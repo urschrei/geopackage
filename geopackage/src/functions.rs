@@ -5,12 +5,23 @@
 //! on every connection this crate opens, so writes to indexed tables work on
 //! any GeoPackage, including files created by other tools.
 //!
-//! Envelope values are taken from the GPB header when present. When absent,
-//! a fallback computes bounds from the WKB body — currently for point
-//! geometries only (the common no-envelope case in the wild, e.g. GDAL
-//! writes points without envelopes). Full WKB traversal lands in M1 via the
-//! georust `wkb` crate.
+//! Envelope values are taken from the GPB header when present (an O(1) read;
+//! the rtree triggers call four of these per row). When the header carries no
+//! envelope — as for GDAL-written points and other envelope-less blobs — the
+//! functions fall back to a full traversal of the WKB body via
+//! [`geopackage_core::geometry::GpbGeometry`], which handles every geometry
+//! type the georust `wkb` crate can read (all byte orders, any Z/M variant).
+//! `ST_IsEmpty` reports emptiness from the same wrapper (header empty flag,
+//! the NaN empty-point convention, and zero-coordinate geometries).
+//!
+//! Limitation: a WKB body whose type the `wkb` crate cannot read — the
+//! non-linear curve types (`CIRCULARSTRING`, `CURVEPOLYGON`, …) and the
+//! abstract `CURVE`/`SURFACE` — produces a typed SQL error rather than an
+//! envelope, so such a geometry cannot be inserted into an rtree-indexed
+//! table. Curve-type envelope support is tracked as an open roadmap item and
+//! needs curve support in `wkb` upstream.
 
+use geopackage_core::geometry::{GeometryError, GpbGeometry};
 use geopackage_core::gpb::{self, GpbError};
 use rusqlite::Connection;
 use rusqlite::functions::{Context, FunctionFlags};
@@ -22,15 +33,13 @@ pub fn register(conn: &Connection) -> rusqlite::Result<()> {
 
     conn.create_scalar_function("ST_IsEmpty", 1, flags, |ctx| {
         with_blob(ctx, |blob| {
-            let (h, body) = parse(blob)?;
-            if h.empty {
+            // The header empty flag is authoritative and cheap; only fall back
+            // to a body traversal when it is not set.
+            let (header, _) = gpb::parse_header(blob)?;
+            if header.empty {
                 return Ok(Some(true));
             }
-            // Cheap check for the empty-point-as-NaN convention.
-            match point_xy(&blob[body..]) {
-                Ok(Some((x, y))) => Ok(Some(x.is_nan() || y.is_nan())),
-                _ => Ok(Some(false)),
-            }
+            Ok(Some(GpbGeometry::parse(blob)?.is_empty()))
         })
     })?;
 
@@ -42,14 +51,16 @@ pub fn register(conn: &Connection) -> rusqlite::Result<()> {
     ] {
         conn.create_scalar_function(name, 1, flags, move |ctx| {
             with_blob(ctx, |blob| {
-                let (h, body) = parse(blob)?;
-                if let Some(bounds) = h.envelope.xy_bounds() {
-                    let v = [bounds.0, bounds.1, bounds.2, bounds.3][idx];
-                    return Ok(Some(v));
+                let (header, _) = gpb::parse_header(blob)?;
+                if let Some((min_x, max_x, min_y, max_y)) = header.envelope.xy_bounds() {
+                    return Ok(Some([min_x, max_x, min_y, max_y][idx]));
                 }
-                match point_xy(&blob[body..])? {
-                    Some((x, y)) => Ok(Some(if idx < 2 { x } else { y })),
-                    None => Err(FnError::NoEnvelope),
+                // No header envelope: traverse the body. An empty geometry has
+                // no spatial extent; report NaN (the rtree triggers guard these
+                // calls with ST_IsEmpty, so a bound is never indexed for one).
+                match GpbGeometry::parse(blob)?.xy_envelope() {
+                    Some(bounds) => Ok(Some(bounds[idx])),
+                    None => Ok(Some(f64::NAN)),
                 }
             })
         })?;
@@ -63,10 +74,8 @@ enum FnError {
     NotABlob,
     #[error(transparent)]
     Gpb(#[from] GpbError),
-    #[error("GPB has no envelope and non-point WKB envelope computation is not yet implemented")]
-    NoEnvelope,
-    #[error("truncated WKB body")]
-    BadWkb,
+    #[error(transparent)]
+    Geometry(#[from] GeometryError),
 }
 
 fn with_blob<T: rusqlite::types::ToSql>(
@@ -80,44 +89,4 @@ fn with_blob<T: rusqlite::types::ToSql>(
             FnError::NotABlob,
         ))),
     }
-}
-
-fn parse(blob: &[u8]) -> Result<(gpb::GpbHeader, usize), FnError> {
-    Ok(gpb::parse_header(blob)?)
-}
-
-/// If the WKB body is a Point (any of XY/Z/M/ZM, ISO codes), return its
-/// coordinates; `Ok(None)` if it is some other geometry type.
-fn point_xy(wkb: &[u8]) -> Result<Option<(f64, f64)>, FnError> {
-    if wkb.len() < 5 {
-        return Err(FnError::BadWkb);
-    }
-    let le = match wkb[0] {
-        0 => false,
-        1 => true,
-        _ => return Err(FnError::BadWkb),
-    };
-    let ty = {
-        let b: [u8; 4] = wkb[1..5].try_into().expect("len checked");
-        if le {
-            u32::from_le_bytes(b)
-        } else {
-            u32::from_be_bytes(b)
-        }
-    };
-    if ty % 1000 != 1 || ty / 1000 > 3 {
-        return Ok(None); // not a point
-    }
-    if wkb.len() < 5 + 16 {
-        return Err(FnError::BadWkb);
-    }
-    let read = |off: usize| {
-        let b: [u8; 8] = wkb[off..off + 8].try_into().expect("len checked");
-        if le {
-            f64::from_le_bytes(b)
-        } else {
-            f64::from_be_bytes(b)
-        }
-    };
-    Ok(Some((read(5), read(13))))
 }

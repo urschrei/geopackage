@@ -26,6 +26,22 @@ fn gpb_empty_point(srs_id: i32) -> Vec<u8> {
     blob
 }
 
+/// GPB blob for a LINESTRING with no header envelope (little-endian WKB).
+///
+/// M0 could not index this: its `ST_*` fallback handled points only, so the
+/// insert trigger's `ST_MinX`/… calls failed. M1's full traversal fixes it.
+fn gpb_linestring_no_envelope(srs_id: i32, pts: &[(f64, f64)]) -> Vec<u8> {
+    let mut blob = encode_header(srs_id, &Envelope::None, false, false);
+    blob.push(1); // WKB little-endian
+    blob.extend_from_slice(&2u32.to_le_bytes()); // LineString
+    blob.extend_from_slice(&(pts.len() as u32).to_le_bytes());
+    for (x, y) in pts {
+        blob.extend_from_slice(&x.to_le_bytes());
+        blob.extend_from_slice(&y.to_le_bytes());
+    }
+    blob
+}
+
 fn setup() -> (tempfile::TempDir, GeoPackage) {
     let dir = tempfile::tempdir().unwrap();
     let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
@@ -158,4 +174,27 @@ fn spatial_query_via_rtree() {
             .unwrap()
     };
     assert_eq!(hits, vec![2]);
+}
+
+#[test]
+fn envelopeless_non_point_insert_indexes_via_traversal() {
+    // The M0 acceptance gap: an envelope-less non-point geometry inserted into
+    // an rtree-indexed table. The insert trigger calls ST_MinX/ST_MaxX/…,
+    // which now traverse the WKB body to bound it. End-to-end proof.
+    let (_dir, gpkg) = setup();
+    let conn = gpkg.connection();
+    conn.execute(
+        "INSERT INTO pts (fid, geom, name) VALUES (5, ?1, 'line')",
+        [gpb_linestring_no_envelope(
+            4326,
+            &[(2.0, 3.0), (8.0, -1.0), (5.0, 9.0)],
+        )],
+    )
+    .unwrap();
+    let rows = rtree_rows(&gpkg);
+    assert_eq!(rows.len(), 1);
+    let (id, minx, maxy) = rows[0];
+    assert_eq!(id, 5);
+    assert!((minx - 2.0).abs() < 1e-6, "minx from traversal");
+    assert!((maxy - 9.0).abs() < 1e-6, "maxy from traversal");
 }

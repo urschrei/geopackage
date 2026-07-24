@@ -24,3 +24,5 @@ geo-types = ["geopackage-core/geo-types"]
 
 [dev-dependencies]
 tempfile.workspace = true
+wkb.workspace = true
+geo-types.workspace = true

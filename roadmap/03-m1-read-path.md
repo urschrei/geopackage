@@ -37,13 +37,23 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       WKB body slice, implementing `geo_traits::GeometryTrait` by delegating to
       `wkb::reader::Wkb`; `to_geo()` behind the `geo-types` feature; raw
       header/body accessors. Depends on georust `wkb` 0.9 and `geo-traits` 0.3.
-- [ ] Full WKB envelope traversal for the `ST_*` fallback (replace the M0
+- [x] Full WKB envelope traversal for the `ST_*` fallback (replaced the M0
       point-only fallback). Placement decision: the wrapper and traversal live
-      in **`geopackage-core`**, keeping the fuzz workspace free of the SQLite
-      dependency; coordinates are visited through the `geo-traits` interface
-      rather than a hand-rolled WKB walker. The eventual home is an upstreamed
-      `gpb` feature in georust `wkb` itself (tracked in
-      [02-ecosystem.md](02-ecosystem.md)); until then this is ours.
+      in **`geopackage-core`** (`GpbGeometry::xy_envelope`/`is_empty`), keeping
+      the fuzz workspace free of the SQLite dependency; coordinates are visited
+      through the `geo-traits` interface rather than a hand-rolled WKB walker.
+      `geopackage/src/functions.rs` now bounds envelope-less blobs of any type
+      the `wkb` crate can read (all byte orders, any Z/M), and `ST_IsEmpty`
+      reports emptiness (header flag, NaN-point convention, zero-element
+      geometries). The eventual home is an upstreamed `gpb` feature in georust
+      `wkb` itself (tracked in [02-ecosystem.md](02-ecosystem.md)); until then
+      this is ours.
+- [ ] Curve-type envelope support: a WKB body whose type the `wkb` crate
+      cannot read — the non-linear curve types (`CIRCULARSTRING`,
+      `CURVEPOLYGON`, `MULTICURVE`, …) and the abstract `CURVE`/`SURFACE` —
+      makes the `ST_*` functions return a typed SQL error rather than an
+      envelope, so such a geometry cannot be inserted into an rtree-indexed
+      table. Needs curve support in georust `wkb` upstream.
 - [ ] Reject/flag geometry column type mismatches (declared POINT, blob says
       LINESTRING) behind a validation option.
 
