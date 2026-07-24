@@ -17,11 +17,13 @@
 
 mod error;
 mod functions;
+mod schema;
 mod srs;
 
 pub use error::{Error, Result};
 pub use geopackage_core as core;
 pub use geopackage_core::GpkgVersion;
+pub use schema::GeometryColumn;
 pub use srs::Srs;
 
 use geopackage_core::{ddl, version};
@@ -153,7 +155,7 @@ impl GeoPackage {
     }
 }
 
-fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
+pub(crate) fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
     conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name = ?1",
         [name],

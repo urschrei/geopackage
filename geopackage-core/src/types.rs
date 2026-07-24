@@ -200,6 +200,42 @@ impl ColumnType {
     }
 }
 
+/// The presence constraint on a geometry's `z` or `m` dimension, as recorded
+/// in the `z` and `m` columns of `gpkg_geometry_columns` (spec Table 21,
+/// Requirement 27). Those columns hold the code `0`, `1`, or `2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ZmFlag {
+    /// `0`: the dimension is prohibited (geometries must not carry it).
+    Prohibited,
+    /// `1`: the dimension is mandatory (every geometry carries it).
+    Mandatory,
+    /// `2`: the dimension is optional (geometries may or may not carry it).
+    Optional,
+}
+
+impl ZmFlag {
+    /// Interpret a raw `z`/`m` column code. Returns `None` for any value
+    /// other than `0`, `1`, or `2`.
+    pub fn from_code(code: u8) -> Option<Self> {
+        Some(match code {
+            0 => Self::Prohibited,
+            1 => Self::Mandatory,
+            2 => Self::Optional,
+            _ => return None,
+        })
+    }
+
+    /// The raw `z`/`m` column code (`0`, `1`, or `2`) for this constraint.
+    pub fn code(&self) -> u8 {
+        match self {
+            Self::Prohibited => 0,
+            Self::Mandatory => 1,
+            Self::Optional => 2,
+        }
+    }
+}
+
 /// Parse the `(N)` suffix of `TEXT(N)`/`BLOB(N)`; empty means no length.
 fn parse_len_suffix(rest: &str) -> Option<Option<u32>> {
     let rest = rest.trim();
@@ -274,6 +310,18 @@ mod tests {
         assert_eq!(ColumnType::parse("VARCHAR(20)"), None);
         assert_eq!(ColumnType::parse("TEXT(x)"), None);
         assert_eq!(ColumnType::parse("NUMERIC"), None);
+    }
+
+    #[test]
+    fn zm_flag_codes() {
+        for f in [ZmFlag::Prohibited, ZmFlag::Mandatory, ZmFlag::Optional] {
+            assert_eq!(ZmFlag::from_code(f.code()), Some(f));
+        }
+        assert_eq!(ZmFlag::from_code(0), Some(ZmFlag::Prohibited));
+        assert_eq!(ZmFlag::from_code(1), Some(ZmFlag::Mandatory));
+        assert_eq!(ZmFlag::from_code(2), Some(ZmFlag::Optional));
+        assert_eq!(ZmFlag::from_code(3), None);
+        assert_eq!(ZmFlag::from_code(255), None);
     }
 
     #[test]

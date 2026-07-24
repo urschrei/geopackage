@@ -32,7 +32,7 @@ pub mod version;
 
 pub use gpb::{Envelope, GpbError, GpbHeader};
 pub use srs::SrsDefinition;
-pub use types::{ColumnType, GeometryType};
+pub use types::{ColumnType, GeometryType, ZmFlag};
 pub use version::GpkgVersion;
 
 /// Errors produced by this crate.

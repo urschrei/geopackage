@@ -34,6 +34,25 @@ pub enum Error {
         /// The requested EPSG code.
         code: i32,
     },
+    /// A `gpkg_geometry_columns.geometry_type_name` value outside the
+    /// spec vocabulary (Annex G).
+    #[error("unknown geometry type name {name:?} for table {table_name:?}")]
+    UnknownGeometryType {
+        /// The table the row describes.
+        table_name: String,
+        /// The unrecognised type name as stored.
+        name: String,
+    },
+    /// A `gpkg_geometry_columns.z` or `.m` value outside `0`/`1`/`2`.
+    #[error("invalid {column} flag {value} in gpkg_geometry_columns for table {table_name:?}")]
+    InvalidZmFlag {
+        /// The table the row describes.
+        table_name: String,
+        /// Which column carried the bad value: `"z"` or `"m"`.
+        column: &'static str,
+        /// The value as stored.
+        value: i64,
+    },
 }
 
 /// Convenience alias.
