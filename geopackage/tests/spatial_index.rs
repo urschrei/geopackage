@@ -952,3 +952,74 @@ fn small_append_into_a_populated_index_keeps_the_triggers() {
     assert_eq!(rtree_rows(conn).len(), 205);
     assert_eq!(rtree_rows(conn), envelope_scan(conn));
 }
+
+/// The bulk build must skip NULL and empty geometries exactly as the triggered
+/// build does.
+///
+/// `create_skips_null_and_empty_geometries` covers this for the triggered path
+/// only: it uses default options on a three-row table, which is far below the
+/// bulk threshold. So the bulk path's own entry-set construction has never been
+/// exercised against an empty or NULL geometry.
+#[test]
+fn bulk_build_skips_null_and_empty_geometries() {
+    let gpkg = in_memory_with_points(&[(1, 10.0, 20.0), (4, -5.0, 7.0)]);
+    let conn = gpkg.connection();
+    conn.execute(
+        "INSERT INTO pts (fid, name, geom) VALUES (2, 'null', NULL)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO pts (fid, name, geom) VALUES (3, 'empty', ?1)",
+        [gpb_empty_point(4326)],
+    )
+    .unwrap();
+
+    let layer = gpkg.layer("pts").unwrap();
+    layer
+        .create_spatial_index_with(BulkIndexOptions::always_bulk())
+        .unwrap();
+
+    let ids: Vec<i64> = rtree_rows(conn).into_iter().map(|r| r.0).collect();
+    assert_eq!(
+        ids,
+        vec![1, 4],
+        "NULL and empty geometries must not be indexed"
+    );
+    assert_eq!(rtree_rows(conn), envelope_scan(conn));
+}
+
+/// A geometry whose GPB header carries no envelope must still be indexed by the
+/// bulk build, with bounds taken from the WKB body.
+///
+/// GDAL writes envelope-less point blobs, so this is the common shape of a
+/// third-party file, and it is the case where the entry-set construction has to
+/// fall back to a body traversal rather than reading the header.
+#[test]
+fn bulk_build_indexes_envelope_less_geometries() {
+    let gpkg = in_memory_with_points(&[(1, 1.0, 1.0)]);
+    let conn = gpkg.connection();
+    // A point with a bare header: no envelope, so bounds come from the body.
+    let mut blob = encode_header(4326, &Envelope::None, false, false);
+    blob.push(1);
+    blob.extend_from_slice(&1u32.to_le_bytes());
+    blob.extend_from_slice(&12.5f64.to_le_bytes());
+    blob.extend_from_slice(&(-3.25f64).to_le_bytes());
+    conn.execute(
+        "INSERT INTO pts (fid, name, geom) VALUES (2, 'bare', ?1)",
+        [blob],
+    )
+    .unwrap();
+
+    let layer = gpkg.layer("pts").unwrap();
+    layer
+        .create_spatial_index_with(BulkIndexOptions::always_bulk())
+        .unwrap();
+
+    assert_eq!(rtree_rows(conn), envelope_scan(conn));
+    let row = rtree_rows(conn)
+        .into_iter()
+        .find(|r| r.0 == 2)
+        .expect("envelope-less geometry should be indexed");
+    assert!((row.1 - 12.5).abs() < 1e-6 && (row.3 - (-3.25)).abs() < 1e-6);
+}
