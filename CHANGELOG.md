@@ -8,55 +8,71 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-24
+
+A performance and durability release. No API is removed or changed: the only
+public additions are `StructuralCheck`, `DEFAULT_FILL_FACTOR` and two builder
+methods on `BulkIndexOptions`, so upgrading from 0.1.0 needs no code changes.
+
+It also carries metadata fixes that 0.1.0 could not: that release's crates.io
+and docs.rs pages point at a repository URL that does not exist, and show no
+README, neither of which can be corrected in place.
+
 ### Added
 
-- `StructuralCheck` and `BulkIndexOptions::with_structural_check`, selecting how
-  thoroughly the bulk-build gate checks database structure after copying the
-  shadow tables: `RtreeOnly` (the new default, `rtreecheck()` on the index just
-  built) or `FullDatabase` (additionally a whole-database
-  `PRAGMA integrity_check`, the previous behaviour).
+- `StructuralCheck` and `BulkIndexOptions::with_structural_check`, choosing how
+  thoroughly the bulk-build gate checks database structure: `RtreeOnly` (the new
+  default, `rtreecheck()` over the index just built) or `FullDatabase`
+  (additionally a whole-database `PRAGMA integrity_check`, which is what 0.1.0
+  always did).
+- `DEFAULT_FILL_FACTOR` and `BulkIndexOptions::with_fill_factor`, setting the
+  fraction of each RTree node filled when packing. The default of 1.0 gives the
+  smallest tree and the best queries; lower it when a freshly built index will
+  be appended to heavily.
+- Runnable examples: `inspect`, `bulk_load`, `bbox_query` and `repair_index`.
 
 ### Changed
 
-- Bulk spatial-index builds construct the RTree directly instead of inserting
-  every entry into a scratch index and copying the result. 1M-point indexed
-  `write_all` goes from 4.95s to ~2.08s, and from 7.31s at 0.1.0. Queries are
-  unaffected or slightly better, and the resulting tree is a third smaller than
-  the one SQLite's own insertion path builds. The node layout is taken from
-  SQLite's `rtree.c` and validated by `rtreecheck()` in the existing build gate
-  ([#20]). Measured like for like, both building an index over the same rows of
-  the same file, this is level with GDAL: 8% slower on uniform points and 9%
-  faster on clustered ones, while running a verification gate GDAL does not.
-- Documented what the bulk-build gate costs. Every bulk index build verifies
-  itself before it is trusted, and that verification is roughly 45% of the
-  build (~745ms of ~1593ms at 1M points), which is why the build is level with
-  GDAL rather than ahead of it: GDAL runs no equivalent. The check stays for
-  now, because the RTree is written by hand into an undocumented on-disk
-  format. Making it optional is a 1.0 question.
-- `%_rowid` shadow-table rows are now inserted in feature-id order rather than
-  in the tree's leaf order. That table is keyed by feature id, so inserting in
-  Hilbert order was paying page splits for every row: 556ms on uniform data and
-  1.76s on clustered at 1M rows, against 265ms for both afterwards.
-- The bulk build no longer uses an `ATTACH`ed scratch database, so it no longer
-  requires autocommit and runs entirely within one transaction.
+- **Bulk spatial-index builds are about 3.5x faster.** A 1M-point indexed
+  `write_all` goes from 7.31s to roughly 2.08s. Four changes got there, in
+  decreasing order of effect: the RTree is now constructed directly and its
+  shadow tables written, rather than every entry being inserted into a scratch
+  index and copied ([#20]); `%_rowid` rows are inserted in feature-id order
+  rather than tree order, since that table is keyed by feature id and inserting
+  in Hilbert order paid a page split per row; the gate uses `rtreecheck()` on
+  the new index instead of a whole-database `integrity_check` ([#16]); and
+  `write_all` reuses the envelopes it computed while encoding instead of
+  re-deriving them with an `ST_*` scan.
+- Measured like for like, both implementations building an index over the same
+  rows of the same file, this is level with GDAL: 8% slower on uniformly spread
+  points and 9% faster on clustered points, while running a verification pass
+  GDAL has no equivalent of and producing a tree a third smaller for the same
+  query latency. Queries are unaffected or slightly faster than 0.1.0.
 - **A bulk `write_all` is now atomic.** Dropping the RTree triggers, every row
   insert, the `gpkg_contents` flush, the index rebuild and reinstalling the
   triggers all commit together, so a crash or error part-way through leaves the
-  file exactly as it was. Previously the rows committed before the index was
+  file exactly as it was. In 0.1.0 the rows committed before the index was
   rebuilt, and a crash in between left a `Stale` index needing
-  `repair_spatial_index()`. That split was forced by the `ATTACH`; removing it
-  removed the window ([#15]).
-- Bulk spatial-index builds are roughly a third faster: 1M-point indexed
-  `write_all` goes from 7.31s to 4.95s (criterion, point -32.3%, linestring
-  -33.3%, polygon -35.6%, all p < 0.05). Three fixes: the scratch RTree inserts
-  now run in one transaction rather than one implicit transaction per row; the
-  gate uses `rtreecheck()` instead of a whole-database `integrity_check` ([#16]);
-  and `write_all` reuses the envelopes it computes while encoding instead of
-  re-deriving them with an `ST_*` scan. The index produced is byte-identical.
-- The read benchmark now closes and reopens its fixture before measuring, rather
-  than querying through the connection that built it. Its figures are therefore
-  slower than, and not comparable to, the v0.1.0 set. See
-  `roadmap/benchmarks/2026-07-24-bulk-build.md`.
+  `repair_spatial_index()`. That split was forced by an `ATTACH`ed scratch
+  database, which is now gone ([#15]).
+- The bulk-build gate is a large share of a build: roughly 45%, about 745ms of a
+  1593ms build at 1M points, split between checking the written index against
+  the input and `rtreecheck`. It is why the build is level with GDAL rather than
+  ahead of it. The check stays, because the RTree is written by hand into a
+  format SQLite does not document as an interface; whether it should become
+  optional is a question for 1.0.
+- Peak memory during a bulk build is lower: the tree is streamed into the shadow
+  tables as it is built rather than assembled whole in memory first.
+
+### Fixed
+
+- Both crates now carry a working `repository` URL and a README on crates.io.
+  0.1.0 pointed at `github.com/georust/geopackage`, which does not exist yet.
+- The crate documentation now states the untrusted-input limitation ([#3]) that
+  0.1.0 shipped with but did not mention: the `wkb` 0.9.2 reader pre-allocates
+  from unbounded element counts, so a malformed geometry can drive a very large
+  allocation. Still unfixed upstream, so it remains a known limitation here: do
+  not parse GeoPackage files from untrusted sources.
 
 ## [0.1.0] - 2026-07-24
 
@@ -129,7 +145,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/urschrei/geopackage/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/urschrei/geopackage/releases/tag/v0.1.0
 [#3]: https://github.com/urschrei/geopackage/issues/3
 [#4]: https://github.com/urschrei/geopackage/issues/4
