@@ -260,3 +260,76 @@ fn features_in_requires_a_geometry_column() {
         other => panic!("expected NoGeometryColumn, got {:?}", other.map(|_| ())),
     }
 }
+
+#[test]
+fn out_of_box_value_errors_do_not_surface() {
+    // A row whose DATETIME text is malformed but whose geometry lies outside
+    // the query box must be skipped before value conversion on both paths; the
+    // same bad value inside the box must surface as an Err.
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+    let conn = gpkg.connection();
+    for table in ["dt_idx", "dt_plain"] {
+        conn.execute_batch(&format!(
+            "CREATE TABLE {table} (fid INTEGER PRIMARY KEY, geom GEOMETRY, seen DATETIME);\
+             INSERT INTO gpkg_contents (table_name, data_type, srs_id) \
+               VALUES ('{table}', 'features', 4326);"
+        ))
+        .unwrap();
+    }
+    conn.execute_batch(
+        "CREATE TABLE gpkg_geometry_columns (\
+           table_name TEXT NOT NULL, column_name TEXT NOT NULL, \
+           geometry_type_name TEXT NOT NULL, srs_id INTEGER NOT NULL, \
+           z TINYINT NOT NULL, m TINYINT NOT NULL);\
+         INSERT INTO gpkg_geometry_columns VALUES ('dt_idx', 'geom', 'GEOMETRY', 4326, 0, 0);\
+         INSERT INTO gpkg_geometry_columns VALUES ('dt_plain', 'geom', 'GEOMETRY', 4326, 0, 0);",
+    )
+    .unwrap();
+    conn.execute_batch(&triggers::create_rtree_table_sql("dt_idx", "geom").unwrap())
+        .unwrap();
+    for sql in triggers::create_triggers_sql("dt_idx", "geom", "fid").unwrap() {
+        conn.execute_batch(&sql).unwrap();
+    }
+    for table in ["dt_idx", "dt_plain"] {
+        conn.execute(
+            &format!("INSERT INTO {table} VALUES (1, ?1, '2026-07-24T12:00:00.000Z')"),
+            [point_blob(0.0, 0.0)],
+        )
+        .unwrap();
+        conn.execute(
+            &format!("INSERT INTO {table} VALUES (2, ?1, 'not a datetime')"),
+            [point_blob(100.0, 100.0)],
+        )
+        .unwrap();
+    }
+
+    let near_origin = BoundingBox::new(-1.0, -1.0, 1.0, 1.0);
+    let far_corner = BoundingBox::new(99.0, 99.0, 101.0, 101.0);
+    for name in ["dt_idx", "dt_plain"] {
+        let layer = gpkg.layer(name).unwrap();
+        assert_eq!(
+            layer.has_spatial_index().unwrap(),
+            name == "dt_idx",
+            "{name}"
+        );
+
+        let results: Vec<_> = layer.features_in(near_origin).unwrap().collect();
+        let fids: Vec<i64> = results
+            .iter()
+            .map(|r| {
+                r.as_ref()
+                    .expect("bad row outside the box must not surface")
+                    .fid()
+            })
+            .collect();
+        assert_eq!(fids, vec![1], "{name}");
+
+        let errors = layer
+            .features_in(far_corner)
+            .unwrap()
+            .filter(|r| r.is_err())
+            .count();
+        assert_eq!(errors, 1, "{name}: bad row inside the box must surface");
+    }
+}

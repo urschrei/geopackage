@@ -286,6 +286,12 @@ impl<'a> Layer<'a> {
     /// envelope read from the blob (header envelope preferred, WKB traversal
     /// fallback — the same rule the `ST_*` functions use).
     ///
+    /// Rows outside the box are skipped before their values are converted, so
+    /// a value that does not fit its declared column type surfaces as an `Err`
+    /// only when its row intersects the box. An unreadable geometry blob
+    /// surfaces as an `Err` on whichever path visits it: always on a full
+    /// scan, only as an index candidate on the RTree path.
+    ///
     /// # Errors
     ///
     /// [`Error::NoGeometryColumn`] if the layer has no geometry column.
@@ -459,18 +465,21 @@ impl<'a> Layer<'a> {
         let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
         let mut out: Vec<Result<Feature>> = Vec::new();
         while let Some(row) = rows.next()? {
-            let feature = self.feature_from_row(row, geom_idx);
-            match &filter {
-                None => out.push(feature),
-                Some(bbox) => match feature {
-                    Ok(feature) => match feature_in_box(&feature, bbox) {
-                        Ok(true) => out.push(Ok(feature)),
-                        Ok(false) => {}
-                        Err(e) => out.push(Err(e)),
-                    },
-                    Err(e) => out.push(Err(e)),
-                },
+            // Decide bbox membership from the geometry blob before converting
+            // any values: a row outside the box is skipped entirely, so value
+            // conversion errors surface only for rows the query returns —
+            // identically on the RTree and full-scan paths.
+            if let Some(bbox) = &filter {
+                match row_in_box(row, geom_idx, bbox) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(e) => {
+                        out.push(Err(e));
+                        continue;
+                    }
+                }
             }
+            out.push(self.feature_from_row(row, geom_idx));
         }
         Ok(Features {
             inner: out.into_iter(),
@@ -510,10 +519,20 @@ impl<'a> Layer<'a> {
     }
 }
 
-/// Whether a feature's true `f64` envelope intersects `bbox`. A feature with no
-/// geometry, or an empty geometry (no finite coordinate), never matches.
-fn feature_in_box(feature: &Feature, bbox: &BoundingBox) -> Result<bool> {
-    let Some(blob) = feature.geometry_bytes() else {
+/// Whether the row's true `f64` geometry envelope intersects `bbox`, read
+/// straight from the raw blob. A NULL geometry cell, or an empty geometry (no
+/// finite coordinate), never matches.
+fn row_in_box(
+    row: &rusqlite::Row<'_>,
+    geom_idx: Option<usize>,
+    bbox: &BoundingBox,
+) -> Result<bool> {
+    // A filtered query always selects the geometry column (features_in errors
+    // on a layer without one), so geom_idx is present here.
+    let Some(gi) = geom_idx else {
+        return Ok(false);
+    };
+    let ValueRef::Blob(blob) = row.get_ref(gi)? else {
         return Ok(false);
     };
     match blob_xy_envelope(blob)? {
