@@ -368,6 +368,15 @@ fn case_mismatch() {
     check_fixture("case_mismatch");
 }
 
+#[test]
+fn qgis_lines() {
+    // Written by QGIS (native:savefeatures) rather than ogr2ogr: a second
+    // producer's container defaults, read against GDAL's view of the same
+    // bytes. Generated only where QGIS is installed; the committed fixture
+    // tests everywhere.
+    check_fixture("qgis_lines");
+}
+
 // --- cross-implementation spatial-index query --------------------------------
 
 /// A GDAL-built RTree must serve `features_in` correctly through our reader:
@@ -486,6 +495,13 @@ fn snapshots_match_live_gdal() {
         let committed: Json =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let fresh_path = out.path().join(name);
+        if !fresh_path.exists() {
+            // The QGIS-written fixture regenerates only where QGIS is
+            // installed; its committed snapshot still gates in the always-on
+            // tests above.
+            eprintln!("skipping {name}: this machine's generator run did not produce it");
+            continue;
+        }
         let fresh: Json =
             serde_json::from_str(&std::fs::read_to_string(&fresh_path).unwrap()).unwrap();
         assert_eq!(

@@ -37,10 +37,10 @@ Data Interface as the bulk data plane.
   sha256-pinned external soak (`scripts/fetch_corpus.sh` + the ignored
   `corpus_external.rs`). All four M1 acceptance criteria hold **locally** and
   the gates (nextest, clippy `-D warnings`, fmt, docs, `--no-default-features`)
-  are green. **Two caveats keep the milestone open:** CI has **not** yet been
-  exercised on GitHub, so the "done when criteria pass in CI" bar is not met;
-  and **QGIS-written fixtures are outstanding** (QGIS is not installed on the
-  generating machine).
+  are green. The corpus covers GDAL-written, QGIS-written (4.0.2, headless
+  `qgis_process`), raw-SQLite, and fetched third-party files. **One caveat
+  keeps the milestone open:** CI has **not** yet been exercised on GitHub, so
+  the "done when criteria pass in CI" bar is not met.
 
 ## Working conventions
 

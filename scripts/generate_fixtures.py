@@ -9,17 +9,21 @@ check our read against the snapshot, so the snapshot is the cross-implementation
 oracle: what GDAL saw when it read the same bytes.
 
 Only the Python standard library plus the external command-line tools ``ogr2ogr``
-and ``ogrinfo`` (GDAL) are used; there is no project virtualenv. ``sqlite3`` is
+and ``ogrinfo`` (GDAL) are used; there is no project virtualenv. QGIS's
+``qgis_process`` is used for one fixture when available (``QGIS_PROCESS`` env
+var, PATH, or a macOS ``/Applications/QGIS*.app`` bundle) and skipped with a
+warning otherwise. ``sqlite3`` is
 used through Python's bundled module, both to build the raw fixtures that GDAL
 cannot express directly (exact ``TINYINT``/``DOUBLE`` column types, legacy
 ``application_id``, a case-mismatched catalogue) and to shrink each container to
 a 512-byte page size (GDAL's default 4 KiB pages waste space on these tiny
 tables).
 
-Determinism: every input geometry and attribute value is a fixed literal, the
-``gpkg_contents.last_change`` timestamp is pinned (GDAL writes "now" otherwise),
-and no field derived from the wall clock is recorded. Regenerating with the same
-GDAL therefore reproduces byte-identical snapshots. Fields that vary with the
+Determinism: every input geometry and attribute value is a fixed literal; the
+``gpkg_contents.last_change`` and ``gpkg_metadata_reference.timestamp`` values
+are pinned (GDAL writes "now" into both); and the SQLite header's change
+counter is forced to a constant after the final VACUUM. Regenerating with the
+same GDAL/QGIS therefore reproduces byte-identical containers and snapshots. Fields that vary with the
 GDAL/PROJ build -- the ``coordinateSystem`` WKT/PROJJSON block, layer ``extent``,
 driver name strings, dataset ``metadata`` -- are deliberately *not* copied into
 the snapshot; only the GDAL version string is recorded, as provenance the Rust
@@ -40,6 +44,7 @@ GDAL on ``PATH`` (the committed fixtures let the tests run without it).
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import shutil
@@ -98,6 +103,32 @@ def gdal_version() -> str:
     return run(["ogrinfo", "--version"]).stdout.strip()
 
 
+def find_qgis_process() -> str | None:
+    """Locate ``qgis_process`` for the QGIS-written fixture.
+
+    Order: the ``QGIS_PROCESS`` environment variable, then PATH, then macOS
+    application bundles (``/Applications/QGIS*.app``). Returns ``None`` when
+    QGIS is not installed; the QGIS fixture is then skipped with a warning
+    rather than failing the whole generation run.
+    """
+    env = os.environ.get("QGIS_PROCESS")
+    if env:
+        return env if Path(env).exists() else None
+    on_path = shutil.which("qgis_process")
+    if on_path:
+        return on_path
+    bundles = sorted(glob.glob("/Applications/QGIS*.app/Contents/MacOS/qgis_process"))
+    return bundles[-1] if bundles else None
+
+
+def qgis_version(qgis_process: str) -> str:
+    out = run([qgis_process, "--version"]).stdout
+    for line in out.splitlines():
+        if line.startswith("QGIS "):
+            return line.strip()
+    return "QGIS (unknown version)"
+
+
 def ogr2ogr(*args: str) -> None:
     run(["ogr2ogr", *args])
 
@@ -112,9 +143,25 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def pin_last_change(path: Path) -> None:
+    """Pin every wall-clock timestamp GDAL writes into the container.
+
+    ``gpkg_contents.last_change`` always exists; GDAL also stamps "now" into
+    ``gpkg_metadata_reference.timestamp`` when it creates metadata tables,
+    which would otherwise make regenerated containers differ byte-wise from
+    run to run.
+    """
     con = connect(path)
     try:
         con.execute("UPDATE gpkg_contents SET last_change = ?", (FIXED_LAST_CHANGE,))
+        has_metadata_reference = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'gpkg_metadata_reference'"
+        ).fetchone()
+        if has_metadata_reference:
+            con.execute(
+                "UPDATE gpkg_metadata_reference SET timestamp = ?",
+                (FIXED_LAST_CHANGE,),
+            )
         con.commit()
     finally:
         con.close()
@@ -136,9 +183,28 @@ def shrink(path: Path) -> None:
             sidecar.unlink()
 
 
+def pin_change_counter(path: Path) -> None:
+    """Pin the SQLite header's file change counter.
+
+    Bytes 24-27 (change counter) and 92-95 (its version-valid-for copy) hold
+    the cumulative count of write transactions the file has seen, which varies
+    with GDAL's internal statement batching from run to run. With every
+    content timestamp already pinned, these two header words are the last
+    byte-level difference between regenerations, so they are forced to a
+    constant. Safe for a fully checkpointed, rollback-journal database.
+    """
+    counter = (1).to_bytes(4, "big")
+    with path.open("r+b") as fh:
+        fh.seek(24)
+        fh.write(counter)
+        fh.seek(92)
+        fh.write(counter)
+
+
 def finalise(path: Path) -> None:
     pin_last_change(path)
     shrink(path)
+    pin_change_counter(path)
 
 
 # --- fixture builders --------------------------------------------------------
@@ -541,6 +607,56 @@ def build_case_mismatch(tmp: Path) -> Path:
 # --- snapshot extraction -----------------------------------------------------
 
 
+QGIS_LINES_GEOJSON = {
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type": "Feature",
+            "properties": {"name": "High Street", "lanes": 2, "length_m": 431.25},
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [[-6.26, 53.34], [-6.25, 53.345], [-6.245, 53.35]],
+            },
+        },
+        {
+            "type": "Feature",
+            "properties": {"name": "Quay", "lanes": 1, "length_m": 88.5},
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [[-6.28, 53.346], [-6.27, 53.347]],
+            },
+        },
+    ],
+}
+
+
+def build_qgis_lines(tmp: Path, qgis_process: str) -> Path:
+    """A GeoPackage written by QGIS itself (``native:savefeatures``).
+
+    The other fixtures are ogr2ogr-written; this one exercises a second
+    producer. QGIS drives GDAL's GPKG driver through its own vector-file-writer
+    defaults, so the container it emits (fid handling, index creation) is
+    QGIS's, not ogr2ogr's.
+    """
+    out = FIXTURES / "qgis_lines.gpkg"
+    out.unlink(missing_ok=True)
+    src = tmp / "qgis_lines.geojson"
+    write_geojson(src, QGIS_LINES_GEOJSON)
+    run(
+        [
+            qgis_process,
+            "run",
+            "native:savefeatures",
+            "--",
+            f"INPUT={src}",
+            f"OUTPUT={out}",
+            "LAYER_NAME=qgis_lines",
+        ]
+    )
+    finalise(out)
+    return out
+
+
 def sqlite_query(path: Path, sql: str, params: tuple = ()) -> list[tuple]:
     con = sqlite3.connect(path)
     try:
@@ -658,6 +774,7 @@ def write_snapshot(
     open_mode: str,
     expect_warnings: list[str],
     version: str,
+    writer: str | None = None,
 ) -> None:
     # Read the header pragmas directly.
     con = sqlite3.connect(path)
@@ -671,6 +788,7 @@ def write_snapshot(
         "_provenance": {
             "generator": "scripts/generate_fixtures.py",
             "gdal_version": version,
+            "writer": writer or "ogr2ogr / raw sqlite3",
             "note": (
                 "Derived from ogrinfo -json -features. GDAL/PROJ-version-"
                 "dependent fields (coordinateSystem, extent, driver names, "
@@ -703,20 +821,30 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         plan = [
-            (build_multilayer_1_4(tmp), "strict", []),
-            (build_points_1_2(tmp), "strict", []),
-            (build_attributes_spread(tmp), "strict", []),
-            (build_legacy_gp10(tmp), "lenient", ["LegacyApplicationId"]),
-            (build_case_mismatch(tmp), "lenient", ["TableNameCaseMismatch"]),
+            (build_multilayer_1_4(tmp), "strict", [], None),
+            (build_points_1_2(tmp), "strict", [], None),
+            (build_attributes_spread(tmp), "strict", [], None),
+            (build_legacy_gp10(tmp), "lenient", ["LegacyApplicationId"], None),
+            (build_case_mismatch(tmp), "lenient", ["TableNameCaseMismatch"], None),
         ]
+        qgis = find_qgis_process()
+        if qgis:
+            plan.append((build_qgis_lines(tmp, qgis), "strict", [], qgis_version(qgis)))
+        else:
+            print(
+                "warning: qgis_process not found (set QGIS_PROCESS to override); "
+                "skipping the QGIS-written fixture qgis_lines.gpkg",
+                file=sys.stderr,
+            )
 
     total = 0
-    for path, open_mode, expect_warnings in plan:
+    for path, open_mode, expect_warnings, writer in plan:
         write_snapshot(
             path,
             open_mode=open_mode,
             expect_warnings=expect_warnings,
             version=version,
+            writer=writer,
         )
         size = path.stat().st_size
         total += size

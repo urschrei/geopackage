@@ -2,22 +2,20 @@
   "_provenance": {
     "generator": "scripts/generate_fixtures.py",
     "gdal_version": "GDAL 3.12.3 \"Chicoutimi\", released 2026/03/17",
-    "writer": "ogr2ogr / raw sqlite3",
+    "writer": "QGIS 4.0.2-Norrköping 'Norrköping' (bb929340)",
     "note": "Derived from ogrinfo -json -features. GDAL/PROJ-version-dependent fields (coordinateSystem, extent, driver names, metadata) are not recorded; normalisations are documented in geopackage/tests/corpus.rs."
   },
-  "fixture": "legacy_gp10.gpkg",
-  "application_id": 1196437808,
+  "fixture": "qgis_lines.gpkg",
+  "application_id": 1196444487,
   "user_version": 10400,
-  "open": "lenient",
-  "expect_warnings": [
-    "LegacyApplicationId"
-  ],
+  "open": "strict",
+  "expect_warnings": [],
   "layers": [
     {
-      "name": "points",
+      "name": "qgis_lines",
       "fid_column": "fid",
-      "geometry_type": "Point",
-      "feature_count": 3,
+      "geometry_type": "LineString",
+      "feature_count": 2,
       "spatially_indexed": true,
       "fields": [
         {
@@ -26,8 +24,13 @@
           "subtype": null
         },
         {
-          "name": "pop",
+          "name": "lanes",
           "type": "Integer",
+          "subtype": null
+        },
+        {
+          "name": "length_m",
+          "type": "Real",
           "subtype": null
         }
       ],
@@ -35,43 +38,47 @@
         {
           "fid": 1,
           "geometry": {
-            "type": "Point",
+            "type": "LineString",
             "coordinates": [
-              1.0,
-              2.0
+              [
+                -6.26,
+                53.34
+              ],
+              [
+                -6.25,
+                53.345
+              ],
+              [
+                -6.245,
+                53.35
+              ]
             ]
           },
           "properties": {
-            "name": "alpha",
-            "pop": 100
+            "name": "High Street",
+            "lanes": 2,
+            "length_m": 431.25
           }
         },
         {
           "fid": 2,
           "geometry": {
-            "type": "Point",
+            "type": "LineString",
             "coordinates": [
-              3.5,
-              -4.25
+              [
+                -6.28,
+                53.346
+              ],
+              [
+                -6.27,
+                53.347
+              ]
             ]
           },
           "properties": {
-            "name": "béta ☃",
-            "pop": 200
-          }
-        },
-        {
-          "fid": 3,
-          "geometry": {
-            "type": "Point",
-            "coordinates": [
-              10.0,
-              20.0
-            ]
-          },
-          "properties": {
-            "name": "gamma",
-            "pop": 300
+            "name": "Quay",
+            "lanes": 1,
+            "length_m": 88.5
           }
         }
       ]

@@ -2,6 +2,7 @@
   "_provenance": {
     "generator": "scripts/generate_fixtures.py",
     "gdal_version": "GDAL 3.12.3 \"Chicoutimi\", released 2026/03/17",
+    "writer": "ogr2ogr / raw sqlite3",
     "note": "Derived from ogrinfo -json -features. GDAL/PROJ-version-dependent fields (coordinateSystem, extent, driver names, metadata) are not recorded; normalisations are documented in geopackage/tests/corpus.rs."
   },
   "fixture": "gdal_points_1_2.gpkg",

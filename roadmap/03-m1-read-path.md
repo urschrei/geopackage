@@ -140,11 +140,16 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       each), an attribute-only table, and legacy-`application_id` /
       case-mismatch files for the lenient open path. Larger third-party samples
       (GDAL 1.0/1.2, OGC, NGA) are script-fetched (`scripts/fetch_corpus.sh`,
-      sha256-pinned) into a git-ignored `corpus/`. **QGIS-written fixtures
-      outstanding**: QGIS is not installed on the generating machine, so none
-      is committed (the scheduled QGIS interop job in
+      sha256-pinned) into a git-ignored `corpus/`. A QGIS-written fixture
+      (`qgis_lines.gpkg`, QGIS 4.0.2 via headless `qgis_process`
+      `native:savefeatures`) is committed alongside the ogr2ogr ones; the
+      generator discovers `qgis_process` (env var, PATH, macOS app bundle) and
+      skips that fixture with a warning where QGIS is absent. Regeneration is
+      byte-deterministic: content timestamps (`gpkg_contents.last_change`,
+      `gpkg_metadata_reference.timestamp`) and the SQLite header change
+      counter are pinned. The scheduled QGIS interop job in
       [08-testing-conformance.md](08-testing-conformance.md) is still to be
-      wired).
+      wired.
 - [x] Round-trip comparison test vs `ogrinfo -json` output for each corpus file
       (`geopackage/tests/corpus.rs`): per-layer feature count, fid sequence,
       per-feature geometry type + coordinates, and every attribute value. Each
@@ -181,13 +186,13 @@ is "pass in CI", and CI has not yet been exercised on GitHub (see
 
 1. Every corpus file opens and iterates fully; geometry + attribute values
    match GDAL's read of the same file.
-   → **Met (this chunk).** `corpus.rs` opens all five committed fixtures,
-   iterates every feature and compares against the `ogrinfo` snapshots (counts,
-   fid sequence, geometry type + coordinates, every attribute value); the
-   `corpus_external.rs` soak reads 6740 features across four larger third-party
-   files with zero errors. Caveat: no **QGIS**-written fixture yet (QGIS not
-   installed), so "files produced by … QGIS" from the M1 goal is not yet
-   demonstrated.
+   → **Met (this chunk).** `corpus.rs` opens all six committed fixtures
+   (five ogr2ogr/raw-sqlite, one QGIS-written), iterates every feature and
+   compares against the `ogrinfo` snapshots (counts, fid sequence, geometry
+   type + coordinates, every attribute value); the `corpus_external.rs` soak
+   reads 6740 features across four larger third-party files with zero errors.
+   "Files produced by GDAL, QGIS, and NGA tools" from the M1 goal are all
+   represented.
 2. bbox queries use the rtree when present (assert via `EXPLAIN QUERY PLAN`)
    and return provably identical results either way.
    → **Met (held before this chunk).** `features_in.rs` asserts the plan and
