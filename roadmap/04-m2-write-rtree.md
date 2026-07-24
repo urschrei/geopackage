@@ -228,6 +228,10 @@ write performance competitive with GDAL's GPKG driver.
    polygon × unindexed/triggered/bulk), read matrix (full scan, `features_in`
    index vs full-scan), and the `ogr2ogr` baseline, with exact commands.)*
 5. Tag **v0.1.0**; publish `geopackage-core` + `geopackage` to crates.io.
-   *(**Open — maintainer's act.** The workspace version is bumped to `0.1.0`;
-   tagging and publishing are deliberately left to the maintainer and not done
-   here.)*
+   *(**Done, 2026-07-24.** Tagged `v0.1.0` at `b3649cc` with a GitHub release;
+   `geopackage-core` 0.1.0 and `geopackage` 0.1.0 published to crates.io, both
+   building on docs.rs. Post-release follow-ups landed separately: the crates'
+   `repository` metadata pointed at the not-yet-existing `georust/geopackage`
+   and is now the live URL (GitHub preserves the redirect through a transfer),
+   both crates now carry the README on crates.io, and the release is recorded in
+   `CHANGELOG.md`. The org transfer itself remains open in issue #18.)*

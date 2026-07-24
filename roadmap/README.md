@@ -45,7 +45,7 @@ Data Interface as the bulk data plane.
   clippy `-D warnings` with the strict lint set, fmt, docs, fuzz-build).
   **M1 is complete**; the GitHub M1 milestone is closed. Deferred follow-ups
   are tracked as issues #1–#6.
-- **M2 implementation complete** (2026-07-24): the full write path (layer
+- **M2 complete and released as v0.1.0** (2026-07-24): the full write path (layer
   creation + DDL, `FeatureWriter`/`write_all`, DATETIME serialisation), the
   RTree spatial-index lifecycle (create/drop/repair, the 1.4 trigger set), the
   D8 bulk shadow-table index build with its gate + triggered fallback, the D4
@@ -54,17 +54,21 @@ Data Interface as the bulk data plane.
   external-validation harness (ets-gpkg12, PDOK, ogrinfo, GDAL round-trip).
   **151 unit/integration tests pass**; the `#[ignore]`d GDAL-interop tests pass
   locally. All five acceptance criteria are annotated in
-  [04-m2-write-rtree.md](04-m2-write-rtree.md). What remains for the milestone
-  bar:
+  [04-m2-write-rtree.md](04-m2-write-rtree.md); criterion 5 is met — `v0.1.0` is
+  tagged at `b3649cc` with a GitHub release, and `geopackage-core` 0.1.0 and
+  `geopackage` 0.1.0 are on crates.io and building on docs.rs. Released with the
+  following still open:
   - **GDAL-parity performance target**: not yet met. Unindexed writes are
     competitive, but the D8 bulk indexed write is ~3-4x slower than GDAL's
     indexed `ogr2ogr` copy at 1M rows — the whole-database `integrity_check`
     gate and the per-row `ST_*` envelope scan dominate. The two open D8
     follow-ups (scope the structural check to `rtreecheck`; build the scratch
     RTree in a separate connection) target this; see the 2026-07-24 benchmark.
-  - **v0.1.0 tag + crates.io publish** (`geopackage-core` + `geopackage`): the
-    maintainer's act; the workspace version is bumped to `0.1.0` but nothing is
-    tagged or published here.
+  - **Shipped known limitation**: the `wkb` 0.9.2 untrusted-count OOM (#3) was
+    scoped "before v0.1" but no upstream fix has been released (0.9.2 is still
+    latest), so 0.1.0 ships with it. Now documented as a known limitation in the
+    README and in both crates' docs rather than left implicit; the dependency
+    bump follows upstream.
   - Smaller open items: a dedicated concurrent-reader (read-during-write) test,
     a QGIS re-check in this pass (M1 already exercises QGIS via the corpus), and
     the deferred bulk-build follow-ups tracked in
