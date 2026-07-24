@@ -18,6 +18,16 @@ While the version is below 1.0 the API may change in any release.
 
 ### Changed
 
+- Bulk spatial-index builds construct the RTree directly instead of inserting
+  every entry into a scratch index and copying the result. 1M-point indexed
+  `write_all` goes from 4.95s to ~2.08s, and from 7.31s at 0.1.0, which brings
+  it to GDAL's indexed `ogr2ogr` figures (1.89s point, 2.03s linestring, 2.13s
+  polygon). Note that `ogr2ogr`'s time includes reading its source file while
+  ours is write-only, so GDAL does more work for the same number. Queries are
+  unaffected or slightly better. The node layout is taken from SQLite's own
+  `rtree.c` and validated by `rtreecheck()` in the existing build gate ([#20]).
+- The bulk build no longer uses an `ATTACH`ed scratch database, so it no longer
+  requires autocommit and runs entirely within one transaction.
 - Bulk spatial-index builds are roughly a third faster: 1M-point indexed
   `write_all` goes from 7.31s to 4.95s (criterion, point -32.3%, linestring
   -33.3%, polygon -35.6%, all p < 0.05). Three fixes: the scratch RTree inserts

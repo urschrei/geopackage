@@ -167,21 +167,30 @@ write performance competitive with GDAL's GPKG driver.
       GDAL's source read, so it is conservative for a pure write). Benches compile
       in CI via clippy `--all-targets`; they carry `test = false` so `cargo test`
       never runs them.)*
-- [ ] Target: bulk indexed write >= GDAL parity (its own rtree trick means
-      parity is the goal, not a multiple). *(**Not yet met**, but closer.
-      Unindexed writes are competitive (our write-only point load 0.81 s vs
-      GDAL's 1.22 s read+write). The D8 bulk indexed write went from ~3.9x
-      GDAL's indexed `ogr2ogr` copy to ~2.6x (7.31 s to 4.95 s against 1.89 s
-      for 1M points) via three fixes: the scratch inserts now run in one
-      transaction, the gate uses `rtreecheck` rather than a whole-database
-      `integrity_check` (#16), and `write_all` reuses its encode-time envelopes
-      instead of rescanning. The original attribution was wrong: the `ST_*` scan
-      was only 0.26 s of 7.26 s, while the scratch RTree build was 4.61 s.
-      What remains is that scratch build (3.03 s), which is SQLite's own per-row
-      RTree insertion; Hilbert-ordered insertion and a larger scratch page size
-      were both tried and do not help. Closing the gap needs packed node
-      construction in Rust (#20). See
-      [benchmarks/2026-07-24-bulk-build.md](benchmarks/2026-07-24-bulk-build.md).)*
+- [x] Target: bulk indexed write >= GDAL parity (its own rtree trick means
+      parity is the goal, not a multiple). *(**Met on the benchmark, with a
+      caveat.** At 1M rows the packed build is ~2.08 s (point), ~2.08 s
+      (linestring) and ~2.14 s (polygon) against GDAL's indexed `ogr2ogr` at
+      1.89 / 2.03 / 2.13 s: lines and polygons at parity, points within ~10%.
+      The caveat is the one the original write-up recorded and which now
+      dominates the reading: `ogr2ogr`'s figure includes reading its source
+      file, ours is write-only from memory, so GDAL is doing more work for the
+      same number. Parity here is not parity on equal work. Getting there took
+      four changes, in decreasing order of effect: packed node construction
+      (#20), the scratch inserts running in one transaction, the `rtreecheck`
+      gate (#16), and reusing `write_all`'s encode-time envelopes. History:
+      7.31 s at v0.1.0, 4.95 s after the first three, ~2.08 s packed. See
+      [benchmarks/2026-07-24-packed-nodes.md](benchmarks/2026-07-24-packed-nodes.md).)*
+
+- [x] (issue #20) Build the RTree without the module: pack `%_node`/`%_rowid`/
+      `%_parent` directly from the entry set rather than inserting row by row
+      into a scratch index. *(Done in `geopackage/src/packed.rs`. Node format and
+      invariants taken from SQLite's `rtree.c` and its `rtreecheck`; entries are
+      Hilbert-ordered and packed full, internal levels built bottom-up. Lee and
+      Lee's OMT partitioning was implemented and measured against this: ~15%
+      slower to build on uniform data with no query benefit, within noise on
+      clustered data, so it was dropped. Removing the scratch database also
+      removed the `ATTACH`, so the build is now a single transaction.)*
 
 ## Acceptance criteria
 

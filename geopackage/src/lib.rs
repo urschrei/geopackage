@@ -107,6 +107,7 @@ mod index;
 mod layer;
 mod open;
 mod options;
+mod packed;
 mod schema;
 mod srs;
 mod value;

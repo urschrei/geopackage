@@ -370,7 +370,7 @@ pub(crate) fn drop_all_rtree_triggers(conn: &Connection, table: &str, column: &s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bulk::ScratchDb;
+    use crate::packed::PackedRtree;
     use crate::{GeoPackage, GeometrySpec, TableSchemaBuilder};
     use geo_types::Point;
     use geopackage_core::types::GeometryType;
@@ -411,10 +411,12 @@ mod tests {
             )
     }
 
-    /// A test tamper that adds a bogus row to the scratch index, so the copied
-    /// result no longer matches the accumulated set and the gate must reject it.
-    fn add_bogus_row(scratch: &ScratchDb<'_>) -> Result<()> {
-        scratch.insert_scratch_row(1_000_000, [0.0, 0.0, 0.0, 0.0])
+    /// A test tamper that drops an entry from the packed tree's rowid mapping,
+    /// so the written result no longer matches the accumulated set and the gate
+    /// must reject it.
+    fn corrupt_packed_tree(packed: &mut PackedRtree) -> Result<()> {
+        packed.rowid_map.pop();
+        Ok(())
     }
 
     #[test]
@@ -445,7 +447,7 @@ mod tests {
         let (_dir, gpkg) = populated(&[(1, 10.0, 20.0), (2, -5.0, 7.0), (3, 100.0, 100.0)]);
         let layer = gpkg.layer("pts").unwrap();
         let path = layer
-            .create_spatial_index_impl(BulkIndexOptions::always_bulk(), add_bogus_row)
+            .create_spatial_index_impl(BulkIndexOptions::always_bulk(), corrupt_packed_tree)
             .unwrap();
         // The gate rejected the tampered bulk copy and rebuilt through triggers.
         assert_eq!(path, BuildPath::TriggeredFallback);

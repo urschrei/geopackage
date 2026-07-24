@@ -1,22 +1,29 @@
-//! D8 bulk RTree build: the scratch-database shadow-table technique.
+//! D8 bulk RTree build: construct the index directly and write it.
 //!
 //! SQLite's RTree module has no bulk-load entry point, so populating an index
 //! one row at a time, whether through the spec's `INSERT INTO rtree SELECT`
 //! statement or through the per-row triggers, pays the node-splitting cost for
-//! every row. GDAL's fix, which this module reimplements from the issue
-//! description ([gdal#7614](https://github.com/OSGeo/gdal/issues/7614)), is to
-//! build the RTree in a **scratch in-memory database** and then copy its
-//! `rtree_%_node` / `_rowid` / `_parent` shadow tables verbatim into the target.
-//! The copy is a plain B-tree table copy: no RTree module logic, no `ST_*`
-//! calls, no triggers.
+//! every row. GDAL's fix ([gdal#7614](https://github.com/OSGeo/gdal/issues/7614))
+//! is to build the RTree in a scratch in-memory database and copy its shadow
+//! tables into the target, which this module used to reimplement. Measurement
+//! showed the scratch build itself was then the dominant cost, because it still
+//! inserted every entry through the module one row at a time.
+//!
+//! So the tree is now built outright: [`crate::packed`] lays out the
+//! `rtree_%_node` / `_rowid` / `_parent` contents in memory from the entry set,
+//! and this module writes them as ordinary rows. No RTree module logic, no
+//! `ST_*` calls, no triggers, and no scratch database.
+//!
+//! Dropping the scratch database also removed the `ATTACH`, which required
+//! autocommit and so forced the build out of the caller's transaction. The
+//! whole build is now one transaction.
 //!
 //! The GeoPackage RTree is always `rtree(id, minx, maxx, miny, maxy)` (2-D, no
 //! auxiliary columns), so the three shadow tables have a fixed shape
 //! (`_node(nodeno, data)`, `_rowid(rowid, nodeno)`, `_parent(nodeno,
-//! parentnode)`) and copying between two such tables is well defined regardless
-//! of the RTree's name.
+//! parentnode)`) regardless of the RTree's name.
 //!
-//! Every bulk build is **gated** before it is trusted (see [`gate`]): the copied
+//! Every bulk build is **gated** before it is trusted (see [`gate`]): the written
 //! index must contain exactly the accumulated `(fid, envelope)` set (row count
 //! plus a per-row containment check), and it must pass a structural check
 //! ([`StructuralCheck`]: `rtreecheck()` on the index by default, optionally a
@@ -24,10 +31,9 @@
 //! fall back to the triggered population statement, so a failed gate never
 //! yields a corrupt or stale index, only a slower build.
 //!
-//! The entry set itself comes either from an `ST_*` scan of the table
-//! ([`fill_index`]) or, when the caller can prove it accounts for every
-//! indexable row, from envelopes computed while encoding the geometries
-//! ([`fill_index_with`]).
+//! The entry set itself comes either from an `ST_*` scan of the table or, when
+//! the caller can prove it accounts for every indexable row, from envelopes
+//! computed while encoding the geometries (see [`fill_index`]'s `precomputed`).
 
 use std::collections::HashMap;
 
@@ -36,14 +42,15 @@ use geopackage_core::triggers;
 use rusqlite::Connection;
 
 use crate::Result;
+use crate::packed::{self, PackedRtree};
 
 /// Default candidate-row count at or above which
 /// [`crate::Layer::create_spatial_index`] and [`crate::Layer::write_all`] choose
 /// the bulk shadow-table build over the per-row triggered build.
 ///
-/// Below this, the fixed cost of the scratch database, the shadow-table copy,
-/// and the `PRAGMA integrity_check` gate outweighs the saving; above it the
-/// bulk copy wins. Override with [`BulkIndexOptions`].
+/// Below this, the fixed cost of building and writing the tree plus the gate
+/// outweighs the saving; above it the bulk build wins. Override with
+/// [`BulkIndexOptions`].
 pub const DEFAULT_BULK_THRESHOLD: usize = 10_000;
 
 /// Tuning for the RTree bulk-build path (design decision D8).
@@ -64,7 +71,7 @@ pub struct BulkIndexOptions {
 }
 
 /// How much of the database the bulk-build gate checks structurally after
-/// copying the shadow tables.
+/// writing the shadow tables.
 ///
 /// Both settings run the full content gate (the bijection between the copied
 /// index and the accumulated envelope set, and the per-row containment check);
@@ -129,116 +136,72 @@ pub(crate) enum BuildPath {
     /// The per-row triggered population (`INSERT INTO rtree SELECT`), chosen
     /// because the table was below the bulk threshold.
     Triggered,
-    /// The D8 bulk shadow-table copy, gate passed.
+    /// The D8 bulk build, gate passed.
     Bulk,
-    /// The bulk copy was attempted but its gate failed, so the triggered
+    /// The bulk build was attempted but its gate failed, so the triggered
     /// population was used as a fallback.
     TriggeredFallback,
 }
 
-/// A test seam run against the scratch database after it is built and before its
-/// shadow tables are copied into the target. Production always passes
-/// [`no_tamper`]; a test can pass a function that corrupts the scratch state to
-/// prove the gate rejects it and the triggered fallback still yields a correct
-/// index.
-pub(crate) type ScratchTamper = fn(&ScratchDb<'_>) -> Result<()>;
+/// A test seam run against the packed tree before it is written into the
+/// target's shadow tables. Production always passes [`no_tamper`]; a test can
+/// pass a function that corrupts the packed result to prove the gate rejects it
+/// and the triggered fallback still yields a correct index.
+pub(crate) type ScratchTamper = fn(&mut PackedRtree) -> Result<()>;
 
 /// The no-op [`ScratchTamper`] used in production.
-pub(crate) fn no_tamper(_: &ScratchDb<'_>) -> Result<()> {
+pub(crate) fn no_tamper(_: &mut PackedRtree) -> Result<()> {
     Ok(())
 }
 
-/// Alias of the attached scratch database, and the name of the scratch RTree
-/// built inside it. Fixed names are safe because index building is
-/// single-threaded on one connection and the attach is bracketed by
-/// [`ScratchDb`]'s lifetime.
-const SCRATCH_ALIAS: &str = "gpkg_bulk_scratch";
-const SCRATCH_RTREE: &str = "gpkg_bulk_rtree";
-
-/// An attached in-memory scratch database holding a freshly built RTree, whose
-/// shadow tables are copied into the target. Detaches on drop.
-pub(crate) struct ScratchDb<'c> {
-    conn: &'c Connection,
+/// The byte length the RTree module expects every node blob of `rtree` to have.
+///
+/// Read from the freshly created index's root node rather than re-derived from
+/// `PRAGMA page_size`, because that is exactly what the module itself does when
+/// it reopens an existing index: it takes the node size from `length(data)` of
+/// node 1 and rejects any node that differs. Reading it keeps the two
+/// definitions from drifting apart.
+fn node_size(conn: &Connection, rtree: &str) -> Result<usize> {
+    let size: i64 = conn.query_row(
+        &format!(
+            "SELECT length(data) FROM {} WHERE nodeno = 1",
+            quote(&format!("{rtree}_node"))?
+        ),
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(usize::try_from(size).unwrap_or(0))
 }
 
-impl<'c> ScratchDb<'c> {
-    /// Attach a fresh in-memory scratch database and create the scratch RTree.
-    fn attach(conn: &'c Connection) -> Result<Self> {
-        // Drop any alias left attached by an earlier build that failed to
-        // detach, so the ATTACH below cannot fail on a stale name.
-        best_effort(conn, &format!("DETACH DATABASE {}", quote(SCRATCH_ALIAS)?));
-        conn.execute_batch(&format!(
-            "ATTACH DATABASE ':memory:' AS {}",
-            quote(SCRATCH_ALIAS)?
-        ))?;
-        conn.execute_batch(&format!(
-            "CREATE VIRTUAL TABLE {} USING rtree(id, minx, maxx, miny, maxy)",
-            self_scratch_rtree()?
-        ))?;
-        Ok(Self { conn })
-    }
+/// Replace the three shadow tables' contents with a packed tree.
+fn write_packed(conn: &Connection, rtree: &str, packed: &PackedRtree) -> Result<()> {
+    let node_table = quote(&format!("{rtree}_node"))?;
+    let rowid_table = quote(&format!("{rtree}_rowid"))?;
+    let parent_table = quote(&format!("{rtree}_parent"))?;
 
-    /// Insert the accumulated `(fid, envelope)` rows into the scratch RTree.
-    fn build(&self, rows: &[(i64, [f64; 4])]) -> Result<()> {
-        let sql = format!(
-            "INSERT INTO {} VALUES (?1, ?2, ?3, ?4, ?5)",
-            self_scratch_rtree()?
-        );
-        let tx = self.conn.unchecked_transaction()?;
-        {
-            let mut stmt = self.conn.prepare(&sql)?;
-            for (id, [min_x, max_x, min_y, max_y]) in rows {
-                stmt.execute(rusqlite::params![id, min_x, max_x, min_y, max_y])?;
-            }
-        }
-        tx.commit()?;
-        Ok(())
-    }
+    conn.execute_batch(&format!(
+        "DELETE FROM {node_table}; DELETE FROM {rowid_table}; DELETE FROM {parent_table};"
+    ))?;
 
-    /// Insert one raw row into the scratch RTree. Only used by test tampers to
-    /// corrupt the scratch state (e.g. add a row so the copied index no longer
-    /// matches the accumulated set).
-    #[cfg(test)]
-    pub(crate) fn insert_scratch_row(
-        &self,
-        id: i64,
-        [min_x, max_x, min_y, max_y]: [f64; 4],
-    ) -> Result<()> {
-        self.conn.execute(
-            &format!(
-                "INSERT INTO {} VALUES (?1, ?2, ?3, ?4, ?5)",
-                self_scratch_rtree()?
-            ),
-            rusqlite::params![id, min_x, max_x, min_y, max_y],
-        )?;
-        Ok(())
-    }
-}
-
-impl Drop for ScratchDb<'_> {
-    fn drop(&mut self) {
-        if let Ok(alias) = quote(SCRATCH_ALIAS) {
-            best_effort(self.conn, &format!("DETACH DATABASE {alias}"));
+    {
+        let mut stmt = conn.prepare(&format!("INSERT INTO {node_table} VALUES (?1, ?2)"))?;
+        for (nodeno, blob) in &packed.nodes {
+            stmt.execute(rusqlite::params![nodeno, blob])?;
         }
     }
-}
-
-/// Run a housekeeping statement whose failure is safe to ignore: a failed
-/// ATTACH/DETACH leaves an in-memory scratch database that is discarded when the
-/// connection closes.
-fn best_effort(conn: &Connection, sql: &str) {
-    if conn.execute_batch(sql).is_err() {
-        // Deliberately ignored: this is best-effort cleanup.
+    {
+        let mut stmt = conn.prepare(&format!("INSERT INTO {rowid_table} VALUES (?1, ?2)"))?;
+        for (rowid, nodeno) in &packed.rowid_map {
+            stmt.execute(rusqlite::params![rowid, nodeno])?;
+        }
     }
-}
-
-/// The quoted, alias-qualified scratch RTree name (`"alias"."rtree"`).
-fn self_scratch_rtree() -> Result<String> {
-    Ok(format!(
-        "{}.{}",
-        quote(SCRATCH_ALIAS)?,
-        quote(SCRATCH_RTREE)?
-    ))
+    {
+        let mut stmt = conn.prepare(&format!("INSERT INTO {parent_table} VALUES (?1, ?2)"))?;
+        for (nodeno, parent) in &packed.parent_map {
+            stmt.execute(rusqlite::params![nodeno, parent])?;
+        }
+    }
+    Ok(())
 }
 
 /// The number of rows in `table` (the cheap decision proxy: no `ST_*` calls).
@@ -274,23 +237,6 @@ fn accumulate_envelopes(
         ))
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
-}
-
-/// Copy the three shadow tables of the scratch RTree into the target RTree's
-/// shadow tables, replacing their (freshly created, empty) contents.
-fn copy_shadow_tables(conn: &Connection, rtree: &str) -> Result<()> {
-    for suffix in ["node", "rowid", "parent"] {
-        let target = quote(&format!("{rtree}_{suffix}"))?;
-        let source = format!(
-            "{}.{}",
-            quote(SCRATCH_ALIAS)?,
-            quote(&format!("{SCRATCH_RTREE}_{suffix}"))?
-        );
-        conn.execute_batch(&format!(
-            "DELETE FROM {target}; INSERT INTO {target} SELECT * FROM {source};"
-        ))?;
-    }
-    Ok(())
 }
 
 /// Gate a freshly copied RTree against the accumulated `(fid, envelope)` set.
@@ -388,26 +334,29 @@ where
         Some(entries) => entries,
         None => accumulate_envelopes(conn, table, geom, pk)?,
     };
-    let scratch = ScratchDb::attach(conn)?;
-    scratch.build(&accumulated)?;
-    tamper(&scratch)?;
 
     let quoted_rtree = quote(rtree)?;
     let create_vtab = triggers::create_rtree_table_sql(table, geom)?;
 
-    // ATTACH/DETACH bracket this transaction (they require autocommit); the
-    // scratch build above and the detach on `scratch` drop happen outside it.
+    // The whole build is one transaction. Nothing here needs autocommit: the
+    // tree is constructed in memory by `packed::pack` and written as ordinary
+    // rows, so unlike the previous `ATTACH`ed scratch database there is no
+    // window in which the rows are committed but the index is not.
     let tx = conn.unchecked_transaction()?;
     conn.execute_batch(&format!("DROP TABLE IF EXISTS {quoted_rtree}"))?;
     conn.execute_batch(&create_vtab)?;
-    copy_shadow_tables(conn, rtree)?;
+
+    let node_size = node_size(conn, rtree)?;
+    let mut packed = packed::pack(&accumulated, node_size)?;
+    tamper(&mut packed)?;
+    write_packed(conn, rtree, &packed)?;
 
     let expected: HashMap<i64, [f64; 4]> = accumulated.into_iter().collect();
     let path = if gate(conn, rtree, expected, options.structural_check)? {
         BuildPath::Bulk
     } else {
-        // Discard the copied result and rebuild through the triggered
-        // population, which cannot be affected by a bad shadow-table copy.
+        // Discard the packed result and rebuild through the triggered
+        // population, which cannot be affected by a bad packed tree.
         conn.execute_batch(&format!("DROP TABLE {quoted_rtree}"))?;
         conn.execute_batch(&create_vtab)?;
         conn.execute_batch(&triggers::populate_rtree_sql(table, geom, pk)?)?;

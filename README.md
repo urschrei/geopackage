@@ -128,11 +128,6 @@ for the detailed results.
   [georust/wkb](https://github.com/georust/wkb); do not parse untrusted
   GeoPackage files with 0.1.0. Tracked in
   [#3](https://github.com/urschrei/geopackage/issues/3).
-- **Bulk indexed writes are not yet at GDAL parity**: roughly 2.6x slower than
-  an indexed `ogr2ogr` copy at 1M rows (4.95 s against 1.89 s), down from 3.9x
-  in 0.1.0. What remains is SQLite's own per-row RTree insertion while building
-  the scratch index. Tracked in
-  [#20](https://github.com/urschrei/geopackage/issues/20).
 - **Non-linear curve types** (`CIRCULARSTRING`, `COMPOUNDCURVE`, …) cannot have
   their envelopes computed and so cannot be inserted into an indexed table.
   Tracked in [#5](https://github.com/urschrei/geopackage/issues/5).
