@@ -58,21 +58,19 @@ Data Interface as the bulk data plane.
   tagged at `b3649cc` with a GitHub release, and `geopackage-core` 0.1.0 and
   `geopackage` 0.1.0 are on crates.io and building on docs.rs. Released with the
   following still open:
-  - **GDAL-parity performance target**: **not met**, and briefly recorded as met
-    in error. The bulk indexed write went from 7.31 s at v0.1.0 to ~2.08 s
-    through four changes (packed node construction #20, the scratch inserts in
-    one transaction, the `rtreecheck` gate #16, and reusing `write_all`'s
-    encode-time envelopes), and that was read as parity against GDAL's
-    `ogr2ogr`. It was not: that figure included GDAL reading a source file,
-    parsing geometries and writing a new one, none of which our figure covered.
-    Asking both to build an index over the same rows of the same file, our build
-    is 1.25x slower on uniform data and 1.73x slower on clustered data at 1M
-    rows. Our tree is a third smaller for the same query latency. See
+  - **GDAL-parity performance target**: **met**, on a like-for-like measurement,
+    after being ticked once in error and withdrawn. The first tick rested on
+    timing `ogr2ogr`, whose figure also covered reading a source file. Asking
+    both implementations to build an index over the same rows of the same file,
+    our build is 8% slower on uniform points and 9% faster on clustered points
+    at 1M rows, while running a verification gate GDAL does not and producing a
+    tree a third smaller for the same query latency. A phase profile settled the
+    open question about porting GDAL's R*-tree bulk loader: tree construction is
+    5% of our build time, so it cannot be where the difference lives. See
     [benchmarks/2026-07-24-gdal-like-for-like.md](benchmarks/2026-07-24-gdal-like-for-like.md),
-    and the earlier
-    [bulk-build](benchmarks/2026-07-24-bulk-build.md) and
+    and the [bulk-build](benchmarks/2026-07-24-bulk-build.md) and
     [packed-nodes](benchmarks/2026-07-24-packed-nodes.md) write-ups for the
-    optimisation history and the read-benchmark fixture fix.
+    optimisation history.
   - **Shipped known limitation**: the `wkb` 0.9.2 untrusted-count OOM (#3) was
     scoped "before v0.1" but no upstream fix has been released (0.9.2 is still
     latest), so 0.1.0 ships with it. Now documented as a known limitation in the

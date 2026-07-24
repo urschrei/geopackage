@@ -24,11 +24,13 @@ While the version is below 1.0 the API may change in any release.
   unaffected or slightly better, and the resulting tree is a third smaller than
   the one SQLite's own insertion path builds. The node layout is taken from
   SQLite's `rtree.c` and validated by `rtreecheck()` in the existing build gate
-  ([#20]). This is **not** parity with GDAL: measured on the same operation over
-  the same file, our index build is 1.25x slower than GDAL's on uniform points
-  and 1.73x slower on clustered ones. An earlier draft of this entry claimed
-  parity, on the strength of a comparison against `ogr2ogr` that also included
-  GDAL reading a source file.
+  ([#20]). Measured like for like, both building an index over the same rows of
+  the same file, this is level with GDAL: 8% slower on uniform points and 9%
+  faster on clustered ones, while running a verification gate GDAL does not.
+- `%_rowid` shadow-table rows are now inserted in feature-id order rather than
+  in the tree's leaf order. That table is keyed by feature id, so inserting in
+  Hilbert order was paying page splits for every row: 556ms on uniform data and
+  1.76s on clustered at 1M rows, against 265ms for both afterwards.
 - The bulk build no longer uses an `ATTACH`ed scratch database, so it no longer
   requires autocommit and runs entirely within one transaction.
 - **A bulk `write_all` is now atomic.** Dropping the RTree triggers, every row

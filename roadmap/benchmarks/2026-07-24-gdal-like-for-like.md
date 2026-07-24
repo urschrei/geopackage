@@ -46,18 +46,62 @@ throughout.
 
 ## Build time, 1M points
 
-| distribution | ours | GDAL | ratio |
-|---|---|---|---|
-| uniform | 1841 ms | 1469 ms | **1.25x slower** |
-| clustered | 3871 ms | 2237 ms | **1.73x slower** |
+The first run of this harness showed us well behind, which prompted a phase
+profile. That found the cause, and fixing it changed the answer:
 
-Repetitions were tight: uniform 1847-1950 ms for ours against 1592-1619 ms for
-GDAL, clustered 3513-4027 ms against 2296-2581 ms. The gap is well outside the
-spread, so this is a real difference, not noise.
+| distribution | ours, first run | ours, after the fix | GDAL | ratio now |
+|---|---|---|---|---|
+| uniform | 1841 ms | 1593 ms | 1480 ms | 1.08x slower |
+| clustered | 3871 ms | 1956 ms | 2140 ms | 0.91x, i.e. faster |
 
-At 20k rows the same script reports ours 50 ms against GDAL's 32 ms (1.56x), but
-at that size the startup floor is most of the raw measurement and the subtraction
-dominates the result, so it carries little weight.
+At 20k rows the same script reports ours 50 ms against GDAL's 32 ms, but at that
+size the startup floor is most of the raw measurement and the subtraction
+dominates, so it carries little weight.
+
+## Where the time actually goes
+
+Phase profile of our build at 1M points, before the fix. This is the evidence
+that decided what to do about the gap:
+
+| phase | uniform | clustered |
+|---|---|---|
+| `ST_*` envelope scan | 343 ms | 351 ms |
+| tree construction (Hilbert keys, sort, node encoding) | **92 ms** | **89 ms** |
+| SQLite writes of the shadow tables | 594 ms | 1855 ms |
+| gate (bijection scan + `rtreecheck`) | 745 ms | 1223 ms |
+| total | 1810 ms | 3550 ms |
+
+Two things follow immediately.
+
+**Tree construction is 5% of the time.** Replacing the packing algorithm with
+something better, including porting the R*-tree builder GDAL uses, could at best
+save a fraction of 90 ms. It cannot account for a 372 ms gap, let alone close
+it. That question is settled by this table.
+
+**The shadow-table writes were nearly all `%_rowid`.** Splitting them by table
+gave 36 ms for `%_node`, 6 ms for `%_parent`, and 556 ms (uniform) or 1758 ms
+(clustered) for `%_rowid`. That table is keyed by feature id, but the packer
+emits its rows in leaf order, which is Hilbert order and close to random with
+respect to feature id, so a million inserts were paying page splits the whole
+way. Buffering them and inserting in key order costs 16 bytes per entry and a
+sort, and brings both distributions to ~265 ms. It also removes the
+distribution sensitivity entirely, which is why the clustered case improved so
+much more than the uniform one.
+
+## The gate, which GDAL does not have
+
+After the fix, the largest single component of our build is the gate: 745 ms of
+1593 ms on uniform data, being a full bijection scan of the written index
+against the accumulated envelopes plus `rtreecheck` over the whole tree. GDAL
+runs no equivalent.
+
+That is a deliberate trade. The tree is written by hand from our own
+understanding of an undocumented on-disk format, so it is checked by SQLite's
+own checker and against the input set before it is trusted, with a fallback to
+the triggered build on any anomaly. Roughly half our build time is that
+insurance. It is worth stating plainly rather than hiding in an aggregate: on
+these figures, without the gate we would be comfortably faster than GDAL on both
+distributions, and the reason not to do that is confidence, not speed.
 
 ## What each build produced, 1M uniform
 
@@ -88,24 +132,29 @@ advantage here, and costs none either.
 
 ## Conclusion
 
-**The GDAL-parity target is not met.** Our index build is 1.25x slower on
-uniformly spread points and 1.73x slower on clustered points, against the same
-operation on the same file. The earlier claim of parity was an artefact of
-comparing against a figure that included GDAL reading a source file.
+On the same operation over the same file, our index build is now **8% slower
+than GDAL on uniformly spread points and 9% faster on clustered points**, while
+carrying a verification pass GDAL does not run and producing a tree a third
+smaller for equivalent query latency. Calling that parity is fair; claiming a
+win is not.
 
-What the packed build does deliver is a third fewer nodes for the same query
-performance, and a build that is a single transaction.
+The earlier claim of parity, from the `ogr2ogr` comparison, was still an
+artefact and is still withdrawn: it was right by accident, for a measurement
+that could not have shown it.
 
-Two things worth investigating, neither of which this run explains:
+**Do not port GDAL's R*-tree bulk loader.** Tree construction is 5% of our
+runtime. The gap it could address does not exist; the costs that do exist are
+the `ST_*` scan, the shadow-table writes, and our own gate. This was worth
+measuring rather than arguing about, and the phase table is the reason the
+answer is clear.
 
-- Both implementations slow down on clustered data, but ours degrades more (2.1x
-  against GDAL's 1.5x), while producing an identically sized tree in both cases.
-  The distribution-sensitive part of our path is the Hilbert sort, which is the
-  place to look first.
-- GDAL's builder is Rouault's `sqlite_rtree_bulk_load`, which reimplements
-  SQLite's R*-tree insertion in memory. That it beats a sort-and-pack build is
-  not the expected result, and is worth understanding before assuming the gap is
-  inherent.
+Remaining candidates, in the order the profile suggests:
+
+- The gate, at ~45% of the build. Not a defect, and not something to remove
+  lightly, but the one place where real time is available if confidence in the
+  packer ever justifies making it optional.
+- The `ST_*` envelope scan at ~343 ms, which `write_all` already avoids by
+  reusing encode-time envelopes but `create_spatial_index` cannot.
 
 ## Reproducing
 

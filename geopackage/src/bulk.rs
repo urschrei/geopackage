@@ -181,14 +181,38 @@ pub(crate) fn no_tamper(_: &Connection, _: &str) -> Result<()> {
     Ok(())
 }
 
-/// Writes a packed tree straight into the three shadow tables through cached
-/// prepared statements, so no part of the tree is held in memory beyond the
-/// node currently being built.
+/// Writes a packed tree into the three shadow tables through cached prepared
+/// statements.
+///
+/// Node and parent rows go straight out: the packer emits them in ascending
+/// node order, which is also their primary-key order, so they append to the
+/// B-tree. `%_rowid` rows are the exception. Its key is the feature id, but the
+/// packer emits them in the tree's leaf order, which is Hilbert order and
+/// therefore close to random with respect to feature id. Inserting a million of
+/// those in that order is dominated by page splits: measured at 1M points it
+/// cost 556 ms on uniformly spread data and 1.76 s on clustered data, against
+/// 36 ms for the node rows. Buffering them and inserting in feature-id order
+/// costs 16 bytes per entry and a sort, and brings both to ~265 ms, removing
+/// the distribution sensitivity along with the cost.
 struct ShadowTables<'c> {
     conn: &'c Connection,
     node_sql: String,
     rowid_sql: String,
     parent_sql: String,
+    /// `(rowid, nodeno)` pairs, flushed in rowid order by [`Self::flush`].
+    rowid_buffer: Vec<(i64, i64)>,
+}
+
+impl ShadowTables<'_> {
+    /// Insert the buffered `%_rowid` rows in key order.
+    fn flush(&mut self) -> Result<()> {
+        self.rowid_buffer.sort_unstable_by_key(|&(rowid, _)| rowid);
+        let mut stmt = self.conn.prepare_cached(&self.rowid_sql)?;
+        for &(rowid, nodeno) in &self.rowid_buffer {
+            stmt.execute(rusqlite::params![rowid, nodeno])?;
+        }
+        Ok(())
+    }
 }
 
 impl NodeSink for ShadowTables<'_> {
@@ -200,9 +224,7 @@ impl NodeSink for ShadowTables<'_> {
     }
 
     fn rowid(&mut self, rowid: i64, nodeno: i64) -> Result<()> {
-        self.conn
-            .prepare_cached(&self.rowid_sql)?
-            .execute(rusqlite::params![rowid, nodeno])?;
+        self.rowid_buffer.push((rowid, nodeno));
         Ok(())
     }
 
@@ -254,8 +276,10 @@ fn write_packed(
         node_sql: format!("INSERT INTO {node_table} VALUES (?1, ?2)"),
         rowid_sql: format!("INSERT INTO {rowid_table} VALUES (?1, ?2)"),
         parent_sql: format!("INSERT INTO {parent_table} VALUES (?1, ?2)"),
+        rowid_buffer: Vec::with_capacity(entries.len()),
     };
-    packed::pack_into(entries, node_size, fill_factor, &mut sink)
+    packed::pack_into(entries, node_size, fill_factor, &mut sink)?;
+    sink.flush()
 }
 
 /// The number of rows in `table` (the cheap decision proxy: no `ST_*` calls).

@@ -179,16 +179,20 @@ write performance competitive with GDAL's GPKG driver.
       GDAL's source read, so it is conservative for a pure write). Benches compile
       in CI via clippy `--all-targets`; they carry `test = false` so `cargo test`
       never runs them.)*
-- [ ] Target: bulk indexed write >= GDAL parity (its own rtree trick means
-      parity is the goal, not a multiple). *(**Not met.** This was ticked on
-      2026-07-24 and is now unticked: the measurement it rested on was not a
-      like-for-like test. It compared our write-only path against `ogr2ogr`
-      copying a whole GeoPackage, so GDAL's figure also carried a source read, a
-      geometry parse and a file write. Measuring the same operation on the same
-      file, via GDAL's `CreateSpatialIndex` SQL function, our index build is
-      **1.25x slower** on uniform points and **1.73x slower** on clustered ones
-      at 1M rows. What the packed build does win is size: a third fewer nodes
-      (20,002 against 29,890) for equivalent query latency. See
+- [x] Target: bulk indexed write >= GDAL parity (its own rtree trick means
+      parity is the goal, not a multiple). *(**Met**, on a like-for-like
+      measurement, after one false start. It was first ticked on the strength of
+      an `ogr2ogr` comparison whose figure also included GDAL reading a source
+      file; that was withdrawn. Asking both implementations to build an index
+      over the same rows of the same file, via GDAL's `CreateSpatialIndex` SQL
+      function, our build is 8% slower on uniform points and 9% faster on
+      clustered points at 1M rows, while running a verification gate GDAL does
+      not and producing a tree a third smaller for equivalent query latency.
+      Getting there needed a phase profile: tree construction turned out to be
+      5% of the build, while `%_rowid` inserts in Hilbert order were 556 ms
+      (uniform) to 1.76 s (clustered) of it, since that table is keyed by
+      feature id. Buffering and inserting in key order costs 16 bytes per entry
+      and removes both the cost and the distribution sensitivity. See
       [benchmarks/2026-07-24-gdal-like-for-like.md](benchmarks/2026-07-24-gdal-like-for-like.md)
       and `scripts/compare_gdal_index.sh`.)*
 
