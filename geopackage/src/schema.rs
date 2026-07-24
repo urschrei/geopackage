@@ -102,6 +102,38 @@ impl GeoPackage {
             .transpose()
     }
 
+    /// Like [`GeoPackage::geometry_column`] but matching the table name
+    /// case-insensitively.
+    ///
+    /// The read path uses this so a feature layer keeps its geometry column
+    /// even when the `gpkg_geometry_columns` row spells the table name in a
+    /// different case than `gpkg_contents` or the physical table (one of the
+    /// conditions [`GeoPackage::open_lenient`] tolerates and warns about).
+    pub(crate) fn geometry_column_ci(&self, table_name: &str) -> Result<Option<GeometryColumn>> {
+        if !table_exists(self.connection(), "gpkg_geometry_columns")? {
+            return Ok(None);
+        }
+        let raw = self
+            .connection()
+            .query_row(
+                &format!("{GEOMETRY_COLUMNS_SELECT} WHERE table_name = ?1 COLLATE NOCASE"),
+                [table_name],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, i32>(3)?,
+                        r.get::<_, i64>(4)?,
+                        r.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        raw.map(|(t, c, g, s, z, m)| GeometryColumn::from_raw(t, c, g, s, z, m))
+            .transpose()
+    }
+
     /// All `gpkg_geometry_columns` rows, ordered by table name.
     ///
     /// Returns an empty vector when the table is absent (see

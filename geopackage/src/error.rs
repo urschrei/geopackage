@@ -98,6 +98,33 @@ pub enum Error {
         /// The geometry column that was read.
         column: String,
     },
+    /// A layer was requested by a name that is not present in `gpkg_contents`.
+    #[error("no such layer: {table_name:?} is not registered in gpkg_contents")]
+    NoSuchLayer {
+        /// The requested layer name.
+        table_name: String,
+    },
+    /// A layer was requested with the wrong accessor: its `gpkg_contents`
+    /// `data_type` does not match the accessor used ([`crate::GeoPackage::layer`]
+    /// expects `features`, [`crate::GeoPackage::attributes`] expects
+    /// `attributes`).
+    #[error("layer {table_name:?} has data_type {found:?}, not {expected:?}")]
+    WrongDataType {
+        /// The layer as named in `gpkg_contents`.
+        table_name: String,
+        /// The `data_type` the accessor requires.
+        expected: &'static str,
+        /// The `data_type` actually recorded in `gpkg_contents`.
+        found: String,
+    },
+    /// A spatial (bounding-box) query was requested on a layer that has no
+    /// geometry column (an attribute layer, or a feature table whose
+    /// `gpkg_geometry_columns` row is missing).
+    #[error("layer {table_name:?} has no geometry column; spatial queries are unavailable")]
+    NoGeometryColumn {
+        /// The layer that was queried.
+        table_name: String,
+    },
 }
 
 /// Convenience alias.

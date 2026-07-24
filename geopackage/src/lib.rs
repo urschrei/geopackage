@@ -1,9 +1,26 @@
 //! Read and write [OGC GeoPackage](https://www.geopackage.org/spec140/) files.
 //!
-//! **Status: M0 skeleton.** Container create/open with pragma and schema
-//! validation, required SQL function registration, and `gpkg_contents`
-//! introspection. Feature/attribute CRUD, spatial index management, and the
-//! geo-traits API arrive in M1/M2 — see the roadmap in the repository README.
+//! **Status: M1 read path.** The container is created and opened with pragma
+//! and schema validation ([`GeoPackage::create`], [`GeoPackage::open`],
+//! [`GeoPackage::open_read_only`], [`GeoPackage::from_connection`]), and the
+//! required RTree SQL functions are registered on every connection. On top of
+//! `gpkg_contents`, `gpkg_spatial_ref_sys` ([`Srs`]) and per-table schema
+//! introspection ([`TableSchema`]), this crate exposes a read path:
+//!
+//! - [`GeoPackage::layers`] enumerates feature layers; [`GeoPackage::layer`]
+//!   and [`GeoPackage::attributes`] return typed [`Layer`] handles.
+//! - [`Layer::features`] iterates a layer as owned [`Feature`]s, with by-name
+//!   and by-index value access and lazy geometry parsing.
+//! - [`Layer::features_in`] runs a bounding-box query, using the RTree spatial
+//!   index when one is present and a full scan otherwise, with provably
+//!   identical results.
+//! - [`Layer::select`] appends a caller-supplied `WHERE` clause (raw SQL, per
+//!   design decision D9: SQL is the query engine).
+//! - [`GeoPackage::open_lenient`] tolerates legacy and lightly malformed files,
+//!   collecting [`OpenWarning`]s instead of failing.
+//!
+//! Feature/attribute writes, spatial index maintenance from Rust, and the
+//! GeoArrow bulk plane arrive in later milestones — see the repository roadmap.
 //!
 //! ```no_run
 //! # fn main() -> Result<(), geopackage::Error> {
@@ -17,6 +34,8 @@
 
 mod error;
 mod functions;
+mod layer;
+mod open;
 mod schema;
 mod srs;
 mod value;
@@ -24,6 +43,8 @@ mod value;
 pub use error::{Error, Result};
 pub use geopackage_core as core;
 pub use geopackage_core::GpkgVersion;
+pub use layer::{BoundingBox, Feature, Features, Layer, LayerKind};
+pub use open::OpenWarning;
 pub use schema::{Column, GeometryColumn, TableSchema};
 pub use srs::Srs;
 pub use value::{ConversionOptions, DateTimeParsing, Value};
@@ -36,6 +57,7 @@ use std::path::Path;
 pub struct GeoPackage {
     conn: Connection,
     version: GpkgVersion,
+    warnings: Vec<OpenWarning>,
 }
 
 impl GeoPackage {
@@ -75,6 +97,7 @@ impl GeoPackage {
         Ok(Self {
             conn,
             version: GpkgVersion::V1_4,
+            warnings: Vec::new(),
         })
     }
 
@@ -117,7 +140,11 @@ impl GeoPackage {
             }
         }
         functions::register(&conn)?;
-        Ok(Self { conn, version })
+        Ok(Self {
+            conn,
+            version,
+            warnings: Vec::new(),
+        })
     }
 
     /// The spec version declared by the file's pragmas.
@@ -165,6 +192,28 @@ pub(crate) fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bo
     )
     .optional()
     .map(|o| o.is_some())
+}
+
+/// Resolve `name` to the actual SQLite table (or view) name, matching
+/// case-insensitively.
+///
+/// SQLite object names resolve case-insensitively, but joins between catalogue
+/// tables (`gpkg_contents`, `gpkg_geometry_columns`) compare the stored strings
+/// exactly. This returns the physical name as SQLite stores it — identical to
+/// `name` for a well-formed file, differing only in case for the wrong-case
+/// files [`GeoPackage::open_lenient`] tolerates. `None` when no such table
+/// exists under any casing.
+pub(crate) fn resolve_table_name(
+    conn: &Connection,
+    name: &str,
+) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT name FROM sqlite_master \
+         WHERE type IN ('table','view') AND name = ?1 COLLATE NOCASE",
+        [name],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
 }
 
 /// A row of `gpkg_contents`.

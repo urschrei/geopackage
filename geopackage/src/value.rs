@@ -141,6 +141,27 @@ impl GeoPackage {
     }
 }
 
+/// Convert a typed [`Value`] into an owned rusqlite value for parameter
+/// binding (the [`crate::Layer::select`] passthrough).
+///
+/// [`Value::Date`] and [`Value::DateTime`] bind as their canonical text form
+/// (the strict spec spelling); [`Value::Boolean`] binds as the integer `0`/`1`.
+/// This keeps rusqlite types out of the public API: callers pass our [`Value`]
+/// enum and conversion happens here.
+pub(crate) fn value_to_sql(value: &Value) -> rusqlite::types::Value {
+    use rusqlite::types::Value as Sql;
+    match value {
+        Value::Null => Sql::Null,
+        Value::Boolean(b) => Sql::Integer(i64::from(*b)),
+        Value::Integer(i) => Sql::Integer(*i),
+        Value::Float(f) => Sql::Real(*f),
+        Value::Text(s) => Sql::Text(s.clone()),
+        Value::Blob(b) => Sql::Blob(b.clone()),
+        Value::Date(d) => Sql::Text(d.to_string()),
+        Value::DateTime(dt) => Sql::Text(dt.to_string()),
+    }
+}
+
 /// Convert a raw SQLite value into a typed [`Value`], driven by the column's
 /// declared type.
 ///
