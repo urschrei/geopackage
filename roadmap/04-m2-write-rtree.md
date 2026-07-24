@@ -95,6 +95,16 @@ write performance competitive with GDAL's GPKG driver.
       merge-into-populated-index bulk path (re-index existing + new, or an rstar
       escalation) is deferred until benchmarks justify it (see 02-ecosystem
       rstar note).
+- [ ] Read-path finding (from the hegel port of the `features_in` property
+      test): for a coordinate of `f32` sub-normal magnitude (`|x| < ~1.2e-38`,
+      e.g. `3e-39`), SQLite coerces the `f64` query-box constraint to `f32`
+      non-conservatively, so the RTree candidate scan can drop a truly
+      intersecting feature *before* `features_in`'s `f64` re-test runs — the
+      indexed and full-scan paths then disagree. Fix in the M1 read path by
+      expanding the bound each query passes to the vtab outward to the enclosing
+      `f32` (min → next-lower `f32`, max → next-higher `f32`) so the vtab filter
+      is provably conservative. The property test avoids the sub-normal band
+      until this lands (it is outside the domain of geographic coordinates).
 
 ### Performance
 - [ ] Criterion benches: 1M and 10M point/line/polygon writes, indexed and

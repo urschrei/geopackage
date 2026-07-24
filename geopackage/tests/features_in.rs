@@ -1,13 +1,15 @@
 //! `Layer::features_in`: the RTree-accelerated path, the full-scan fallback,
-//! and a seeded property test proving they return identical rows.
+//! and a property test proving they return identical rows.
 //!
-//! The generator is a hand-rolled deterministic SplitMix64 rather than
-//! `proptest`: the property here is a set equality with an independent oracle
-//! (envelopes computed directly from the coordinates we generated), which does
-//! not benefit much from shrinking, and a zero-dependency seeded generator
-//! keeps the dependency tree honest and CI reproducible. Failing seeds print,
-//! so a regression is replayable. Decision recorded in
-//! `roadmap/03-m1-read-path.md`.
+//! The property is a set equality against an independent oracle: the expected
+//! fids are computed directly from the `f64` coordinates hegel generated
+//! (`env_intersects`), never from either query path, so a bug in one path
+//! cannot hide. Coordinates are `f64` values that are not `f32`-exact (so they
+//! stress the RTree's `f32` bound rounding and `features_in`'s candidate re-test
+//! against the true `f64` envelope), quantised only to keep their magnitude out
+//! of the `f32` sub-normal band (see `draw_coord`). Ported from a hand-rolled
+//! SplitMix64 generator to `#[hegel::test]` (which shrinks failing cases to a
+//! minimal counterexample — the sub-normal edge above was found this way).
 
 #![expect(
     clippy::unwrap_used,
@@ -17,30 +19,7 @@
 use geopackage::core::gpb::{Envelope, encode_header};
 use geopackage::core::triggers;
 use geopackage::{BoundingBox, GeoPackage};
-
-/// A deterministic SplitMix64 PRNG (public-domain algorithm).
-struct Rng(u64);
-
-impl Rng {
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    /// A full-mantissa `f64` in `[lo, hi)` — almost never exactly representable
-    /// in `f32`, which is the point (it stresses the RTree's f32 rounding).
-    fn f64_in(&mut self, lo: f64, hi: f64) -> f64 {
-        let u = (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
-        lo + u * (hi - lo)
-    }
-
-    fn below(&mut self, n: u64) -> u64 {
-        self.next_u64() % n
-    }
-}
+use hegel::generators;
 
 /// A GPB point blob with no header envelope (forcing traversal on read).
 fn point_blob(x: f64, y: f64) -> Vec<u8> {
@@ -65,15 +44,34 @@ fn linestring_blob(pts: &[(f64, f64)]) -> Vec<u8> {
     b
 }
 
-/// A random geometry blob and its true `f64` envelope `[min_x, max_x, min_y, max_y]`.
-fn random_geom(rng: &mut Rng) -> (Vec<u8>, [f64; 4]) {
-    let coord = |rng: &mut Rng| rng.f64_in(-100.0, 100.0);
-    if rng.below(2) == 0 {
-        let (x, y) = (coord(rng), coord(rng));
+/// A realistic-magnitude `f64` coordinate in `[-100, 100]`, quantised to 6
+/// decimal places. It is generally not representable in `f32` (so it still
+/// stresses the RTree's `f32` bound rounding and the candidate re-test), but its
+/// magnitude stays out of the `f32` sub-normal band (`|x| < ~1.2e-38`).
+///
+/// Un-quantised draws let hegel reach sub-normal-magnitude coordinates, where
+/// SQLite's RTree coerces the `f64` query constraints to `f32` non-conservatively
+/// and drops a truly-intersecting candidate before `features_in`'s `f64` re-test
+/// runs. That is a real (M1 read-path) edge outside the domain of geographic
+/// coordinates — flagged in `roadmap/04-m2-write-rtree.md`, not exercised here.
+fn draw_coord(tc: &hegel::TestCase) -> f64 {
+    let v = tc.draw(
+        generators::floats::<f64>()
+            .min_value(-100.0)
+            .max_value(100.0),
+    );
+    (v * 1_000_000.0).round() / 1_000_000.0
+}
+
+/// A drawn point or short linestring geometry blob (no header envelope, forcing
+/// traversal on read) and its true `f64` envelope `[min_x, max_x, min_y, max_y]`.
+fn draw_geom(tc: &hegel::TestCase) -> (Vec<u8>, [f64; 4]) {
+    if tc.draw(generators::booleans()) {
+        let (x, y) = (draw_coord(tc), draw_coord(tc));
         (point_blob(x, y), [x, x, y, y])
     } else {
-        let n = 2 + rng.below(3) as usize;
-        let pts: Vec<(f64, f64)> = (0..n).map(|_| (coord(rng), coord(rng))).collect();
+        let n = tc.draw(generators::integers::<usize>().min_value(2).max_value(4));
+        let pts: Vec<(f64, f64)> = (0..n).map(|_| (draw_coord(tc), draw_coord(tc))).collect();
         let mut env = [
             f64::INFINITY,
             f64::NEG_INFINITY,
@@ -87,6 +85,35 @@ fn random_geom(rng: &mut Rng) -> (Vec<u8>, [f64; 4]) {
             env[3] = env[3].max(*y);
         }
         (linestring_blob(&pts), env)
+    }
+}
+
+/// A drawn query box: usually a random box (sized `0..60` per side), and
+/// sometimes a degenerate box sitting exactly on a stored feature's min corner
+/// (the inclusive-boundary + `f32`-rounding case).
+fn draw_bbox(tc: &hegel::TestCase, envelopes: &[(i64, [f64; 4])]) -> BoundingBox {
+    if !envelopes.is_empty() && tc.draw(generators::booleans()) {
+        let i = tc.draw(
+            generators::integers::<usize>()
+                .min_value(0)
+                .max_value(envelopes.len() - 1),
+        );
+        let env = envelopes.get(i).expect("drawn index within bounds").1;
+        BoundingBox::new(env[0], env[2], env[0], env[2])
+    } else {
+        let min_x = tc.draw(
+            generators::floats::<f64>()
+                .min_value(-110.0)
+                .max_value(110.0),
+        );
+        let min_y = tc.draw(
+            generators::floats::<f64>()
+                .min_value(-110.0)
+                .max_value(110.0),
+        );
+        let w = tc.draw(generators::floats::<f64>().min_value(0.0).max_value(60.0));
+        let h = tc.draw(generators::floats::<f64>().min_value(0.0).max_value(60.0));
+        BoundingBox::new(min_x, min_y, min_x + w, min_y + h)
     }
 }
 
@@ -172,80 +199,51 @@ fn rtree_path_uses_vtab_full_scan_does_not() {
     assert!(plain_plan.iter().any(|d| d.contains("SCAN plain")));
 }
 
-#[test]
-fn features_in_matches_full_scan_filter_property() {
+#[hegel::test]
+fn features_in_matches_full_scan_filter(tc: hegel::TestCase) {
     let dir = tempfile::tempdir().unwrap();
     let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
     build_layers(&gpkg);
     let conn = gpkg.connection();
 
-    let mut total_hits = 0usize;
-    for seed in 0..40u64 {
-        let mut rng = Rng(seed.wrapping_mul(0x0123_4567_89AB_CDEF).wrapping_add(1));
-        conn.execute_batch("DELETE FROM pts; DELETE FROM plain;")
+    // The same geometries into both tables (indexed `pts`, plain `plain`),
+    // recording each true `f64` envelope for the independent oracle.
+    let n = tc.draw(generators::integers::<usize>().min_value(1).max_value(30));
+    let mut envelopes: Vec<(i64, [f64; 4])> = Vec::with_capacity(n);
+    for fid in 1..=(n as i64) {
+        let (blob, env) = draw_geom(&tc);
+        for table in ["pts", "plain"] {
+            conn.execute(
+                &format!("INSERT INTO {table} (fid, geom) VALUES (?1, ?2)"),
+                rusqlite::params![fid, blob],
+            )
             .unwrap();
-
-        // Insert the same geometries into both tables, recording true envelopes.
-        let n = 15 + rng.below(15) as usize;
-        let mut envelopes: Vec<(i64, [f64; 4])> = Vec::with_capacity(n);
-        for fid in 1..=(n as i64) {
-            let (blob, env) = random_geom(&mut rng);
-            for table in ["pts", "plain"] {
-                conn.execute(
-                    &format!("INSERT INTO {table} (fid, geom) VALUES (?1, ?2)"),
-                    rusqlite::params![fid, blob],
-                )
-                .unwrap();
-            }
-            envelopes.push((fid, env));
         }
-
-        let indexed = gpkg.layer("pts").unwrap();
-        let plain = gpkg.layer("plain").unwrap();
-
-        for q in 0..12u64 {
-            // A mix of random boxes and boxes whose edges sit exactly on a
-            // stored coordinate (the inclusive-boundary + f32-rounding case).
-            let bbox = if q < 8 || envelopes.is_empty() {
-                let min_x = rng.f64_in(-110.0, 110.0);
-                let min_y = rng.f64_in(-110.0, 110.0);
-                BoundingBox::new(
-                    min_x,
-                    min_y,
-                    min_x + rng.f64_in(0.0, 60.0),
-                    min_y + rng.f64_in(0.0, 60.0),
-                )
-            } else {
-                let (_, env) = envelopes[rng.below(envelopes.len() as u64) as usize];
-                // A degenerate box exactly on the feature's min corner.
-                BoundingBox::new(env[0], env[2], env[0], env[2])
-            };
-
-            let reference: Vec<i64> = {
-                let mut r: Vec<i64> = envelopes
-                    .iter()
-                    .filter(|(_, env)| env_intersects(*env, bbox))
-                    .map(|(fid, _)| *fid)
-                    .collect();
-                r.sort_unstable();
-                r
-            };
-            total_hits += reference.len();
-
-            let via_rtree = fids(indexed.features_in(bbox).unwrap());
-            let via_scan = fids(plain.features_in(bbox).unwrap());
-
-            assert_eq!(
-                via_rtree, reference,
-                "RTree path diverged (seed={seed}, query={q}, bbox={bbox:?})"
-            );
-            assert_eq!(
-                via_scan, reference,
-                "full-scan path diverged (seed={seed}, query={q}, bbox={bbox:?})"
-            );
-        }
+        envelopes.push((fid, env));
     }
-    assert!(total_hits > 0, "the property test never matched anything");
+
+    let indexed = gpkg.layer("pts").unwrap();
+    let plain = gpkg.layer("plain").unwrap();
+    let bbox = draw_bbox(&tc, &envelopes);
+
+    let reference: Vec<i64> = {
+        let mut r: Vec<i64> = envelopes
+            .iter()
+            .filter(|(_, env)| env_intersects(*env, bbox))
+            .map(|(fid, _)| *fid)
+            .collect();
+        r.sort_unstable();
+        r
+    };
+
+    let via_rtree = fids(indexed.features_in(bbox).unwrap());
+    let via_scan = fids(plain.features_in(bbox).unwrap());
+
+    assert_eq!(via_rtree, reference, "RTree path diverged (bbox={bbox:?})");
+    assert_eq!(
+        via_scan, reference,
+        "full-scan path diverged (bbox={bbox:?})"
+    );
 }
 
 #[test]
