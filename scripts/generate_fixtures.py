@@ -41,6 +41,7 @@ GDAL on ``PATH`` (the committed fixtures let the tests run without it).
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -49,7 +50,15 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-FIXTURES = REPO_ROOT / "geopackage" / "tests" / "fixtures"
+# Output directory. Overridable so the live-regeneration corpus test
+# (geopackage/tests/corpus.rs) can regenerate into a scratch directory and diff,
+# without touching the committed fixtures.
+FIXTURES = Path(
+    os.environ.get(
+        "GEOPACKAGE_FIXTURES_DIR",
+        REPO_ROOT / "geopackage" / "tests" / "fixtures",
+    )
+)
 
 # SQLite header pragmas (see geopackage-core/src/version.rs).
 APPLICATION_ID_GPKG = 0x4750_4B47

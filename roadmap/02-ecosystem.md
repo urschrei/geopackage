@@ -11,6 +11,7 @@
 | [`geo-types`](https://crates.io/crates/geo-types) | Convenience conversions | M1 | Default-on feature, not a hard dep |
 | `rusqlite` | SQLite | now | `bundled` + `functions`; `serialize` later for from/to-bytes (D5) |
 | `thiserror` | errors | now | |
+| [`serde_json`](https://crates.io/crates/serde_json) | corpus snapshot parsing | M1 | **dev-dependency of `geopackage` only.** Parses the committed `ogrinfo -json` expected-output snapshots in `geopackage/tests/corpus.rs`; not a runtime dependency |
 
 ### CRS definitions (decided, M1)
 
