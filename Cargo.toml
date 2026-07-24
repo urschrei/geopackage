@@ -1,0 +1,23 @@
+[workspace]
+members = ["geopackage-core", "geopackage"]
+exclude = ["geopackage-core/fuzz"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/georust/geopackage"
+authors = ["The GeoRust developers"]
+keywords = ["geopackage", "gpkg", "gis", "geospatial", "ogc"]
+categories = ["science::geo", "database"]
+
+[workspace.dependencies]
+geopackage-core = { version = "0.0.1", path = "geopackage-core" }
+thiserror = "2"
+rusqlite = { version = "0.40", features = ["bundled", "functions"] }
+tempfile = "3"
+
+[profile.release]
+lto = "thin"

@@ -1,0 +1,7 @@
+/target
+Cargo.lock
+.DS_Store
+geopackage-core/fuzz/target
+geopackage-core/fuzz/corpus
+geopackage-core/fuzz/artifacts
+geopackage-core/fuzz/coverage

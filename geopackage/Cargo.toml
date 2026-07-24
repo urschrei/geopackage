@@ -1,0 +1,19 @@
+[package]
+name = "geopackage"
+description = "Read and write OGC GeoPackage (.gpkg) files: pure-Rust container handling over bundled SQLite, with spec-correct spatial indexing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+geopackage-core.workspace = true
+rusqlite.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
