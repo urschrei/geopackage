@@ -78,6 +78,13 @@ engineering.
   wkb already; a shared `gpb` feature there (header parse + body delegate)
   would let rusqlite-gpkg, geozero and us converge on one codec. Track as an
   explicit M1 task; until it lands, `geopackage-core::gpb` is ours.
+  Two upstream `wkb` items surfaced during M1 (both tracked in
+  [03-m1-read-path.md](03-m1-read-path.md)): (1) `wkb` 0.9.2's reader
+  pre-allocates from an untrusted element count
+  (`Vec::with_capacity(num_geometries)` / `num_rings`) without bounding it
+  against the buffer, so a malformed count drives an out-of-memory – found by
+  our `gpb_geometry` fuzz target; (2) no reader support for the non-linear
+  curve types, so their envelopes cannot be computed yet.
 - **geozero**: adapt with attribution, don't depend (geozero's gpkg support
   drags in sqlx). Worth lifting: the `WkbDialect::Geopackage` test cases and
   fixtures (battle-tested against real files since 2020), the empty-flag and

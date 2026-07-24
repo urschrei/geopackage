@@ -54,6 +54,15 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       makes the `ST_*` functions return a typed SQL error rather than an
       envelope, so such a geometry cannot be inserted into an rtree-indexed
       table. Needs curve support in georust `wkb` upstream.
+- [ ] **wkb upstream (fuzz finding):** `wkb` 0.9.2 pre-allocates from an
+      untrusted element count without bounding it against the remaining buffer
+      (`Vec::with_capacity(num_geometries)` in `reader::GeometryCollection`,
+      `Vec::with_capacity(num_rings)` in `reader::Polygon`). A 17-byte GPB blob
+      whose body is a `GEOMETRYCOLLECTION` declaring `0xFFFFFFFF` members drives
+      a ~240 GB allocation (out-of-memory), found by the `gpb_geometry` fuzz
+      target. This is a `wkb` bug, not the wrapper (our code never panics); fix
+      upstream by growing the vec on demand or capping capacity by the bytes
+      left. Until fixed, the `gpb_geometry` fuzz target exposes this OOM class.
 - [ ] Reject/flag geometry column type mismatches (declared POINT, blob says
       LINESTRING) behind a validation option. The primitive exists
       (`geometry::geometry_type_matches` + `wkb_geometry_type`, and
