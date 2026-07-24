@@ -4,6 +4,7 @@
 //! expressed without a database connection:
 //!
 //! - [`gpb`]: the GeoPackage Binary (GPB) geometry blob header codec
+//! - [`geometry`]: the parsed geometry wrapper ([`GpbGeometry`])
 //! - [`types`]: column and geometry type vocabulary (spec Table 1, Annex G)
 //! - [`datetime`]: `DATE`/`DATETIME` text form parsing (strict and lenient)
 //! - [`ddl`]: normative `CREATE TABLE` SQL and required `gpkg_spatial_ref_sys` seed rows
@@ -17,6 +18,15 @@
 //!
 //! SQL text is reproduced verbatim from the spec's normative annexes
 //! (Annex C "Table Definition SQL", Annex F.3 "R-tree Spatial Indexes").
+//!
+//! # Reading untrusted geometries
+//!
+//! [`GpbGeometry`] parses WKB bodies with the `wkb` crate, whose 0.9.2 reader
+//! pre-allocates from element counts read out of the blob without bounding them
+//! against the buffer: a malformed geometry declaring a `0xFFFFFFFF`-member
+//! collection drives a multi-gigabyte allocation. The fix belongs upstream in
+//! [georust/wkb](https://github.com/georust/wkb); until it lands and this crate
+//! bumps its dependency, do not parse geometries from untrusted sources.
 
 // `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
 // workspace lints table (root Cargo.toml); see roadmap decision D12 for the

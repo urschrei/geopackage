@@ -1,11 +1,17 @@
 //! Read and write [OGC GeoPackage](https://www.geopackage.org/spec140/) files.
 //!
-//! **Status: M1 read path.** The container is created and opened with pragma
-//! and schema validation ([`GeoPackage::create`], [`GeoPackage::open`],
-//! [`GeoPackage::open_read_only`], [`GeoPackage::from_connection`]), and the
-//! required RTree SQL functions are registered on every connection. On top of
-//! `gpkg_contents`, `gpkg_spatial_ref_sys` ([`Srs`]) and per-table schema
-//! introspection ([`TableSchema`]), this crate exposes a read path:
+//! **Status: pre-alpha (0.1.0).** The read and write paths are complete and
+//! validated against external tooling, but the API will change without notice
+//! before 1.0.
+//!
+//! The container is created and opened with pragma and schema validation
+//! ([`GeoPackage::create`], [`GeoPackage::open`], [`GeoPackage::open_read_only`],
+//! [`GeoPackage::from_connection`]), and the required RTree SQL functions are
+//! registered on every connection. On top of `gpkg_contents`,
+//! `gpkg_spatial_ref_sys` ([`Srs`]) and per-table schema introspection
+//! ([`TableSchema`]):
+//!
+//! **Reading**
 //!
 //! - [`GeoPackage::layers`] enumerates feature layers; [`GeoPackage::layer`]
 //!   and [`GeoPackage::attributes`] return typed [`Layer`] handles.
@@ -16,21 +22,76 @@
 //!   identical results.
 //! - [`Layer::select`] appends a caller-supplied `WHERE` clause (raw SQL, per
 //!   design decision D9: SQL is the query engine).
+//! - [`GeoPackage::open_lenient`] tolerates legacy and lightly malformed files,
+//!   collecting [`OpenWarning`]s instead of failing.
+//!
+//! **Writing**
+//!
+//! - [`TableSchemaBuilder`] declares a table's columns, primary key and
+//!   geometry column; [`GeoPackage::create_layer`] and
+//!   [`GeoPackage::create_attributes_table`] emit the user-table DDL and the
+//!   catalogue rows in one transaction.
+//! - [`Layer::writer`] returns a [`FeatureWriter`] owning a transaction, with
+//!   `insert`/`update`/`delete` over any `impl GeometryTrait<T = f64>`;
+//!   [`Layer::write_all`] is the batched bulk-load path.
 //! - [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`], and
 //!   [`Layer::repair_spatial_index`] manage the RTree spatial index (the
 //!   GeoPackage 1.4 trigger set, design decision D7). Building a large index —
 //!   [`Layer::create_spatial_index_with`], or [`Layer::write_all`] into a fresh
 //!   indexed layer — uses the D8 bulk shadow-table build ([`BulkIndexOptions`]).
-//! - [`GeoPackage::open_lenient`] tolerates legacy and lightly malformed files,
-//!   collecting [`OpenWarning`]s instead of failing.
+//! - [`OpenOptions`] selects the journal mode ([`JournalMode`], WAL opt-in) and
+//!   [`Synchronous`] level; see the interchange-first close policy on
+//!   [`GeoPackage`].
 //!
 //! The GeoArrow bulk plane arrives in a later milestone — see the repository
 //! roadmap.
 //!
-//! ```no_run
-//! # fn main() -> Result<(), geopackage::Error> {
-//! let gpkg = geopackage::GeoPackage::create("example.gpkg")?;
-//! assert!(gpkg.contents()?.is_empty());
+//! # Reading untrusted files
+//!
+//! The `wkb` 0.9.2 reader this crate parses geometry with pre-allocates from
+//! element counts read out of the blob without bounding them against the
+//! buffer, so a malformed geometry declaring a `0xFFFFFFFF`-member collection
+//! drives a multi-gigabyte allocation. The fix belongs upstream in
+//! [georust/wkb](https://github.com/georust/wkb); until it lands and this crate
+//! bumps its dependency, do not parse GeoPackage files from untrusted sources.
+//!
+//! # Example
+//!
+//! Create a file, declare a point layer, write features, index it, and query by
+//! bounding box:
+//!
+//! ```
+//! use geo_types::Point;
+//! use geopackage::core::types::{ColumnType, GeometryType};
+//! use geopackage::{
+//!     BoundingBox, ColumnSpec, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value,
+//! };
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # let dir = tempfile::tempdir()?;
+//! # let path = dir.path().join("cities.gpkg");
+//! let gpkg = GeoPackage::create(path)?;
+//!
+//! gpkg.create_layer(
+//!     &TableSchemaBuilder::new("cities")
+//!         .column(ColumnSpec::new("name", ColumnType::Text(None)))
+//!         .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+//! )?;
+//!
+//! let layer = gpkg.layer("cities")?;
+//! layer.create_spatial_index()?;
+//!
+//! layer.write_all(
+//!     vec![
+//!         NewFeature::new(Point::new(-6.26, 53.35), vec![Value::Text("Dublin".into())]),
+//!         NewFeature::new(Point::new(-0.13, 51.51), vec![Value::Text("London".into())]),
+//!     ],
+//!     1000,
+//! )?;
+//!
+//! // Uses the RTree index when one is present, a full scan otherwise.
+//! let found = layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))?;
+//! assert_eq!(found.len(), 1);
 //! # Ok(()) }
 //! ```
 
