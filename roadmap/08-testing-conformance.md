@@ -1,6 +1,6 @@
 # Testing & conformance (cross-cutting)
 
-The crate's pitch is "correct first, fast second, and we can prove both".
+The crate's pitch is "correct first, fast second, both can be demonstrated".
 This file is the harness plan; milestone docs reference it.
 
 ## Layers of verification
@@ -8,10 +8,14 @@ This file is the harness plan; milestone docs reference it.
 1. **Spec-derived unit tests** (`geopackage-core`): testable requirements get
    tests named for their requirement number (`req11_srs_seeds`,
    `req20_gpb_magic`, …). The M0 suite starts this; keep the convention.
-2. **Property tests** (proptest, from M2): GPB round-trip over arbitrary
-   geometries (all types × XY/Z/M/ZM × empty × nested collections);
-   envelope ⊇ geometry; `features_in(bbox)` ≡ scan-filter; rtree state ≡
-   full rebuild after arbitrary write/update/delete/upsert sequences.
+2. **Property tests** (Hegel/[`hegeltest`](https://hegel.dev), from M2): GPB
+   round-trip over arbitrary geometries (all types × XY/Z/M/ZM × empty ×
+   nested collections); envelope ⊇ geometry; `features_in(bbox)` ≡
+   scan-filter; rtree state ≡ full rebuild after arbitrary
+   write/update/delete/upsert sequences. Hegel is Hypothesis-powered
+   (server-side shrinking, `#[hegel::test]` on the standard test runner);
+   the hand-rolled SplitMix64 generator in `tests/features_in.rs` gets
+   ported to it when the dev-dependency lands.
 3. **Fuzzing** (cargo-fuzz, continuous once public via OSS-Fuzz):
    `gpb_parse` (M0 ✅), `gpb_geometry` (header+body via wkb, M1),
    `open_arbitrary` (arbitrary bytes as .gpkg file, M1), tile matrix
@@ -29,7 +33,7 @@ This file is the harness plan; milestone docs reference it.
    files → our model → compare against `ogrinfo -json`. QGIS headless open
    in a scheduled (not per-PR) job.
 6. **Corruption regressions**: fixtures for every historical failure mode we
-   know — stale `update3` + UPSERT, mixed trigger generations, envelope
+   know – stale `update3` + UPSERT, mixed trigger generations, envelope
    disagreeing with geometry, wrong-endian headers, GP10 application_id,
    truncated GPB, `-wal` sidecar left by a crashed writer.
 7. **Benchmarks** (criterion, from M2): tracked in-repo with hardware notes;

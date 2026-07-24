@@ -38,7 +38,7 @@ work (M5).
 | `arrow-array`/`arrow-schema` + [`geoarrow-array`](https://github.com/geoarrow/geoarrow-rs) | RecordBatch I/O, GeoArrow(WKB) columns | M3 |
 | `cargo-c`/`cbindgen` | C ABI packaging | M3 |
 | `clap` | CLI | M3 |
-| `criterion`, `proptest` | benches, property tests | M2 |
+| `criterion`, [`hegeltest`](https://hegel.dev) (Hegel) | benches, property tests | M2 (dev-deps) |
 | `pyo3`+`maturin`, `napi-rs`, `uniffi` | bindings | post-v0.2, demand-driven |
 | `sqlite-wasm-rs` | browser | parked (D5) |
 

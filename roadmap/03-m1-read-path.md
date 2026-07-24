@@ -175,8 +175,10 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       — the property is a set equality with an independent oracle (little value
       from shrinking) and a zero-dependency seeded generator keeps the
       dependency tree honest and CI reproducible (failing seeds print). So
-      `proptest` was **not** added and stays on the M2 row in
-      [02-ecosystem.md](02-ecosystem.md).
+      no property-testing dependency was added in M1. The M2 property tests
+      use Hegel (`hegeltest`, see [02-ecosystem.md](02-ecosystem.md) and
+      [08-testing-conformance.md](08-testing-conformance.md)); this
+      hand-rolled generator gets ported to it then.
 
 ## Acceptance criteria
 
