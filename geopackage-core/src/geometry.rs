@@ -25,9 +25,11 @@ use geo_traits::{
     MultiPointTrait, MultiPolygonTrait, PointTrait, PolygonTrait, RectTrait, TriangleTrait,
 };
 use geo_traits::{GeometryCollectionTrait, GeometryType as GtGeometryType};
+use wkb::Endianness;
 use wkb::reader::{
     GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon, Wkb,
 };
+use wkb::writer::{WriteOptions, write_geometry};
 
 /// Errors from constructing or reading a [`GpbGeometry`].
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +51,10 @@ pub enum GeometryError {
     /// (Annex G).
     #[error("unknown WKB geometry type code {0}")]
     UnknownWkbType(u32),
+    /// The geometry could not be encoded to WKB: the georust `wkb` writer
+    /// rejected it (for example a coordinate dimension it cannot serialise).
+    #[error("failed to encode geometry to WKB")]
+    EncodeWkb(#[source] wkb::error::WkbError),
 }
 
 /// A GeoPackage geometry: a parsed GPB header plus its ISO WKB body.
@@ -121,7 +127,7 @@ impl<'a> GpbGeometry<'a> {
     /// convention, or malformed values) do not contribute to the box.
     pub fn xy_envelope(&self) -> Option<[f64; 4]> {
         let mut bounds = XyBounds::new();
-        accumulate_xy_bounds(&self.wkb, &mut bounds);
+        visit_coords(&self.wkb, &mut |x, y, _| bounds.add(x, y));
         bounds.finish()
     }
 
@@ -253,6 +259,64 @@ pub fn wkb_geometry_type(wkb_body: &[u8]) -> Result<GeometryType, GeometryError>
     Ok(ty)
 }
 
+/// The GPB envelope to write for a geometry under the always-envelope policy
+/// (design decision D6), and whether the geometry is empty.
+///
+/// The envelope is [`Envelope::Xyz`] when the geometry carries a Z dimension
+/// (including for a single point), otherwise [`Envelope::Xy`]. An M dimension
+/// never widens the envelope: readers and the rtree only use X, Y (and, for
+/// 3D, Z) bounds. A geometry with no finite coordinate is *empty*: the returned
+/// envelope is [`Envelope::None`] and the boolean is `true`, so the encoder
+/// omits the envelope and sets the header empty flag.
+///
+/// [`Envelope::Xy`]: crate::gpb::Envelope::Xy
+/// [`Envelope::Xyz`]: crate::gpb::Envelope::Xyz
+/// [`Envelope::None`]: crate::gpb::Envelope::None
+pub fn write_envelope<G: GeometryTrait<T = f64>>(geom: &G) -> (gpb::Envelope, bool) {
+    let mut bounds = XyzBounds::new();
+    visit_coords(geom, &mut |x, y, z| bounds.add(x, y, z));
+    let Some([min_x, max_x, min_y, max_y]) = bounds.xy_bounds() else {
+        return (gpb::Envelope::None, true);
+    };
+    match bounds.z_bounds() {
+        Some((min_z, max_z)) => (
+            gpb::Envelope::Xyz([min_x, max_x, min_y, max_y, min_z, max_z]),
+            false,
+        ),
+        None => (gpb::Envelope::Xy([min_x, max_x, min_y, max_y]), false),
+    }
+}
+
+/// Encode a geometry as a complete GeoPackage Binary (GPB) blob: an
+/// always-little-endian header ([`gpb::encode_header`]) with an envelope per
+/// [`write_envelope`] (D6), followed by the little-endian ISO WKB body written
+/// by the georust `wkb` crate.
+///
+/// `srs_id` is written into the header (the geometry column's spatial reference
+/// system). Returns the blob and its XY envelope `[min_x, max_x, min_y, max_y]`
+/// (`None` for an empty geometry) so a caller can fold it into a running
+/// bounding box without re-traversing the geometry.
+///
+/// # Errors
+///
+/// [`GeometryError::EncodeWkb`] if the `wkb` writer cannot serialise the
+/// geometry.
+pub fn encode_gpb<G: GeometryTrait<T = f64>>(
+    geom: &G,
+    srs_id: i32,
+) -> Result<(Vec<u8>, Option<[f64; 4]>), GeometryError> {
+    let (envelope, empty) = write_envelope(geom);
+    let xy = envelope
+        .xy_bounds()
+        .map(|(min_x, max_x, min_y, max_y)| [min_x, max_x, min_y, max_y]);
+    let mut blob = gpb::encode_header(srs_id, &envelope, empty, false);
+    let options = WriteOptions {
+        endianness: Endianness::LittleEndian,
+    };
+    write_geometry(&mut blob, geom, &options).map_err(GeometryError::EncodeWkb)?;
+    Ok((blob, xy))
+}
+
 /// Accumulator for an XY bounding box over visited coordinates.
 #[derive(Debug, Clone, Copy)]
 struct XyBounds {
@@ -291,69 +355,141 @@ impl XyBounds {
     }
 }
 
-fn add_point(point: &impl PointTrait<T = f64>, bounds: &mut XyBounds) {
+/// Accumulator for an XY bounding box plus, when present, a Z bounds range.
+/// Feeds [`write_envelope`]'s always-envelope policy.
+#[derive(Debug, Clone, Copy)]
+struct XyzBounds {
+    xy: XyBounds,
+    min_z: f64,
+    max_z: f64,
+    seen_z: bool,
+}
+
+impl XyzBounds {
+    fn new() -> Self {
+        Self {
+            xy: XyBounds::new(),
+            min_z: f64::INFINITY,
+            max_z: f64::NEG_INFINITY,
+            seen_z: false,
+        }
+    }
+
+    fn add(&mut self, x: f64, y: f64, z: Option<f64>) {
+        self.xy.add(x, y);
+        if let Some(z) = z
+            && z.is_finite()
+        {
+            self.min_z = self.min_z.min(z);
+            self.max_z = self.max_z.max(z);
+            self.seen_z = true;
+        }
+    }
+
+    /// The XY bounds, or `None` when no finite XY coordinate was seen (an
+    /// empty geometry).
+    fn xy_bounds(&self) -> Option<[f64; 4]> {
+        self.xy.finish()
+    }
+
+    /// The Z range, when any coordinate carried a finite Z.
+    fn z_bounds(&self) -> Option<(f64, f64)> {
+        self.seen_z.then_some((self.min_z, self.max_z))
+    }
+}
+
+/// Read a coordinate's X and Y and, when it carries a Z dimension, its Z.
+///
+/// Only [`Dimensions::Xyz`] and [`Dimensions::Xyzm`] place Z at index 2;
+/// [`Dimensions::Xym`] puts M there, so Z reads as `None` for it.
+fn coord_xyz(coord: &impl CoordTrait<T = f64>) -> (f64, f64, Option<f64>) {
+    let z = match coord.dim() {
+        Dimensions::Xyz | Dimensions::Xyzm => coord.nth(2),
+        _ => None,
+    };
+    (coord.x(), coord.y(), z)
+}
+
+fn visit_point(point: &impl PointTrait<T = f64>, visit: &mut impl FnMut(f64, f64, Option<f64>)) {
     if let Some(coord) = point.coord() {
-        bounds.add(coord.x(), coord.y());
+        let (x, y, z) = coord_xyz(&coord);
+        visit(x, y, z);
     }
 }
 
-fn add_line_string(line_string: &impl LineStringTrait<T = f64>, bounds: &mut XyBounds) {
+fn visit_line_string(
+    line_string: &impl LineStringTrait<T = f64>,
+    visit: &mut impl FnMut(f64, f64, Option<f64>),
+) {
     for coord in line_string.coords() {
-        bounds.add(coord.x(), coord.y());
+        let (x, y, z) = coord_xyz(&coord);
+        visit(x, y, z);
     }
 }
 
-fn add_polygon(polygon: &impl PolygonTrait<T = f64>, bounds: &mut XyBounds) {
+fn visit_polygon(
+    polygon: &impl PolygonTrait<T = f64>,
+    visit: &mut impl FnMut(f64, f64, Option<f64>),
+) {
     if let Some(exterior) = polygon.exterior() {
-        add_line_string(&exterior, bounds);
+        visit_line_string(&exterior, visit);
     }
     for interior in polygon.interiors() {
-        add_line_string(&interior, bounds);
+        visit_line_string(&interior, visit);
     }
 }
 
-/// Walk a geometry through the `geo-traits` interface, folding every finite
-/// coordinate into `bounds`. Recurses into geometry collections.
-fn accumulate_xy_bounds<G: GeometryTrait<T = f64>>(geom: &G, bounds: &mut XyBounds) {
+/// Walk a geometry through the `geo-traits` interface, passing every
+/// coordinate's `(x, y, z?)` to `visit`. Recurses into geometry collections.
+/// The XY-only accumulation (read-path envelope) ignores the third argument;
+/// the write-path envelope uses it.
+fn visit_coords<G: GeometryTrait<T = f64>>(
+    geom: &G,
+    visit: &mut impl FnMut(f64, f64, Option<f64>),
+) {
     match geom.as_type() {
-        GtGeometryType::Point(point) => add_point(point, bounds),
-        GtGeometryType::LineString(line_string) => add_line_string(line_string, bounds),
-        GtGeometryType::Polygon(polygon) => add_polygon(polygon, bounds),
+        GtGeometryType::Point(point) => visit_point(point, visit),
+        GtGeometryType::LineString(line_string) => visit_line_string(line_string, visit),
+        GtGeometryType::Polygon(polygon) => visit_polygon(polygon, visit),
         GtGeometryType::MultiPoint(multi_point) => {
             for point in multi_point.points() {
-                add_point(&point, bounds);
+                visit_point(&point, visit);
             }
         }
         GtGeometryType::MultiLineString(multi_line_string) => {
             for line_string in multi_line_string.line_strings() {
-                add_line_string(&line_string, bounds);
+                visit_line_string(&line_string, visit);
             }
         }
         GtGeometryType::MultiPolygon(multi_polygon) => {
             for polygon in multi_polygon.polygons() {
-                add_polygon(&polygon, bounds);
+                visit_polygon(&polygon, visit);
             }
         }
         GtGeometryType::GeometryCollection(collection) => {
             for member in collection.geometries() {
-                accumulate_xy_bounds(&member, bounds);
+                visit_coords(&member, visit);
             }
         }
         // The `wkb` reader never yields these, but the traversal is generic
         // over any `GeometryTrait`, so they are handled rather than ignored.
         GtGeometryType::Rect(rect) => {
             let (min, max) = (rect.min(), rect.max());
-            bounds.add(min.x(), min.y());
-            bounds.add(max.x(), max.y());
+            let (min_x, min_y, min_z) = coord_xyz(&min);
+            let (max_x, max_y, max_z) = coord_xyz(&max);
+            visit(min_x, min_y, min_z);
+            visit(max_x, max_y, max_z);
         }
         GtGeometryType::Triangle(triangle) => {
             for coord in triangle.coords() {
-                bounds.add(coord.x(), coord.y());
+                let (x, y, z) = coord_xyz(&coord);
+                visit(x, y, z);
             }
         }
         GtGeometryType::Line(line) => {
             for coord in line.coords() {
-                bounds.add(coord.x(), coord.y());
+                let (x, y, z) = coord_xyz(&coord);
+                visit(x, y, z);
             }
         }
     }
@@ -702,5 +838,72 @@ mod tests {
         assert!(g.matches_declared(GeometryType::Point));
         assert!(g.matches_declared(GeometryType::Geometry));
         assert!(!g.matches_declared(GeometryType::LineString));
+    }
+
+    /// A little-endian ISO WKB `POINT Z` body (type code 1001).
+    fn wkb_point_z(x: f64, y: f64, z: f64) -> Vec<u8> {
+        let mut b = vec![1u8];
+        b.extend_from_slice(&1001u32.to_le_bytes());
+        b.extend_from_slice(&x.to_le_bytes());
+        b.extend_from_slice(&y.to_le_bytes());
+        b.extend_from_slice(&z.to_le_bytes());
+        b
+    }
+
+    #[test]
+    #[cfg(feature = "geo-types")]
+    fn encode_gpb_xy_point_roundtrips() {
+        let point = geo_types::Point::new(3.0, 4.0);
+        let (blob, xy) = encode_gpb(&point, 4326).unwrap();
+        assert_eq!(xy, Some([3.0, 3.0, 4.0, 4.0]));
+        let g = GpbGeometry::parse(&blob).unwrap();
+        assert_eq!(g.header().srs_id, 4326);
+        assert_eq!(g.header().envelope, Envelope::Xy([3.0, 3.0, 4.0, 4.0]));
+        assert!(!g.header().empty);
+        assert_eq!(g.geometry_type(), GeometryType::Point);
+    }
+
+    #[test]
+    #[cfg(feature = "geo-types")]
+    fn encode_gpb_linestring_envelope() {
+        let ls = geo_types::LineString::from(vec![(0.0, 0.0), (10.0, -3.0), (4.0, 8.0)]);
+        let (blob, xy) = encode_gpb(&ls, 4326).unwrap();
+        assert_eq!(xy, Some([0.0, 10.0, -3.0, 8.0]));
+        let g = GpbGeometry::parse(&blob).unwrap();
+        assert_eq!(g.header().envelope, Envelope::Xy([0.0, 10.0, -3.0, 8.0]));
+        assert_eq!(g.geometry_type(), GeometryType::LineString);
+    }
+
+    #[test]
+    fn encode_gpb_z_point_writes_xyz_envelope() {
+        // A Z geometry (built as a GpbGeometry) re-encodes with an XYZ envelope
+        // and an XYZ WKB body, per the always-envelope policy (D6).
+        let src_blob = gpb(&wkb_point_z(1.0, 2.0, 9.0));
+        let src = GpbGeometry::parse(&src_blob).unwrap();
+        assert_eq!(src.dim(), Dimensions::Xyz);
+        let (blob, xy) = encode_gpb(&src, 4326).unwrap();
+        assert_eq!(xy, Some([1.0, 1.0, 2.0, 2.0]));
+        let g = GpbGeometry::parse(&blob).unwrap();
+        assert_eq!(
+            g.header().envelope,
+            Envelope::Xyz([1.0, 1.0, 2.0, 2.0, 9.0, 9.0])
+        );
+        assert_eq!(g.dim(), Dimensions::Xyz);
+        assert_eq!(g.geometry_type(), GeometryType::Point);
+    }
+
+    #[test]
+    fn write_envelope_empty_point_is_empty() {
+        let blob = gpb(&wkb_point(f64::NAN, f64::NAN));
+        let g = GpbGeometry::parse(&blob).unwrap();
+        let (envelope, empty) = write_envelope(&g);
+        assert_eq!(envelope, Envelope::None);
+        assert!(empty);
+        // Re-encoding preserves the empty flag and omits the envelope.
+        let (reblob, xy) = encode_gpb(&g, 4326).unwrap();
+        assert_eq!(xy, None);
+        let re = GpbGeometry::parse(&reblob).unwrap();
+        assert_eq!(re.header().envelope, Envelope::None);
+        assert!(re.header().empty);
     }
 }
