@@ -21,6 +21,7 @@ use geopackage::{
 };
 use hegel::generators;
 use rusqlite::{Connection, OptionalExtension};
+use std::path::Path;
 
 /// A GPB blob for an empty point (empty flag + NaN coordinates, no envelope):
 /// the population guard must skip this exactly as the triggers' `ST_IsEmpty`
@@ -44,27 +45,54 @@ fn gpb_point(srs_id: i32, x: f64, y: f64) -> Vec<u8> {
     blob
 }
 
-/// Create a GeoPackage with a `pts(fid, name, geom)` feature layer, populated
-/// with the given `(fid, x, y)` points via the high-level writer. Coordinates
-/// are chosen exact-in-`f32` by callers so the index (which stores `f32`
-/// bounds) compares equal to the header envelope.
+/// Add a `pts(fid, name, geom)` feature layer to `gpkg` and populate it with
+/// the given `(fid, x, y)` points via the high-level writer. Coordinates are
+/// chosen exact-in-`f32` by callers so the index (which stores `f32` bounds)
+/// compares equal to the header envelope.
+fn add_points_layer(gpkg: &GeoPackage, points: &[(i64, f64, f64)]) {
+    let builder = TableSchemaBuilder::new("pts")
+        .column(ColumnSpec::new("name", ColumnType::Text(None)))
+        .geometry(GeometrySpec::new(GeometryType::Point, 4326));
+    let layer = gpkg.create_layer(&builder).unwrap();
+    let mut writer = layer.writer().unwrap();
+    for &(fid, x, y) in points {
+        writer
+            .insert(Some(fid), &Point::new(x, y), &[Value::Null])
+            .unwrap();
+    }
+    writer.commit().unwrap();
+}
+
+/// Create an on-disk GeoPackage in a fresh tempdir, carrying the `pts` layer
+/// from [`add_points_layer`].
 fn gpkg_with_points(points: &[(i64, f64, f64)]) -> (tempfile::TempDir, GeoPackage) {
     let dir = tempfile::tempdir().unwrap();
     let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
-    {
-        let builder = TableSchemaBuilder::new("pts")
-            .column(ColumnSpec::new("name", ColumnType::Text(None)))
-            .geometry(GeometrySpec::new(GeometryType::Point, 4326));
-        let layer = gpkg.create_layer(&builder).unwrap();
-        let mut writer = layer.writer().unwrap();
-        for &(fid, x, y) in points {
-            writer
-                .insert(Some(fid), &Point::new(x, y), &[Value::Null])
-                .unwrap();
-        }
-        writer.commit().unwrap();
-    }
+    add_points_layer(&gpkg, points);
     (dir, gpkg)
+}
+
+/// As [`gpkg_with_points`], but held entirely in SQLite's private per-connection
+/// in-memory database (the `:memory:` filename) rather than in a file.
+///
+/// The property tests below build a whole GeoPackage (or two) per generated
+/// case, and that cost is dominated by the container, not by the number of
+/// points: measured per case, a fixture with 26 points costs the same as one
+/// with none. On Windows CI, where creating a file, cycling a rollback journal
+/// per transaction and syncing all cost orders of magnitude more than on
+/// macOS/Linux, this reached roughly 3.8s per case and tripped hegel's
+/// `TooSlow` health check, which requires 10 valid cases inside 30s. Dropping
+/// the file removes that term on every platform, so the input space stays as
+/// wide as it was rather than being trimmed to buy back time.
+///
+/// Nothing these properties assert depends on the container being a file: they
+/// compare rtree table contents against a triggered build and against an `ST_*`
+/// scan of the same database. The example-based tests in this file exercise the
+/// same index-building code over real files.
+fn in_memory_with_points(points: &[(i64, f64, f64)]) -> GeoPackage {
+    let gpkg = GeoPackage::create(Path::new(":memory:")).unwrap();
+    add_points_layer(&gpkg, points);
+    gpkg
 }
 
 /// The rtree contents as `(id, minx, maxx, miny, maxy)`, ordered by id.
@@ -565,19 +593,24 @@ fn rtree_tracks_full_scan_through_write_ops(tc: hegel::TestCase) {
 /// contents, and both equal the full-scan rebuild, for an arbitrary feature set.
 #[hegel::test]
 fn bulk_and_triggered_builds_agree(tc: hegel::TestCase) {
-    let n = tc.draw(generators::integers::<usize>().min_value(0).max_value(30));
+    // Above the 51-entry node capacity, so the generated trees span the
+    // single-root-leaf case and multi-node cases with a real internal level.
+    // At or below 51 the packed and triggered builders are structurally
+    // indistinguishable, which made the earlier cap of 30 a much weaker claim
+    // than it appeared.
+    let n = tc.draw(generators::integers::<usize>().min_value(0).max_value(140));
     let points: Vec<(i64, f64, f64)> = (1..=(n as i64))
         .map(|fid| (fid, draw_coord(&tc), draw_coord(&tc)))
         .collect();
 
-    let (_d1, triggered) = gpkg_with_points(&points);
+    let triggered = in_memory_with_points(&points);
     triggered
         .layer("pts")
         .unwrap()
         .create_spatial_index_with(BulkIndexOptions::never_bulk())
         .unwrap();
 
-    let (_d2, bulk) = gpkg_with_points(&points);
+    let bulk = in_memory_with_points(&points);
     bulk.layer("pts")
         .unwrap()
         .create_spatial_index_with(BulkIndexOptions::always_bulk())
@@ -602,13 +635,18 @@ fn bulk_and_triggered_builds_agree(tc: hegel::TestCase) {
 /// feature set.
 #[hegel::test]
 fn write_all_bulk_envelopes_match_triggered_build(tc: hegel::TestCase) {
-    let n = tc.draw(generators::integers::<usize>().min_value(0).max_value(30));
+    // Above the 51-entry node capacity, so the generated trees span the
+    // single-root-leaf case and multi-node cases with a real internal level.
+    // At or below 51 the packed and triggered builders are structurally
+    // indistinguishable, which made the earlier cap of 30 a much weaker claim
+    // than it appeared.
+    let n = tc.draw(generators::integers::<usize>().min_value(0).max_value(140));
     let points: Vec<(i64, f64, f64)> = (1..=(n as i64))
         .map(|fid| (fid, draw_coord(&tc), draw_coord(&tc)))
         .collect();
 
     // Reference: rows written first, then a triggered index built over them.
-    let (_d1, triggered) = gpkg_with_points(&points);
+    let triggered = in_memory_with_points(&points);
     triggered
         .layer("pts")
         .unwrap()
@@ -617,12 +655,8 @@ fn write_all_bulk_envelopes_match_triggered_build(tc: hegel::TestCase) {
 
     // Under test: an empty indexed layer loaded with `write_all`, which takes
     // the bulk path and feeds it the encode-time envelopes.
-    let dir = tempfile::tempdir().unwrap();
-    let gpkg = GeoPackage::create(dir.path().join("w.gpkg")).unwrap();
-    let builder = TableSchemaBuilder::new("pts")
-        .column(ColumnSpec::new("name", ColumnType::Text(None)))
-        .geometry(GeometrySpec::new(GeometryType::Point, 4326));
-    let layer = gpkg.create_layer(&builder).unwrap();
+    let gpkg = in_memory_with_points(&[]);
+    let layer = gpkg.layer("pts").unwrap();
     layer.create_spatial_index().unwrap();
     let features: Vec<_> = points
         .iter()
@@ -742,4 +776,93 @@ fn feature_writer_maintains_new_index() {
         .map(|f| f.unwrap().fid())
         .collect();
     assert_eq!(hits, vec![3]);
+}
+
+/// A packed tree deep enough to have two internal levels must still match a
+/// triggered build exactly, and satisfy SQLite's own structural check.
+///
+/// The property tests above top out at 140 entries, which is one internal level
+/// (node capacity is 51). Three levels needs more than 51 * 51 entries, so this
+/// case is deterministic rather than generated: it is the only coverage of the
+/// packed builder's recursion beyond a single internal level, where the depth
+/// field, the parent mappings and the root renumbering all have to line up.
+#[test]
+fn deep_packed_tree_matches_triggered_build() {
+    // 3000 > 51 * 51, so the root has internal children which have leaf
+    // children: depth 2.
+    // Coordinates are multiples of 1/4 and 1/8 so they are exact in `f32`, which
+    // is what lets the stored index bounds compare equal to the `ST_*` envelope
+    // scan. The strides are coprime with the moduli, so the points spread over
+    // the domain rather than collapsing onto a line.
+    let points: Vec<(i64, f64, f64)> = (1..=3000)
+        .map(|i| {
+            let x = f64::from(u32::try_from((i * 7) % 1021).unwrap()) / 4.0;
+            let y = f64::from(u32::try_from((i * 13) % 509).unwrap()) / 8.0;
+            (i, x, y)
+        })
+        .collect();
+
+    let triggered = in_memory_with_points(&points);
+    triggered
+        .layer("pts")
+        .unwrap()
+        .create_spatial_index_with(BulkIndexOptions::never_bulk())
+        .unwrap();
+
+    let packed = in_memory_with_points(&points);
+    packed
+        .layer("pts")
+        .unwrap()
+        .create_spatial_index_with(BulkIndexOptions::always_bulk())
+        .unwrap();
+
+    // The tree really is three levels deep: the root node stores its depth in
+    // the first two bytes, big-endian, and depth 2 means root, internal, leaf.
+    let root: Vec<u8> = packed
+        .connection()
+        .query_row(
+            "SELECT data FROM rtree_pts_geom_node WHERE nodeno = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let depth = u16::from_be_bytes([root[0], root[1]]);
+    assert_eq!(depth, 2, "expected a tree with two internal levels");
+
+    // SQLite's own checker accepts the hand-written structure.
+    let report: String = packed
+        .connection()
+        .query_row("SELECT rtreecheck('rtree_pts_geom')", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(report, "ok", "rtreecheck rejected the packed tree");
+
+    assert_eq!(
+        rtree_rows(packed.connection()),
+        rtree_rows(triggered.connection()),
+        "deep packed index differs from the triggered build"
+    );
+    assert_eq!(
+        rtree_rows(packed.connection()),
+        envelope_scan(packed.connection()),
+        "deep packed index does not match the scan"
+    );
+
+    // And it answers queries identically through the index.
+    let bbox = BoundingBox::new(10.0, 5.0, 120.0, 40.0);
+    let layer = packed.layer("pts").unwrap();
+    let reference = triggered.layer("pts").unwrap();
+    let mut got: Vec<i64> = layer
+        .features_in(bbox)
+        .unwrap()
+        .map(|f| f.unwrap().fid())
+        .collect();
+    let mut want: Vec<i64> = reference
+        .features_in(bbox)
+        .unwrap()
+        .map(|f| f.unwrap().fid())
+        .collect();
+    got.sort_unstable();
+    want.sort_unstable();
+    assert_eq!(got, want, "deep packed index answers queries differently");
+    assert!(!got.is_empty(), "the query box should match something");
 }
