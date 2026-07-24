@@ -1,8 +1,8 @@
 //! D8 bulk RTree build: the scratch-database shadow-table technique.
 //!
 //! SQLite's RTree module has no bulk-load entry point, so populating an index
-//! one row at a time — whether through the spec's `INSERT INTO rtree SELECT`
-//! statement or through the per-row triggers — pays the node-splitting cost for
+//! one row at a time, whether through the spec's `INSERT INTO rtree SELECT`
+//! statement or through the per-row triggers, pays the node-splitting cost for
 //! every row. GDAL's fix, which this module reimplements from the issue
 //! description ([gdal#7614](https://github.com/OSGeo/gdal/issues/7614)), is to
 //! build the RTree in a **scratch in-memory database** and then copy its
@@ -18,10 +18,16 @@
 //!
 //! Every bulk build is **gated** before it is trusted (see [`gate`]): the copied
 //! index must contain exactly the accumulated `(fid, envelope)` set (row count
-//! plus a per-row containment check) and `PRAGMA integrity_check` must pass.
-//! Any anomaly makes [`fill_index`] fall back to the triggered population
-//! statement, so a failed gate never yields a corrupt or stale index — only a
-//! slower build.
+//! plus a per-row containment check), and it must pass a structural check
+//! ([`StructuralCheck`]: `rtreecheck()` on the index by default, optionally a
+//! whole-database `PRAGMA integrity_check`). Any anomaly makes [`fill_index`]
+//! fall back to the triggered population statement, so a failed gate never
+//! yields a corrupt or stale index, only a slower build.
+//!
+//! The entry set itself comes either from an `ST_*` scan of the table
+//! ([`fill_index`]) or, when the caller can prove it accounts for every
+//! indexable row, from envelopes computed while encoding the geometries
+//! ([`fill_index_with`]).
 
 use std::collections::HashMap;
 
@@ -52,12 +58,38 @@ pub struct BulkIndexOptions {
     /// Candidate-row count at or above which the bulk build is used. `0` always
     /// uses the bulk path; [`usize::MAX`] always uses the triggered path.
     pub bulk_threshold: usize,
+    /// How thoroughly the gate checks database structure after the copy.
+    /// Defaults to [`StructuralCheck::RtreeOnly`].
+    pub structural_check: StructuralCheck,
+}
+
+/// How much of the database the bulk-build gate checks structurally after
+/// copying the shadow tables.
+///
+/// Both settings run the full content gate (the bijection between the copied
+/// index and the accumulated envelope set, and the per-row containment check);
+/// this chooses only the SQLite-level structural check layered on top.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum StructuralCheck {
+    /// Check the RTree that was just built, with `rtreecheck()`. Its cost is
+    /// proportional to the index rather than to the whole file, and a
+    /// pre-existing problem elsewhere in the database cannot force a needless
+    /// fallback. The default.
+    #[default]
+    RtreeOnly,
+    /// Additionally run a whole-database `PRAGMA integrity_check`. This is
+    /// O(database): on a large file it dominates the gate, and a benign
+    /// pre-existing issue anywhere in the file forces the (still correct)
+    /// triggered fallback. Use when validating a file of unknown provenance.
+    FullDatabase,
 }
 
 impl Default for BulkIndexOptions {
     fn default() -> Self {
         Self {
             bulk_threshold: DEFAULT_BULK_THRESHOLD,
+            structural_check: StructuralCheck::RtreeOnly,
         }
     }
 }
@@ -65,19 +97,27 @@ impl Default for BulkIndexOptions {
 impl BulkIndexOptions {
     /// Options with an explicit bulk threshold.
     pub fn with_threshold(bulk_threshold: usize) -> Self {
-        Self { bulk_threshold }
+        Self {
+            bulk_threshold,
+            ..Self::default()
+        }
     }
 
     /// Always take the bulk path (threshold `0`).
     pub fn always_bulk() -> Self {
-        Self { bulk_threshold: 0 }
+        Self::with_threshold(0)
     }
 
     /// Never take the bulk path (threshold [`usize::MAX`]).
     pub fn never_bulk() -> Self {
-        Self {
-            bulk_threshold: usize::MAX,
-        }
+        Self::with_threshold(usize::MAX)
+    }
+
+    /// Set the structural check the gate runs after the copy.
+    #[must_use]
+    pub fn with_structural_check(mut self, structural_check: StructuralCheck) -> Self {
+        self.structural_check = structural_check;
+        self
     }
 }
 
@@ -144,10 +184,14 @@ impl<'c> ScratchDb<'c> {
             "INSERT INTO {} VALUES (?1, ?2, ?3, ?4, ?5)",
             self_scratch_rtree()?
         );
-        let mut stmt = self.conn.prepare(&sql)?;
-        for (id, [min_x, max_x, min_y, max_y]) in rows {
-            stmt.execute(rusqlite::params![id, min_x, max_x, min_y, max_y])?;
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = self.conn.prepare(&sql)?;
+            for (id, [min_x, max_x, min_y, max_y]) in rows {
+                stmt.execute(rusqlite::params![id, min_x, max_x, min_y, max_y])?;
+            }
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -256,7 +300,12 @@ fn copy_shadow_tables(conn: &Connection, rtree: &str) -> Result<()> {
 /// contains the true envelope (the RTree stores `f32` bounds, minima rounded
 /// down and maxima rounded up, so containment — not equality — is the correct
 /// relation), and `PRAGMA integrity_check` reports `ok`.
-fn gate(conn: &Connection, rtree: &str, mut expected: HashMap<i64, [f64; 4]>) -> Result<bool> {
+fn gate(
+    conn: &Connection,
+    rtree: &str,
+    mut expected: HashMap<i64, [f64; 4]>,
+    structural_check: StructuralCheck,
+) -> Result<bool> {
     let quoted = quote(rtree)?;
     let count: i64 = conn.query_row(&format!("SELECT count(*) FROM {quoted}"), [], |r| r.get(0))?;
     if usize::try_from(count).unwrap_or(usize::MAX) != expected.len() {
@@ -280,38 +329,65 @@ fn gate(conn: &Connection, rtree: &str, mut expected: HashMap<i64, [f64; 4]>) ->
         return Ok(false);
     }
 
-    // Belt-and-braces structural check over the whole database, as design
-    // decision D8 requires. On a very large database this dominates the gate
-    // cost; a benign pre-existing issue anywhere in the file forces the (still
-    // correct) triggered fallback.
-    let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
-    Ok(integrity == "ok")
+    // Structural check on top of the content gate above. `rtreecheck` walks the
+    // index just built, cross-checking every entry against its parent's bounds
+    // and the `%_rowid`/`%_parent` mappings against `%_node`, and reports `ok`
+    // or a description of what is wrong. Its cost is proportional to the index;
+    // `PRAGMA integrity_check` is O(database) and opt-in (design decision D8,
+    // issue #16).
+    let rtree_report: String = conn.query_row("SELECT rtreecheck(?1)", [rtree], |r| r.get(0))?;
+    if rtree_report != "ok" {
+        return Ok(false);
+    }
+
+    if structural_check == StructuralCheck::FullDatabase {
+        let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+        return Ok(integrity == "ok");
+    }
+    Ok(true)
 }
 
-/// Build (or rebuild) the RTree `rtree` for `table`/`geom` from a full scan,
-/// via the D8 bulk shadow-table copy, gated with automatic fallback to the
-/// triggered population.
+/// Build (or rebuild) the RTree `rtree` for `table`/`geom` via the D8 bulk
+/// shadow-table copy, gated with automatic fallback to the triggered
+/// population.
 ///
 /// On entry the virtual table may or may not exist and the RTree triggers must
 /// **not** be installed (the caller drops them first for a rebuild); this
 /// function (re)creates the virtual table empty, fills it, and runs `after`
-/// inside the same transaction — the caller uses `after` to install the trigger
+/// inside the same transaction. The caller uses `after` to install the trigger
 /// set and any `gpkg_extensions` row, so the whole operation commits atomically.
 ///
+/// `precomputed` supplies the `(fid, envelope)` entry set directly instead of
+/// deriving it from an `ST_*` scan of the table. Pass `Some` only when the
+/// caller can prove it holds an entry for every indexable row: the bulk
+/// `write_all` path passes the envelopes it computed while encoding, and only
+/// when the table was empty before the write. An incomplete set would build an
+/// index missing rows, which the gate cannot detect because it checks the index
+/// against this very set. `None` scans, which is always sound.
+///
 /// `tamper` is [`no_tamper`] outside tests.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "internal build entry point threading the whole build context; a parameter struct would be used by these two call sites alone"
+)]
 pub(crate) fn fill_index<F>(
     conn: &Connection,
     table: &str,
     geom: &str,
     pk: &str,
     rtree: &str,
+    options: BulkIndexOptions,
+    precomputed: Option<Vec<(i64, [f64; 4])>>,
     tamper: ScratchTamper,
     after: F,
 ) -> Result<BuildPath>
 where
     F: FnOnce(&Connection) -> Result<()>,
 {
-    let accumulated = accumulate_envelopes(conn, table, geom, pk)?;
+    let accumulated = match precomputed {
+        Some(entries) => entries,
+        None => accumulate_envelopes(conn, table, geom, pk)?,
+    };
     let scratch = ScratchDb::attach(conn)?;
     scratch.build(&accumulated)?;
     tamper(&scratch)?;
@@ -327,7 +403,7 @@ where
     copy_shadow_tables(conn, rtree)?;
 
     let expected: HashMap<i64, [f64; 4]> = accumulated.into_iter().collect();
-    let path = if gate(conn, rtree, expected)? {
+    let path = if gate(conn, rtree, expected, options.structural_check)? {
         BuildPath::Bulk
     } else {
         // Discard the copied result and rebuild through the triggered
