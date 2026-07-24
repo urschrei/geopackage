@@ -24,6 +24,8 @@
 //! (`_node(nodeno, data)`, `_rowid(rowid, nodeno)`, `_parent(nodeno,
 //! parentnode)`) regardless of the RTree's name.
 //!
+//! # The gate
+//!
 //! Every bulk build is **gated** before it is trusted (see [`gate`]): the written
 //! index must contain exactly the accumulated `(fid, envelope)` set (row count
 //! plus a per-row containment check), and it must pass a structural check
@@ -31,6 +33,22 @@
 //! whole-database `PRAGMA integrity_check`). Any anomaly makes [`fill_index`]
 //! fall back to the triggered population statement, so a failed gate never
 //! yields a corrupt or stale index, only a slower build.
+//!
+//! **The gate is about 45% of the build.** Profiled over 1M points, it costs
+//! ~745 ms of a ~1593 ms build: roughly half in the bijection scan, which reads
+//! every entry back out of the index, and half in `rtreecheck`, which walks the
+//! whole tree. GDAL's builder runs no equivalent, and without the gate this
+//! crate would be comfortably faster than it rather than level with it (see
+//! `roadmap/benchmarks/2026-07-24-gdal-like-for-like.md`).
+//!
+//! That cost is deliberate and stays for now. This module writes a tree by hand
+//! into an on-disk format that SQLite does not document as an interface, so the
+//! result is checked against SQLite's own checker and against the input before
+//! anything relies on it. Removing or defaulting-off the gate is a question for
+//! 1.0, once the packer has enough history behind it to justify the trust; it is
+//! not a change to make while the format handling is this new. Until then the
+//! honest framing is that roughly half of a bulk index build is insurance, and
+//! the reason to keep paying it is confidence rather than speed.
 //!
 //! The entry set itself comes either from an `ST_*` scan of the table or, when
 //! the caller can prove it accounts for every indexable row, from envelopes
@@ -88,9 +106,15 @@ pub struct BulkIndexOptions {
 /// How much of the database the bulk-build gate checks structurally after
 /// writing the shadow tables.
 ///
-/// Both settings run the full content gate (the bijection between the copied
+/// Both settings run the full content gate (the bijection between the written
 /// index and the accumulated envelope set, and the per-row containment check);
 /// this chooses only the SQLite-level structural check layered on top.
+///
+/// The gate as a whole is a substantial share of a bulk build, around 45% at 1M
+/// points, split roughly evenly between the content check and `rtreecheck`. It
+/// is not currently possible to switch off entirely: a bulk build writes the
+/// RTree by hand, and verifying it is what makes that defensible. Whether that
+/// remains the right default is a 1.0 question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum StructuralCheck {

@@ -27,6 +27,12 @@ While the version is below 1.0 the API may change in any release.
   ([#20]). Measured like for like, both building an index over the same rows of
   the same file, this is level with GDAL: 8% slower on uniform points and 9%
   faster on clustered ones, while running a verification gate GDAL does not.
+- Documented what the bulk-build gate costs. Every bulk index build verifies
+  itself before it is trusted, and that verification is roughly 45% of the
+  build (~745ms of ~1593ms at 1M points), which is why the build is level with
+  GDAL rather than ahead of it: GDAL runs no equivalent. The check stays for
+  now, because the RTree is written by hand into an undocumented on-disk
+  format. Making it optional is a 1.0 question.
 - `%_rowid` shadow-table rows are now inserted in feature-id order rather than
   in the tree's leaf order. That table is keyed by feature id, so inserting in
   Hilbert order was paying page splits for every row: 556ms on uniform data and

@@ -47,6 +47,19 @@ bindings where demand exists, and an API freeze.
 - [ ] Docs: book-style guide (mdBook): cookbook for the 10 common tasks,
       migration notes from gdal/gpkg-rs/rusqlite-gpkg, FFI integration guide.
 - [ ] Performance regression CI (criterion + threshold alerts).
+- [ ] **Revisit the D8 bulk-build gate.** Every bulk index build verifies itself
+      before it is trusted: a bijection and containment check of the written
+      index against the accumulated envelopes, plus `rtreecheck` over the tree,
+      with a fallback to the triggered build on any anomaly. That is about **45%
+      of the build** (~745 ms of a ~1593 ms build at 1M points), and GDAL's
+      builder runs no equivalent, so without it we would be faster than GDAL
+      rather than level with it. The cost is the right call while
+      `geopackage/src/packed.rs` is new: it writes an RTree by hand into a format
+      SQLite does not document as an interface. The 1.0 question is whether the
+      packer has enough history by then to make the gate opt-in, or to keep only
+      the cheaper half. Decide it on the evidence at the time rather than on the
+      benchmark alone, and if it is relaxed, keep a way to turn it back on. See
+      [benchmarks/2026-07-24-gdal-like-for-like.md](benchmarks/2026-07-24-gdal-like-for-like.md).
 - [ ] 1.0 RFC issue in georust with the frozen API summary; two-release
       deprecation policy adopted.
 
