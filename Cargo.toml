@@ -30,5 +30,61 @@ geo-types = "0.7"
 unsafe_code = "forbid"
 missing_docs = "warn"
 
+# Strict clippy set, after
+# https://emschwartz.me/your-clippy-config-should-be-stricter/ — all "warn"
+# locally, promoted to errors by CI's `-D warnings`. Test code is exempted
+# from the panic-family lints via clippy.toml. Deliberately omitted from the
+# article's list: `expect_used` (justified `expect` messages are house
+# style), `arithmetic_side_effects` (~85% noise by the author's own
+# measurement), and the optional cast trio (`cast_possible_wrap`,
+# `cast_precision_loss`, `cast_possible_truncation` — the read path widens
+# integers to f64 deliberately and documents it).
+[workspace.lints.clippy]
+# Don't panic.
+string_slice = "warn"
+indexing_slicing = "warn"
+unwrap_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+unreachable = "warn"
+get_unwrap = "warn"
+unwrap_in_result = "warn"
+panic_in_result_fn = "warn"
+unchecked_time_subtraction = "warn"
+# Don't fail silently.
+let_underscore_future = "warn"
+let_underscore_must_use = "warn"
+unused_result_ok = "warn"
+map_err_ignore = "warn"
+assertions_on_result_states = "warn"
+# Async hazards (no async here yet; guards the future).
+await_holding_lock = "warn"
+await_holding_refcell_ref = "warn"
+if_let_mutex = "warn"
+large_futures = "warn"
+# Unsafe hygiene (moot under forbid(unsafe_code); binds the future ffi crate
+# if it ever opts into the workspace table).
+mem_forget = "warn"
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+unnecessary_safety_doc = "warn"
+unnecessary_safety_comment = "warn"
+# Numeric.
+float_cmp = "warn"
+float_cmp_const = "warn"
+lossy_float_literal = "warn"
+cast_sign_loss = "warn"
+invalid_upcast_comparisons = "warn"
+# Easy-to-avoid issues.
+rc_mutex = "warn"
+debug_assert_with_mut_call = "warn"
+iter_not_returning_iterator = "warn"
+expl_impl_clone_on_copy = "warn"
+dbg_macro = "warn"
+# Suppression hygiene: #[expect(..., reason = "...")] only.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
 [profile.release]
 lto = "thin"

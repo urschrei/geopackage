@@ -1,0 +1,9 @@
+# Test code may panic freely: assertions and unwraps ARE the mechanism.
+# These exempt #[cfg(test)] and integration-test targets from the
+# panic-family restriction lints in the workspace lints table.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
