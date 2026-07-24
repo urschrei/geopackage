@@ -23,7 +23,7 @@ mod srs;
 pub use error::{Error, Result};
 pub use geopackage_core as core;
 pub use geopackage_core::GpkgVersion;
-pub use schema::GeometryColumn;
+pub use schema::{Column, GeometryColumn, TableSchema};
 pub use srs::Srs;
 
 use geopackage_core::{ddl, version};

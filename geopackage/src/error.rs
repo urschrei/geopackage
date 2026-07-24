@@ -53,6 +53,13 @@ pub enum Error {
         /// The value as stored.
         value: i64,
     },
+    /// Introspection was asked for a table that does not exist (its
+    /// `PRAGMA table_info` returned no rows).
+    #[error("no such table: {table_name:?}")]
+    NoSuchTable {
+        /// The requested table name.
+        table_name: String,
+    },
 }
 
 /// Convenience alias.

@@ -1,6 +1,6 @@
 //! `gpkg_geometry_columns` and `PRAGMA table_info` introspection.
 
-use geopackage::core::types::{GeometryType, ZmFlag};
+use geopackage::core::types::{ColumnType, GeometryType, ZmFlag};
 use geopackage::{Error, GeoPackage};
 
 /// A GeoPackage with a feature-style table `roads(fid, geom, name, ...)` and a
@@ -109,5 +109,94 @@ fn invalid_zm_flag_is_typed_error() {
             assert_eq!(value, 3);
         }
         other => panic!("expected InvalidZmFlag, got {other:?}"),
+    }
+}
+
+#[test]
+fn table_schema_columns_and_pk() {
+    let (_dir, gpkg) = feature_gpkg();
+    let schema = gpkg.table_schema("roads").unwrap();
+    assert_eq!(schema.table_name, "roads");
+
+    // The geometry_columns row is attached.
+    let gc = schema.geometry_column.as_ref().unwrap();
+    assert_eq!(gc.geometry_type, GeometryType::LineString);
+
+    // Primary key: the fid column, discovered (not assumed) from the pragma.
+    let pk = schema.primary_key().unwrap();
+    assert_eq!(pk.name, "fid");
+    assert_eq!(pk.column_type, Some(ColumnType::Integer));
+    assert_eq!(pk.primary_key, 1);
+    assert_eq!(schema.primary_key_columns().len(), 1);
+
+    // Assorted column types parse.
+    assert_eq!(
+        schema.column("name").unwrap().column_type,
+        Some(ColumnType::Text(Some(64)))
+    );
+    assert_eq!(
+        schema.column("surveyed").unwrap().column_type,
+        Some(ColumnType::DateTime)
+    );
+    assert_eq!(
+        schema.column("built").unwrap().column_type,
+        Some(ColumnType::Date)
+    );
+
+    // NOT NULL and DEFAULT are surfaced.
+    let lanes = schema.column("lanes").unwrap();
+    assert_eq!(lanes.column_type, Some(ColumnType::MediumInt));
+    assert!(lanes.not_null);
+    assert_eq!(lanes.default_value.as_deref(), Some("2"));
+    assert!(!lanes.is_primary_key());
+
+    // A declared type outside the spec vocabulary keeps its raw string.
+    let weird = schema.column("weird").unwrap();
+    assert_eq!(weird.declared_type, "VARCHAR(20)");
+    assert_eq!(weird.column_type, None);
+}
+
+#[test]
+fn table_schema_no_primary_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+    gpkg.connection()
+        .execute_batch("CREATE TABLE notes (body TEXT, created DATETIME);")
+        .unwrap();
+    let schema = gpkg.table_schema("notes").unwrap();
+    assert_eq!(schema.columns.len(), 2);
+    assert!(schema.primary_key().is_none());
+    assert!(schema.primary_key_columns().is_empty());
+    assert!(schema.geometry_column.is_none());
+}
+
+#[test]
+fn table_schema_composite_primary_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+    gpkg.connection()
+        .execute_batch(
+            "CREATE TABLE grid (row INTEGER, col INTEGER, v REAL, PRIMARY KEY (row, col));",
+        )
+        .unwrap();
+    let schema = gpkg.table_schema("grid").unwrap();
+    // Composite key is surfaced, not rejected; the single-key accessor abstains.
+    assert_eq!(schema.primary_key_columns().len(), 2);
+    assert!(schema.primary_key().is_none());
+    let ordered: Vec<&str> = schema
+        .primary_key_columns()
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(ordered, vec!["row", "col"]);
+}
+
+#[test]
+fn table_schema_missing_table_is_typed_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+    match gpkg.table_schema("ghost") {
+        Err(Error::NoSuchTable { table_name }) => assert_eq!(table_name, "ghost"),
+        other => panic!("expected NoSuchTable, got {other:?}"),
     }
 }
