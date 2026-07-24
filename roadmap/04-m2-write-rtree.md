@@ -6,14 +6,18 @@ write performance competitive with GDAL's GPKG driver.
 ## Tasks
 
 ### Layer creation & DDL
-- [ ] `TableSchemaBuilder`: columns (gpkg types + constraints), geometry
+- [x] `TableSchemaBuilder`: columns (gpkg types + constraints), geometry
       column (type, srs, z/m flags), pk. Emits user table DDL +
       `gpkg_contents` + `gpkg_geometry_columns` rows (creating
       `gpkg_geometry_columns` on first use).
-- [ ] `create_layer` / `create_attributes_table`; table/column name
+- [x] `create_layer` / `create_attributes_table`; table/column name
       validation (reject `gpkg_` prefix per spec, SQL keywords quoted).
-- [ ] `gpkg_contents.last_change` maintenance; bbox (min_x…max_y) updated on
-      write commit (cheap: fold envelopes during the transaction).
+- [x] `gpkg_contents.last_change` maintenance; bbox (min_x…max_y) updated on
+      write commit (cheap: fold envelopes during the transaction). *(The
+      running fold and the commit-time `last_change`/bbox update live in the
+      Group B `FeatureWriter::commit`, since they depend on the writer; create
+      seeds the initial row with the DDL default `last_change` and a NULL
+      bbox.)*
 
 ### Feature writes
 - [ ] `tx.writer(layer)` prepared-statement writer: insert (with/without

@@ -33,6 +33,7 @@
 // workspace lints table (root Cargo.toml); see roadmap decision D12 for the
 // unsafe policy and its single planned exception (`geopackage-ffi`, M3).
 
+mod create;
 mod error;
 mod functions;
 mod layer;
@@ -41,6 +42,9 @@ mod schema;
 mod srs;
 mod value;
 
+pub use create::{
+    ColumnSpec, DEFAULT_GEOMETRY_COLUMN, DEFAULT_PRIMARY_KEY, GeometrySpec, TableSchemaBuilder,
+};
 pub use error::{Error, Result};
 pub use geopackage_core as core;
 pub use geopackage_core::GpkgVersion;

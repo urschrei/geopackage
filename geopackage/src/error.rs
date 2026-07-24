@@ -141,6 +141,55 @@ pub enum Error {
         /// The layer that was queried.
         table_name: String,
     },
+    /// A table was requested with a name beginning `gpkg_`, which the spec
+    /// reserves for its own tables (Requirement 25).
+    #[error("table name {table_name:?} is reserved: user table names must not begin with 'gpkg_'")]
+    ReservedTablePrefix {
+        /// The rejected table name.
+        table_name: String,
+    },
+    /// A table was created with a name that a table or view already uses.
+    #[error("table {table_name:?} already exists")]
+    TableAlreadyExists {
+        /// The clashing table name.
+        table_name: String,
+    },
+    /// A layer was created referencing an `srs_id` absent from
+    /// `gpkg_spatial_ref_sys`.
+    #[error(
+        "srs_id {srs_id} is not present in gpkg_spatial_ref_sys; \
+         register it first with GeoPackage::add_srs or GeoPackage::add_epsg_srs"
+    )]
+    UnknownSrs {
+        /// The unregistered spatial reference system identifier.
+        srs_id: i32,
+    },
+    /// A layer was created with an extension (non-linear or abstract) geometry
+    /// type. Writing those types is a later milestone.
+    #[error(
+        "geometry type {geometry_type} requires a gpkg_geom_<TYPE> extension; \
+         writing extension geometry types is not yet supported"
+    )]
+    ExtensionGeometryUnsupported {
+        /// The rejected geometry type.
+        geometry_type: geopackage_core::types::GeometryType,
+    },
+    /// [`crate::GeoPackage::create_layer`] was called with a builder that has no
+    /// geometry column (use [`crate::GeoPackage::create_attributes_table`] for a
+    /// non-spatial table).
+    #[error("cannot create feature layer {table_name:?}: the builder has no geometry column")]
+    MissingGeometrySpec {
+        /// The table the builder describes.
+        table_name: String,
+    },
+    /// [`crate::GeoPackage::create_attributes_table`] was called with a builder
+    /// that has a geometry column (use [`crate::GeoPackage::create_layer`] for a
+    /// feature table).
+    #[error("cannot create attributes table {table_name:?}: the builder has a geometry column")]
+    UnexpectedGeometrySpec {
+        /// The table the builder describes.
+        table_name: String,
+    },
 }
 
 /// Convenience alias.
