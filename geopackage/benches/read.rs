@@ -3,11 +3,11 @@
 //! Two point layers of the same data are built once (kept alive for the whole
 //! run): one with a 1.4 spatial index, one without. The benchmarks then measure
 //!
-//! - `full_scan`            — [`geopackage::Layer::features`] over every row.
-//! - `features_in/index_small` — a small bounding-box query served by the RTree.
-//! - `features_in/scan_small`  — the same box answered by a full-scan filter
+//! - `full_scan`:            [`geopackage::Layer::features`] over every row.
+//! - `features_in/index_small`: a small bounding-box query served by the RTree.
+//! - `features_in/scan_small`:  the same box answered by a full-scan filter
 //!   (no index), the honest baseline the index is measured against.
-//! - `features_in/index_full`  — a box covering the whole layer, served by the
+//! - `features_in/index_full`:  a box covering the whole layer, served by the
 //!   RTree (index traversal plus materialising every row).
 //!
 //! Row count defaults to 1,000,000; override with `GPKG_BENCH_ROWS`.

@@ -1,4 +1,4 @@
-# M2 — write path + spatial index → v0.1
+# M2: write path + spatial index → v0.1
 
 Goal: create valid GeoPackage 1.4 files that pass external validators, with
 write performance competitive with GDAL's GPKG driver.
@@ -37,7 +37,7 @@ write performance competitive with GDAL's GPKG driver.
 - [x] `layer.create_spatial_index()`: vtab + 1.4 triggers + populate +
       `gpkg_extensions` row (creating `gpkg_extensions` on first use);
       `drop_spatial_index()`; `has_spatial_index()`. *(Population is the plain
-      `INSERT INTO rtree SELECT` with the `ST_IsEmpty`/NULL guard — the D8 bulk
+      `INSERT INTO rtree SELECT` with the `ST_IsEmpty`/NULL guard; the D8 bulk
       build replaces it. `create` errors on an already-indexed layer
       (`SpatialIndexExists`), an attribute layer (`NoGeometryColumn`), or a
       table with no single-column primary key (`NoPrimaryKey`); `drop` is
@@ -54,7 +54,7 @@ write performance competitive with GDAL's GPKG driver.
       *(Implemented in `geopackage/src/bulk.rs`. The scratch database is an
       `ATTACH`ed `:memory:` db built from an `ST_*` envelope scan; its
       `_node`/`_rowid`/`_parent` shadow tables are copied into the target inside
-      one transaction that also (re)creates the vtab and — via an `after` hook —
+      one transaction that also (re)creates the vtab and, via an `after` hook,
       installs the triggers/`gpkg_extensions` row atomically. The gate is a
       bijection + containment check of the copied index against the accumulated
       envelopes plus `PRAGMA integrity_check`; any anomaly drops the copied
@@ -77,7 +77,7 @@ write performance competitive with GDAL's GPKG driver.
 - [x] Journal mode option on create/open (Delete default, Wal opt-in);
       checkpoint + reset to DELETE on close/Drop; `synchronous` exposure.
       *(`OpenOptions` builder (mirrors `std::fs::OpenOptions`) with typed
-      `JournalMode`/`Synchronous` enums — no rusqlite types in the public API;
+      `JournalMode`/`Synchronous` enums, so no rusqlite types in the public API;
       plain `create`/`open`/`open_read_only` are the default-options shortcuts.
       An unspecified journal mode leaves the file's mode untouched (a fresh file
       is DELETE, SQLite's default); WAL is opt-in. A handle that opted into WAL
@@ -125,7 +125,7 @@ write performance competitive with GDAL's GPKG driver.
       `features_in` stays correct via a full scan. Added `SpatialIndexStatus`
       { `Absent`, `Current`, `Legacy`, `Stale` } and `Layer::spatial_index_status`
       to name it, and taught `repair_spatial_index` to recover a `Stale` (or
-      orphaned) index by rebuilding + reinstalling the 1.4 triggers — previously
+      orphaned) index by rebuilding + reinstalling the 1.4 triggers; previously
       the file was stuck between `create_spatial_index` (`SpatialIndexExists`)
       and `repair` (`NoSpatialIndex`). A clean (non-crash) error on the bulk path
       is still restored in-process, so the `Stale` window is only reachable by an
@@ -147,7 +147,7 @@ write performance competitive with GDAL's GPKG driver.
       test): for a coordinate of `f32` sub-normal magnitude (`|x| < ~1.2e-38`,
       e.g. `3e-39`), SQLite coerces the `f64` query-box constraint to `f32`
       non-conservatively, so the RTree candidate scan can drop a truly
-      intersecting feature *before* `features_in`'s `f64` re-test runs — the
+      intersecting feature *before* `features_in`'s `f64` re-test runs, so the
       indexed and full-scan paths then disagree. Fix in the M1 read path by
       expanding the bound each query passes to the vtab outward to the enclosing
       `f32` (min → next-lower `f32`, max → next-higher `f32`) so the vtab filter
@@ -160,7 +160,7 @@ write performance competitive with GDAL's GPKG driver.
       not, vs `gdal` crate as baseline; read-scan throughput vs M1 numbers.
       *(`geopackage/benches/{write,read}.rs`, criterion `0.8`. Recorded at 1M in
       `roadmap/benchmarks/2026-07-24-m2.md` (Apple M2 Pro); 10M extrapolated, not
-      run in the matrix — the triggered path is ~18 s/1M and criterion's 10-sample
+      run in the matrix, since the triggered path is ~18 s/1M and criterion's 10-sample
       floor makes a 10M matrix run for hours with no new ratio information. The
       baseline is the `ogr2ogr` CLI, not the `gdal` crate: the crate needs system
       bindings, and the CLI timing is the honest, documented baseline (it includes
@@ -189,7 +189,7 @@ write performance competitive with GDAL's GPKG driver.
    the PDOK validator, and open correctly in QGIS and `ogrinfo` (manual 1.4
    checks: trigger names update5/6/7, user_version 10400).
    *(**Largely verified, 2026-07-24.** A representative file (four indexed
-   feature layers — 2D point, Z point, linestring in EPSG:3857, polygon — a
+   feature layers (2D point, Z point, linestring in EPSG:3857, polygon), a
    non-spatial attributes table, every attribute type) was written by the new
    API and checked (`geopackage/tests/gdal_interop.rs`, `#[ignore]`d; run
    locally):
@@ -199,7 +199,7 @@ write performance competitive with GDAL's GPKG driver.
      1.4 generation (`update5`/`update6`/`update7` present, no `update1`/
      `update3`).
    - **ets-gpkg12 1.3** (`scripts/run_ets_gpkg12.sh`, jar sha256-pinned): 40
-     passed, 71 skipped (not applicable), **1 failed** —
+     passed, 71 skipped (not applicable), **1 failed**:
      `RTreeIndexTests::extensionIndexImplementation`, whose regex hard-codes the
      GeoPackage **1.2** `update1` trigger and rejects our correct 1.4 set. This
      is the documented 1.2-vs-1.4 gap (no 1.3/1.4 ETS exists); the 1.4 trigger
@@ -207,7 +207,7 @@ write performance competitive with GDAL's GPKG driver.
      in the file.
    - **PDOK** `pdok-geopackage-validator` 0.14.4
      (`scripts/run_pdok_validator.sh`): 21 checks; the only findings are RQ13
-     "single SRS across geometry tables" (our file deliberately mixes 4326+3857 —
+     "single SRS across geometry tables" (our file deliberately mixes 4326+3857,
      spec-legal; PDOK convention, advisory) and RC19 (the intentional Z layer, a
      recommendation). All other RQ/RC checks pass.
    - **QGIS**: not re-exercised in this pass (covered in the M1 corpus via
@@ -228,7 +228,7 @@ write performance competitive with GDAL's GPKG driver.
    `write_ops` and `bulk_and_triggered_builds_agree` prove the rtree equals a
    full-scan rebuild after arbitrary insert/update/delete/upsert sequences
    (both build paths), and `features_in_matches_full_scan_filter` proves the
-   query paths agree — all green in CI. A **dedicated concurrent-reader**
+   query paths agree, all green in CI. A **dedicated concurrent-reader**
    (read-during-write) test is not present; WAL round-trip/durability is covered
    by `wal_journal.rs`/`crash_safety.rs`. The concurrent-reader sub-item stays
    open.)*

@@ -4,10 +4,10 @@
 //! Measures [`geopackage::Layer::write_all`] for point, linestring, and polygon
 //! layers across the three index configurations:
 //!
-//! - `unindexed`  — no spatial index; plain batched inserts.
-//! - `triggered`  — an empty 1.4 spatial index present, maintained per row by
+//! - `unindexed`:  no spatial index; plain batched inserts.
+//! - `triggered`:  an empty 1.4 spatial index present, maintained per row by
 //!   the RTree triggers as each row lands (`never_bulk`).
-//! - `bulk`       — an empty 1.4 spatial index present, built by the D8
+//! - `bulk`:       an empty 1.4 spatial index present, built by the D8
 //!   shadow-table copy after the rows are inserted with triggers dropped
 //!   (`always_bulk`).
 //!
@@ -156,7 +156,7 @@ fn prepare(geom: GeomKind, mode: Mode, master: &[NewFeature<Geometry<f64>>]) -> 
         let layer = gpkg.create_layer(&builder).expect("create layer");
         if matches!(mode, Mode::Triggered | Mode::Bulk) {
             // Building the index on the empty table installs the 1.4 triggers and
-            // an empty RTree — the starting state for both indexed write paths.
+            // an empty RTree, the starting state for both indexed write paths.
             layer.create_spatial_index().expect("create spatial index");
         }
     }

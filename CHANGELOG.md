@@ -75,7 +75,7 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
 
 ### Validation
 
-- OGC `ets-gpkg12`: 40 passed, 71 not applicable, 1 failed — the failure's regex
+- OGC `ets-gpkg12`: 40 passed, 71 not applicable, 1 failed. The failure's regex
   hard-codes the GeoPackage 1.2 `update1` trigger and rejects the correct 1.4
   set. No 1.3/1.4 ETS exists; the 1.4 trigger semantics are covered by a manual
   checklist.

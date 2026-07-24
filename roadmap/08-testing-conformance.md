@@ -22,8 +22,8 @@ This file is the harness plan; milestone docs reference it.
    consistency parser (M4). Corpus seeded from the fixture corpus.
 4. **External validators** (CI, from M2, on files *we* write):
    - OGC [ets-gpkg12](https://github.com/opengeospatial/ets-gpkg12) all-in-one
-     jar (Java in CI). Note: it validates 1.2 semantics — no 1.3/1.4 ETS
-     exists as of 2026-07 — so supplement with:
+     jar (Java in CI). Note: it validates 1.2 semantics, and no 1.3/1.4 ETS
+     exists as of 2026-07, so supplement with:
    - **manual 1.4 checklist** (trigger names are update5/6/7 and no
      update1/update3; user_version 10400; strict DATETIME format),
    - [PDOK geopackage-validator](https://github.com/PDOK/geopackage-validator)
@@ -33,7 +33,7 @@ This file is the harness plan; milestone docs reference it.
    files → our model → compare against `ogrinfo -json`. QGIS headless open
    in a scheduled (not per-PR) job.
 6. **Corruption regressions**: fixtures for every historical failure mode we
-   know – stale `update3` + UPSERT, mixed trigger generations, envelope
+   know: stale `update3` + UPSERT, mixed trigger generations, envelope
    disagreeing with geometry, wrong-endian headers, GP10 application_id,
    truncated GPB, `-wal` sidecar left by a crashed writer.
 7. **Benchmarks** (criterion, from M2): tracked in-repo with hardware notes;

@@ -4,7 +4,7 @@ Decision record. Each entry: decision, rationale, consequences. Prior-art
 lessons draw heavily on Hiroaki Yutani's (yutannihilation) write-up of building
 `rusqlite-gpkg`:
 ["How it feels to write a GPKG library in 2026, in Rust"](https://dev.to/yutannihilation/how-it-feels-to-write-a-gpkg-library-in-2026-in-rust-52mg)
-— cited below as **[HY26]**. He hit most of the sharp edges first; where we
+cited below as **[HY26]**. He hit most of the sharp edges first; where we
 diverge from his choices it's deliberate and documented as such.
 
 ## D1. SQLite driver: rusqlite, sync core
@@ -12,7 +12,7 @@ diverge from his choices it's deliberate and documented as such.
 **Decision.** rusqlite with `bundled` + `functions`. No sqlx. Async, if ever,
 as a `spawn_blocking` wrapper crate.
 
-**Rationale.** The RTree extension's triggers call `ST_IsEmpty`/`ST_MinX`/… —
+**Rationale.** The RTree extension's triggers call `ST_IsEmpty`/`ST_MinX`/…,
 functions SQLite does not have. Any connection that writes to an indexed table
 must register them or writes fail ([HY26] hit this too; it is why geozero's
 sqlx-based gpkg support cannot maintain spatial indexes –
@@ -83,7 +83,7 @@ in the GPB header. Readers and `ST_*` functions prefer the header envelope;
 envelope-less blobs (e.g. GDAL-written points) fall back to WKB traversal
 (M1: full traversal via `wkb`; M0 ships point-only).
 
-**Rationale.** Header envelopes make `ST_MinX` & co. O(1) – the rtree triggers
+**Rationale.** Header envelopes make `ST_MinX` & co. O(1); the rtree triggers
 call four of them per row, so this is a write-throughput decision, not a
 nicety. Points get envelopes too (uniformity beats the 32-byte saving; GDAL
 omits them for points, which is why the fallback must exist).

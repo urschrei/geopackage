@@ -6,11 +6,11 @@
 # The PDOK validator applies stricter naming/index/SRS/geometry rules than the
 # OGC spec mandates; per roadmap/08-testing-conformance.md its findings are
 # treated as advisory where they exceed the spec (e.g. RQ13 "single SRS across
-# all geometry tables" — multiple SRS is spec-legal).
+# all geometry tables", since multiple SRS is spec-legal).
 #
 # It runs one of two ways, preferred in order:
 #   1. A local `geopackage-validator` CLI on PATH (pip package
-#      `pdok-geopackage-validator`, needs the osgeo/GDAL Python bindings —
+#      `pdok-geopackage-validator`, needs the osgeo/GDAL Python bindings,
 #      trivial when system GDAL is installed:
 #        python3 -m venv --system-site-packages env
 #        env/bin/pip install pdok-geopackage-validator numpy

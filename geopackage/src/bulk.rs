@@ -253,7 +253,7 @@ pub(crate) fn table_row_count(conn: &Connection, table: &str) -> Result<usize> {
 
 /// Accumulate `(fid, [min_x, max_x, min_y, max_y])` for every row whose geometry
 /// is indexable, using the registered `ST_*` functions and the exact NULL/empty
-/// guard the trigger population uses — so the accumulated set is identical to
+/// guard the trigger population uses, so the accumulated set is identical to
 /// what the triggered path would index.
 fn accumulate_envelopes(
     conn: &Connection,
@@ -298,7 +298,7 @@ fn copy_shadow_tables(conn: &Connection, rtree: &str) -> Result<()> {
 /// Passes only when the index contains exactly one row per accumulated entry
 /// (row count and a bijection on `id`), each stored bound conservatively
 /// contains the true envelope (the RTree stores `f32` bounds, minima rounded
-/// down and maxima rounded up, so containment — not equality — is the correct
+/// down and maxima rounded up, so containment, not equality, is the correct
 /// relation), and `PRAGMA integrity_check` reports `ok`.
 fn gate(
     conn: &Connection,

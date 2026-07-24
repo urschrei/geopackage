@@ -10,7 +10,7 @@ Data Interface as the bulk data plane.
 | File | Contents |
 |---|---|
 | [00-completed.md](00-completed.md) | What exists today (M0) and how it was verified |
-| [01-design-decisions.md](01-design-decisions.md) | Decision record: driver, API shape, CRS policy, WAL, Wasm posture — including lessons from prior art |
+| [01-design-decisions.md](01-design-decisions.md) | Decision record: driver, API shape, CRS policy, WAL, Wasm posture, including lessons from prior art |
 | [02-ecosystem.md](02-ecosystem.md) | Dependency map, georust coordination, code-adaptation policy (wkb, geozero, rstar, arrow, …) |
 | [03-m1-read-path.md](03-m1-read-path.md) | M1: feature/attribute read path, full WKB envelopes |
 | [04-m2-write-rtree.md](04-m2-write-rtree.md) | M2: write path, layer creation, bulk rtree build → **v0.1** |
@@ -27,7 +27,7 @@ Data Interface as the bulk data plane.
   incl. end-to-end trigger/UPSERT proofs, CI (3 OSes, MSRV 1.85, clippy `-D
   warnings`, fmt, docs, fuzz-build).
 - **M1 complete** (criteria verified in CI, 2026-07-24): schema model,
-  geometry wrapper, and the feature/attribute **read path** —
+  geometry wrapper, and the feature/attribute **read path**:
   `layers()`/`layer()`/`attributes()` handles, `features()`/`features_in(bbox)`
   (rtree-accelerated with a full-scan fallback, results property-tested
   identical) and the `select()` WHERE passthrough, plus `open_lenient()` with
@@ -54,7 +54,7 @@ Data Interface as the bulk data plane.
   external-validation harness (ets-gpkg12, PDOK, ogrinfo, GDAL round-trip).
   **151 unit/integration tests pass**; the `#[ignore]`d GDAL-interop tests pass
   locally. All five acceptance criteria are annotated in
-  [04-m2-write-rtree.md](04-m2-write-rtree.md); criterion 5 is met — `v0.1.0` is
+  [04-m2-write-rtree.md](04-m2-write-rtree.md); criterion 5 is met: `v0.1.0` is
   tagged at `b3649cc` with a GitHub release, and `geopackage-core` 0.1.0 and
   `geopackage` 0.1.0 are on crates.io and building on docs.rs. Released with the
   following still open:

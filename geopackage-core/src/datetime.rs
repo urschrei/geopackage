@@ -2,7 +2,7 @@
 //!
 //! GeoPackage stores dates and datetimes as ISO 8601 TEXT. The 1.4 spec kept
 //! the strict datetime form `YYYY-MM-DDTHH:MM:SS.SSSZ` (UTC, millisecond
-//! precision — the shape `strftime('%Y-%m-%dT%H:%M:%fZ', ...)` produces).
+//! precision: the shape `strftime('%Y-%m-%dT%H:%M:%fZ', ...)` produces).
 //! Files in the wild also contain second-precision values, other fractional
 //! widths, numeric UTC offsets, and space separators; [`DateTime::parse_lenient`]
 //! accepts those.

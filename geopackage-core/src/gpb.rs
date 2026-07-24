@@ -5,7 +5,7 @@
 //! ```text
 //! byte 0..2   magic "GP" (0x47 0x50)
 //! byte 2      version (0 = GeoPackage Binary version 1)
-//! byte 3      flags: [R R X E E E B] — bit 0 B: header/envelope byte order
+//! byte 3      flags: [R R X E E E B]. Bit 0 B: header/envelope byte order
 //!             (0 = big-endian, 1 = little-endian); bits 1–3 EEE: envelope
 //!             indicator; bit 4: empty-geometry flag; bit 5 X: extended GPB;
 //!             bits 6–7 R: reserved (0)

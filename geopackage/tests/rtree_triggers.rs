@@ -1,5 +1,5 @@
 //! End-to-end proof of the M0 stack: GPB encoding (core) + registered ST_*
-//! functions + the 1.4 trigger set maintaining a real SQLite rtree —
+//! functions + the 1.4 trigger set maintaining a real SQLite rtree,
 //! including the UPSERT case that corrupted pre-1.4 GeoPackages.
 
 #![expect(

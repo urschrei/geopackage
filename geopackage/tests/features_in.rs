@@ -9,7 +9,7 @@
 //! against the true `f64` envelope), quantised only to keep their magnitude out
 //! of the `f32` sub-normal band (see `draw_coord`). Ported from a hand-rolled
 //! SplitMix64 generator to `#[hegel::test]` (which shrinks failing cases to a
-//! minimal counterexample — the sub-normal edge above was found this way).
+//! minimal counterexample; the sub-normal edge above was found this way).
 
 #![expect(
     clippy::unwrap_used,
@@ -46,8 +46,8 @@ fn linestring_blob(pts: &[(f64, f64)]) -> Vec<u8> {
 
 /// An arbitrary finite `f64` coordinate in `[-100, 100]`, un-quantised.
 ///
-/// The full range — including the `f32` sub-normal band (`|x| < ~1.2e-38`)
-/// that originally broke path equivalence (issue #12) — is deliberately in
+/// The full range, including the `f32` sub-normal band (`|x| < ~1.2e-38`)
+/// that originally broke path equivalence (issue #12), is deliberately in
 /// play: `features_in` widens its RTree query bounds one `f32` ULP outward
 /// before binding, so the vtab candidate set is a conservative superset at
 /// every magnitude and the `f64` re-filter restores exactness.

@@ -6,8 +6,8 @@
 
 A fast, robust, production-quality Rust implementation of the
 [OGC GeoPackage 1.4](https://www.geopackage.org/spec140/) format, intended for
-use from Rust and – via a C ABI with the Arrow C Data Interface as the bulk
-data plane – from higher-level languages.
+use from Rust and, via a C ABI with the Arrow C Data Interface as the bulk
+data plane, from higher-level languages.
 
 **Status: pre-alpha (0.1.0).** The read and write paths are complete and
 validated against external tooling (see [Conformance](#conformance)), but the
@@ -110,7 +110,7 @@ cargo run --example bbox_query -- out.gpkg points -10 -5 10 5
 Files written by this crate are checked against OGC
 [ets-gpkg12](https://github.com/opengeospatial/ets-gpkg12) (40 passed, 1
 failure whose regex hard-codes the GeoPackage 1.2 trigger set and rejects a
-correct 1.4 one — no 1.3/1.4 ETS exists), the
+correct 1.4 one; no 1.3/1.4 ETS exists), the
 [PDOK validator](https://github.com/PDOK/geopackage-validator) (clean but for
 two advisory findings on deliberate choices), `ogrinfo`, and a GDAL round-trip
 that byte-compares geometry WKB and attribute values. The test corpus includes
@@ -128,11 +128,11 @@ for the detailed results.
   [georust/wkb](https://github.com/georust/wkb); do not parse untrusted
   GeoPackage files with 0.1.0. Tracked in
   [#3](https://github.com/urschrei/geopackage/issues/3).
-- **Bulk indexed writes are not yet at GDAL parity** — roughly 3-4x slower than
-  an indexed `ogr2ogr` copy at 1M rows, dominated by the bulk-build gate's
-  whole-database `integrity_check` and the per-row `ST_*` envelope scan.
-  Tracked in [#16](https://github.com/urschrei/geopackage/issues/16) and
-  [#15](https://github.com/urschrei/geopackage/issues/15).
+- **Bulk indexed writes are not yet at GDAL parity**: roughly 2.6x slower than
+  an indexed `ogr2ogr` copy at 1M rows (4.95 s against 1.89 s), down from 3.9x
+  in 0.1.0. What remains is SQLite's own per-row RTree insertion while building
+  the scratch index. Tracked in
+  [#20](https://github.com/urschrei/geopackage/issues/20).
 - **Non-linear curve types** (`CIRCULARSTRING`, `COMPOUNDCURVE`, …) cannot have
   their envelopes computed and so cannot be inserted into an indexed table.
   Tracked in [#5](https://github.com/urschrei/geopackage/issues/5).
@@ -144,7 +144,7 @@ for the detailed results.
 M1 (feature and attribute read: scan, bbox via rtree, WHERE passthrough, full
 WKB envelopes) and M2 (write path, layer creation, bulk rtree build, trigger
 repair) are complete and released as v0.1. Next: M3 GeoArrow `RecordBatch`
-I/O, C ABI (`geopackage-ffi`), CLI — v0.2. M4: tiles. M5: extensions (CRS
+I/O, C ABI (`geopackage-ffi`), CLI, for v0.2. M4: tiles. M5: extensions (CRS
 WKT2, metadata, schema, related tables).
 
 The full roadmap, including the decision record, lives in

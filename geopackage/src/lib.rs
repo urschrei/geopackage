@@ -36,14 +36,14 @@
 //!   [`Layer::write_all`] is the batched bulk-load path.
 //! - [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`], and
 //!   [`Layer::repair_spatial_index`] manage the RTree spatial index (the
-//!   GeoPackage 1.4 trigger set, design decision D7). Building a large index —
+//!   GeoPackage 1.4 trigger set, design decision D7). Building a large index,
 //!   [`Layer::create_spatial_index_with`], or [`Layer::write_all`] into a fresh
-//!   indexed layer — uses the D8 bulk shadow-table build ([`BulkIndexOptions`]).
+//!   indexed layer, uses the D8 bulk shadow-table build ([`BulkIndexOptions`]).
 //! - [`OpenOptions`] selects the journal mode ([`JournalMode`], WAL opt-in) and
 //!   [`Synchronous`] level; see the interchange-first close policy on
 //!   [`GeoPackage`].
 //!
-//! The GeoArrow bulk plane arrives in a later milestone — see the repository
+//! The GeoArrow bulk plane arrives in a later milestone; see the repository
 //! roadmap.
 //!
 //! # Reading untrusted files
@@ -142,7 +142,7 @@ use std::path::Path;
 /// the `.gpkg` handed on is a single file. Prefer the explicit
 /// [`GeoPackage::close`], which surfaces any error; the drop path is
 /// best-effort and never panics. [`GeoPackage::into_connection`] opts out of
-/// this guarantee — the returned connection keeps whatever journal mode it was
+/// this guarantee: the returned connection keeps whatever journal mode it was
 /// in.
 pub struct GeoPackage {
     /// `Some` for the whole lifetime of the handle; taken only by
@@ -343,7 +343,7 @@ impl GeoPackage {
 impl Drop for GeoPackage {
     fn drop(&mut self) {
         // Interchange-first: a WAL handle resets the file to a single DELETE
-        // file. Best-effort and must never panic (design decision D4) — an
+        // file. Best-effort and must never panic (design decision D4): an
         // un-checkpointed WAL file is still valid and recovers on next open.
         if self.journal_mode == JournalMode::Wal
             && let Some(conn) = self.conn.as_ref()
@@ -422,7 +422,7 @@ pub(crate) fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bo
 ///
 /// SQLite object names resolve case-insensitively, but joins between catalogue
 /// tables (`gpkg_contents`, `gpkg_geometry_columns`) compare the stored strings
-/// exactly. This returns the physical name as SQLite stores it — identical to
+/// exactly. This returns the physical name as SQLite stores it, identical to
 /// `name` for a well-formed file, differing only in case for the wrong-case
 /// files [`GeoPackage::open_lenient`] tolerates. `None` when no such table
 /// exists under any casing.

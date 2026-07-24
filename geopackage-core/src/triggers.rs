@@ -6,7 +6,7 @@
 //! classifies/repairs older generations.
 //!
 //! The triggers call `ST_IsEmpty`, `ST_MinX`, `ST_MaxX`, `ST_MinY`, `ST_MaxY`,
-//! which are **not** built into SQLite — every connection that writes to an
+//! which are **not** built into SQLite: every connection that writes to an
 //! indexed table must register them (the `geopackage` crate does this on open).
 
 use crate::Error;
@@ -147,7 +147,7 @@ pub enum TriggerGeneration {
     /// Note: the buggy (≤1.2.0) and fixed (1.2.1–1.3.1) `update3` bodies
     /// share a name; distinguishing them requires inspecting the SQL body.
     PreV1_4,
-    /// Both generations present — inconsistent; should be repaired.
+    /// Both generations present: inconsistent, and should be repaired.
     Mixed,
     /// No rtree triggers found.
     None,

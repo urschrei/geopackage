@@ -1,4 +1,4 @@
-# M1 — container model + read path
+# M1: container model + read path
 
 Goal: read any reasonable GeoPackage's features and attributes, correctly and
 fast, including files produced by GDAL, QGIS, and NGA tools.
@@ -16,11 +16,11 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
 - [x] `TableSchema` introspection: column names, declared gpkg types
       (BOOLEAN, TINYINT, SMALLINT, MEDIUMINT, INT/INTEGER, FLOAT, DOUBLE/REAL,
       TEXT(maxlen), BLOB(maxlen), DATE, DATETIME, geometry types), pk column
-      discovery (`fid` convention but never assumed — read `PRAGMA table_info`).
+      discovery (`fid` convention but never assumed; read `PRAGMA table_info`).
       `TableSchema` + `Column` + `table_schema()`; composite pks surfaced via
       `primary_key_columns()`, single-pk convenience via `primary_key()`.
 - [x] `Value` enum mapping SQLite storage classes ↔ gpkg column types;
-      strict DATETIME parsing (`YYYY-MM-DDTHH:MM:SS.SSSZ` — 1.4 kept the
+      strict DATETIME parsing (`YYYY-MM-DDTHH:MM:SS.SSSZ`; 1.4 kept the
       strict form) with a lenient read option (`ConversionOptions` /
       `DateTimeParsing`). Non-geometry only; storage/type mismatch is a typed
       error. Reachable via the `column_values()` building block.
@@ -53,8 +53,8 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       `wkb` itself (tracked in [02-ecosystem.md](02-ecosystem.md)); until then
       this is ours.
 - [ ] Curve-type envelope support: a WKB body whose type the `wkb` crate
-      cannot read — the non-linear curve types (`CIRCULARSTRING`,
-      `CURVEPOLYGON`, `MULTICURVE`, …) and the abstract `CURVE`/`SURFACE` —
+      cannot read, the non-linear curve types (`CIRCULARSTRING`,
+      `CURVEPOLYGON`, `MULTICURVE`, …) and the abstract `CURVE`/`SURFACE`,
       makes the `ST_*` functions return a typed SQL error rather than an
       envelope, so such a geometry cannot be inserted into an rtree-indexed
       table. Needs curve support in georust `wkb` upstream.
@@ -102,7 +102,7 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       fall back to full scan), else full scan with an envelope filter. RTree
       candidates are re-filtered against the true `f64` envelope (header
       envelope preferred, WKB traversal fallback) because the vtab stores
-      f32-widened bounds — so both paths return exactly the same rows. Asserted
+      f32-widened bounds, so both paths return exactly the same rows. Asserted
       by `EXPLAIN QUERY PLAN` (rtree path shows `VIRTUAL TABLE`; full scan shows
       `SCAN`) and a seeded property test.
 - [x] `layer.select(where_clause, params)` passthrough. `params: &[Value]`
@@ -157,7 +157,7 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       comparison site (GDAL's `YYYY/MM/DD` date and `YYYY/MM/DD HH:MM:SS+00`
       datetime spelling vs our ISO form, float print precision handled with an
       epsilon, JSON-omitted binary recovered via GDAL's `hex()`, empty-vs-NULL
-      geometry, Z dropped by `to_geo`) — our read was **not** weakened to pass.
+      geometry, Z dropped by `to_geo`): our read was **not** weakened to pass.
       Snapshots are committed so the suite runs without GDAL; an `#[ignore]`d
       test regenerates-and-diffs live. Cross-implementation index compatibility
       is proven here: a GDAL-built RTree serves `features_in` correctly through
@@ -168,11 +168,11 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       (`geopackage/tests/features_in.rs`). Both the rtree and the full-scan
       paths are checked against an independent oracle (envelopes computed from
       the generated coordinates), over randomised points and linestrings and
-      query boxes — including full-mantissa `f64` coordinates that are not
+      query boxes, including full-mantissa `f64` coordinates that are not
       representable in `f32` and boxes whose edges sit exactly on a stored
       coordinate, to stress the vtab's f32 boundary rounding. **Generator
       decision:** a hand-rolled seeded SplitMix64 rather than adding `proptest`
-      — the property is a set equality with an independent oracle (little value
+      the property is a set equality with an independent oracle (little value
       from shrinking) and a zero-dependency seeded generator keeps the
       dependency tree honest and CI reproducible (failing seeds print). So
       no property-testing dependency was added in M1. The M2 property tests

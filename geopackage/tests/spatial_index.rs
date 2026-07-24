@@ -22,7 +22,7 @@ use geopackage::{
 use hegel::generators;
 use rusqlite::{Connection, OptionalExtension};
 
-/// A GPB blob for an empty point (empty flag + NaN coordinates, no envelope) —
+/// A GPB blob for an empty point (empty flag + NaN coordinates, no envelope):
 /// the population guard must skip this exactly as the triggers' `ST_IsEmpty`
 /// check does.
 fn gpb_empty_point(srs_id: i32) -> Vec<u8> {
@@ -466,7 +466,7 @@ fn create_on_attribute_layer_errors() {
 ///
 /// The RTree stores 32-bit bounds (minima rounded down, maxima rounded up), so
 /// only for `f32`-exact coordinates does the stored bound equal the `ST_*`
-/// envelope exactly — which is what lets these property tests compare the index
+/// envelope exactly, which is what lets these property tests compare the index
 /// to the scan with `==` rather than a containment tolerance.
 fn draw_coord(tc: &hegel::TestCase) -> f64 {
     f64::from(

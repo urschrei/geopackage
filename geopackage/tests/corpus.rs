@@ -24,7 +24,7 @@
 //!   canonical form is `YYYY-MM-DDTHH:MM:SS.SSSZ`. Reconciled by mapping `/`→`-`
 //!   and the date/time separator space→`T`, then parsing leniently to the same
 //!   [`DateTime`] (a `+00` offset and a `Z` both denote UTC / offset zero, and a
-//!   missing fraction parses as zero nanoseconds — so the two forms compare
+//!   missing fraction parses as zero nanoseconds, so the two forms compare
 //!   equal component-for-component).
 //! - **Floats**: GDAL's JSON writer prints doubles at limited precision, so
 //!   `Real` values are compared with a small relative epsilon rather than for
@@ -173,7 +173,7 @@ fn check_property(ftype: &str, subtype: Option<&str>, gdal: &Json, ours: &Value,
 }
 
 /// Flatten a GDAL GeoJSON `coordinates` value into a list of `[x, y]` pairs
-/// (Z, if present, is dropped — see the module note).
+/// (Z, if present, is dropped; see the module note).
 fn flatten_gdal(v: &Json, out: &mut Vec<[f64; 2]>) {
     let Some(arr) = v.as_array() else { return };
     if arr.first().is_some_and(Json::is_number) {
@@ -391,7 +391,7 @@ fn qgis_lines() {
 /// A GDAL-built RTree must serve `features_in` correctly through our reader:
 /// the indexed points layer reports `has_spatial_index()`, our query targets
 /// GDAL's `rtree_points_geom` vtab, and the rows returned equal an independent
-/// full-scan oracle — while the non-indexed lines layer reports no index yet
+/// full-scan oracle, while the non-indexed lines layer reports no index yet
 /// still answers `features_in` by full scan.
 #[test]
 fn gdal_rtree_features_in_is_correct() {

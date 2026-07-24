@@ -7,7 +7,7 @@
 //! The child is this same test binary, re-invoked to run only the ignored
 //! `crash_child` entry point with the role/path/marker passed through the
 //! environment. Parent and child synchronise on a marker file the child writes
-//! once its transactions are in place — not on a timed sleep — so the kill lands
+//! once its transactions are in place, not on a timed sleep, so the kill lands
 //! deterministically after the committed write is durable and the uncommitted
 //! write is open.
 
@@ -154,7 +154,7 @@ fn run_crash_case(role: &str) {
         "rtree desynced from the table after crash ({role})"
     );
 
-    // The layer is a healthy, current index — no repair needed for this path.
+    // The layer is a healthy, current index, so no repair is needed for this path.
     let layer = gpkg.layer("pts").unwrap();
     assert_eq!(
         layer.spatial_index_status().unwrap(),

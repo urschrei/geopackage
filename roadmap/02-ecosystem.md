@@ -9,7 +9,7 @@
 | [`geo-traits`](https://crates.io/crates/geo-traits) | Public geometry API bound | M1 | The API is generic over it; no concrete type forced |
 | [`wkb`](https://github.com/georust/wkb) (georust) | WKB body encode/decode + envelope traversal | M1 | **Depend, don't copy.** Its no-alloc reader is exactly what the `ST_*` fallback needs |
 | [`geo-types`](https://crates.io/crates/geo-types) | Convenience conversions | M1 | Default-on feature, not a hard dep |
-| `rusqlite` | SQLite | now | `bundled` + `functions`; `serialize` later for from/to-bytes (D5). Drives the workspace MSRV: libsqlite3-sys 0.38's build script uses `cfg_select!` (stable 1.95) without declaring a `rust-version`, so MSRV is 1.95 until upstream gates it — first CI run caught this |
+| `rusqlite` | SQLite | now | `bundled` + `functions`; `serialize` later for from/to-bytes (D5). Drives the workspace MSRV: libsqlite3-sys 0.38's build script uses `cfg_select!` (stable 1.95) without declaring a `rust-version`, so MSRV is 1.95 until upstream gates it; first CI run caught this |
 | `thiserror` | errors | now | |
 | [`serde_json`](https://crates.io/crates/serde_json) | corpus snapshot parsing | M1 | **dev-dependency of `geopackage` only.** Parses the committed `ogrinfo -json` expected-output snapshots in `geopackage/tests/corpus.rs`; not a runtime dependency |
 
@@ -26,7 +26,7 @@ Lookup is one function: `srs::epsg_definition(code)`.
 Alternatives considered:
 [`crs-definitions`](https://crates.io/crates/crs-definitions) (all EPSG codes,
 adds ~MBs) and [`epsg-utils`](https://crates.io/crates/epsg-utils) (what
-rusqlite-gpkg uses) — both rejected to keep binary size honest; revisit if
+rusqlite-gpkg uses), both rejected to keep binary size honest; revisit if
 users push back. Geographic 3D CRSs (e.g. 4979) are deliberately absent: they
 cannot be expressed in WKT1 and belong to the `gpkg_crs_wkt` WKT2 extension
 work (M5).
@@ -50,8 +50,8 @@ insert/update/delete/upsert sequences through both the triggered and the D8 bulk
 build (`geopackage/tests/spatial_index.rs`), and the `features_in`
 index-vs-full-scan equality (`geopackage/tests/features_in.rs`, ported from the
 hand-rolled SplitMix64 generator). Its engine is compiled in from the
-`hegeltest-c` crate at build time — no server binary is fetched at test time and
-no network is needed to *run* the tests — so it runs on plain `cargo test` /
+`hegeltest-c` crate at build time, so no server binary is fetched at test time and
+no network is needed to *run* the tests, so it runs on plain `cargo test` /
 `cargo nextest`, including on a CI runner that can fetch crates at build time. In
 CI, Hegel disables its failure database and derandomises by default (no `.hegel/`
 writes); `.hegel/` is gitignored regardless.
@@ -63,13 +63,13 @@ Three conceivable roles, assessed:
 
 1. **Bulk-building the gpkg spatial index.** Tempting, but the on-disk format
    is SQLite's rtree shadow tables. Using rstar would mean serialising an
-   rstar tree into `rtree_%_node` pages ourselves — reimplementing SQLite's
+   rstar tree into `rtree_%_node` pages ourselves, reimplementing SQLite's
    node format, which is stable-in-practice but internal. GDAL's scratch-DB
    technique (D8) gets the same win using SQLite itself as the serialiser.
    **Parked**: only revisit if benchmarks show the scratch-DB build is a
    bottleneck *and* profiling points at SQLite's insert path, in which case an
    rstar bulk-load (STR packing) + direct shadow-table writes is the escalation
-   — with `PRAGMA integrity_check` gating in tests.
+   with `PRAGMA integrity_check` gating in tests.
 2. **Query-side acceleration.** No: queries go through SQL against the rtree
    vtab; an in-memory duplicate index would be a cache-coherence liability.
 3. **`gpkg_contents` bbox maintenance / small utilities.** Overkill; a fold
@@ -97,7 +97,7 @@ engineering.
   [03-m1-read-path.md](03-m1-read-path.md)): (1) `wkb` 0.9.2's reader
   pre-allocates from an untrusted element count
   (`Vec::with_capacity(num_geometries)` / `num_rings`) without bounding it
-  against the buffer, so a malformed count drives an out-of-memory – found by
+  against the buffer, so a malformed count drives an out-of-memory, found by
   our `gpb_geometry` fuzz target; (2) no reader support for the non-linear
   curve types, so their envelopes cannot be computed yet.
 - **geozero**: adapt with attribution, don't depend (geozero's gpkg support
@@ -119,7 +119,7 @@ engineering.
   is already baked into [01-design-decisions.md](01-design-decisions.md).
 - **GDAL**: adapt *techniques* (shadow-table rtree build, WAL
   checkpoint-on-close, Arrow batch reads), reimplemented from issue/RFC
-  descriptions — C++ internals don't transliterate usefully. Cite
+  descriptions, since C++ internals don't transliterate usefully. Cite
   [gdal#7614](https://github.com/OSGeo/gdal/issues/7614) and RFC 86 at the
   implementation sites.
 - **NGA geopackage-java**: mine its test suite and published sample/corrupt

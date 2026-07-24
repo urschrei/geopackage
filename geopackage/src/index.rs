@@ -1,15 +1,15 @@
 //! RTree spatial-index lifecycle on a [`Layer`]: [`Layer::create_spatial_index`],
 //! [`Layer::drop_spatial_index`], and [`Layer::repair_spatial_index`].
 //!
-//! The normative SQL — the `rtree_<table>_<column>` virtual table, the
-//! GeoPackage 1.4 trigger set, and the population statement — is emitted by
+//! The normative SQL (the `rtree_<table>_<column>` virtual table, the
+//! GeoPackage 1.4 trigger set, and the population statement) is emitted by
 //! [`geopackage_core::triggers`] (spec Annex F.3, reproduced verbatim there).
 //! This module drives it against the live connection and maintains the
 //! `gpkg_extensions` registration row (spec Annex F.3 requirements 75/76).
 //!
 //! Design decision D7: a new index always gets the 1.4 trigger set
 //! (`update5`/`update6`/`update7`), which is UPSERT-safe. Older generations are
-//! never repaired automatically — [`Layer::repair_spatial_index`] is the sole,
+//! never repaired automatically: [`Layer::repair_spatial_index`] is the sole,
 //! explicitly user-invoked path that rewrites an existing trigger set.
 //!
 //! Population takes one of two paths (design decision D8). Below the
@@ -51,7 +51,7 @@ pub enum SpatialIndexStatus {
     Legacy,
     /// A desynchronised index: the virtual table exists but its triggers are
     /// missing (or triggers exist with no table). The state an interrupted bulk
-    /// build leaves — for example a crash during [`Layer::write_all`] after the
+    /// build leaves: for example a crash during [`Layer::write_all`] after the
     /// rows commit but before the index is rebuilt, since the `ATTACH` the bulk
     /// build needs cannot join that final transaction (design decision D8).
     ///
@@ -230,21 +230,21 @@ impl Layer<'_> {
     ///
     /// The pre-1.4 `update1` trigger corrupts an index under `UPSERT`; 1.4
     /// renamed the fixed triggers so the repaired state is detectable by name.
-    /// This is **never** invoked automatically — reading a file never mutates
+    /// This is **never** invoked automatically, since reading a file never mutates
     /// it.
     ///
     /// Repairs every state except a healthy or an absent index (see
     /// [`SpatialIndexStatus`]):
     ///
     /// - [`SpatialIndexStatus::Current`]: already the 1.4 set with its virtual
-    ///   table — a no-op.
-    /// - [`SpatialIndexStatus::Legacy`]: a pre-1.4 or mixed trigger set — drop
+    ///   table, which is a no-op.
+    /// - [`SpatialIndexStatus::Legacy`]: a pre-1.4 or mixed trigger set; drop
     ///   every RTree trigger, install the 1.4 set, rebuild the content.
     /// - [`SpatialIndexStatus::Stale`]: a virtual table with missing triggers
     ///   (the state an interrupted bulk build or crash mid-[`Self::write_all`]
-    ///   leaves), or orphaned triggers with no table — same rebuild, so the
+    ///   leaves), or orphaned triggers with no table; same rebuild, so the
     ///   index is made consistent and 1.4-current again.
-    /// - [`SpatialIndexStatus::Absent`]: nothing to repair —
+    /// - [`SpatialIndexStatus::Absent`]: nothing to repair:
     ///   [`Error::NoSpatialIndex`]; use [`Self::create_spatial_index`].
     ///
     /// The `gpkg_extensions` registration row is left as-is: a repair operates

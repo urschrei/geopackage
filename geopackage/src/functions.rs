@@ -7,16 +7,16 @@
 //!
 //! Envelope values are taken from the GPB header when present (an O(1) read;
 //! the rtree triggers call four of these per row). When the header carries no
-//! envelope — as for GDAL-written points and other envelope-less blobs — the
+//! envelope (as for GDAL-written points and other envelope-less blobs) the
 //! functions fall back to a full traversal of the WKB body via
 //! [`geopackage_core::geometry::GpbGeometry`], which handles every geometry
 //! type the georust `wkb` crate can read (all byte orders, any Z/M variant).
 //! `ST_IsEmpty` reports emptiness from the same wrapper (header empty flag,
 //! the NaN empty-point convention, and zero-coordinate geometries).
 //!
-//! Limitation: a WKB body whose type the `wkb` crate cannot read — the
+//! Limitation: a WKB body whose type the `wkb` crate cannot read, namely the
 //! non-linear curve types (`CIRCULARSTRING`, `CURVEPOLYGON`, …) and the
-//! abstract `CURVE`/`SURFACE` — produces a typed SQL error rather than an
+//! abstract `CURVE`/`SURFACE`, produces a typed SQL error rather than an
 //! envelope, so such a geometry cannot be inserted into an rtree-indexed
 //! table. Curve-type envelope support is tracked as an open roadmap item and
 //! needs curve support in `wkb` upstream.

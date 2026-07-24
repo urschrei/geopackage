@@ -39,13 +39,13 @@ unsafe_code = "forbid"
 missing_docs = "warn"
 
 # Strict clippy set, after
-# https://emschwartz.me/your-clippy-config-should-be-stricter/ — all "warn"
+# https://emschwartz.me/your-clippy-config-should-be-stricter/: all "warn"
 # locally, promoted to errors by CI's `-D warnings`. Test code is exempted
 # from the panic-family lints via clippy.toml. Deliberately omitted from the
 # article's list: `expect_used` (justified `expect` messages are house
 # style), `arithmetic_side_effects` (~85% noise by the author's own
 # measurement), and the optional cast trio (`cast_possible_wrap`,
-# `cast_precision_loss`, `cast_possible_truncation` — the read path widens
+# `cast_precision_loss`, `cast_possible_truncation`, since the read path widens
 # integers to f64 deliberately and documents it).
 [workspace.lints.clippy]
 # Don't panic.

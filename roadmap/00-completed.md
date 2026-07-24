@@ -7,7 +7,7 @@
   is GDAL-bindings-or-nothing. The live pure-Rust contenders are
   [`rusqlite-gpkg`](https://github.com/yutannihilation/rusqlite-gpkg)
   (pre-1.0, active, one maintainer) and geozero's `with-gpkg` blob codec
-  (deliberately not a container implementation — see
+  (deliberately not a container implementation; see
   [geozero#185](https://github.com/georust/geozero/issues/185)).
 - Decision: independent georust crate, loose coordination with rusqlite-gpkg
   and geozero; v0.1 scope = features + attributes + RTree; FFI via Arrow C
@@ -43,10 +43,10 @@
 
 ### `geopackage` (the library)
 
-- [x] `GeoPackage::create` — pragmas (`application_id` 0x47504B47,
+- [x] `GeoPackage::create`: pragmas (`application_id` 0x47504B47,
   `user_version` 10400, `foreign_keys` ON), core tables + SRS seeds in one
   transaction; refuses to overwrite non-empty files.
-- [x] `GeoPackage::open` / `open_read_only` / `from_connection` — pragma
+- [x] `GeoPackage::open` / `open_read_only` / `from_connection`: pragma
   classification, required-table check, typed `NotAGeoPackage` errors.
 - [x] **`ST_*` SQL function registration** on every connection
   (`src/functions.rs`): `ST_IsEmpty`, `ST_MinX/MaxX/MinY/MaxY` from the GPB
@@ -61,7 +61,7 @@
 - [x] 17 tests across 6 suites, incl. two end-to-end proofs against real
   SQLite: `triggers_maintain_index` (every trigger path: insert, geometry
   update, →NULL, NULL→, rowid move, delete, empty-geometry exclusion) and
-  `upsert_works_with_1_4_triggers` (`INSERT … ON CONFLICT DO UPDATE` — the
+  `upsert_works_with_1_4_triggers` (`INSERT … ON CONFLICT DO UPDATE`, the
   exact case that corrupted pre-1.4 GeoPackages), plus an rtree bbox query
   test.
 - [x] cargo-fuzz target `gpb_parse` (never-panic + parse→encode→parse
@@ -75,15 +75,15 @@
 - Crate names `geopackage` / `geopackage-core` (`gpkg` and `gpkg-core` on
   crates.io are owned by cjriley9's dormant project).
 - `gpkg_geometry_columns` and `gpkg_extensions` are **not** created at
-  `create()` time — they are created lazily with the first feature table /
+  `create()` time; they are created lazily with the first feature table /
   extension registration (spec makes them conditional).
 - MIT OR Apache-2.0, edition 2024, MSRV 1.85.
 
-# M1 — container model + read path (completed 2026-07-24)
+# M1: container model + read path (completed 2026-07-24)
 
 Verified by CI run 30101537044 (urschrei/geopackage): 3-OS tests, MSRV 1.95,
 clippy `-D warnings` (strict lint set per D12-adjacent config), fmt, docs,
-fuzz-build — all green. Detail and per-item history in
+fuzz-build, all green. Detail and per-item history in
 [03-m1-read-path.md](03-m1-read-path.md); decisions D3 (CRS vendored subset),
 D12 (unsafe policy) recorded during the milestone.
 

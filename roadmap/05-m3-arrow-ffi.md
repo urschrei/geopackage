@@ -1,4 +1,4 @@
-# M3 — Arrow data plane + C ABI + CLI → v0.2
+# M3: Arrow data plane + C ABI + CLI → v0.2
 
 Goal: make the crate consumable from anything with an Arrow implementation,
 and give it a face (CLI) for dogfooding and bug reports.
@@ -13,7 +13,7 @@ and give it a face (CLI) for dogfooding and bug reports.
       mirroring the scalar API.
 - [ ] `layer.write_arrow(reader: impl RecordBatchReader)`: schema→TableSchema
       mapping, batched writes through the M2 bulk path (rtree shadow-table
-      build included — this is the pyogrio-shaped fast path).
+      build included; this is the pyogrio-shaped fast path).
 - [ ] GeoArrow metadata (extension name `geoarrow.wkb`, CRS as PROJJSON where
       we have it / user-supplied otherwise) on the geometry field.
 - [ ] Interop test: batches round-trip through pyarrow (CI python job) and

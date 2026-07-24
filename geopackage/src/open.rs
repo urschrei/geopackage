@@ -3,10 +3,10 @@
 //!
 //! Strict [`GeoPackage::open`] identifies a GeoPackage and rejects anything it
 //! cannot. `open_lenient` opens the same files but, rather than being stricter,
-//! records typed warnings for conditions a fastidious reader would flag —
+//! records typed warnings for conditions a fastidious reader would flag,
 //! legacy `application_id`s, a missing `gpkg_geometry_columns` table, and
 //! catalogue table names that match a real SQLite table only case-insensitively
-//! — so callers can inspect and iterate a lightly non-conforming file instead
+//! so callers can inspect and iterate a lightly non-conforming file instead
 //! of being turned away. Strict [`GeoPackage::open`] is unchanged.
 
 use crate::{
@@ -51,7 +51,7 @@ impl GeoPackage {
     ///
     /// Retrieve the warnings with [`GeoPackage::open_warnings`]. A file that
     /// cannot be identified as a GeoPackage at all, or is missing a required
-    /// core table (`gpkg_spatial_ref_sys`, `gpkg_contents`), is still an error —
+    /// core table (`gpkg_spatial_ref_sys`, `gpkg_contents`), is still an error:
     /// leniency covers presentation, not identity.
     pub fn open_lenient<P: AsRef<Path>>(path: P) -> Result<Self> {
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;

@@ -12,7 +12,7 @@
 //! The read methods currently materialise the result set into owned features
 //! before returning the iterator. rusqlite's row cursor (`Rows`) borrows its
 //! `Statement` and resets it on drop, so a truly lazy iterator that owns both
-//! would be a self-referential struct — not expressible under this crate's
+//! would be a self-referential struct, not expressible under this crate's
 //! `#![forbid(unsafe_code)]` without a helper such as `self_cell`. The
 //! [`Feature`] ownership shape is unaffected; the trade-off is peak memory for
 //! very large result sets, revisited when the GeoArrow bulk plane lands.
@@ -100,7 +100,7 @@ pub struct Layer<'a> {
     kind: LayerKind,
     geometry_column: Option<GeometryColumn>,
     pk_column: Option<String>,
-    /// Non-geometry columns, in schema order — the values each [`Feature`]
+    /// Non-geometry columns, in schema order: the values each [`Feature`]
     /// carries.
     value_columns: Vec<Column>,
     /// The names of [`Self::value_columns`], shared cheaply into every
@@ -279,10 +279,10 @@ impl<'a> Layer<'a> {
     /// Check each geometry's WKB type against the column's declared
     /// `gpkg_geometry_columns` type while reading (off by default).
     ///
-    /// A row whose body does not satisfy the declared type — per the rules of
+    /// A row whose body does not satisfy the declared type (per the rules of
     /// [`geopackage_core::geometry::geometry_type_matches`]: exact match,
     /// `GEOMETRY` accepts anything, `GEOMETRYCOLLECTION` accepts collection
-    /// types — surfaces as [`Error::GeometryTypeMismatch`] for that row,
+    /// types) surfaces as [`Error::GeometryTypeMismatch`] for that row,
     /// without stopping iteration. The check reads only the WKB type
     /// discriminator, so it also classifies (and rejects) non-linear curve
     /// bodies in a linear-typed column.
@@ -313,7 +313,7 @@ impl<'a> Layer<'a> {
     /// up), so it returns a conservative superset of candidates near a
     /// boundary, and each candidate is re-tested against the true `f64`
     /// envelope read from the blob (header envelope preferred, WKB traversal
-    /// fallback — the same rule the `ST_*` functions use).
+    /// fallback, the same rule the `ST_*` functions use).
     ///
     /// Rows outside the box are skipped before their values are converted, so
     /// a value that does not fit its declared column type surfaces as an `Err`
@@ -348,7 +348,7 @@ impl<'a> Layer<'a> {
     /// The SQL [`Self::features_in`] runs: an RTree join when a usable spatial
     /// index is present, otherwise the full-scan `features` query.
     ///
-    /// Exposed for diagnostics — running `EXPLAIN QUERY PLAN` on it confirms
+    /// Exposed for diagnostics: running `EXPLAIN QUERY PLAN` on it confirms
     /// whether the RTree virtual table is used. The RTree form carries `?1`–`?4`
     /// placeholders for the query box.
     pub fn features_in_sql(&self) -> Result<String> {
@@ -358,7 +358,7 @@ impl<'a> Layer<'a> {
     /// Iterate the features matching a caller-supplied `WHERE` clause.
     ///
     /// `where_clause` is appended (parenthesised) to the layer's base query and
-    /// is **raw SQL, trusted from the caller** — this crate does not parse or
+    /// is **raw SQL, trusted from the caller**: this crate does not parse or
     /// sanitise it (design decision D9: SQL is the query engine;
     /// [`GeoPackage::connection`] is the full escape hatch). `params` bind its
     /// placeholders; they are this crate's [`Value`] enum, converted internally
@@ -512,7 +512,7 @@ impl<'a> Layer<'a> {
         while let Some(row) = rows.next()? {
             // Decide bbox membership from the geometry blob before converting
             // any values: a row outside the box is skipped entirely, so value
-            // conversion errors surface only for rows the query returns —
+            // conversion errors surface only for rows the query returns,
             // identically on the RTree and full-scan paths.
             if let Some(bbox) = &filter {
                 match row_in_box(row, geom_idx, bbox) {

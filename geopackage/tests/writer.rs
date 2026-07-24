@@ -1,6 +1,6 @@
 //! The feature write path (Group B of the M2 write path): the `FeatureWriter`
 //! insert/update/delete, `write_all` batching, `gpkg_contents` bbox and
-//! `last_change` maintenance, Z/M validation, and — the critical case — writes
+//! `last_change` maintenance, Z/M validation, and, the critical case, writes
 //! into a table that already carries the rtree spatial-index triggers.
 //!
 //! Round-trips write with the new API and read back through the M1 read path,

@@ -9,7 +9,7 @@ bindings where demand exists, and an API freeze.
       columns on `gpkg_spatial_ref_sys`; written automatically when a caller
       supplies WKT2 (D3).
 - [ ] **`gpkg_metadata`**: `gpkg_metadata` + `gpkg_metadata_reference` models,
-      typed scopes/reference targets; no XML/profile interpretation — payloads
+      typed scopes/reference targets; no XML/profile interpretation; payloads
       are strings.
 - [ ] **`gpkg_schema`**: `gpkg_data_columns` (aliases, descriptions, mime) +
       `gpkg_data_column_constraints` (enum/range/glob); surfaced on
@@ -30,9 +30,9 @@ bindings where demand exists, and an API freeze.
 - [ ] `geopackage-py`: PyO3 + maturin abi3 wheels; API surface =
       open/create + Arrow streams + geopandas `from_arrow`/`to_arrow`
       convenience; benchmark page vs pyogrio.
-- [ ] Node via napi-rs or browser via wasm + `serialize` bytes API (D5) —
+- [ ] Node via napi-rs or browser via wasm + `serialize` bytes API (D5):
       pick based on who shows up asking.
-- [ ] uniffi (Swift/Kotlin) — pursue when a mobile consumer materialises;
+- [ ] uniffi (Swift/Kotlin): pursue when a mobile consumer materialises;
       NGA-maintenance-mode users are the audience.
 
 ## Hardening / 1.0 gate
@@ -44,7 +44,7 @@ bindings where demand exists, and an API freeze.
 - [ ] API review: audit every `pub` item; `#[non_exhaustive]` where growth is
       plausible; error variants stabilised; rusqlite kept out of public API
       except documented escape hatches; MSRV policy written down.
-- [ ] Docs: book-style guide (mdBook) — cookbook for the 10 common tasks,
+- [ ] Docs: book-style guide (mdBook): cookbook for the 10 common tasks,
       migration notes from gdal/gpkg-rs/rusqlite-gpkg, FFI integration guide.
 - [ ] Performance regression CI (criterion + threshold alerts).
 - [ ] 1.0 RFC issue in georust with the frozen API summary; two-release
@@ -54,7 +54,7 @@ bindings where demand exists, and an API freeze.
 
 - Track spec changes (a 1.4.x errata or 1.5 draft would land here first:
   watch [opengeospatial/geopackage](https://github.com/opengeospatial/geopackage)).
-- Track ETS releases — if an ets for 1.3/1.4 appears, wire it into CI
+- Track ETS releases: if an ets for 1.3/1.4 appears, wire it into CI
   alongside ets-gpkg12.
 - Track Turso/limbo rtree + vtab parity for a possible second backend
   (explicitly not before 1.0).
