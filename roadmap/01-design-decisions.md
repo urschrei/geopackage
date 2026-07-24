@@ -141,3 +141,22 @@ not; every PR needs a human maintainer who can explain every line.
 
 **Rationale.** reviewability *is* part of this crate's value
 proposition against them unvetted LLM code.
+
+## D12. Unsafe policy: forbidden everywhere except the FFI boundary
+
+**Decision.** `unsafe_code = "forbid"` (and `missing_docs = "warn"`) are set
+in the workspace lints table and inherited by every member crate via
+`[lints] workspace = true`. The planned `geopackage-ffi` crate (M3) is the
+sole intended exception: it will not inherit the workspace lints, `unsafe`
+is confined to its C ABI / Arrow C Data Interface surface with the safety
+contract documented on every block, and it gets sanitizer/miri gating in CI
+before first release. `geopackage-core` and `geopackage` never gain
+`unsafe`.
+
+**Rationale.** The container and spec layers have no need for `unsafe`, and
+a blanket forbid makes that checkable rather than aspirational. FFI
+inherently requires `unsafe`; quarantining it in one crate keeps the audit
+surface small and lets the rest of the workspace keep the hard guarantee.
+The workspace-lints mechanism (rather than per-crate attributes) makes the
+policy one declaration with one visible exception, and covers test and bench
+targets too.

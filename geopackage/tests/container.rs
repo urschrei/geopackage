@@ -1,3 +1,5 @@
+//! Container lifecycle: create, open, pragma validation, `gpkg_contents`.
+
 use geopackage::{ContentsDataType, GeoPackage, GpkgVersion};
 
 #[test]

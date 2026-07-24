@@ -10,6 +10,9 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 geopackage-core.workspace = true
 rusqlite.workspace = true

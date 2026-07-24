@@ -29,8 +29,9 @@
 //! # Ok(()) }
 //! ```
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
+// `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
+// workspace lints table (root Cargo.toml); see roadmap decision D12 for the
+// unsafe policy and its single planned exception (`geopackage-ffi`, M3).
 
 mod error;
 mod functions;

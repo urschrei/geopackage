@@ -22,5 +22,13 @@ wkb = "0.9"
 geo-traits = "0.3"
 geo-types = "0.7"
 
+# Inherited by every member via `[lints] workspace = true`. The planned
+# `geopackage-ffi` crate (M3) is the sole intended exception: it will not
+# inherit these lints, confining `unsafe` to the C ABI boundary (see roadmap
+# decision D12).
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
 [profile.release]
 lto = "thin"

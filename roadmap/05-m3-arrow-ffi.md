@@ -22,7 +22,11 @@ and give it a face (CLI) for dogfooding and bug reports.
 ### `geopackage-ffi` (C ABI)
 - [ ] New crate, `cdylib`+`staticlib`, packaged with cargo-c (pkg-config,
       versioned soname). Opaque handles `gpkg_t`, `gpkg_layer_t`; UTF-8;
-      `gpkg_error_t` out-params (code + message + free fn).
+      `gpkg_error_t` out-params (code + message + free fn). This is the sole
+      crate exempt from the workspace `unsafe_code = "forbid"` lint (decision
+      D12): it does not take `[lints] workspace = true`, documents the safety
+      contract on every `unsafe` block (`undocumented_unsafe_blocks` applies),
+      and needs sanitizer/miri CI gating before first release.
 - [ ] Control plane: open/create/close, list layers, schema introspection,
       create layer, create/drop spatial index, begin/commit.
 - [ ] Data plane: `gpkg_layer_read_arrow(layer, opts, ArrowArrayStream* out)`
