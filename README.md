@@ -61,6 +61,24 @@ for feature in layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))? {
 }
 ```
 
+### More examples
+
+Runnable programs in [`geopackage/examples`](https://github.com/urschrei/geopackage/tree/main/geopackage/examples):
+
+| Example | What it shows |
+|---|---|
+| `quickstart` | The snippet above, kept compiling. |
+| `inspect` | Layers, schemas, SRS, feature counts and spatial-index health for a file, in the manner of `ogrinfo -al -so`. Uses `open_lenient`, so it reports problems rather than refusing to open. |
+| `bulk_load` | Loading a large point layer with `write_all`, creating the index first so the bulk shadow-table build is used. |
+| `bbox_query` | `features_in` bounding-box queries (RTree-accelerated or full-scan) and the `select` WHERE passthrough, with lazy geometry parsing. |
+| `repair_index` | Detecting `Legacy` and `Stale` spatial indexes and repairing them. |
+
+```sh
+cargo run --release --example bulk_load -- 200000 out.gpkg
+cargo run --example inspect -- out.gpkg
+cargo run --example bbox_query -- out.gpkg points -10 -5 10 5
+```
+
 ## Workspace
 
 | Crate | Purpose |
