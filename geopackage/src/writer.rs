@@ -813,14 +813,13 @@ fn read_contents_bbox(conn: &Connection, table: &str) -> Result<Option<[f64; 4]>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::packed::PackedRtree;
     use crate::{GeoPackage, GeometrySpec, TableSchemaBuilder};
     use geo_types::Point;
     use geopackage_core::types::GeometryType;
 
     /// A tamper that fails the index build outright, standing in for a crash or
     /// an I/O error between staging the rows and rebuilding the index.
-    fn fail_the_build(_: &mut PackedRtree) -> Result<()> {
+    fn fail_the_build(_: &Connection, _: &str) -> Result<()> {
         Err(Error::NoSpatialIndex {
             table_name: "pts".to_owned(),
             column_name: "geom".to_owned(),

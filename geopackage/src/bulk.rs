@@ -43,7 +43,7 @@ use geopackage_core::triggers;
 use rusqlite::Connection;
 
 use crate::Result;
-use crate::packed::{self, PackedRtree};
+use crate::packed::{self, NodeSink};
 
 /// Default candidate-row count at or above which
 /// [`crate::Layer::create_spatial_index`] and [`crate::Layer::write_all`] choose
@@ -53,6 +53,17 @@ use crate::packed::{self, PackedRtree};
 /// outweighs the saving; above it the bulk build wins. Override with
 /// [`BulkIndexOptions`].
 pub const DEFAULT_BULK_THRESHOLD: usize = 10_000;
+
+/// Default fraction of each RTree node's capacity used by the bulk build.
+///
+/// Packing full gives the smallest tree, the shallowest descent and the best
+/// queries, which is what a bulk load wants. The cost is that a full node has
+/// no room for a later insert, so the first append into it splits immediately.
+/// Appends after a bulk load go through the triggers, which is the per-row path
+/// this build exists to avoid, so the default favours the load and the queries.
+/// Lower it with [`BulkIndexOptions::with_fill_factor`] when a freshly built
+/// index will be appended to heavily.
+pub const DEFAULT_FILL_FACTOR: f64 = 1.0;
 
 /// Tuning for the RTree bulk-build path (design decision D8).
 ///
@@ -69,6 +80,9 @@ pub struct BulkIndexOptions {
     /// How thoroughly the gate checks database structure after the copy.
     /// Defaults to [`StructuralCheck::RtreeOnly`].
     pub structural_check: StructuralCheck,
+    /// Fraction of each RTree node's capacity to fill when packing, in
+    /// `(0, 1]`. Defaults to [`DEFAULT_FILL_FACTOR`].
+    pub fill_factor: f64,
 }
 
 /// How much of the database the bulk-build gate checks structurally after
@@ -98,6 +112,7 @@ impl Default for BulkIndexOptions {
         Self {
             bulk_threshold: DEFAULT_BULK_THRESHOLD,
             structural_check: StructuralCheck::RtreeOnly,
+            fill_factor: DEFAULT_FILL_FACTOR,
         }
     }
 }
@@ -127,6 +142,16 @@ impl BulkIndexOptions {
         self.structural_check = structural_check;
         self
     }
+
+    /// Set the fraction of each node's capacity to fill, in `(0, 1]`.
+    ///
+    /// Values outside that range are clamped, and every node holds at least one
+    /// entry regardless. See [`DEFAULT_FILL_FACTOR`] for the trade-off.
+    #[must_use]
+    pub fn with_fill_factor(mut self, fill_factor: f64) -> Self {
+        self.fill_factor = fill_factor;
+        self
+    }
 }
 
 /// Which path produced an index's contents. Returned by the internal build
@@ -144,15 +169,49 @@ pub(crate) enum BuildPath {
     TriggeredFallback,
 }
 
-/// A test seam run against the packed tree before it is written into the
-/// target's shadow tables. Production always passes [`no_tamper`]; a test can
-/// pass a function that corrupts the packed result to prove the gate rejects it
-/// and the triggered fallback still yields a correct index.
-pub(crate) type ScratchTamper = fn(&mut PackedRtree) -> Result<()>;
+/// A test seam run against the freshly written shadow tables, before the gate
+/// inspects them. Production always passes [`no_tamper`]; a test can pass a
+/// function that corrupts the written index, to prove the gate rejects it and
+/// the triggered fallback still yields a correct one, or that returns an error,
+/// to prove the whole build rolls back.
+pub(crate) type ScratchTamper = fn(&Connection, &str) -> Result<()>;
 
 /// The no-op [`ScratchTamper`] used in production.
-pub(crate) fn no_tamper(_: &mut PackedRtree) -> Result<()> {
+pub(crate) fn no_tamper(_: &Connection, _: &str) -> Result<()> {
     Ok(())
+}
+
+/// Writes a packed tree straight into the three shadow tables through cached
+/// prepared statements, so no part of the tree is held in memory beyond the
+/// node currently being built.
+struct ShadowTables<'c> {
+    conn: &'c Connection,
+    node_sql: String,
+    rowid_sql: String,
+    parent_sql: String,
+}
+
+impl NodeSink for ShadowTables<'_> {
+    fn node(&mut self, nodeno: i64, blob: &[u8]) -> Result<()> {
+        self.conn
+            .prepare_cached(&self.node_sql)?
+            .execute(rusqlite::params![nodeno, blob])?;
+        Ok(())
+    }
+
+    fn rowid(&mut self, rowid: i64, nodeno: i64) -> Result<()> {
+        self.conn
+            .prepare_cached(&self.rowid_sql)?
+            .execute(rusqlite::params![rowid, nodeno])?;
+        Ok(())
+    }
+
+    fn parent(&mut self, nodeno: i64, parentnode: i64) -> Result<()> {
+        self.conn
+            .prepare_cached(&self.parent_sql)?
+            .execute(rusqlite::params![nodeno, parentnode])?;
+        Ok(())
+    }
 }
 
 /// The byte length the RTree module expects every node blob of `rtree` to have.
@@ -174,8 +233,14 @@ fn node_size(conn: &Connection, rtree: &str) -> Result<usize> {
     Ok(usize::try_from(size).unwrap_or(0))
 }
 
-/// Replace the three shadow tables' contents with a packed tree.
-fn write_packed(conn: &Connection, rtree: &str, packed: &PackedRtree) -> Result<()> {
+/// Clear the three shadow tables and stream a freshly packed tree into them.
+fn write_packed(
+    conn: &Connection,
+    rtree: &str,
+    entries: &[(i64, [f64; 4])],
+    node_size: usize,
+    fill_factor: f64,
+) -> Result<()> {
     let node_table = quote(&format!("{rtree}_node"))?;
     let rowid_table = quote(&format!("{rtree}_rowid"))?;
     let parent_table = quote(&format!("{rtree}_parent"))?;
@@ -184,25 +249,13 @@ fn write_packed(conn: &Connection, rtree: &str, packed: &PackedRtree) -> Result<
         "DELETE FROM {node_table}; DELETE FROM {rowid_table}; DELETE FROM {parent_table};"
     ))?;
 
-    {
-        let mut stmt = conn.prepare(&format!("INSERT INTO {node_table} VALUES (?1, ?2)"))?;
-        for (nodeno, blob) in &packed.nodes {
-            stmt.execute(rusqlite::params![nodeno, blob])?;
-        }
-    }
-    {
-        let mut stmt = conn.prepare(&format!("INSERT INTO {rowid_table} VALUES (?1, ?2)"))?;
-        for (rowid, nodeno) in &packed.rowid_map {
-            stmt.execute(rusqlite::params![rowid, nodeno])?;
-        }
-    }
-    {
-        let mut stmt = conn.prepare(&format!("INSERT INTO {parent_table} VALUES (?1, ?2)"))?;
-        for (nodeno, parent) in &packed.parent_map {
-            stmt.execute(rusqlite::params![nodeno, parent])?;
-        }
-    }
-    Ok(())
+    let mut sink = ShadowTables {
+        conn,
+        node_sql: format!("INSERT INTO {node_table} VALUES (?1, ?2)"),
+        rowid_sql: format!("INSERT INTO {rowid_table} VALUES (?1, ?2)"),
+        parent_sql: format!("INSERT INTO {parent_table} VALUES (?1, ?2)"),
+    };
+    packed::pack_into(entries, node_size, fill_factor, &mut sink)
 }
 
 /// The number of rows in `table` (the cheap decision proxy: no `ST_*` calls).
@@ -391,9 +444,8 @@ where
     conn.execute_batch(&create_vtab)?;
 
     let node_size = node_size(conn, rtree)?;
-    let mut packed = packed::pack(&accumulated, node_size)?;
-    tamper(&mut packed)?;
-    write_packed(conn, rtree, &packed)?;
+    write_packed(conn, rtree, &accumulated, node_size, options.fill_factor)?;
+    tamper(conn, rtree)?;
 
     let expected: HashMap<i64, [f64; 4]> = accumulated.into_iter().collect();
     let path = if gate(conn, rtree, expected, options.structural_check)? {

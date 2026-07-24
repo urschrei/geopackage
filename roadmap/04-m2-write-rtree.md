@@ -147,9 +147,10 @@ write performance competitive with GDAL's GPKG driver.
       `writer::tests::failed_bulk_write_rolls_back_rows_and_index`, which forces
       the index build to fail after the rows are staged and asserts nothing
       survives; it fails against the old arrangement. A mid-bulk `SIGKILL` test
-      in `crash_safety.rs` adds an end-to-end consistency check, though the kill
-      lands during the row inserts, which the old code also rolled back, so that
-      one is not itself proof of the fix.)*
+      was written alongside it and then removed: the kill lands during the row
+      inserts, which the old code also rolled back cleanly, so it passed against
+      the arrangement it was meant to catch and was earning nothing against the
+      cost of spawning processes.)*
 - [ ] (issue #17) `write_all` bulk currently engages only for an empty target index; a
       merge-into-populated-index bulk path (re-index existing + new, or an rstar
       escalation) is deferred until benchmarks justify it (see 02-ecosystem

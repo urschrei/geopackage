@@ -23,17 +23,11 @@ use std::time::{Duration, Instant};
 
 use geo_types::Point;
 use geopackage::core::types::GeometryType;
-use geopackage::{
-    GeoPackage, GeometrySpec, JournalMode, NewFeature, OpenOptions, TableSchemaBuilder,
-};
+use geopackage::{GeoPackage, GeometrySpec, JournalMode, OpenOptions, TableSchemaBuilder};
 
 const ROLE_ENV: &str = "GEOPACKAGE_CRASH_ROLE";
 const PATH_ENV: &str = "GEOPACKAGE_CRASH_PATH";
 const MARKER_ENV: &str = "GEOPACKAGE_CRASH_MARKER";
-
-/// Rows the bulk-write child attempts: enough that a kill lands inside the
-/// write rather than after it has finished.
-const BULK_ROWS: i64 = 400_000;
 
 /// The child entry point, re-invoked as a separate process. It only acts when
 /// [`ROLE_ENV`] is set (the parent sets it); the `#[ignore]` keeps it out of an
@@ -50,41 +44,9 @@ fn crash_child() {
     let journal = match role.as_str() {
         "delete" => None,
         "wal" => Some(JournalMode::Wal),
-        "bulk" => {
-            bulk_child_body(&path, &marker);
-        }
         other => panic!("unknown crash role {other:?}"),
     };
     child_body(&path, &marker, journal);
-}
-
-/// The bulk-write child: signal readiness, then start a large bulk `write_all`
-/// and be killed part-way through it. Never returns.
-///
-/// The whole bulk path is one transaction (triggers dropped, rows inserted,
-/// index rebuilt, triggers reinstalled), so wherever the kill lands the parent
-/// must find either none of the write or all of it, and never an index left
-/// desynchronised from the table.
-fn bulk_child_body(path: &str, marker: &str) -> ! {
-    let gpkg = GeoPackage::open(path).expect("child opens the gpkg");
-    let layer = gpkg.layer("pts").expect("child opens the layer");
-
-    let features: Vec<NewFeature<Point<f64>>> = (1..=BULK_ROWS)
-        .map(|i| {
-            let f = i as f64;
-            NewFeature::new(Point::new(f % 180.0, f % 90.0), Vec::new()).with_fid(i)
-        })
-        .collect();
-
-    signal_ready(marker);
-    // Large enough that the kill lands inside the write rather than after it.
-    // The result is irrelevant: this process is about to be killed, and if it
-    // somehow survives to return, the loop below blocks anyway.
-    drop(layer.write_all(features, 0));
-
-    loop {
-        std::thread::sleep(Duration::from_secs(3600));
-    }
 }
 
 /// Open the layer, commit fid 2 (must survive the kill), then open and hold an
@@ -132,6 +94,15 @@ fn signal_ready(marker: &str) {
 /// Build an indexed point layer with one committed feature (fid 1), then run the
 /// crash scenario for `role` and assert the post-crash invariants.
 fn run_crash_case(role: &str) {
+    // A child invocation must never reach a parent test. The child inherits
+    // this process's environment, including the role, so if the test filter
+    // passed to it ever failed to restrict it to `crash_child`, every parent
+    // test would run in the child and spawn children of its own, exponentially.
+    // Refuse structurally rather than trusting the filter.
+    if std::env::var(ROLE_ENV).is_ok() {
+        return;
+    }
+
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("crash.gpkg");
     let marker = dir.path().join("child.ready");
@@ -248,94 +219,4 @@ fn crash_mid_transaction_delete_mode() {
 #[test]
 fn crash_mid_transaction_wal_mode() {
     run_crash_case("wal");
-}
-
-/// Killing a process part-way through a bulk `write_all` leaves either none of
-/// the write or all of it, and never an index desynchronised from the table.
-///
-/// This is an end-to-end check against a real `SIGKILL`, not a proof that the
-/// bulk path is atomic. The kill lands wherever it lands, and in practice that
-/// is during the row inserts, which even the old two-transaction arrangement
-/// rolled back cleanly. The atomicity itself is pinned deterministically by
-/// `writer::tests::failed_bulk_write_rolls_back_rows_and_index`, which forces a
-/// failure in the index build specifically, after the rows are staged: that is
-/// the window this path used to have.
-#[test]
-fn crash_mid_bulk_write_leaves_no_stale_index() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("bulk_crash.gpkg");
-    let marker = dir.path().join("child.ready");
-
-    // An indexed layer with an empty table, which is what makes `write_all`
-    // take the bulk path.
-    {
-        let gpkg = GeoPackage::create(&path).unwrap();
-        let layer = gpkg
-            .create_layer(
-                &TableSchemaBuilder::new("pts")
-                    .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
-            )
-            .unwrap();
-        layer.create_spatial_index().unwrap();
-        gpkg.close().unwrap();
-    }
-
-    let exe = std::env::current_exe().unwrap();
-    let mut child = Command::new(exe)
-        .args(["--exact", "crash_child", "--ignored"])
-        .env(ROLE_ENV, "bulk")
-        .env(PATH_ENV, &path)
-        .env(MARKER_ENV, &marker)
-        .spawn()
-        .unwrap();
-
-    wait_for_marker(&marker, Duration::from_secs(30));
-    child.kill().unwrap();
-    let status = child.wait().unwrap();
-    // Terminated by the signal, not exited on its own. Without this the test
-    // could pass vacuously: a child that failed to start the write at all would
-    // also leave a consistent file.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt;
-        assert_eq!(
-            status.signal(),
-            Some(9),
-            "child exited on its own ({:?}) instead of being killed mid-write",
-            status.code()
-        );
-    }
-    assert!(
-        !status.success(),
-        "child should have been killed, not exited"
-    );
-
-    let gpkg = GeoPackage::open(&path).unwrap();
-    let integrity: String = gpkg
-        .connection()
-        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(integrity, "ok", "integrity_check after a mid-bulk crash");
-
-    // All or nothing: the transaction either committed or rolled back whole.
-    let fids = table_fids(&gpkg);
-    assert!(
-        fids.is_empty() || fids.len() == usize::try_from(BULK_ROWS).unwrap(),
-        "partial bulk write survived: {} rows",
-        fids.len()
-    );
-
-    // Whatever landed, the index agrees with the table and is usable without
-    // a repair. A `Stale` result here is the regression this guards against.
-    let layer = gpkg.layer("pts").unwrap();
-    assert_eq!(
-        layer.spatial_index_status().unwrap(),
-        geopackage::SpatialIndexStatus::Current,
-        "index left desynchronised by a mid-bulk crash"
-    );
-    assert_eq!(
-        rtree_ids(&gpkg),
-        fids,
-        "rtree disagrees with the table after a mid-bulk crash"
-    );
 }

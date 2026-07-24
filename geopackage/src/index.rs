@@ -369,7 +369,6 @@ pub(crate) fn drop_all_rtree_triggers(conn: &Connection, table: &str, column: &s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::packed::PackedRtree;
     use crate::{GeoPackage, GeometrySpec, TableSchemaBuilder};
     use geo_types::Point;
     use geopackage_core::types::GeometryType;
@@ -410,11 +409,14 @@ mod tests {
             )
     }
 
-    /// A test tamper that drops an entry from the packed tree's rowid mapping,
-    /// so the written result no longer matches the accumulated set and the gate
-    /// must reject it.
-    fn corrupt_packed_tree(packed: &mut PackedRtree) -> Result<()> {
-        packed.rowid_map.pop();
+    /// A test tamper that deletes a row from the written index, so it no longer
+    /// matches the accumulated set and the gate must reject it.
+    fn corrupt_written_index(conn: &Connection, rtree: &str) -> Result<()> {
+        conn.execute_batch(&format!(
+            "DELETE FROM {} WHERE id = (SELECT min(id) FROM {})",
+            quote(rtree)?,
+            quote(rtree)?
+        ))?;
         Ok(())
     }
 
@@ -446,7 +448,7 @@ mod tests {
         let (_dir, gpkg) = populated(&[(1, 10.0, 20.0), (2, -5.0, 7.0), (3, 100.0, 100.0)]);
         let layer = gpkg.layer("pts").unwrap();
         let path = layer
-            .create_spatial_index_impl(BulkIndexOptions::always_bulk(), corrupt_packed_tree)
+            .create_spatial_index_impl(BulkIndexOptions::always_bulk(), corrupt_written_index)
             .unwrap();
         // The gate rejected the tampered bulk copy and rebuilt through triggers.
         assert_eq!(path, BuildPath::TriggeredFallback);

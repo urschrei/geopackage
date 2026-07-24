@@ -113,7 +113,7 @@ mod srs;
 mod value;
 mod writer;
 
-pub use bulk::{BulkIndexOptions, DEFAULT_BULK_THRESHOLD, StructuralCheck};
+pub use bulk::{BulkIndexOptions, DEFAULT_BULK_THRESHOLD, DEFAULT_FILL_FACTOR, StructuralCheck};
 pub use create::{
     ColumnSpec, DEFAULT_GEOMETRY_COLUMN, DEFAULT_PRIMARY_KEY, GeometrySpec, TableSchemaBuilder,
 };
