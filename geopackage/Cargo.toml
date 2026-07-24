@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 geopackage-core.workspace = true
+geo-traits.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
 

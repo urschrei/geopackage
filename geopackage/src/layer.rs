@@ -251,6 +251,17 @@ impl<'a> Layer<'a> {
         self.pk_column.as_deref()
     }
 
+    /// The [`GeoPackage`] this layer borrows (for the write path's transaction).
+    pub(crate) fn gpkg(&self) -> &'a GeoPackage {
+        self.gpkg
+    }
+
+    /// The non-geometry columns in schema order (the values a [`Feature`]
+    /// carries, and the columns the write path binds).
+    pub(crate) fn value_columns(&self) -> &[Column] {
+        &self.value_columns
+    }
+
     /// The [`ConversionOptions`] used when converting column values.
     pub fn conversion_options(&self) -> ConversionOptions {
         self.options

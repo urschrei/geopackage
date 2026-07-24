@@ -41,6 +41,7 @@ mod open;
 mod schema;
 mod srs;
 mod value;
+mod writer;
 
 pub use create::{
     ColumnSpec, DEFAULT_GEOMETRY_COLUMN, DEFAULT_PRIMARY_KEY, GeometrySpec, TableSchemaBuilder,
@@ -53,6 +54,7 @@ pub use open::OpenWarning;
 pub use schema::{Column, GeometryColumn, TableSchema};
 pub use srs::Srs;
 pub use value::{ConversionOptions, DateTimeParsing, Value};
+pub use writer::{FeatureWriter, NewFeature};
 
 use geopackage_core::{ddl, version};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
