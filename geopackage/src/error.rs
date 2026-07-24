@@ -98,6 +98,22 @@ pub enum Error {
         /// The geometry column that was read.
         column: String,
     },
+    /// A geometry blob's WKB type does not satisfy the column's declared
+    /// `gpkg_geometry_columns` type (opt-in check; see
+    /// `Layer::with_geometry_type_validation`).
+    #[error(
+        "geometry in {table_name:?}.{column_name:?} is {found} but the column is declared {declared}"
+    )]
+    GeometryTypeMismatch {
+        /// The feature table.
+        table_name: String,
+        /// The geometry column.
+        column_name: String,
+        /// The declared `gpkg_geometry_columns` type.
+        declared: geopackage_core::types::GeometryType,
+        /// The WKB body's actual type.
+        found: geopackage_core::types::GeometryType,
+    },
     /// A layer was requested by a name that is not present in `gpkg_contents`.
     #[error("no such layer: {table_name:?} is not registered in gpkg_contents")]
     NoSuchLayer {

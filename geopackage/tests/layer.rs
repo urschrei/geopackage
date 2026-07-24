@@ -254,3 +254,80 @@ fn select_passthrough_binds_values() {
     assert_eq!(by_name.len(), 1);
     assert_eq!(by_name[0].fid(), 3);
 }
+
+/// A GPB blob with a little-endian WKB LINESTRING body, no envelope.
+fn gpb_linestring(pts: &[(f64, f64)]) -> Vec<u8> {
+    let mut blob = encode_header(4326, &Envelope::None, false, false);
+    blob.push(1);
+    blob.extend_from_slice(&2u32.to_le_bytes());
+    blob.extend_from_slice(&(pts.len() as u32).to_le_bytes());
+    for (x, y) in pts {
+        blob.extend_from_slice(&x.to_le_bytes());
+        blob.extend_from_slice(&y.to_le_bytes());
+    }
+    blob
+}
+
+#[test]
+fn geometry_type_validation_is_opt_in() {
+    // A column declared POINT holding one point and one linestring blob.
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+    gpkg.connection()
+        .execute_batch(
+            "CREATE TABLE pins (fid INTEGER PRIMARY KEY, geom POINT);\
+             CREATE TABLE gpkg_geometry_columns (\
+               table_name TEXT NOT NULL, column_name TEXT NOT NULL, \
+               geometry_type_name TEXT NOT NULL, srs_id INTEGER NOT NULL, \
+               z TINYINT NOT NULL, m TINYINT NOT NULL);\
+             INSERT INTO gpkg_contents (table_name, data_type, srs_id) \
+               VALUES ('pins', 'features', 4326);\
+             INSERT INTO gpkg_geometry_columns VALUES ('pins', 'geom', 'POINT', 4326, 0, 0);",
+        )
+        .unwrap();
+    gpkg.connection()
+        .execute("INSERT INTO pins VALUES (1, ?1)", [gpb_point(1.0, 2.0)])
+        .unwrap();
+    gpkg.connection()
+        .execute(
+            "INSERT INTO pins VALUES (2, ?1)",
+            [gpb_linestring(&[(0.0, 0.0), (3.0, 4.0)])],
+        )
+        .unwrap();
+
+    // Default: no validation, both rows read.
+    let default_rows: Vec<i64> = gpkg
+        .layer("pins")
+        .unwrap()
+        .features()
+        .unwrap()
+        .map(|r| r.unwrap().fid())
+        .collect();
+    assert_eq!(default_rows, vec![1, 2]);
+
+    // Opt-in: the mismatching row surfaces as a typed per-row error and
+    // iteration continues.
+    let validated: Vec<_> = gpkg
+        .layer("pins")
+        .unwrap()
+        .with_geometry_type_validation()
+        .features()
+        .unwrap()
+        .collect();
+    assert_eq!(validated.len(), 2);
+    assert_eq!(validated[0].as_ref().unwrap().fid(), 1);
+    match &validated[1] {
+        Err(Error::GeometryTypeMismatch {
+            table_name,
+            column_name,
+            declared,
+            found,
+        }) => {
+            assert_eq!(table_name, "pins");
+            assert_eq!(column_name, "geom");
+            assert_eq!(declared.as_str(), "POINT");
+            assert_eq!(found.as_str(), "LINESTRING");
+        }
+        other => panic!("expected GeometryTypeMismatch, got {other:?}"),
+    }
+}

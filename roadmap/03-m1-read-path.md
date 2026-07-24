@@ -67,14 +67,16 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       target. This is a `wkb` bug, not the wrapper (our code never panics); fix
       upstream by growing the vec on demand or capping capacity by the bytes
       left. Until fixed, the `gpb_geometry` fuzz target exposes this OOM class.
-- [ ] Reject/flag geometry column type mismatches (declared POINT, blob says
-      LINESTRING) behind a validation option. The primitive exists
+- [x] Reject/flag geometry column type mismatches (declared POINT, blob says
+      LINESTRING) behind a validation option. The primitive
       (`geometry::geometry_type_matches` + `wkb_geometry_type`, and
-      `GpbGeometry::matches_declared`), modelling the spec's instantiable-type
+      `GpbGeometry::matches_declared`) models the spec's instantiable-type
       rules (exact match; `GEOMETRY` accepts anything; `GEOMETRYCOLLECTION`
-      accepts only collection types) and classifying curve-type bodies the
-      `wkb` reader cannot parse. Still needs wiring into an open/read
-      validation option (part of the read-API chunk).
+      accepts only collection types) and classifies curve-type bodies the
+      `wkb` reader cannot parse. Wired as the opt-in
+      `Layer::with_geometry_type_validation()`: a mismatching row surfaces as
+      a per-row `Error::GeometryTypeMismatch` without stopping iteration; off
+      by default.
 
 ### Read API
 - [x] `gpkg.layer(name) -> Layer` (features) / `gpkg.attributes(name)` +
@@ -115,12 +117,10 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       (`open_warnings()`); strict `open()` is unchanged (it already accepts
       GP10/GP11 via `version.rs`, so leniency here adds the diagnostic, not the
       accept decision).
-- [ ] Declared-type validation on read (`geometry_type_matches`) was
-      **deliberately not wired** into the feature path in this chunk (scope
-      note honoured). It remains an opt-in `ConversionOptions`-style flag: a
-      feature whose blob type does not satisfy the column's declared geometry
-      type would surface a typed error or warning. Primitive exists in
-      `geopackage-core::geometry`; wiring is future work.
+- [x] Declared-type validation on read (`geometry_type_matches`) was
+      deliberately not wired in the read-API chunk; now wired as the opt-in
+      `Layer::with_geometry_type_validation()` (see the ticked item under
+      "Geometry" above).
 - [ ] **Lazy/streaming feature iterator.** Replace the eager materialisation in
       `Layer::features`/`features_in`/`select` with a truly lazy cursor that
       owns both the prepared `Statement` and its `Rows`. Needs a safe

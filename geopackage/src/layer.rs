@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use geopackage_core::geometry::GpbGeometry;
+use geopackage_core::geometry::{self, GpbGeometry};
 use geopackage_core::gpb;
 use geopackage_core::ident::quote;
 use geopackage_core::triggers::{self, TriggerGeneration};
@@ -107,6 +107,7 @@ pub struct Layer<'a> {
     /// [`Feature`] for by-name access.
     value_column_names: Arc<[String]>,
     options: ConversionOptions,
+    validate_geometry_type: bool,
 }
 
 impl std::fmt::Debug for Layer<'_> {
@@ -217,6 +218,7 @@ impl GeoPackage {
             value_columns,
             value_column_names,
             options: ConversionOptions::strict(),
+            validate_geometry_type: false,
         })
     }
 }
@@ -260,6 +262,22 @@ impl<'a> Layer<'a> {
     #[must_use]
     pub fn with_conversion_options(mut self, options: ConversionOptions) -> Self {
         self.options = options;
+        self
+    }
+
+    /// Check each geometry's WKB type against the column's declared
+    /// `gpkg_geometry_columns` type while reading (off by default).
+    ///
+    /// A row whose body does not satisfy the declared type — per the rules of
+    /// [`geopackage_core::geometry::geometry_type_matches`]: exact match,
+    /// `GEOMETRY` accepts anything, `GEOMETRYCOLLECTION` accepts collection
+    /// types — surfaces as [`Error::GeometryTypeMismatch`] for that row,
+    /// without stopping iteration. The check reads only the WKB type
+    /// discriminator, so it also classifies (and rejects) non-linear curve
+    /// bodies in a linear-typed column.
+    #[must_use]
+    pub fn with_geometry_type_validation(mut self) -> Self {
+        self.validate_geometry_type = true;
         self
     }
 
@@ -510,12 +528,35 @@ impl<'a> Layer<'a> {
             },
             None => None,
         };
+        if self.validate_geometry_type
+            && let (Some(blob), Some(declared)) = (&geometry, &self.geometry_column)
+        {
+            self.check_declared_type(blob, declared)?;
+        }
         Ok(Feature {
             fid,
             geometry,
             values,
             columns: Arc::clone(&self.value_column_names),
         })
+    }
+
+    /// Enforce the opt-in declared-type check for one geometry blob: read the
+    /// WKB type discriminator (no coordinate materialisation) and test it
+    /// against the declared `gpkg_geometry_columns` type.
+    fn check_declared_type(&self, blob: &[u8], declared: &GeometryColumn) -> Result<()> {
+        let (_, offset) = gpb::parse_header(blob).map_err(|e| Error::Core(e.into()))?;
+        let found =
+            geometry::wkb_geometry_type(&blob[offset..]).map_err(|e| Error::Core(e.into()))?;
+        if !geometry::geometry_type_matches(found, declared.geometry_type) {
+            return Err(Error::GeometryTypeMismatch {
+                table_name: self.table_name.clone(),
+                column_name: declared.column_name.clone(),
+                declared: declared.geometry_type,
+                found,
+            });
+        }
+        Ok(())
     }
 }
 
