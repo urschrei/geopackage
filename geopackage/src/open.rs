@@ -98,9 +98,11 @@ impl GeoPackage {
 
         functions::register(&conn)?;
         Ok(Self {
-            conn,
+            conn: Some(conn),
             version,
             warnings,
+            // The lenient path leaves the file's journal mode untouched.
+            journal_mode: crate::JournalMode::Delete,
         })
     }
 }

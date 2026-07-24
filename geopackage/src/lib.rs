@@ -45,6 +45,7 @@ mod functions;
 mod index;
 mod layer;
 mod open;
+mod options;
 mod schema;
 mod srs;
 mod value;
@@ -59,6 +60,7 @@ pub use geopackage_core as core;
 pub use geopackage_core::GpkgVersion;
 pub use layer::{BoundingBox, Feature, Features, Layer, LayerKind};
 pub use open::OpenWarning;
+pub use options::{JournalMode, OpenOptions, Synchronous};
 pub use schema::{Column, GeometryColumn, TableSchema};
 pub use srs::Srs;
 pub use value::{ConversionOptions, DateTimeParsing, Value};
@@ -69,18 +71,60 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use std::path::Path;
 
 /// An open GeoPackage.
+///
+/// # Interchange-first close (design decision D4)
+///
+/// A handle opened or created in [`JournalMode::Wal`] holds `-wal`/`-shm`
+/// sidecar files while it is live. On [`GeoPackage::close`] and on drop such a
+/// handle checkpoints the WAL and resets the file to [`JournalMode::Delete`], so
+/// the `.gpkg` handed on is a single file. Prefer the explicit
+/// [`GeoPackage::close`], which surfaces any error; the drop path is
+/// best-effort and never panics. [`GeoPackage::into_connection`] opts out of
+/// this guarantee — the returned connection keeps whatever journal mode it was
+/// in.
 pub struct GeoPackage {
-    conn: Connection,
+    /// `Some` for the whole lifetime of the handle; taken only by
+    /// [`Self::into_connection`], which is why the handle can implement `Drop`.
+    conn: Option<Connection>,
     version: GpkgVersion,
     warnings: Vec<OpenWarning>,
+    /// The journal mode this handle is responsible for finalising: `Wal` only
+    /// when it opted into WAL and must reset the file to `Delete` on close/drop.
+    journal_mode: JournalMode,
 }
 
 impl GeoPackage {
-    /// Create a new GeoPackage 1.4 file at `path`.
+    /// Create a new GeoPackage 1.4 file at `path` with default options
+    /// ([`JournalMode::Delete`], SQLite's default `synchronous`).
     ///
-    /// Fails if `path` already exists and is non-empty.
+    /// Fails if `path` already exists and is non-empty. Use [`OpenOptions`] to
+    /// create in [`JournalMode::Wal`] or with an explicit [`Synchronous`] level.
     pub fn create<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref();
+        OpenOptions::new().create(path)
+    }
+
+    /// Open an existing GeoPackage read-write with default options.
+    ///
+    /// Use [`OpenOptions`] to select a journal mode or `synchronous` level.
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        OpenOptions::new().open(path)
+    }
+
+    /// Open an existing GeoPackage read-only with default options.
+    pub fn open_read_only<P: AsRef<Path>>(path: P) -> Result<Self> {
+        OpenOptions::new().open_read_only(path)
+    }
+
+    /// Wrap an already-open connection with default options, validating that it
+    /// is a GeoPackage and registering the required SQL functions.
+    pub fn from_connection(conn: Connection) -> Result<Self> {
+        // A caller-supplied connection is left in whatever journal mode it
+        // already has (no journal pragma applied).
+        Self::from_connection_configured(conn, OpenOptions::new(), false)
+    }
+
+    /// The `create` core, applying `options` before seeding the schema.
+    pub(crate) fn create_configured(path: &Path, options: OpenOptions) -> Result<Self> {
         if path.exists()
             && std::fs::metadata(path)
                 .map(|m| m.len() > 0)
@@ -98,6 +142,7 @@ impl GeoPackage {
                 .expect("1.4 has a user_version"),
         )?;
         conn.pragma_update(None, "foreign_keys", true)?;
+        let journal_mode = apply_open_options(&conn, options, true)?;
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(&format!(
             "{};\n{};",
@@ -110,30 +155,33 @@ impl GeoPackage {
         tx.commit()?;
         functions::register(&conn)?;
         Ok(Self {
-            conn,
+            conn: Some(conn),
             version: GpkgVersion::V1_4,
             warnings: Vec::new(),
+            journal_mode,
         })
     }
 
-    /// Open an existing GeoPackage read-write.
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        Self::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
-    }
-
-    /// Open an existing GeoPackage read-only.
-    pub fn open_read_only<P: AsRef<Path>>(path: P) -> Result<Self> {
-        Self::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-    }
-
-    fn open_with_flags<P: AsRef<Path>>(path: P, flags: OpenFlags) -> Result<Self> {
+    /// The `open`/`open_read_only` core, applying `options` after opening.
+    pub(crate) fn open_configured(
+        path: &Path,
+        flags: OpenFlags,
+        options: OpenOptions,
+    ) -> Result<Self> {
         let conn = Connection::open_with_flags(path, flags)?;
-        Self::from_connection(conn)
+        // A read-only connection cannot change its journal mode.
+        let apply_journal = flags.contains(OpenFlags::SQLITE_OPEN_READ_WRITE);
+        Self::from_connection_configured(conn, options, apply_journal)
     }
 
-    /// Wrap an already-open connection, validating that it is a GeoPackage
-    /// and registering the required SQL functions.
-    pub fn from_connection(conn: Connection) -> Result<Self> {
+    /// Validate a connection as a GeoPackage, apply `options`, and register the
+    /// SQL functions. `apply_journal` is false for a read-only or
+    /// caller-supplied connection whose journal mode must be left untouched.
+    pub(crate) fn from_connection_configured(
+        conn: Connection,
+        options: OpenOptions,
+        apply_journal: bool,
+    ) -> Result<Self> {
         let application_id = read_header_u32(&conn, "application_id")?;
         let user_version = read_header_u32(&conn, "user_version")?;
         let version = GpkgVersion::from_pragmas(application_id, user_version).ok_or(
@@ -152,11 +200,13 @@ impl GeoPackage {
                 });
             }
         }
+        let journal_mode = apply_open_options(&conn, options, apply_journal)?;
         functions::register(&conn)?;
         Ok(Self {
-            conn,
+            conn: Some(conn),
             version,
             warnings: Vec::new(),
+            journal_mode,
         })
     }
 
@@ -167,7 +217,7 @@ impl GeoPackage {
 
     /// The rows of `gpkg_contents`.
     pub fn contents(&self) -> Result<Vec<ContentsEntry>> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.connection().prepare(
             "SELECT table_name, data_type, identifier, srs_id, min_x, min_y, max_x, max_y \
              FROM gpkg_contents ORDER BY table_name",
         )?;
@@ -188,13 +238,97 @@ impl GeoPackage {
 
     /// Borrow the underlying connection (escape hatch: full SQL access).
     pub fn connection(&self) -> &Connection {
-        &self.conn
+        self.conn
+            .as_ref()
+            .expect("connection is present for the whole handle lifetime")
     }
 
     /// Consume, returning the underlying connection.
-    pub fn into_connection(self) -> Connection {
+    ///
+    /// This **opts out** of the interchange-first close guarantee (design
+    /// decision D4): the returned connection keeps whatever journal mode it is
+    /// in, so a handle that was in [`JournalMode::Wal`] hands back a WAL
+    /// connection with its `-wal`/`-shm` sidecars intact. Use
+    /// [`Self::close`] instead when the resulting file is to be handed over.
+    pub fn into_connection(mut self) -> Connection {
+        // Taking the connection leaves `self.conn == None`, so the `Drop` below
+        // runs its finalise on nothing.
         self.conn
+            .take()
+            .expect("connection is present until into_connection consumes it")
     }
+
+    /// Close the GeoPackage, finalising a [`JournalMode::Wal`] file back to a
+    /// single [`JournalMode::Delete`] file (design decision D4).
+    ///
+    /// For a WAL handle this checkpoints the WAL (`TRUNCATE`) and resets the
+    /// journal mode to `DELETE`, removing the `-wal`/`-shm` sidecars, then
+    /// closes the connection. For a non-WAL handle it is just a close. Prefer
+    /// this to a plain drop when you want to observe any finalisation error; the
+    /// drop path does the same work best-effort and swallows errors.
+    pub fn close(mut self) -> Result<()> {
+        if self.journal_mode == JournalMode::Wal
+            && let Some(conn) = self.conn.as_ref()
+        {
+            finalize_wal_to_delete(conn)?;
+            // Recorded so the `Drop` below sees a settled file and does nothing.
+            self.journal_mode = JournalMode::Delete;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for GeoPackage {
+    fn drop(&mut self) {
+        // Interchange-first: a WAL handle resets the file to a single DELETE
+        // file. Best-effort and must never panic (design decision D4) — an
+        // un-checkpointed WAL file is still valid and recovers on next open.
+        if self.journal_mode == JournalMode::Wal
+            && let Some(conn) = self.conn.as_ref()
+            && finalize_wal_to_delete(conn).is_err()
+        {
+            // Deliberately ignored: nothing actionable in `Drop`.
+        }
+    }
+}
+
+/// Apply `options` to a freshly opened connection, returning the journal mode
+/// the resulting handle is responsible for finalising.
+///
+/// The synchronous level, when set, is always applied. The journal mode is
+/// applied only when `apply_journal` is true (false for a read-only connection,
+/// which cannot change it) and a mode is set; an unset journal mode leaves the
+/// file as it is. The returned [`JournalMode`] is [`JournalMode::Wal`] only when
+/// WAL was actually applied, so only then do close/drop reset the file.
+fn apply_open_options(
+    conn: &Connection,
+    options: OpenOptions,
+    apply_journal: bool,
+) -> Result<JournalMode> {
+    if let Some(synchronous) = options.synchronous {
+        conn.pragma_update(None, "synchronous", synchronous.code())?;
+    }
+    if apply_journal && let Some(mode) = options.journal_mode {
+        // journal_mode returns the resulting mode as a row, so it is a query,
+        // not a plain pragma_update; the keyword comes from a typed enum.
+        conn.query_row(
+            &format!("PRAGMA journal_mode = {}", mode.keyword()),
+            [],
+            |_| Ok(()),
+        )?;
+        return Ok(mode);
+    }
+    Ok(JournalMode::Delete)
+}
+
+/// Checkpoint a WAL database fully into the main file and reset it to the
+/// `DELETE` rollback journal, removing the `-wal`/`-shm` sidecars.
+fn finalize_wal_to_delete(conn: &Connection) -> Result<()> {
+    // TRUNCATE flushes every committed frame into the main database and shrinks
+    // the WAL to zero; the mode switch then removes the sidecar files.
+    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+    conn.query_row("PRAGMA journal_mode = DELETE", [], |_| Ok(()))?;
+    Ok(())
 }
 
 /// Read a 32-bit SQLite database-header pragma (`application_id` or
