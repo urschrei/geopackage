@@ -45,7 +45,32 @@ Data Interface as the bulk data plane.
   clippy `-D warnings` with the strict lint set, fmt, docs, fuzz-build).
   **M1 is complete**; the GitHub M1 milestone is closed. Deferred follow-ups
   are tracked as issues #1–#6.
-- **M2 not started.**
+- **M2 implementation complete** (2026-07-24): the full write path (layer
+  creation + DDL, `FeatureWriter`/`write_all`, DATETIME serialisation), the
+  RTree spatial-index lifecycle (create/drop/repair, the 1.4 trigger set), the
+  D8 bulk shadow-table index build with its gate + triggered fallback, the D4
+  journal/durability work (WAL opt-in, interchange-first close, crash-safety
+  test), the Hegel property tests, criterion write/read benchmarks, and the
+  external-validation harness (ets-gpkg12, PDOK, ogrinfo, GDAL round-trip).
+  **151 unit/integration tests pass**; the `#[ignore]`d GDAL-interop tests pass
+  locally. All five acceptance criteria are annotated in
+  [04-m2-write-rtree.md](04-m2-write-rtree.md). What remains for the milestone
+  bar:
+  - **GDAL-parity performance target**: not yet met. Unindexed writes are
+    competitive, but the D8 bulk indexed write is ~3-4x slower than GDAL's
+    indexed `ogr2ogr` copy at 1M rows — the whole-database `integrity_check`
+    gate and the per-row `ST_*` envelope scan dominate. The two open D8
+    follow-ups (scope the structural check to `rtreecheck`; build the scratch
+    RTree in a separate connection) target this; see the 2026-07-24 benchmark.
+  - **v0.1.0 tag + crates.io publish** (`geopackage-core` + `geopackage`): the
+    maintainer's act; the workspace version is bumped to `0.1.0` but nothing is
+    tagged or published here.
+  - Smaller open items: a dedicated concurrent-reader (read-during-write) test,
+    a QGIS re-check in this pass (M1 already exercises QGIS via the corpus), and
+    the deferred bulk-build follow-ups tracked in
+    [04-m2-write-rtree.md](04-m2-write-rtree.md) (gate-cost scoping, the
+    separate-connection bulk path, merge-into-populated-index, and the `f32`
+    sub-normal read-path fix).
 
 ## Working conventions
 
