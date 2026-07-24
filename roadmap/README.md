@@ -26,7 +26,12 @@ Data Interface as the bulk data plane.
   container create/open with validation, `ST_*` function registration, 17 tests
   incl. end-to-end trigger/UPSERT proofs, CI (3 OSes, MSRV 1.85, clippy `-D
   warnings`, fmt, docs, fuzz-build).
-- **M1 not started.**
+- **M1 in progress**: schema model, geometry wrapper, and the feature/attribute
+  **read path** are done — `layers()`/`layer()`/`attributes()` handles,
+  `features()`/`features_in(bbox)` (rtree-accelerated with a full-scan fallback,
+  results property-tested identical) and the `select()` WHERE passthrough, plus
+  `open_lenient()` with typed open warnings. Outstanding: the fixture corpus and
+  the `ogrinfo`-comparison verification against GDAL/QGIS/NGA files.
 
 ## Working conventions
 

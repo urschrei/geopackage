@@ -28,9 +28,13 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       `BOOLEAN` currently maps any non-zero INTEGER to `true`, and a whole
       number stored with integer affinity in a `FLOAT`/`DOUBLE` column is
       widened to `Value::Float` rather than rejected.
-- [ ] Fold the `column_values()` building block into the streaming feature/
-      attribute read path when it lands (it was added here only to make `Value`
-      conversion reachable and testable ahead of `layer()`/`features()`).
+- [x] Fold the `column_values()` building block into the streaming feature/
+      attribute read path. `Layer::features`/`features_in`/`select` drive
+      `value::value_from_ref` from the layer schema's declared types with a
+      `ConversionOptions` (carried on the `Layer`, default strict, overridable
+      via `with_conversion_options`). `column_values()` itself is kept: it is a
+      small, tested single-column convenience and shares the conversion core, so
+      dropping it would only remove coverage.
 
 ### Geometry
 - [x] `GpbGeometry<'a>` wrapper (`geopackage_core::geometry`): parsed header +
@@ -73,25 +77,75 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       validation option (part of the read-API chunk).
 
 ### Read API
-- [ ] `gpkg.layer(name) -> Layer` (features) / `gpkg.attributes(name)`;
-      layers enumerate from `gpkg_contents` joined with
-      `gpkg_geometry_columns`.
-- [ ] `layer.features()` streaming iterator over prepared statement;
-      `Feature { fid, geometry, values }` with by-name and by-index access.
-- [ ] `layer.features_in(bbox)`: uses `rtree_<t>_<c>` when present
-      (`classify_triggers` ≠ None + vtab exists), falls back to full scan with
-      envelope filter; identical results property-tested.
-- [ ] `layer.select(where_clause, params)` passthrough.
-- [ ] `open_lenient()`: tolerate GP10/GP11 files, missing
-      `gpkg_geometry_columns` for attribute-only files, wrong-case table
-      names; collect warnings on the handle rather than failing.
+- [x] `gpkg.layer(name) -> Layer` (features) / `gpkg.attributes(name)` +
+      `gpkg.layers()`. Feature enumeration joins `gpkg_contents`
+      (`data_type = 'features'`) to `gpkg_geometry_columns` **case-insensitively**
+      (`COLLATE NOCASE`), so a wrong-case catalogue still enumerates. A name not
+      in `gpkg_contents` is `NoSuchLayer`; the wrong `data_type` is
+      `WrongDataType`. A `Layer` caches the introspected `TableSchema`, its
+      resolved geometry column and single-column pk.
+- [x] `layer.features()` yields owned `Feature { fid, geometry: Option<Vec<u8>>,
+      values }` with by-name (`value`) and by-index (`get`) access and a lazy
+      `geometry() -> Result<Option<GpbGeometry>>`. The iterator is
+      `Iterator<Item = Result<Feature>>` (per-row fallible). **Deviation:** the
+      result set is materialised into owned features rather than streamed
+      lazily. rusqlite's `Rows` borrows its `Statement` and resets it on drop,
+      so a lazy iterator owning both is a self-referential struct, which
+      `#![forbid(unsafe_code)]` cannot express without a helper crate
+      (`self_cell`/`ouroboros`). The `Feature` ownership shape is what the
+      original note anticipated; only peak memory differs. New item below.
+- [x] `layer.features_in(bbox)`: uses `rtree_<t>_<c>` when
+      `classify_triggers ≠ None` **and** the vtab exists **and** the layer has a
+      single-column pk (the rtree id is joined back on it; rowid-only tables
+      fall back to full scan), else full scan with an envelope filter. RTree
+      candidates are re-filtered against the true `f64` envelope (header
+      envelope preferred, WKB traversal fallback) because the vtab stores
+      f32-widened bounds — so both paths return exactly the same rows. Asserted
+      by `EXPLAIN QUERY PLAN` (rtree path shows `VIRTUAL TABLE`; full scan shows
+      `SCAN`) and a seeded property test.
+- [x] `layer.select(where_clause, params)` passthrough. `params: &[Value]`
+      (our enum) convert internally (`Date`/`DateTime` bind as canonical text);
+      no rusqlite type in the signature. The clause is raw, caller-trusted SQL
+      (D9).
+- [x] `open_lenient()`: tolerates GP10/GP11 `application_id`s
+      (`LegacyApplicationId`), a missing `gpkg_geometry_columns` table
+      (`MissingGeometryColumns`), and `gpkg_contents` table names that match a
+      real SQLite table only case-insensitively (`TableNameCaseMismatch`,
+      resolved to the physical table). Warnings are collected on the handle
+      (`open_warnings()`); strict `open()` is unchanged (it already accepts
+      GP10/GP11 via `version.rs`, so leniency here adds the diagnostic, not the
+      accept decision).
+- [ ] Declared-type validation on read (`geometry_type_matches`) was
+      **deliberately not wired** into the feature path in this chunk (scope
+      note honoured). It remains an opt-in `ConversionOptions`-style flag: a
+      feature whose blob type does not satisfy the column's declared geometry
+      type would surface a typed error or warning. Primitive exists in
+      `geopackage-core::geometry`; wiring is future work.
+- [ ] **Lazy/streaming feature iterator.** Replace the eager materialisation in
+      `Layer::features`/`features_in`/`select` with a truly lazy cursor that
+      owns both the prepared `Statement` and its `Rows`. Needs a safe
+      self-referential holder (`self_cell`/`ouroboros`) or an owning-cursor
+      addition upstream in rusqlite; blocked today by `#![forbid(unsafe_code)]`.
+      Relevant once very large layers are read outside the GeoArrow bulk plane.
 
 ### Corpus & verification (details in [08-testing-conformance.md](08-testing-conformance.md))
 - [ ] Fixture corpus: files written by GDAL (≥3.6 and 3.11+/1.4), QGIS, NGA
       sample data; commit small ones, script-fetch big ones.
 - [ ] Round-trip comparison test vs `ogrinfo -json` output for each corpus
       file (feature counts, geometry types, first/last feature equality).
-- [ ] Property test: `features_in(bbox)` ≡ full-scan filter.
+- [x] Property test: `features_in(bbox)` ≡ full-scan filter
+      (`geopackage/tests/features_in.rs`). Both the rtree and the full-scan
+      paths are checked against an independent oracle (envelopes computed from
+      the generated coordinates), over randomised points and linestrings and
+      query boxes — including full-mantissa `f64` coordinates that are not
+      representable in `f32` and boxes whose edges sit exactly on a stored
+      coordinate, to stress the vtab's f32 boundary rounding. **Generator
+      decision:** a hand-rolled seeded SplitMix64 rather than adding `proptest`
+      — the property is a set equality with an independent oracle (little value
+      from shrinking) and a zero-dependency seeded generator keeps the
+      dependency tree honest and CI reproducible (failing seeds print). So
+      `proptest` was **not** added and stays on the M2 row in
+      [02-ecosystem.md](02-ecosystem.md).
 
 ## Acceptance criteria
 
