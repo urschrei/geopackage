@@ -12,17 +12,21 @@
 //! never repaired automatically — [`Layer::repair_spatial_index`] is the sole,
 //! explicitly user-invoked path that rewrites an existing trigger set.
 //!
-//! The D8 bulk-load path (build the rtree in a scratch database and copy its
-//! shadow tables) is a later slice; population here is a single
-//! `INSERT INTO rtree SELECT` over the existing rows, using the registered
-//! `ST_*` functions and skipping empty/NULL geometries exactly as the triggers
-//! do.
+//! Population takes one of two paths (design decision D8). Below the
+//! [`BulkIndexOptions`] threshold it is a single `INSERT INTO rtree SELECT` over
+//! the existing rows, using the registered `ST_*` functions and skipping
+//! empty/NULL geometries exactly as the triggers do. At or above the threshold
+//! it is the bulk shadow-table build in [`crate::bulk`]: accumulate the
+//! envelopes, build the index in a scratch in-memory database, and copy the
+//! shadow tables into the target, gated with automatic fallback to the
+//! triggered path.
 
 use geopackage_core::ddl;
 use geopackage_core::ident::quote;
 use geopackage_core::triggers::{self, TriggerGeneration};
 use rusqlite::Connection;
 
+use crate::bulk::{self, BuildPath, BulkIndexOptions, ScratchTamper};
 use crate::{Error, GeometryColumn, Layer, Result, table_exists};
 
 impl Layer<'_> {
@@ -34,9 +38,11 @@ impl Layer<'_> {
     /// `gpkg_rtree_index` extension in `gpkg_extensions` (creating that table on
     /// first use). The whole operation is one transaction.
     ///
-    /// Population uses a single `INSERT INTO rtree SELECT` driven by the
-    /// registered `ST_*` functions. The bulk-load path (design decision D8) that
-    /// replaces this for large tables is a later slice.
+    /// Population takes the per-row triggered path (a single
+    /// `INSERT INTO rtree SELECT` driven by the registered `ST_*` functions) for
+    /// tables below [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD)
+    /// rows, and the D8 bulk shadow-table build above it. Use
+    /// [`Self::create_spatial_index_with`] to override the threshold.
     ///
     /// # Errors
     ///
@@ -47,33 +53,67 @@ impl Layer<'_> {
     /// - [`Error::SpatialIndexExists`] if the `rtree_<table>_<column>` virtual
     ///   table already exists.
     pub fn create_spatial_index(&self) -> Result<()> {
+        self.create_spatial_index_with(BulkIndexOptions::default())
+    }
+
+    /// Build the RTree spatial index with an explicit choice of build path
+    /// (design decision D8).
+    ///
+    /// Identical to [`Self::create_spatial_index`] but with a caller-supplied
+    /// [`BulkIndexOptions`] controlling the bulk-vs-triggered threshold.
+    /// [`BulkIndexOptions::always_bulk`] and [`BulkIndexOptions::never_bulk`]
+    /// force a path.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::create_spatial_index`].
+    pub fn create_spatial_index_with(&self, options: BulkIndexOptions) -> Result<()> {
+        self.create_spatial_index_impl(options, bulk::no_tamper)
+            .map(|_| ())
+    }
+
+    /// The `create_spatial_index` core, returning which path built the index and
+    /// taking a scratch-tamper seam so tests can force the bulk gate to fail.
+    fn create_spatial_index_impl(
+        &self,
+        options: BulkIndexOptions,
+        tamper: ScratchTamper,
+    ) -> Result<BuildPath> {
         let geom = self.require_geometry_column()?;
         let pk = self.require_primary_key()?;
         let conn = self.gpkg().connection();
-        let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
+        let table = self.table_name();
+        let column = &geom.column_name;
+        let rtree = triggers::rtree_table_name(table, column);
         if table_exists(conn, &rtree)? {
             return Err(Error::SpatialIndexExists {
-                table_name: self.table_name().to_owned(),
-                column_name: geom.column_name.clone(),
+                table_name: table.to_owned(),
+                column_name: column.clone(),
             });
         }
 
-        let tx = conn.unchecked_transaction()?;
-        tx.execute_batch(&triggers::create_rtree_table_sql(
-            self.table_name(),
-            &geom.column_name,
-        )?)?;
-        for sql in triggers::create_triggers_sql(self.table_name(), &geom.column_name, pk)? {
-            tx.execute_batch(&sql)?;
+        if bulk::table_row_count(conn, table)? < options.bulk_threshold {
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(&triggers::create_rtree_table_sql(table, column)?)?;
+            for sql in triggers::create_triggers_sql(table, column, pk)? {
+                tx.execute_batch(&sql)?;
+            }
+            tx.execute_batch(&triggers::populate_rtree_sql(table, column, pk)?)?;
+            register_extension_row(&tx, table, column)?;
+            tx.commit()?;
+            return Ok(BuildPath::Triggered);
         }
-        tx.execute_batch(&triggers::populate_rtree_sql(
-            self.table_name(),
-            &geom.column_name,
-            pk,
-        )?)?;
-        register_extension_row(&tx, self.table_name(), &geom.column_name)?;
-        tx.commit()?;
-        Ok(())
+
+        // Bulk path: `fill_index` creates the virtual table, copies the scratch
+        // shadow tables (or falls back), then runs `after` in the same
+        // transaction to install the triggers and the extension row atomically.
+        bulk::fill_index(conn, table, column, pk, &rtree, tamper, |conn| {
+            for sql in triggers::create_triggers_sql(table, column, pk)? {
+                conn.execute_batch(&sql)?;
+            }
+            register_extension_row(conn, table, column)?;
+            Ok(())
+        })
     }
 
     /// Remove this layer's RTree spatial index: its triggers, the
@@ -236,4 +276,92 @@ fn drop_all_rtree_triggers(conn: &Connection, table: &str, column: &str) -> Resu
         conn.execute_batch(&format!("DROP TRIGGER IF EXISTS {}", quote(name)?))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bulk::ScratchDb;
+    use crate::{GeoPackage, GeometrySpec, TableSchemaBuilder};
+    use geo_types::Point;
+    use geopackage_core::types::GeometryType;
+
+    /// A GeoPackage with a `pts(fid, geom)` point layer populated via the
+    /// writer. Coordinates are chosen exact-in-`f32` so the index bounds equal
+    /// the `ST_*` envelope scan.
+    fn populated(points: &[(i64, f64, f64)]) -> (tempfile::TempDir, GeoPackage) {
+        let dir = tempfile::tempdir().unwrap();
+        let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+        let builder =
+            TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326));
+        let layer = gpkg.create_layer(&builder).unwrap();
+        let mut writer = layer.writer().unwrap();
+        for &(fid, x, y) in points {
+            writer.insert(Some(fid), &Point::new(x, y), &[]).unwrap();
+        }
+        writer.commit().unwrap();
+        (dir, gpkg)
+    }
+
+    /// Whether the rtree contents equal a manual `ST_*` envelope scan.
+    fn rtree_matches_scan(gpkg: &GeoPackage) -> bool {
+        let conn = gpkg.connection();
+        let read = |sql: &str| -> Vec<(i64, f64, f64, f64, f64)> {
+            let mut stmt = conn.prepare(sql).unwrap();
+            stmt.query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+        };
+        read("SELECT id, minx, maxx, miny, maxy FROM rtree_pts_geom ORDER BY id")
+            == read(
+                "SELECT fid, ST_MinX(geom), ST_MaxX(geom), ST_MinY(geom), ST_MaxY(geom) \
+                 FROM pts WHERE geom NOT NULL AND NOT ST_IsEmpty(geom) ORDER BY fid",
+            )
+    }
+
+    /// A test tamper that adds a bogus row to the scratch index, so the copied
+    /// result no longer matches the accumulated set and the gate must reject it.
+    fn add_bogus_row(scratch: &ScratchDb<'_>) -> Result<()> {
+        scratch.insert_scratch_row(1_000_000, [0.0, 0.0, 0.0, 0.0])
+    }
+
+    #[test]
+    fn bulk_path_builds_a_correct_index() {
+        let (_dir, gpkg) = populated(&[(1, 10.0, 20.0), (2, -5.0, 7.0), (3, 100.0, 100.0)]);
+        let layer = gpkg.layer("pts").unwrap();
+        let path = layer
+            .create_spatial_index_impl(BulkIndexOptions::always_bulk(), bulk::no_tamper)
+            .unwrap();
+        assert_eq!(path, BuildPath::Bulk);
+        assert!(layer.has_spatial_index().unwrap());
+        assert!(rtree_matches_scan(&gpkg));
+    }
+
+    #[test]
+    fn below_threshold_uses_the_triggered_path() {
+        let (_dir, gpkg) = populated(&[(1, 1.0, 1.0)]);
+        let layer = gpkg.layer("pts").unwrap();
+        let path = layer
+            .create_spatial_index_impl(BulkIndexOptions::never_bulk(), bulk::no_tamper)
+            .unwrap();
+        assert_eq!(path, BuildPath::Triggered);
+        assert!(rtree_matches_scan(&gpkg));
+    }
+
+    #[test]
+    fn corrupt_scratch_falls_back_to_the_triggered_path() {
+        let (_dir, gpkg) = populated(&[(1, 10.0, 20.0), (2, -5.0, 7.0), (3, 100.0, 100.0)]);
+        let layer = gpkg.layer("pts").unwrap();
+        let path = layer
+            .create_spatial_index_impl(BulkIndexOptions::always_bulk(), add_bogus_row)
+            .unwrap();
+        // The gate rejected the tampered bulk copy and rebuilt through triggers.
+        assert_eq!(path, BuildPath::TriggeredFallback);
+        assert!(layer.has_spatial_index().unwrap());
+        // The fallback still produced a correct index.
+        assert!(rtree_matches_scan(&gpkg));
+    }
 }

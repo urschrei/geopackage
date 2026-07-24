@@ -36,6 +36,7 @@
 // workspace lints table (root Cargo.toml); see roadmap decision D12 for the
 // unsafe policy and its single planned exception (`geopackage-ffi`, M3).
 
+mod bulk;
 mod create;
 mod error;
 mod functions;
@@ -47,6 +48,7 @@ mod srs;
 mod value;
 mod writer;
 
+pub use bulk::{BulkIndexOptions, DEFAULT_BULK_THRESHOLD};
 pub use create::{
     ColumnSpec, DEFAULT_GEOMETRY_COLUMN, DEFAULT_PRIMARY_KEY, GeometrySpec, TableSchemaBuilder,
 };
