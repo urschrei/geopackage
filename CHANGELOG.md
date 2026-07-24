@@ -8,13 +8,20 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-24
+
+Performance across all three index and read paths, plus a streaming read. No
+API is removed or changed; the additions are `Layer::cursor`, `cursor_in`,
+`cursor_select` and the `FeatureCursor` / `FeatureStream` types they return.
+
 ### Added
 
-- Streaming reads: `Layer::cursor`, `Layer::cursor_in` and `Layer::cursor_select`
-  return a `FeatureCursor` whose `features()` yields a `FeatureStream`, holding
-  one row at a time instead of materialising the result set. Over 100k features
-  this reads in 18.8ms against 29.5ms for the materialising methods, with peak
-  memory bounded by a row rather than by the query.
+- **Streaming reads.** `Layer::cursor`, `Layer::cursor_in` and
+  `Layer::cursor_select` return a `FeatureCursor` whose `features()` yields a
+  `FeatureStream`, holding one row at a time instead of materialising the result
+  set. Over 100k features this reads in 18.8ms against 29.5ms for the
+  materialising methods, with peak memory bounded by a row rather than by the
+  query.
 
   It is two calls rather than one because rusqlite's row cursor borrows its
   `Statement`, so an iterator owning both would be self-referential, which
@@ -26,6 +33,30 @@ While the version is below 1.0 the API may change in any release.
   default for layers small enough that the result set is not a problem. Both
   paths build the same `Feature`s through the same code, so they never differ
   in results ([#4]).
+
+### Changed
+
+- **`create_spatial_index` is about 12% faster** (1504ms to 1330ms at 1M
+  points). Its entry set was built by asking SQLite for `ST_IsEmpty` plus the
+  four `ST_Min`/`ST_Max` functions per row: six user-function dispatches, each
+  re-fetching the blob and re-parsing the GPB header. It now reads each blob
+  once and computes the envelope in Rust, borrowing the blob rather than copying
+  it. Emptiness is still decided exactly as `ST_IsEmpty` decides it and the
+  bounds still come from the header envelope when present, so the accumulated
+  set is identical rather than merely close ([#22], thanks to @sayrer).
+- **A large `write_all` into an already-populated spatial index now rebuilds it
+  in bulk** rather than letting the triggers append row by row. A rebuild costs
+  roughly 1.5us per row of the whole table where a triggered append costs 18 to
+  40us per new row, so the rebuild wins once the new rows are more than about a
+  tenth of the existing ones, which is where the threshold now sits. Appending
+  100k rows to a 1M-row indexed layer goes from 2938ms to 1783ms ([#17]).
+
+### Fixed
+
+- The bulk build path is now covered for NULL, empty and envelope-less
+  geometries. The existing test for that behaviour used default options on a
+  three-row table, which is far below the bulk threshold, so it only ever
+  exercised the triggered path.
 
 ## [0.1.1] - 2026-07-24
 
@@ -168,7 +199,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/urschrei/geopackage/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/urschrei/geopackage/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/urschrei/geopackage/releases/tag/v0.1.0
 [#3]: https://github.com/urschrei/geopackage/issues/3
@@ -177,4 +209,6 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
 [#5]: https://github.com/urschrei/geopackage/issues/5
 [#15]: https://github.com/urschrei/geopackage/issues/15
 [#16]: https://github.com/urschrei/geopackage/issues/16
+[#17]: https://github.com/urschrei/geopackage/issues/17
 [#20]: https://github.com/urschrei/geopackage/issues/20
+[#22]: https://github.com/urschrei/geopackage/pull/22

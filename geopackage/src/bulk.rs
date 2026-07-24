@@ -325,7 +325,7 @@ pub(crate) fn table_row_count(conn: &Connection, table: &str) -> Result<usize> {
 /// This reproduces in a single parse what the previous SQL scan computed with
 /// five `ST_*` calls per row. The blob is known non-NULL (the query's
 /// `WHERE {c} NOT NULL` handles that). Emptiness is decided exactly as
-/// `ST_IsEmpty` decides it — the header empty flag, else a body traversal — and
+/// `ST_IsEmpty` decides it (the header empty flag, else a body traversal) and
 /// the bounds are taken from the header envelope when present and from the body
 /// otherwise, exactly as `ST_MinX`/`ST_MaxX`/`ST_MinY`/`ST_MaxY` do. So the
 /// returned set is identical to the one the old scan produced.
