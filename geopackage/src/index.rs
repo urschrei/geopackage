@@ -29,6 +29,67 @@ use rusqlite::Connection;
 use crate::bulk::{self, BuildPath, BulkIndexOptions, ScratchTamper};
 use crate::{Error, GeometryColumn, Layer, Result, table_exists};
 
+/// The health of a layer's RTree spatial index, from
+/// [`Layer::spatial_index_status`].
+///
+/// Derived from two signals: whether the `rtree_<table>_<column>` virtual table
+/// exists, and which generation of trigger set (if any) maintains it
+/// ([`TriggerGeneration`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SpatialIndexStatus {
+    /// No spatial index: neither the virtual table nor any RTree trigger is
+    /// present. Build one with [`Layer::create_spatial_index`].
+    Absent,
+    /// A complete, current index: the virtual table exists and carries the
+    /// GeoPackage 1.4 trigger set. [`Layer::features_in`] uses it.
+    Current,
+    /// A present index maintained by a legacy (pre-1.4) or mixed trigger set.
+    /// Usable, but the pre-1.4 `update1` trigger corrupts the index under
+    /// `UPSERT`; [`Layer::repair_spatial_index`] upgrades it to the 1.4 set
+    /// (design decision D7).
+    Legacy,
+    /// A desynchronised index: the virtual table exists but its triggers are
+    /// missing (or triggers exist with no table). The state an interrupted bulk
+    /// build leaves — for example a crash during [`Layer::write_all`] after the
+    /// rows commit but before the index is rebuilt, since the `ATTACH` the bulk
+    /// build needs cannot join that final transaction (design decision D8).
+    ///
+    /// The index is **not** silently trusted: [`Layer::has_spatial_index`]
+    /// reports `false` for it, so [`Layer::features_in`] falls back to a correct
+    /// full scan. [`Layer::repair_spatial_index`] rebuilds it and reinstalls the
+    /// 1.4 triggers.
+    Stale,
+}
+
+impl Layer<'_> {
+    /// Classify this layer's RTree spatial index (see [`SpatialIndexStatus`]).
+    ///
+    /// A layer with no geometry column is [`SpatialIndexStatus::Absent`]. This
+    /// is the detector for the interrupted-bulk-build case (design decision D8):
+    /// a [`SpatialIndexStatus::Stale`] result directs the caller to
+    /// [`Self::repair_spatial_index`].
+    pub fn spatial_index_status(&self) -> Result<SpatialIndexStatus> {
+        let Some(geom) = self.geometry_column() else {
+            return Ok(SpatialIndexStatus::Absent);
+        };
+        let conn = self.gpkg().connection();
+        let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
+        let rtree_exists = table_exists(conn, &rtree)?;
+        let generation = self.classify_rtree_triggers(&geom.column_name)?;
+        Ok(match (rtree_exists, generation) {
+            (false, TriggerGeneration::None) => SpatialIndexStatus::Absent,
+            (true, TriggerGeneration::V1_4) => SpatialIndexStatus::Current,
+            (true, TriggerGeneration::PreV1_4 | TriggerGeneration::Mixed) => {
+                SpatialIndexStatus::Legacy
+            }
+            // Virtual table without triggers (interrupted bulk build), or
+            // triggers without a table: a desynchronised, repairable index.
+            (true, TriggerGeneration::None) | (false, _) => SpatialIndexStatus::Stale,
+        })
+    }
+}
+
 impl Layer<'_> {
     /// Build an RTree spatial index over this feature layer's geometry column.
     ///
@@ -151,70 +212,82 @@ impl Layer<'_> {
         Ok(())
     }
 
-    /// Upgrade a legacy or inconsistent RTree trigger set to the GeoPackage 1.4
-    /// set and rebuild the index content (design decision D7).
+    /// Repair a legacy, inconsistent, or desynchronised RTree spatial index:
+    /// install the GeoPackage 1.4 trigger set and rebuild the index content
+    /// (design decisions D7, D8).
     ///
     /// The pre-1.4 `update1` trigger corrupts an index under `UPSERT`; 1.4
     /// renamed the fixed triggers so the repaired state is detectable by name.
     /// This is **never** invoked automatically — reading a file never mutates
     /// it.
     ///
-    /// Behaviour by trigger generation ([`Self::has_spatial_index`] classifies
-    /// the same way):
+    /// Repairs every state except a healthy or an absent index (see
+    /// [`SpatialIndexStatus`]):
     ///
-    /// - [`TriggerGeneration::V1_4`]: already current, a no-op.
-    /// - [`TriggerGeneration::PreV1_4`] or [`TriggerGeneration::Mixed`]: drop
-    ///   every RTree trigger, install the 1.4 set, and rebuild the index from
-    ///   the current rows.
-    /// - [`TriggerGeneration::None`]: [`Error::NoSpatialIndex`] — there is
-    ///   nothing to repair; use [`Self::create_spatial_index`].
+    /// - [`SpatialIndexStatus::Current`]: already the 1.4 set with its virtual
+    ///   table — a no-op.
+    /// - [`SpatialIndexStatus::Legacy`]: a pre-1.4 or mixed trigger set — drop
+    ///   every RTree trigger, install the 1.4 set, rebuild the content.
+    /// - [`SpatialIndexStatus::Stale`]: a virtual table with missing triggers
+    ///   (the state an interrupted bulk build or crash mid-[`Self::write_all`]
+    ///   leaves), or orphaned triggers with no table — same rebuild, so the
+    ///   index is made consistent and 1.4-current again.
+    /// - [`SpatialIndexStatus::Absent`]: nothing to repair —
+    ///   [`Error::NoSpatialIndex`]; use [`Self::create_spatial_index`].
+    ///
+    /// The `gpkg_extensions` registration row is left as-is: a repair operates
+    /// on an index that was already created (and so already registered).
     ///
     /// # Errors
     ///
     /// - [`Error::NoGeometryColumn`] on a layer with no geometry column.
     /// - [`Error::NoPrimaryKey`] if the table has no single-column primary key.
-    /// - [`Error::NoSpatialIndex`] if no RTree triggers are present.
+    /// - [`Error::NoSpatialIndex`] if there is no index at all to repair.
     pub fn repair_spatial_index(&self) -> Result<()> {
         let geom = self.require_geometry_column()?;
         let pk = self.require_primary_key()?;
+        let conn = self.gpkg().connection();
+        let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
         let generation = self.classify_rtree_triggers(&geom.column_name)?;
-        match generation {
-            TriggerGeneration::V1_4 => Ok(()),
-            TriggerGeneration::None => Err(Error::NoSpatialIndex {
+        let rtree_exists = table_exists(conn, &rtree)?;
+
+        // A current, complete index needs nothing.
+        if generation == TriggerGeneration::V1_4 && rtree_exists {
+            return Ok(());
+        }
+        // Truly absent: no triggers and no virtual table.
+        if generation == TriggerGeneration::None && !rtree_exists {
+            return Err(Error::NoSpatialIndex {
                 table_name: self.table_name().to_owned(),
                 column_name: geom.column_name.clone(),
-            }),
-            TriggerGeneration::PreV1_4 | TriggerGeneration::Mixed => {
-                let conn = self.gpkg().connection();
-                let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
-
-                let tx = conn.unchecked_transaction()?;
-                drop_all_rtree_triggers(&tx, self.table_name(), &geom.column_name)?;
-                for sql in triggers::create_triggers_sql(self.table_name(), &geom.column_name, pk)?
-                {
-                    tx.execute_batch(&sql)?;
-                }
-                // Rebuild the index content. The virtual table is normally
-                // present alongside legacy triggers; create it if a corrupt
-                // file lost it, so the repopulation below cannot fail on a
-                // missing table.
-                if !table_exists(&tx, &rtree)? {
-                    tx.execute_batch(&triggers::create_rtree_table_sql(
-                        self.table_name(),
-                        &geom.column_name,
-                    )?)?;
-                } else {
-                    tx.execute_batch(&format!("DELETE FROM {}", quote(&rtree)?))?;
-                }
-                tx.execute_batch(&triggers::populate_rtree_sql(
-                    self.table_name(),
-                    &geom.column_name,
-                    pk,
-                )?)?;
-                tx.commit()?;
-                Ok(())
-            }
+            });
         }
+
+        // Everything else is repairable by rebuilding: a legacy/mixed trigger
+        // set (D7), a stale index left by an interrupted bulk build (a virtual
+        // table with no triggers, D8), or orphaned triggers with no table.
+        let tx = conn.unchecked_transaction()?;
+        drop_all_rtree_triggers(&tx, self.table_name(), &geom.column_name)?;
+        for sql in triggers::create_triggers_sql(self.table_name(), &geom.column_name, pk)? {
+            tx.execute_batch(&sql)?;
+        }
+        // Ensure the virtual table exists and is empty before repopulating: it
+        // is normally present, but a stale/corrupt file may have lost it.
+        if table_exists(&tx, &rtree)? {
+            tx.execute_batch(&format!("DELETE FROM {}", quote(&rtree)?))?;
+        } else {
+            tx.execute_batch(&triggers::create_rtree_table_sql(
+                self.table_name(),
+                &geom.column_name,
+            )?)?;
+        }
+        tx.execute_batch(&triggers::populate_rtree_sql(
+            self.table_name(),
+            &geom.column_name,
+            pk,
+        )?)?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// This layer's geometry column, or [`Error::NoGeometryColumn`] when it has
@@ -367,5 +440,63 @@ mod tests {
         assert!(layer.has_spatial_index().unwrap());
         // The fallback still produced a correct index.
         assert!(rtree_matches_scan(&gpkg));
+    }
+
+    #[test]
+    fn status_classifies_absent_and_current() {
+        let (_dir, gpkg) = populated(&[(1, 1.0, 1.0)]);
+        let layer = gpkg.layer("pts").unwrap();
+        assert_eq!(
+            layer.spatial_index_status().unwrap(),
+            SpatialIndexStatus::Absent
+        );
+        layer.create_spatial_index().unwrap();
+        assert_eq!(
+            layer.spatial_index_status().unwrap(),
+            SpatialIndexStatus::Current
+        );
+    }
+
+    /// Dropping the triggers while leaving the virtual table is exactly the file
+    /// state an interrupted bulk build (or a crash mid-`write_all`) leaves: the
+    /// rows are committed, the rtree table is present but no longer maintained.
+    /// The status detector must flag it `Stale`, the read gate must decline it,
+    /// and `repair_spatial_index` must rebuild it to `Current`.
+    #[test]
+    fn stale_index_is_detected_and_repaired() {
+        let (_dir, gpkg) = populated(&[(1, 10.0, 20.0), (2, -5.0, 7.0), (3, 100.0, 100.0)]);
+        let layer = gpkg.layer("pts").unwrap();
+        layer.create_spatial_index().unwrap();
+        assert!(rtree_matches_scan(&gpkg));
+
+        // Simulate the interrupted-bulk-build window: triggers gone, table kept.
+        drop_all_rtree_triggers(gpkg.connection(), "pts", "geom").unwrap();
+
+        assert_eq!(
+            layer.spatial_index_status().unwrap(),
+            SpatialIndexStatus::Stale
+        );
+        // The read path declines a stale index (falls back to a full scan)
+        // rather than trusting desynced contents.
+        assert!(!layer.has_spatial_index().unwrap());
+
+        // repair rebuilds and reinstalls the 1.4 triggers.
+        layer.repair_spatial_index().unwrap();
+        assert_eq!(
+            layer.spatial_index_status().unwrap(),
+            SpatialIndexStatus::Current
+        );
+        assert!(layer.has_spatial_index().unwrap());
+        assert!(rtree_matches_scan(&gpkg));
+    }
+
+    #[test]
+    fn repair_absent_index_errors() {
+        let (_dir, gpkg) = populated(&[(1, 1.0, 1.0)]);
+        let layer = gpkg.layer("pts").unwrap();
+        assert!(matches!(
+            layer.repair_spatial_index(),
+            Err(Error::NoSpatialIndex { .. })
+        ));
     }
 }

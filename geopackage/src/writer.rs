@@ -48,6 +48,21 @@
 //! maintenance, rebuilds the index in one bulk shadow-table copy (see
 //! [`crate::bulk`]), and reinstalls the triggers. The threshold and forcing are
 //! controlled by [`BulkIndexOptions`] via [`Layer::write_all_with`].
+//!
+//! # Bulk-build crash window
+//!
+//! The bulk rebuild cannot be a single atomic transaction with the row inserts:
+//! the scratch database it uses is `ATTACH`ed, and `ATTACH` requires autocommit,
+//! so the rows are committed before the index is rebuilt. A process crash in
+//! that window leaves the rows committed but the index desynchronised —
+//! specifically the rtree virtual table present with its triggers dropped, which
+//! [`Layer::spatial_index_status`] reports as [`crate::SpatialIndexStatus::Stale`].
+//! This is not silent corruption: [`Layer::has_spatial_index`] declines a stale
+//! index, so [`Layer::features_in`] falls back to a correct full scan, and
+//! [`Layer::repair_spatial_index`] rebuilds the index and reinstalls the 1.4
+//! triggers. A clean (non-crash) error on the bulk path is handled in-process —
+//! the index is restored to a consistent, trigger-maintained state before the
+//! error returns — so this window is only reachable by an actual crash or kill.
 
 use geo_traits::{Dimensions, GeometryTrait};
 use geopackage_core::geometry::encode_gpb;
