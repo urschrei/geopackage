@@ -9,7 +9,7 @@
 | [`geo-traits`](https://crates.io/crates/geo-traits) | Public geometry API bound | M1 | The API is generic over it; no concrete type forced |
 | [`wkb`](https://github.com/georust/wkb) (georust) | WKB body encode/decode + envelope traversal | M1 | **Depend, don't copy.** Its no-alloc reader is exactly what the `ST_*` fallback needs |
 | [`geo-types`](https://crates.io/crates/geo-types) | Convenience conversions | M1 | Default-on feature, not a hard dep |
-| `rusqlite` | SQLite | now | `bundled` + `functions`; `serialize` later for from/to-bytes (D5) |
+| `rusqlite` | SQLite | now | `bundled` + `functions`; `serialize` later for from/to-bytes (D5). Drives the workspace MSRV: libsqlite3-sys 0.38's build script uses `cfg_select!` (stable 1.95) without declaring a `rust-version`, so MSRV is 1.95 until upstream gates it — first CI run caught this |
 | `thiserror` | errors | now | |
 | [`serde_json`](https://crates.io/crates/serde_json) | corpus snapshot parsing | M1 | **dev-dependency of `geopackage` only.** Parses the committed `ogrinfo -json` expected-output snapshots in `geopackage/tests/corpus.rs`; not a runtime dependency |
 
