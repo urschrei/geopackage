@@ -34,17 +34,30 @@ write performance competitive with GDAL's GPKG driver.
       `datetime::DateTime` `Display`, bound through `Value`).
 
 ### Spatial index
-- [ ] `layer.create_spatial_index()`: vtab + 1.4 triggers + populate +
+- [x] `layer.create_spatial_index()`: vtab + 1.4 triggers + populate +
       `gpkg_extensions` row (creating `gpkg_extensions` on first use);
-      `drop_spatial_index()`; `has_spatial_index()`.
+      `drop_spatial_index()`; `has_spatial_index()`. *(Population is the plain
+      `INSERT INTO rtree SELECT` with the `ST_IsEmpty`/NULL guard — the D8 bulk
+      build replaces it. `create` errors on an already-indexed layer
+      (`SpatialIndexExists`), an attribute layer (`NoGeometryColumn`), or a
+      table with no single-column primary key (`NoPrimaryKey`); `drop` is
+      idempotent and removes any trigger generation, leaving the
+      `gpkg_extensions` table. The extension row uses the spec Annex F.3
+      requirement 75/76 strings, reusing the existing `triggers::EXTENSION_*`
+      constants.)*
 - [ ] **Bulk build (D8)**: during `write_all` on an indexed layer (or
       `create_spatial_index` on a populated table): drop/defer triggers,
       accumulate `(fid, envelope)`, build rtree in scratch in-memory DB, copy
       `rtree_%_node/parent/rowid` shadow tables in one transaction, reinstall
       triggers. Gate with rtree integrity query + `PRAGMA integrity_check` in
       tests; automatic fallback to triggered path on any anomaly.
-- [ ] `repair_spatial_index()`: drop legacy `update1`/`update3`, install 1.4
+- [x] `repair_spatial_index()`: drop legacy `update1`/`update3`, install 1.4
       set, rebuild if `TriggerGeneration::Mixed` (D7). Never automatic.
+      *(Replaces every rtree trigger of a `PreV1_4`/`Mixed` generation with the
+      1.4 set and rebuilds the index content; `V1_4` is a no-op, `None` is a
+      typed `NoSpatialIndex` error directing to `create_spatial_index`. Shares
+      the read-side `has_spatial_index` classification via a `pub(crate)`
+      helper.)*
 
 ### Journal & durability (D4)
 - [ ] Journal mode option on create/open (Delete default, Wal opt-in);
