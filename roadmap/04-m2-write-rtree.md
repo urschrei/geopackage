@@ -20,13 +20,18 @@ write performance competitive with GDAL's GPKG driver.
       bbox.)*
 
 ### Feature writes
-- [ ] `tx.writer(layer)` prepared-statement writer: insert (with/without
+- [x] `layer.writer()` prepared-statement writer: insert (with/without
       explicit fid), update, delete; accepts `impl GeometryTrait<T = f64>`;
       encodes GPB (always-envelope policy, D6) via core encoder + `wkb`
-      writer; Z/M validated against column flags.
-- [ ] Batched insert helper (`write_all(iter)`) wrapping a transaction,
-      statement reuse, configurable batch size.
-- [ ] DATETIME serialization in the strict 1.4 format.
+      writer; Z/M validated against column flags. *(The writer owns its
+      transaction rather than borrowing a `tx` object, keeping
+      `rusqlite::Transaction` out of the public API; statement reuse is via
+      the per-connection `prepare_cached` cache.)*
+- [x] Batched insert helper (`write_all(iter, batch_size)`) wrapping a
+      transaction per batch, statement reuse, configurable batch size (`0`
+      = one transaction for the whole iterator).
+- [x] DATETIME serialization in the strict 1.4 format (via the core
+      `datetime::DateTime` `Display`, bound through `Value`).
 
 ### Spatial index
 - [ ] `layer.create_spatial_index()`: vtab + 1.4 triggers + populate +

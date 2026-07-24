@@ -190,6 +190,36 @@ pub enum Error {
         /// The table the builder describes.
         table_name: String,
     },
+    /// A write supplied a value slice whose length does not match the layer's
+    /// non-geometry column count.
+    #[error("table {table_name:?} expects {expected} value(s) per row, got {found}")]
+    ValueCountMismatch {
+        /// The table being written.
+        table_name: String,
+        /// The number of non-geometry columns.
+        expected: usize,
+        /// The number of values supplied.
+        found: usize,
+    },
+    /// A written geometry's `z`/`m` presence violates the geometry column's
+    /// declared constraint (`gpkg_geometry_columns.z` / `.m`).
+    #[error(
+        "geometry for {table_name:?}.{column:?} {verb} a {dimension} dimension, \
+         but the column declares it {constraint:?}"
+    )]
+    ZmViolation {
+        /// The feature table.
+        table_name: String,
+        /// The geometry column.
+        column: String,
+        /// Which dimension: `"z"` or `"m"`.
+        dimension: &'static str,
+        /// The column's declared constraint.
+        constraint: geopackage_core::types::ZmFlag,
+        /// `"carries"` when the geometry has the dimension, `"lacks"` when it
+        /// does not.
+        verb: &'static str,
+    },
 }
 
 /// Convenience alias.
