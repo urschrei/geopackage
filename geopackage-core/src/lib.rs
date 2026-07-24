@@ -4,6 +4,8 @@
 //! expressed without a database connection:
 //!
 //! - [`gpb`]: the GeoPackage Binary (GPB) geometry blob header codec
+//! - [`types`]: column and geometry type vocabulary (spec Table 1, Annex G)
+//! - [`datetime`]: `DATE`/`DATETIME` text form parsing (strict and lenient)
 //! - [`ddl`]: normative `CREATE TABLE` SQL and required `gpkg_spatial_ref_sys` seed rows
 //! - [`srs`]: vendored EPSG WKT1 subset for `gpkg_spatial_ref_sys` seeding
 //! - [`triggers`]: RTree spatial index virtual table and trigger SQL (version-aware)
@@ -19,15 +21,18 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod datetime;
 pub mod ddl;
 pub mod gpb;
 pub mod ident;
 pub mod srs;
 pub mod triggers;
+pub mod types;
 pub mod version;
 
 pub use gpb::{Envelope, GpbError, GpbHeader};
 pub use srs::SrsDefinition;
+pub use types::{ColumnType, GeometryType};
 pub use version::GpkgVersion;
 
 /// Errors produced by this crate.
