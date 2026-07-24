@@ -11,7 +11,12 @@ edition = "2024"
 # gates it or declares an accurate rust-version.
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/georust/geopackage"
+# The repo has not been transferred to the georust org yet (roadmap 02-ecosystem,
+# issue #18). Point at the live URL so the crates.io/docs.rs links resolve;
+# GitHub keeps a redirect from the old path after a transfer, so this stays
+# correct once the move happens.
+repository = "https://github.com/urschrei/geopackage"
+readme = "README.md"
 authors = ["The GeoRust developers"]
 keywords = ["geopackage", "gpkg", "gis", "geospatial", "ogc"]
 categories = ["science::geo", "database"]
