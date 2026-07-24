@@ -74,10 +74,33 @@ write performance competitive with GDAL's GPKG driver.
       helper.)*
 
 ### Journal & durability (D4)
-- [ ] Journal mode option on create/open (Delete default, Wal opt-in);
+- [x] Journal mode option on create/open (Delete default, Wal opt-in);
       checkpoint + reset to DELETE on close/Drop; `synchronous` exposure.
-- [ ] Crash-safety test: kill mid-transaction (child process), reopen,
+      *(`OpenOptions` builder (mirrors `std::fs::OpenOptions`) with typed
+      `JournalMode`/`Synchronous` enums — no rusqlite types in the public API;
+      plain `create`/`open`/`open_read_only` are the default-options shortcuts.
+      An unspecified journal mode leaves the file's mode untouched (a fresh file
+      is DELETE, SQLite's default); WAL is opt-in. A handle that opted into WAL
+      checkpoints (`wal_checkpoint(TRUNCATE)`) and resets the file to DELETE on
+      the explicit consuming `close()` and on `Drop` (best-effort, never panics),
+      so a handed-over `.gpkg` has no `-wal`/`-shm` sidecars. `into_connection()`
+      and a plain `open` of a pre-existing WAL file both opt out of the finalise
+      and leave the mode as found. The connection field is `Option<Connection>`
+      so the handle can implement `Drop` and still hand the connection back.)*
+- [x] Crash-safety test: kill mid-transaction (child process), reopen,
       verify integrity + no index desync.
+      *(`geopackage/tests/crash_safety.rs`: an always-on parent test re-invokes
+      this test binary to run only the ignored `crash_child` entry point, which
+      commits one write, holds a second uncommitted, and signals readiness via a
+      marker file before blocking; the parent kills it (`SIGKILL`) and reopens,
+      asserting `integrity_check` ok, committed rows intact, the uncommitted row
+      absent, and the rtree in step with the table. Runs for both DELETE and WAL
+      modes. Synchronisation is on the marker file, not sleeps; verified reliable
+      over repeated runs, so it is always-on rather than `#[ignore]`. The
+      interrupted-bulk-build desync (below) is covered deterministically by a
+      unit test in `index.rs` rather than by timing a kill mid-bulk. WAL
+      sidecar/round-trip behaviour is covered by
+      `geopackage/tests/wal_journal.rs`.)*
 
 ### Bulk-build follow-ups (discovered during D8)
 - [ ] Gate cost: the D8 gate runs a whole-database `PRAGMA integrity_check`,
@@ -86,11 +109,31 @@ write performance competitive with GDAL's GPKG driver.
       fallback. Consider scoping the structural check to `rtreecheck(<rtree>)`
       (available in bundled SQLite 3.53) with `integrity_check` behind an option,
       once benchmarks quantify the cost.
-- [ ] Bulk-build atomicity: `ATTACH`/`DETACH` require autocommit, so the scratch
+- [x] Bulk-build atomicity: `ATTACH`/`DETACH` require autocommit, so the scratch
       build and detach sit outside the copy transaction. For `write_all` the row
       inserts commit before the index rebuild, so a crash between them can leave
       a stale index needing `repair_spatial_index()`. Fold into the D4
       journal/durability crash-safety work rather than solving separately.
+      *(Addressed by detect-and-direct, not by claiming atomicity across the
+      `ATTACH` boundary. The crash leaves the rtree virtual table present with
+      its triggers dropped; `has_spatial_index` already declines that state, so
+      `features_in` stays correct via a full scan. Added `SpatialIndexStatus`
+      { `Absent`, `Current`, `Legacy`, `Stale` } and `Layer::spatial_index_status`
+      to name it, and taught `repair_spatial_index` to recover a `Stale` (or
+      orphaned) index by rebuilding + reinstalling the 1.4 triggers — previously
+      the file was stuck between `create_spatial_index` (`SpatialIndexExists`)
+      and `repair` (`NoSpatialIndex`). A clean (non-crash) error on the bulk path
+      is still restored in-process, so the `Stale` window is only reachable by an
+      actual crash/kill.)*
+- [ ] Narrow the bulk-build crash window further: build the scratch RTree in a
+      **separate in-memory `Connection`** (not an `ATTACH`ed database) and copy
+      its shadow-table rows out and into the target inside the same transaction
+      as the `write_all` row inserts, so the whole `write_all` becomes atomic and
+      the `Stale` window closes entirely. Deferred from this pass: it reworks the
+      gated `bulk::fill_index` copy mechanism (cross-connection blob copy instead
+      of `INSERT ... SELECT`), so it wants its own change with the existing gate
+      and fallback re-proven. Detect-and-direct (above) covers correctness
+      meanwhile.
 - [ ] `write_all` bulk currently engages only for an empty target index; a
       merge-into-populated-index bulk path (re-index existing + new, or an rstar
       escalation) is deferred until benchmarks justify it (see 02-ecosystem
