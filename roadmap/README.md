@@ -21,6 +21,15 @@ Data Interface as the bulk data plane.
 
 ## Status snapshot (2026-07-24)
 
+- **0.1.1 released** (2026-07-24): the packed RTree build (about 3.5x faster
+  than 0.1.0 and level with GDAL on a like-for-like measurement), the atomic
+  bulk `write_all`, the `StructuralCheck` and fill-factor options, and the
+  crates.io metadata that 0.1.0 could not carry. One thing it does **not** fix:
+  the `repository` link still 404s for readers, because the repository is
+  private until the georust move (#18). Open follow-up from the release: the
+  full-scan read path is about 25% slower than `rusqlite-gpkg` on the same
+  SQLite (#21).
+
 - **M0 complete**: workspace (`geopackage-core`, `geopackage`, fuzz), GPB header
   codec, normative DDL + 1.4 RTree trigger set (verbatim from spec source),
   container create/open with validation, `ST_*` function registration, 17 tests

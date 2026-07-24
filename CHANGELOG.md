@@ -66,8 +66,12 @@ README, neither of which can be corrected in place.
 
 ### Fixed
 
-- Both crates now carry a working `repository` URL and a README on crates.io.
-  0.1.0 pointed at `github.com/georust/geopackage`, which does not exist yet.
+- Both crates now render their README on crates.io. 0.1.0 showed none.
+- The `repository` URL now points at the real repository rather than at
+  `github.com/georust/geopackage`, which does not exist. Note that it still does
+  not resolve for anyone else: the repository is private until the move to the
+  georust org, so the link on crates.io and docs.rs remains a 404 for readers.
+  An earlier wording of this entry claimed the link was fixed, which was wrong.
 - The crate documentation now states the untrusted-input limitation ([#3]) that
   0.1.0 shipped with but did not mention: the `wkb` 0.9.2 reader pre-allocates
   from unbounded element counts, so a malformed geometry can drive a very large
