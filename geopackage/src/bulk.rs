@@ -56,9 +56,12 @@
 
 use std::collections::HashMap;
 
+use geopackage_core::geometry::GpbGeometry;
+use geopackage_core::gpb;
 use geopackage_core::ident::quote;
 use geopackage_core::triggers;
 use rusqlite::Connection;
+use rusqlite::types::ValueRef;
 
 use crate::Result;
 use crate::packed::{self, NodeSink};
@@ -316,10 +319,47 @@ pub(crate) fn table_row_count(conn: &Connection, table: &str) -> Result<usize> {
     Ok(usize::try_from(count).unwrap_or(usize::MAX))
 }
 
+/// The XY envelope to index for one geometry blob, or `None` if the row is not
+/// indexable (empty under the same rule the `ST_*` functions apply).
+///
+/// This reproduces in a single parse what the previous SQL scan computed with
+/// five `ST_*` calls per row. The blob is known non-NULL (the query's
+/// `WHERE {c} NOT NULL` handles that). Emptiness is decided exactly as
+/// `ST_IsEmpty` decides it — the header empty flag, else a body traversal — and
+/// the bounds are taken from the header envelope when present and from the body
+/// otherwise, exactly as `ST_MinX`/`ST_MaxX`/`ST_MinY`/`ST_MaxY` do. So the
+/// returned set is identical to the one the old scan produced.
+fn envelope_of(blob: &[u8]) -> std::result::Result<Option<[f64; 4]>, geopackage_core::Error> {
+    let (header, _) = gpb::parse_header(blob)?;
+    if header.empty {
+        return Ok(None);
+    }
+    // `ST_IsEmpty` traverses the body whenever the header flag is unset, so a
+    // faithful set requires the same traversal here rather than trusting a
+    // present header envelope. That traversal also yields the bounds for a blob
+    // whose header carries no envelope, so this one parse serves both purposes.
+    let Some(body_bounds) = GpbGeometry::parse(blob)?.xy_envelope() else {
+        return Ok(None);
+    };
+    let bounds = match header.envelope.xy_bounds() {
+        Some((min_x, max_x, min_y, max_y)) => [min_x, max_x, min_y, max_y],
+        None => body_bounds,
+    };
+    Ok(Some(bounds))
+}
+
 /// Accumulate `(fid, [min_x, max_x, min_y, max_y])` for every row whose geometry
-/// is indexable, using the registered `ST_*` functions and the exact NULL/empty
-/// guard the trigger population uses, so the accumulated set is identical to
-/// what the triggered path would index.
+/// is indexable, so the accumulated set is identical to what the triggered path
+/// would index.
+///
+/// The envelope is derived by parsing each blob once in Rust (see
+/// [`envelope_of`]). The previous form asked SQLite for
+/// `ST_IsEmpty` plus the four `ST_Min/Max` functions per row: six user-function
+/// dispatches, each re-fetching the blob and re-parsing the GPB header, and each
+/// `ST_*` re-traversing the body for an envelope-less blob. Reading the blob
+/// once collapses that to a single parse per row for the identical set. This
+/// scan runs only on the standalone `create_spatial_index` path; the bulk
+/// `write_all` path passes `precomputed` envelopes and never reaches here.
 fn accumulate_envelopes(
     conn: &Connection,
     table: &str,
@@ -327,18 +367,33 @@ fn accumulate_envelopes(
     pk: &str,
 ) -> Result<Vec<(i64, [f64; 4])>> {
     let (t, c, i) = (quote(table)?, quote(geom)?, quote(pk)?);
-    let sql = format!(
-        "SELECT {i}, ST_MinX({c}), ST_MaxX({c}), ST_MinY({c}), ST_MaxY({c}) \
-         FROM {t} WHERE {c} NOT NULL AND NOT ST_IsEmpty({c})"
-    );
+    let sql = format!("SELECT {i}, {c} FROM {t} WHERE {c} NOT NULL");
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], |r| {
-        Ok((
-            r.get::<_, i64>(0)?,
-            [r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?],
-        ))
-    })?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        // Borrow the blob rather than `get::<Vec<u8>>`, so a million rows are
+        // not each copied out of SQLite's page just to read a header.
+        let blob = match row.get_ref(1)? {
+            ValueRef::Blob(b) => b,
+            // `WHERE {c} NOT NULL` rules out NULL; any other type in a geometry
+            // column is malformed, which the old `ST_*` scan also surfaced as an
+            // error rather than skipping.
+            _ => {
+                return Err(rusqlite::Error::InvalidColumnType(
+                    1,
+                    geom.to_string(),
+                    rusqlite::types::Type::Blob,
+                )
+                .into());
+            }
+        };
+        if let Some(bounds) = envelope_of(blob)? {
+            out.push((id, bounds));
+        }
+    }
+    Ok(out)
 }
 
 /// Gate a freshly copied RTree against the accumulated `(fid, envelope)` set.
