@@ -201,6 +201,37 @@ pub enum Error {
         /// The number of values supplied.
         found: usize,
     },
+    /// A spatial-index operation was requested on a layer whose table has no
+    /// single-column primary key. The RTree triggers key the index on that
+    /// column, so one is required to build, repair, or use the index.
+    #[error("table {table_name:?} has no single-column primary key; a spatial index requires one")]
+    NoPrimaryKey {
+        /// The table that was queried.
+        table_name: String,
+    },
+    /// [`crate::Layer::create_spatial_index`] was called on a layer whose
+    /// geometry column already carries an RTree spatial index (its
+    /// `rtree_<table>_<column>` virtual table already exists).
+    #[error("table {table_name:?} column {column_name:?} already has a spatial index")]
+    SpatialIndexExists {
+        /// The feature table.
+        table_name: String,
+        /// The geometry column.
+        column_name: String,
+    },
+    /// [`crate::Layer::repair_spatial_index`] was called on a layer that has no
+    /// RTree triggers to repair. Build an index with
+    /// [`crate::Layer::create_spatial_index`] first.
+    #[error(
+        "table {table_name:?} column {column_name:?} has no spatial index to repair; \
+         create one with Layer::create_spatial_index"
+    )]
+    NoSpatialIndex {
+        /// The feature table.
+        table_name: String,
+        /// The geometry column.
+        column_name: String,
+    },
     /// A written geometry's `z`/`m` presence violates the geometry column's
     /// declared constraint (`gpkg_geometry_columns.z` / `.m`).
     #[error(
