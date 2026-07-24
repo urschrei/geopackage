@@ -9,8 +9,8 @@
 //! lookup is a typed "supply the definition yourself" error at the container
 //! layer, never a silent `undefined`.
 //!
-//! Literal definitions live in the generated [`epsg_wkt`] table; regenerate
-//! with `scripts/generate_epsg_wkt.py`.
+//! Literal definitions live in the generated `epsg_wkt` table (private
+//! submodule); regenerate with `scripts/generate_epsg_wkt.py`.
 
 mod epsg_wkt;
 
