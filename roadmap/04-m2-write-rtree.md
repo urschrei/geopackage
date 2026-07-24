@@ -103,7 +103,7 @@ write performance competitive with GDAL's GPKG driver.
       `geopackage/tests/wal_journal.rs`.)*
 
 ### Bulk-build follow-ups (discovered during D8)
-- [ ] Gate cost: the D8 gate runs a whole-database `PRAGMA integrity_check`,
+- [ ] (issue #16) Gate cost: the D8 gate runs a whole-database `PRAGMA integrity_check`,
       which is O(database) and dominates the gate on very large files; a benign
       pre-existing issue anywhere also forces the (still correct) triggered
       fallback. Consider scoping the structural check to `rtreecheck(<rtree>)`
@@ -125,7 +125,7 @@ write performance competitive with GDAL's GPKG driver.
       and `repair` (`NoSpatialIndex`). A clean (non-crash) error on the bulk path
       is still restored in-process, so the `Stale` window is only reachable by an
       actual crash/kill.)*
-- [ ] Narrow the bulk-build crash window further: build the scratch RTree in a
+- [ ] (issue #15) Narrow the bulk-build crash window further: build the scratch RTree in a
       **separate in-memory `Connection`** (not an `ATTACH`ed database) and copy
       its shadow-table rows out and into the target inside the same transaction
       as the `write_all` row inserts, so the whole `write_all` becomes atomic and
@@ -134,11 +134,11 @@ write performance competitive with GDAL's GPKG driver.
       of `INSERT ... SELECT`), so it wants its own change with the existing gate
       and fallback re-proven. Detect-and-direct (above) covers correctness
       meanwhile.
-- [ ] `write_all` bulk currently engages only for an empty target index; a
+- [ ] (issue #17) `write_all` bulk currently engages only for an empty target index; a
       merge-into-populated-index bulk path (re-index existing + new, or an rstar
       escalation) is deferred until benchmarks justify it (see 02-ecosystem
       rstar note).
-- [ ] Read-path finding (from the hegel port of the `features_in` property
+- [x] Read-path finding (from the hegel port of the `features_in` property
       test): for a coordinate of `f32` sub-normal magnitude (`|x| < ~1.2e-38`,
       e.g. `3e-39`), SQLite coerces the `f64` query-box constraint to `f32`
       non-conservatively, so the RTree candidate scan can drop a truly
@@ -146,8 +146,9 @@ write performance competitive with GDAL's GPKG driver.
       indexed and full-scan paths then disagree. Fix in the M1 read path by
       expanding the bound each query passes to the vtab outward to the enclosing
       `f32` (min → next-lower `f32`, max → next-higher `f32`) so the vtab filter
-      is provably conservative. The property test avoids the sub-normal band
-      until this lands (it is outside the domain of geographic coordinates).
+      is provably conservative. *(Fixed in PR #13, closing issue #12: bounds
+      are widened one `f32` ULP outward before binding, and the property test
+      generator is un-constrained back across the sub-normal band.)*
 
 ### Performance
 - [x] Criterion benches: 1M and 10M point/line/polygon writes, indexed and
