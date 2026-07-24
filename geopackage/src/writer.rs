@@ -299,7 +299,7 @@ impl<'a> Layer<'a> {
     {
         let iter = features.into_iter();
         if self.bulk_write_applicable(iter.size_hint().0, options)? {
-            self.write_all_bulk(iter)
+            self.write_all_bulk(iter, options)
         } else {
             self.write_all_batched(iter, batch_size)
         }
@@ -375,7 +375,7 @@ impl<'a> Layer<'a> {
     ///
     /// On any failure after the triggers are dropped, the index is restored to a
     /// consistent, trigger-maintained state before the error is returned.
-    fn write_all_bulk<G, I>(&self, features: I) -> Result<Vec<i64>>
+    fn write_all_bulk<G, I>(&self, features: I, options: BulkIndexOptions) -> Result<Vec<i64>>
     where
         G: GeometryTrait<T = f64>,
         I: IntoIterator<Item = NewFeature<G>>,
@@ -395,25 +395,53 @@ impl<'a> Layer<'a> {
         let rtree = triggers::rtree_table_name(table, column);
         let conn = self.gpkg().connection();
 
+        // Envelopes computed while encoding can be reused as the RTree entry set
+        // only if this write accounts for every indexable row in the table. An
+        // empty table before the write is the cheap, sufficient proof; otherwise
+        // `fill_index` re-derives the set with its own `ST_*` scan.
+        let table_was_empty = bulk::table_row_count(conn, table)? == 0;
+
         drop_all_rtree_triggers(conn, table, column)?;
 
         let result = (|| -> Result<Vec<i64>> {
             let mut fids = Vec::new();
+            let mut entries = Vec::new();
             let mut writer = self.writer()?;
             for feature in features {
                 let fid = match &feature.geometry {
-                    Some(geometry) => writer.insert(feature.fid, geometry, &feature.values)?,
+                    Some(geometry) => {
+                        let (fid, envelope) = writer.insert_returning_envelope(
+                            feature.fid,
+                            geometry,
+                            &feature.values,
+                        )?;
+                        if let Some(envelope) = envelope {
+                            entries.push((fid, envelope));
+                        }
+                        fid
+                    }
                     None => writer.insert_row(feature.fid, &feature.values)?,
                 };
                 fids.push(fid);
             }
             writer.commit()?;
-            bulk::fill_index(conn, table, column, pk, &rtree, bulk::no_tamper, |conn| {
-                for sql in triggers::create_triggers_sql(table, column, pk)? {
-                    conn.execute_batch(&sql)?;
-                }
-                Ok(())
-            })?;
+            let precomputed = table_was_empty.then_some(entries);
+            bulk::fill_index(
+                conn,
+                table,
+                column,
+                pk,
+                &rtree,
+                options,
+                precomputed,
+                bulk::no_tamper,
+                |conn| {
+                    for sql in triggers::create_triggers_sql(table, column, pk)? {
+                        conn.execute_batch(&sql)?;
+                    }
+                    Ok(())
+                },
+            )?;
             Ok(fids)
         })();
 
@@ -473,6 +501,20 @@ impl FeatureWriter<'_> {
         geometry: &G,
         values: &[Value],
     ) -> Result<i64> {
+        self.insert_returning_envelope(fid, geometry, values)
+            .map(|(assigned, _)| assigned)
+    }
+
+    /// [`Self::insert`], additionally returning the geometry's XY envelope
+    /// (`[min_x, max_x, min_y, max_y]`, `None` for an empty geometry) so the
+    /// bulk write path can accumulate RTree entries without a second `ST_*`
+    /// scan of the table.
+    pub(crate) fn insert_returning_envelope<G: GeometryTrait<T = f64>>(
+        &mut self,
+        fid: Option<i64>,
+        geometry: &G,
+        values: &[Value],
+    ) -> Result<(i64, Option<[f64; 4]>)> {
         self.check_values(values)?;
         let (blob, xy) = self.encode_geometry(geometry)?;
         let sql = self.insert_sql(fid.is_some(), true);
@@ -488,7 +530,7 @@ impl FeatureWriter<'_> {
             self.bbox_dirty = true;
         }
         self.dirty = true;
-        Ok(assigned)
+        Ok((assigned, xy))
     }
 
     /// Insert a row with no geometry (a NULL geometry on a feature table, or an

@@ -16,7 +16,8 @@ use geopackage::core::gpb::{Envelope, encode_header};
 use geopackage::core::triggers::{self, TriggerGeneration};
 use geopackage::core::types::{ColumnType, GeometryType};
 use geopackage::{
-    BoundingBox, BulkIndexOptions, ColumnSpec, GeoPackage, GeometrySpec, TableSchemaBuilder, Value,
+    BoundingBox, BulkIndexOptions, ColumnSpec, GeoPackage, GeometrySpec, NewFeature,
+    StructuralCheck, TableSchemaBuilder, Value,
 };
 use hegel::generators;
 use rusqlite::{Connection, OptionalExtension};
@@ -593,6 +594,109 @@ fn bulk_and_triggered_builds_agree(tc: hegel::TestCase) {
         envelope_scan(bulk.connection()),
         "bulk index does not match the scan"
     );
+}
+
+/// The bulk `write_all` path reuses the envelopes computed while encoding each
+/// geometry instead of re-deriving them with an `ST_*` scan. That reused set
+/// must yield exactly the index a triggered build produces, for an arbitrary
+/// feature set.
+#[hegel::test]
+fn write_all_bulk_envelopes_match_triggered_build(tc: hegel::TestCase) {
+    let n = tc.draw(generators::integers::<usize>().min_value(0).max_value(30));
+    let points: Vec<(i64, f64, f64)> = (1..=(n as i64))
+        .map(|fid| (fid, draw_coord(&tc), draw_coord(&tc)))
+        .collect();
+
+    // Reference: rows written first, then a triggered index built over them.
+    let (_d1, triggered) = gpkg_with_points(&points);
+    triggered
+        .layer("pts")
+        .unwrap()
+        .create_spatial_index_with(BulkIndexOptions::never_bulk())
+        .unwrap();
+
+    // Under test: an empty indexed layer loaded with `write_all`, which takes
+    // the bulk path and feeds it the encode-time envelopes.
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("w.gpkg")).unwrap();
+    let builder = TableSchemaBuilder::new("pts")
+        .column(ColumnSpec::new("name", ColumnType::Text(None)))
+        .geometry(GeometrySpec::new(GeometryType::Point, 4326));
+    let layer = gpkg.create_layer(&builder).unwrap();
+    layer.create_spatial_index().unwrap();
+    let features: Vec<_> = points
+        .iter()
+        .map(|&(fid, x, y)| NewFeature::new(Point::new(x, y), vec![Value::Null]).with_fid(fid))
+        .collect();
+    layer
+        .write_all_with(features, 0, BulkIndexOptions::always_bulk())
+        .unwrap();
+
+    assert_eq!(
+        rtree_rows(gpkg.connection()),
+        rtree_rows(triggered.connection()),
+        "write_all bulk index differs from the triggered build"
+    );
+    assert_eq!(
+        rtree_rows(gpkg.connection()),
+        envelope_scan(gpkg.connection()),
+        "write_all bulk index does not match the scan"
+    );
+}
+
+/// Rows already in the table before a bulk `write_all` mean the encode-time
+/// envelopes do not account for every indexable row, so the build must fall
+/// back to deriving the entry set by scanning. Pre-existing NULL-geometry rows
+/// leave the index legitimately empty, which is what makes the bulk path
+/// eligible in the first place.
+#[test]
+fn write_all_bulk_with_preexisting_rows_indexes_every_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("m.gpkg")).unwrap();
+    let builder = TableSchemaBuilder::new("pts")
+        .column(ColumnSpec::new("name", ColumnType::Text(None)))
+        .geometry(GeometrySpec::new(GeometryType::Point, 4326));
+    let layer = gpkg.create_layer(&builder).unwrap();
+
+    // Two NULL-geometry rows: indexable-row count stays zero.
+    {
+        let mut writer = layer.writer().unwrap();
+        writer.insert_row(Some(1), &[Value::Null]).unwrap();
+        writer.insert_row(Some(2), &[Value::Null]).unwrap();
+        writer.commit().unwrap();
+    }
+    layer.create_spatial_index().unwrap();
+    assert_eq!(rtree_rows(gpkg.connection()).len(), 0);
+
+    let features = vec![
+        NewFeature::new(Point::new(5.0, 6.0), vec![Value::Null]).with_fid(3),
+        NewFeature::new(Point::new(7.0, 8.0), vec![Value::Null]).with_fid(4),
+    ];
+    layer
+        .write_all_with(features, 0, BulkIndexOptions::always_bulk())
+        .unwrap();
+
+    let conn = gpkg.connection();
+    assert_eq!(rtree_rows(conn), envelope_scan(conn));
+    let ids: Vec<i64> = rtree_rows(conn).into_iter().map(|r| r.0).collect();
+    assert_eq!(ids, vec![3, 4]);
+}
+
+/// The opt-in whole-database structural check still produces a correct index.
+#[test]
+fn bulk_build_with_full_database_check_is_correct() {
+    let points: Vec<(i64, f64, f64)> = (1..=20).map(|i| (i, i as f64, -(i as f64))).collect();
+    let (_dir, gpkg) = gpkg_with_points(&points);
+    gpkg.layer("pts")
+        .unwrap()
+        .create_spatial_index_with(
+            BulkIndexOptions::always_bulk().with_structural_check(StructuralCheck::FullDatabase),
+        )
+        .unwrap();
+
+    let conn = gpkg.connection();
+    assert_eq!(rtree_rows(conn), envelope_scan(conn));
+    assert_eq!(rtree_rows(conn).len(), 20);
 }
 
 #[test]

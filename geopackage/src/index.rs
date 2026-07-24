@@ -168,13 +168,25 @@ impl Layer<'_> {
         // Bulk path: `fill_index` creates the virtual table, copies the scratch
         // shadow tables (or falls back), then runs `after` in the same
         // transaction to install the triggers and the extension row atomically.
-        bulk::fill_index(conn, table, column, pk, &rtree, tamper, |conn| {
-            for sql in triggers::create_triggers_sql(table, column, pk)? {
-                conn.execute_batch(&sql)?;
-            }
-            register_extension_row(conn, table, column)?;
-            Ok(())
-        })
+        // No precomputed entry set: the table is already populated, so the
+        // envelopes must come from a scan.
+        bulk::fill_index(
+            conn,
+            table,
+            column,
+            pk,
+            &rtree,
+            options,
+            None,
+            tamper,
+            |conn| {
+                for sql in triggers::create_triggers_sql(table, column, pk)? {
+                    conn.execute_batch(&sql)?;
+                }
+                register_extension_row(conn, table, column)?;
+                Ok(())
+            },
+        )
     }
 
     /// Remove this layer's RTree spatial index: its triggers, the
