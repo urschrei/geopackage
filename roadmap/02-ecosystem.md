@@ -38,9 +38,23 @@ work (M5).
 | `arrow-array`/`arrow-schema` + [`geoarrow-array`](https://github.com/geoarrow/geoarrow-rs) | RecordBatch I/O, GeoArrow(WKB) columns | M3 |
 | `cargo-c`/`cbindgen` | C ABI packaging | M3 |
 | `clap` | CLI | M3 |
-| `criterion`, [`hegeltest`](https://hegel.dev) (Hegel) | benches, property tests | M2 (dev-deps) |
+| [`hegeltest`](https://hegel.dev) (Hegel) | property tests | **landed M2** (dev-dep of `geopackage`, `0.28`) |
+| `criterion` | benches | M2 (dev-dep) |
 | `pyo3`+`maturin`, `napi-rs`, `uniffi` | bindings | post-v0.2, demand-driven |
 | `sqlite-wasm-rs` | browser | parked (D5) |
+
+`hegeltest` (the Hegel PBT library, Hypothesis-powered) is a dev-dependency of
+`geopackage` only. It closes the property-test scope of **issue #2**: the RTree
+contents provably match a full-scan rebuild after arbitrary
+insert/update/delete/upsert sequences through both the triggered and the D8 bulk
+build (`geopackage/tests/spatial_index.rs`), and the `features_in`
+index-vs-full-scan equality (`geopackage/tests/features_in.rs`, ported from the
+hand-rolled SplitMix64 generator). Its engine is compiled in from the
+`hegeltest-c` crate at build time — no server binary is fetched at test time and
+no network is needed to *run* the tests — so it runs on plain `cargo test` /
+`cargo nextest`, including on a CI runner that can fetch crates at build time. In
+CI, Hegel disables its failure database and derandomises by default (no `.hegel/`
+writes); `.hegel/` is gitignored regardless.
 
 ## rstar: why it is *not* in the plan (yet)
 
