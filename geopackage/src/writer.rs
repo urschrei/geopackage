@@ -75,6 +75,15 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, Transaction, params_from_iter};
 
 use crate::bulk::{self, BulkIndexOptions};
+
+/// How large a `write_all` must be, relative to the rows already in a spatial
+/// index, before the bulk path rebuilds that index instead of letting the
+/// triggers append to it.
+///
+/// A write of at least `existing / MERGE_REBUILD_RATIO` new rows takes the
+/// rebuild. See [`Layer::bulk_write_applicable`] for the measurements behind
+/// the value.
+const MERGE_REBUILD_RATIO: usize = 10;
 use crate::index::drop_all_rtree_triggers;
 use crate::value::value_to_sql;
 use crate::{Error, Layer, Result, Value};
@@ -361,8 +370,20 @@ impl<'a> Layer<'a> {
 
     /// Whether a `write_all` should take the D8 bulk-build path: the layer has a
     /// geometry column and a single-column primary key, a recognised spatial
-    /// index whose contents are empty, and `size_hint_lower` reaches the
-    /// threshold.
+    /// index, `size_hint_lower` reaches the threshold, and the write is large
+    /// enough relative to the existing index to be worth rebuilding it.
+    ///
+    /// An empty index is the clear case: there is nothing to preserve, so the
+    /// bulk build is a straight win. A populated index is a trade, because the
+    /// bulk path rebuilds the whole thing rather than appending to it. Measured
+    /// at 1M and 100k existing rows, a rebuild costs roughly 1.5 us per row of
+    /// the *total* table while a triggered append costs roughly 18 to 40 us per
+    /// *new* row, rising with table size as the index deepens. Rebuilding
+    /// therefore wins once the new rows are somewhere between 5% and 10% of the
+    /// existing ones. [`MERGE_REBUILD_RATIO`] takes the conservative end: at
+    /// 100k existing rows a 10k-row append measured 187 ms triggered against
+    /// 149 ms rebuilt, and at 1M existing a 100k-row append measured 2938 ms
+    /// against 1783 ms.
     fn bulk_write_applicable(
         &self,
         size_hint_lower: usize,
@@ -378,12 +399,18 @@ impl<'a> Layer<'a> {
             return Ok(false);
         }
         let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
-        let count: i64 = self.gpkg().connection().query_row(
+        let indexed: i64 = self.gpkg().connection().query_row(
             &format!("SELECT count(*) FROM {}", quote(&rtree)?),
             [],
             |r| r.get(0),
         )?;
-        Ok(count == 0)
+        let indexed = usize::try_from(indexed).unwrap_or(usize::MAX);
+        if indexed == 0 {
+            return Ok(true);
+        }
+        // Rebuilding a populated index has to pay for the rows already in it,
+        // so it is only worth it for a large enough write.
+        Ok(size_hint_lower >= indexed / MERGE_REBUILD_RATIO)
     }
 
     /// The D8 bulk write path: drop the rtree triggers, insert every row in one

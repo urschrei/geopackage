@@ -866,3 +866,89 @@ fn deep_packed_tree_matches_triggered_build() {
     assert_eq!(got, want, "deep packed index answers queries differently");
     assert!(!got.is_empty(), "the query box should match something");
 }
+
+/// A large `write_all` into an already-populated index rebuilds it in bulk
+/// rather than letting the triggers append row by row, and the result still
+/// matches a triggered build exactly.
+///
+/// Before this, `write_all` took the bulk path only into an empty index, so a
+/// merge always paid the per-row triggered cost. Measured at 100k existing rows,
+/// appending 10k triggered took 187ms against 149ms rebuilt, and the gap widens
+/// with the size of the write.
+#[test]
+fn large_append_into_a_populated_index_rebuilds_it() {
+    // Enough existing rows that the ratio rule is exercised rather than the
+    // empty-index shortcut, and enough new rows to clear it.
+    let existing: Vec<(i64, f64, f64)> = (1..=200).map(|i| (i, i as f64, -(i as f64))).collect();
+    let gpkg = in_memory_with_points(&existing);
+    let layer = gpkg.layer("pts").unwrap();
+    layer.create_spatial_index().unwrap();
+    assert_eq!(rtree_rows(gpkg.connection()).len(), 200);
+
+    // 100 new rows against 200 existing is well over the 1-in-10 ratio.
+    let new: Vec<NewFeature<Point<f64>>> = (201..=300)
+        .map(|i| NewFeature::new(Point::new(i as f64, -(i as f64)), vec![Value::Null]).with_fid(i))
+        .collect();
+    layer
+        .write_all_with(new, 0, BulkIndexOptions::with_threshold(1))
+        .unwrap();
+
+    let conn = gpkg.connection();
+    assert_eq!(
+        rtree_rows(conn).len(),
+        300,
+        "every row indexed after the merge"
+    );
+    assert_eq!(rtree_rows(conn), envelope_scan(conn));
+
+    // Contents alone would look the same whichever path ran, so check the shape
+    // too. A packed rebuild fills leaves to the 51-entry capacity, giving 6
+    // leaves plus a root for 300 entries; letting the triggers append leaves
+    // SQLite's half-filled split nodes, measured at 12 for the same rows.
+    let nodes: i64 = conn
+        .query_row("SELECT count(*) FROM rtree_pts_geom_node", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        nodes, 7,
+        "expected a packed rebuild, not a triggered append"
+    );
+
+    assert_eq!(
+        layer.spatial_index_status().unwrap(),
+        geopackage::SpatialIndexStatus::Current,
+        "the triggers must be back after a rebuild"
+    );
+
+    // A subsequent single write is still indexed, so the triggers really work.
+    {
+        let mut writer = layer.writer().unwrap();
+        writer
+            .insert(Some(301), &Point::new(301.0, -301.0), &[Value::Null])
+            .unwrap();
+        writer.commit().unwrap();
+    }
+    assert_eq!(rtree_rows(conn).len(), 301);
+    assert_eq!(rtree_rows(conn), envelope_scan(conn));
+}
+
+/// A small append into a populated index keeps the triggered path: rebuilding
+/// the whole index to add a handful of rows would cost more than it saves.
+#[test]
+fn small_append_into_a_populated_index_keeps_the_triggers() {
+    let existing: Vec<(i64, f64, f64)> = (1..=200).map(|i| (i, i as f64, -(i as f64))).collect();
+    let gpkg = in_memory_with_points(&existing);
+    let layer = gpkg.layer("pts").unwrap();
+    layer.create_spatial_index().unwrap();
+
+    // 5 new rows against 200 existing is under the ratio.
+    let new: Vec<NewFeature<Point<f64>>> = (201..=205)
+        .map(|i| NewFeature::new(Point::new(i as f64, -(i as f64)), vec![Value::Null]).with_fid(i))
+        .collect();
+    layer
+        .write_all_with(new, 0, BulkIndexOptions::with_threshold(1))
+        .unwrap();
+
+    let conn = gpkg.connection();
+    assert_eq!(rtree_rows(conn).len(), 205);
+    assert_eq!(rtree_rows(conn), envelope_scan(conn));
+}
