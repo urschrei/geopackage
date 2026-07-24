@@ -1,0 +1,131 @@
+{
+  "_provenance": {
+    "generator": "scripts/generate_fixtures.py",
+    "gdal_version": "GDAL 3.12.3 \"Chicoutimi\", released 2026/03/17",
+    "note": "Derived from ogrinfo -json -features. GDAL/PROJ-version-dependent fields (coordinateSystem, extent, driver names, metadata) are not recorded; normalisations are documented in geopackage/tests/corpus.rs."
+  },
+  "fixture": "attributes_spread.gpkg",
+  "application_id": 1196444487,
+  "user_version": 10400,
+  "open": "strict",
+  "expect_warnings": [],
+  "layers": [
+    {
+      "name": "spread",
+      "fid_column": "fid",
+      "geometry_type": null,
+      "feature_count": 3,
+      "spatially_indexed": false,
+      "fields": [
+        {
+          "name": "b",
+          "type": "Integer",
+          "subtype": "Boolean"
+        },
+        {
+          "name": "ti",
+          "type": "Integer",
+          "subtype": null
+        },
+        {
+          "name": "si",
+          "type": "Integer",
+          "subtype": "Int16"
+        },
+        {
+          "name": "mi",
+          "type": "Integer",
+          "subtype": null
+        },
+        {
+          "name": "i",
+          "type": "Integer64",
+          "subtype": null
+        },
+        {
+          "name": "fl",
+          "type": "Real",
+          "subtype": "Float32"
+        },
+        {
+          "name": "db",
+          "type": "Real",
+          "subtype": null
+        },
+        {
+          "name": "txt",
+          "type": "String",
+          "subtype": null
+        },
+        {
+          "name": "bl",
+          "type": "Binary",
+          "subtype": null
+        },
+        {
+          "name": "dt",
+          "type": "Date",
+          "subtype": null
+        },
+        {
+          "name": "dtm",
+          "type": "DateTime",
+          "subtype": null
+        }
+      ],
+      "features": [
+        {
+          "fid": 1,
+          "geometry": null,
+          "properties": {
+            "b": true,
+            "ti": 7,
+            "si": 300,
+            "mi": 70000,
+            "i": 5000000000,
+            "fl": 1.5,
+            "db": 2.5,
+            "txt": "café ☃",
+            "dt": "2026/07/24",
+            "dtm": "2026/07/24 12:00:00+00",
+            "bl": "DEADBEEF"
+          }
+        },
+        {
+          "fid": 2,
+          "geometry": null,
+          "properties": {
+            "b": false,
+            "ti": -8,
+            "si": -300,
+            "mi": -1,
+            "i": -2,
+            "fl": -0.5,
+            "db": -0.25,
+            "txt": "plain ascii",
+            "dt": "2000/02/29",
+            "dtm": "1999/12/31 23:59:59.999+00",
+            "bl": "000102"
+          }
+        },
+        {
+          "fid": 3,
+          "geometry": null,
+          "properties": {
+            "b": null,
+            "ti": null,
+            "si": null,
+            "mi": null,
+            "i": null,
+            "fl": null,
+            "db": null,
+            "txt": null,
+            "bl": null,
+            "dt": null,
+            "dtm": null
+          }
+        }
+      ]
+    }
+  ]
+}

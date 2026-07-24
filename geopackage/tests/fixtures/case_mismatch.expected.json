@@ -1,0 +1,74 @@
+{
+  "_provenance": {
+    "generator": "scripts/generate_fixtures.py",
+    "gdal_version": "GDAL 3.12.3 \"Chicoutimi\", released 2026/03/17",
+    "note": "Derived from ogrinfo -json -features. GDAL/PROJ-version-dependent fields (coordinateSystem, extent, driver names, metadata) are not recorded; normalisations are documented in geopackage/tests/corpus.rs."
+  },
+  "fixture": "case_mismatch.gpkg",
+  "application_id": 1196444487,
+  "user_version": 10400,
+  "open": "lenient",
+  "expect_warnings": [
+    "TableNameCaseMismatch"
+  ],
+  "layers": [
+    {
+      "name": "Roads",
+      "fid_column": "fid",
+      "geometry_type": "LineString",
+      "feature_count": 2,
+      "spatially_indexed": true,
+      "fields": [
+        {
+          "name": "rd",
+          "type": "String",
+          "subtype": null
+        }
+      ],
+      "features": [
+        {
+          "fid": 1,
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                10.0,
+                -3.0
+              ],
+              [
+                4.0,
+                8.0
+              ]
+            ]
+          },
+          "properties": {
+            "rd": "main"
+          }
+        },
+        {
+          "fid": 2,
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                -2.0,
+                7.0
+              ],
+              [
+                9.0,
+                -1.0
+              ]
+            ]
+          },
+          "properties": {
+            "rd": "side"
+          }
+        }
+      ]
+    }
+  ]
+}
