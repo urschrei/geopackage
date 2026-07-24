@@ -8,7 +8,7 @@
 )]
 
 use geopackage::core::gpb::{Envelope, encode_header};
-use geopackage::{ContentsDataType, Error, GeoPackage, LayerKind, Value};
+use geopackage::{BoundingBox, ContentsDataType, Error, GeoPackage, LayerKind, Value};
 use geopackage::{ConversionOptions, core::datetime::DateTime};
 
 /// A GPB point blob with an XY envelope (little-endian WKB).
@@ -336,4 +336,84 @@ fn geometry_type_validation_is_opt_in() {
         }
         other => panic!("expected GeometryTypeMismatch, got {other:?}"),
     }
+}
+
+/// The streaming cursor returns exactly what the materialising read does, for
+/// all three query shapes. If these ever diverge, one of them is wrong.
+#[test]
+fn cursor_matches_the_materialising_read() {
+    let (_dir, gpkg) = roads_gpkg();
+    let layer = gpkg.layer("roads").unwrap();
+
+    let materialised: Vec<(i64, Option<Vec<u8>>)> = layer
+        .features()
+        .unwrap()
+        .map(|f| {
+            let f = f.unwrap();
+            (f.fid(), f.geometry_bytes().map(<[u8]>::to_vec))
+        })
+        .collect();
+
+    let mut cursor = layer.cursor().unwrap();
+    let streamed: Vec<(i64, Option<Vec<u8>>)> = cursor
+        .features()
+        .unwrap()
+        .map(|f| {
+            let f = f.unwrap();
+            (f.fid(), f.geometry_bytes().map(<[u8]>::to_vec))
+        })
+        .collect();
+    assert_eq!(streamed, materialised, "full scan");
+    assert!(!streamed.is_empty(), "fixture should have rows");
+
+    // Bounding box, which also exercises the per-row filter on the stream.
+    let bbox = BoundingBox::new(-10.0, -10.0, 10.0, 10.0);
+    let want: Vec<i64> = layer
+        .features_in(bbox)
+        .unwrap()
+        .map(|f| f.unwrap().fid())
+        .collect();
+    let mut cursor = layer.cursor_in(bbox).unwrap();
+    let got: Vec<i64> = cursor
+        .features()
+        .unwrap()
+        .map(|f| f.unwrap().fid())
+        .collect();
+    assert_eq!(got, want, "bounding box");
+
+    // WHERE passthrough.
+    let want: Vec<i64> = layer
+        .select("fid > 1", &[])
+        .unwrap()
+        .map(|f| f.unwrap().fid())
+        .collect();
+    let mut cursor = layer.cursor_select("fid > 1", &[]).unwrap();
+    let got: Vec<i64> = cursor
+        .features()
+        .unwrap()
+        .map(|f| f.unwrap().fid())
+        .collect();
+    assert_eq!(got, want, "where clause");
+}
+
+/// A cursor can be iterated more than once: each `features()` call re-runs the
+/// query from the start.
+#[test]
+fn cursor_can_be_iterated_twice() {
+    let (_dir, gpkg) = roads_gpkg();
+    let layer = gpkg.layer("roads").unwrap();
+    let mut cursor = layer.cursor().unwrap();
+
+    let first: Vec<i64> = cursor
+        .features()
+        .unwrap()
+        .map(|f| f.unwrap().fid())
+        .collect();
+    let second: Vec<i64> = cursor
+        .features()
+        .unwrap()
+        .map(|f| f.unwrap().fid())
+        .collect();
+    assert_eq!(first, second);
+    assert!(!first.is_empty());
 }

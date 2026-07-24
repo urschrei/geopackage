@@ -8,6 +8,25 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- Streaming reads: `Layer::cursor`, `Layer::cursor_in` and `Layer::cursor_select`
+  return a `FeatureCursor` whose `features()` yields a `FeatureStream`, holding
+  one row at a time instead of materialising the result set. Over 100k features
+  this reads in 18.8ms against 29.5ms for the materialising methods, with peak
+  memory bounded by a row rather than by the query.
+
+  It is two calls rather than one because rusqlite's row cursor borrows its
+  `Statement`, so an iterator owning both would be self-referential, which
+  `#![forbid(unsafe_code)]` rules out without a helper crate. The cursor owns
+  the statement and the stream borrows it, which is the shape rusqlite itself
+  uses.
+
+  `features`, `features_in` and `select` are unchanged and remain the right
+  default for layers small enough that the result set is not a problem. Both
+  paths build the same `Feature`s through the same code, so they never differ
+  in results ([#4]).
+
 ## [0.1.1] - 2026-07-24
 
 A performance and durability release. No API is removed or changed: the only
@@ -153,6 +172,7 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
 [0.1.1]: https://github.com/urschrei/geopackage/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/urschrei/geopackage/releases/tag/v0.1.0
 [#3]: https://github.com/urschrei/geopackage/issues/3
+[#4]: https://github.com/urschrei/geopackage/issues/4
 [#4]: https://github.com/urschrei/geopackage/issues/4
 [#5]: https://github.com/urschrei/geopackage/issues/5
 [#15]: https://github.com/urschrei/geopackage/issues/15

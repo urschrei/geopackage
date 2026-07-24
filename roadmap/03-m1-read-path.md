@@ -121,18 +121,23 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       deliberately not wired in the read-API chunk; now wired as the opt-in
       `Layer::with_geometry_type_validation()` (see the ticked item under
       "Geometry" above).
-- [ ] **Lazy/streaming feature iterator.** Replace the eager materialisation in
-      `Layer::features`/`features_in`/`select`. This was recorded as blocked by
-      `#![forbid(unsafe_code)]`, needing `self_cell`/`ouroboros` or an upstream
-      rusqlite change. That is wrong, and only true of one design: an iterator
-      that *owns* both the `Statement` and its `Rows` is self-referential, but
-      an iterator that *borrows* a caller-held statement is not. rusqlite's own
-      API has exactly that shape. A prototype compiles under the current lint
-      set with no new dependency and read 100k features in 16 ms against 24 ms
-      for the materialising path, which is also where the read gap against
-      rusqlite-gpkg (#21) appears to live. The open question is API shape, not
-      feasibility: a two-step `layer.cursor()` then `cursor.features()`, keeping
-      the current one-step method as the convenience form.
+- [x] **Lazy/streaming feature iterator.** *(Done, and the recorded blocker was
+      wrong. This said a lazy iterator needed `self_cell`/`ouroboros` or an
+      upstream rusqlite change because of `#![forbid(unsafe_code)]`. That is
+      true only of an iterator that **owns** both the `Statement` and its
+      `Rows`; one that **borrows** a caller-held statement is not
+      self-referential, which is how rusqlite's own API is shaped. `self_cell`
+      turned out not to work here either way, since its dependent builder takes
+      `&Owner` while rusqlite's `query` needs `&mut self`; `ouroboros` does work
+      and was prototyped, but costs 7 new crates including a second proc macro,
+      which was judged not worth it against three extra methods. So:
+      `Layer::cursor`/`cursor_in`/`cursor_select` return a `FeatureCursor`
+      owning the statement, and its `features()` yields a borrowing
+      `FeatureStream`. 100k features read in 18.8 ms against 29.5 ms
+      materialised, with peak memory bounded by one row. The materialising
+      methods are unchanged; both paths share one `RowContext::feature_from_row`
+      so they cannot diverge, and a test asserts they agree for all three query
+      shapes.)*
 
 ### Corpus & verification (details in [08-testing-conformance.md](08-testing-conformance.md))
 - [x] Fixture corpus: five small GDAL-written / `sqlite3`-built fixtures

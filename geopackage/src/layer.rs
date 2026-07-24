@@ -9,18 +9,24 @@
 //! not outlive the SQLite cursor, so each [`Feature`] owns its geometry blob
 //! and its converted column values rather than borrowing the row.
 //!
-//! The read methods currently materialise the result set into owned features
-//! before returning the iterator. rusqlite's row cursor (`Rows`) borrows its
-//! `Statement` and resets it on drop, so an iterator that *owns both* would be
-//! a self-referential struct, which this crate's `#![forbid(unsafe_code)]`
-//! rules out without a helper such as `self_cell`.
+//! There are two ways to read features, and they return the same rows.
 //!
-//! That is a constraint on one design, not on streaming as such. Handing the
-//! caller the statement, as rusqlite itself does, keeps the borrow one-way and
-//! needs no self reference and no new dependency. A prototype of that shape
-//! read 100k features in 16 ms against 24 ms for the materialising path here,
-//! with bounded memory. See issue #4; the [`Feature`] ownership shape is
-//! unaffected either way.
+//! [`Layer::features`], [`Layer::features_in`] and [`Layer::select`] materialise
+//! the whole result set into owned features before returning the iterator. One
+//! call, and the right default for layers small enough that the result set is
+//! not a problem.
+//!
+//! [`Layer::cursor`], [`Layer::cursor_in`] and [`Layer::cursor_select`] stream,
+//! holding one row at a time. Two calls, because rusqlite's row cursor borrows
+//! its `Statement`: an iterator owning both would be self-referential, which
+//! this crate's `#![forbid(unsafe_code)]` rules out without a helper crate.
+//! Handing the statement to the caller keeps the borrow one-way, which is the
+//! shape rusqlite itself uses. Measured over 100k features, streaming reads in
+//! 18.8 ms against 29.5 ms materialised, with peak memory bounded by one row
+//! rather than by the result set.
+//!
+//! Both build the same [`Feature`]s through the same code, so the choice is
+//! memory and ergonomics, never results.
 
 use std::sync::Arc;
 
@@ -388,6 +394,76 @@ impl<'a> Layer<'a> {
         self.execute(&sql, sql_params, geom_idx, None)
     }
 
+    /// A streaming full scan: the same rows as [`Self::features`], one at a
+    /// time instead of materialised.
+    ///
+    /// Two steps, because the returned cursor owns the prepared statement that
+    /// the iterator borrows. See [`FeatureCursor`] for why.
+    ///
+    /// ```no_run
+    /// # fn main() -> Result<(), geopackage::Error> {
+    /// # let gpkg = geopackage::GeoPackage::open("x.gpkg")?;
+    /// # let layer = gpkg.layer("roads")?;
+    /// let mut cursor = layer.cursor()?;
+    /// for feature in cursor.features()? {
+    ///     println!("{}", feature?.fid());
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub fn cursor(&self) -> Result<FeatureCursor<'_>> {
+        let (sql, geom_idx) = self.base_select()?;
+        self.prepare_cursor(&sql, Vec::new(), geom_idx, None)
+    }
+
+    /// A streaming bounding-box query: the same rows as [`Self::features_in`],
+    /// using the RTree index on the same terms.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoGeometryColumn`] if the layer has no geometry column.
+    pub fn cursor_in(&self, bbox: BoundingBox) -> Result<FeatureCursor<'_>> {
+        let (sql, geom_idx, uses_rtree) = self.features_in_plan()?;
+        let params = if uses_rtree {
+            use rusqlite::types::Value as Sql;
+            vec![
+                Sql::Real(widen_up(bbox.max_x)),
+                Sql::Real(widen_down(bbox.min_x)),
+                Sql::Real(widen_up(bbox.max_y)),
+                Sql::Real(widen_down(bbox.min_y)),
+            ]
+        } else {
+            Vec::new()
+        };
+        self.prepare_cursor(&sql, params, geom_idx, Some(bbox))
+    }
+
+    /// A streaming `WHERE` query: the same rows as [`Self::select`], with the
+    /// same raw-SQL contract (design decision D9).
+    pub fn cursor_select(&self, where_clause: &str, params: &[Value]) -> Result<FeatureCursor<'_>> {
+        let (base, geom_idx) = self.base_select()?;
+        let sql = format!("{base} WHERE ({where_clause})");
+        let sql_params: Vec<rusqlite::types::Value> = params.iter().map(value_to_sql).collect();
+        self.prepare_cursor(&sql, sql_params, geom_idx, None)
+    }
+
+    /// Prepare the statement a cursor will own, with the row metadata it needs
+    /// detached from this handle.
+    fn prepare_cursor(
+        &self,
+        sql: &str,
+        params: Vec<rusqlite::types::Value>,
+        geom_idx: Option<usize>,
+        filter: Option<BoundingBox>,
+    ) -> Result<FeatureCursor<'_>> {
+        Ok(FeatureCursor {
+            stmt: self.gpkg.connection().prepare(sql)?,
+            params,
+            geom_idx,
+            filter,
+            ctx: self.row_context(),
+        })
+    }
+
     /// Whether [`Self::features_in`] will use the RTree spatial index.
     ///
     /// True when the layer has a geometry column and a single-column primary
@@ -536,6 +612,152 @@ impl<'a> Layer<'a> {
         })
     }
 
+    fn feature_from_row(
+        &self,
+        row: &rusqlite::Row<'_>,
+        geom_idx: Option<usize>,
+    ) -> Result<Feature> {
+        self.row_context().feature_from_row(row, geom_idx)
+    }
+
+    /// The per-row metadata needed to build owned [`Feature`]s, detached from
+    /// this handle so a [`FeatureCursor`] can outlive the borrow that made it.
+    ///
+    /// Cloned once per query, not per row: the column list is a handful of
+    /// entries and the column names are already behind an `Arc`.
+    fn row_context(&self) -> RowContext {
+        RowContext {
+            table_name: self.table_name.clone(),
+            value_columns: self.value_columns.clone(),
+            value_column_names: Arc::clone(&self.value_column_names),
+            options: self.options,
+            validate_geometry_type: self.validate_geometry_type,
+            geometry_column: self.geometry_column.clone(),
+        }
+    }
+}
+
+/// A prepared streaming read over a layer, owning its statement.
+///
+/// Obtained from [`Layer::cursor`], [`Layer::cursor_in`] or
+/// [`Layer::cursor_select`], and turned into an iterator by
+/// [`FeatureCursor::features`].
+///
+/// # Why this is two steps
+///
+/// rusqlite's row cursor borrows its `Statement`, so an iterator owning both
+/// would be self-referential, which this crate's `#![forbid(unsafe_code)]`
+/// rules out without a helper crate. Handing the statement to the caller keeps
+/// the borrow one-way, which is the same shape rusqlite itself uses:
+///
+/// ```no_run
+/// # fn main() -> Result<(), geopackage::Error> {
+/// # let gpkg = geopackage::GeoPackage::open("x.gpkg")?;
+/// # let layer = gpkg.layer("roads")?;
+/// let mut cursor = layer.cursor()?;
+/// for feature in cursor.features()? {
+///     let feature = feature?;
+///     println!("{}", feature.fid());
+/// }
+/// # Ok(()) }
+/// ```
+///
+/// The difference from [`Layer::features`] is peak memory, not results: this
+/// holds one row at a time, where the materialising methods build the whole
+/// result set before returning. Prefer this for layers large enough that the
+/// result set is a problem, and the one-step methods otherwise.
+#[derive(Debug)]
+pub struct FeatureCursor<'a> {
+    stmt: rusqlite::Statement<'a>,
+    params: Vec<rusqlite::types::Value>,
+    geom_idx: Option<usize>,
+    filter: Option<BoundingBox>,
+    ctx: RowContext,
+}
+
+impl FeatureCursor<'_> {
+    /// Run the query and stream its rows.
+    ///
+    /// Each call re-runs the query from the start, so a cursor can be iterated
+    /// more than once. Rows are yielded as `Result<Feature>`: a value that does
+    /// not fit its declared column type surfaces as an `Err` for that row
+    /// without ending the scan, exactly as the materialising methods do.
+    pub fn features(&mut self) -> Result<FeatureStream<'_>> {
+        let rows = self
+            .stmt
+            .query(rusqlite::params_from_iter(self.params.iter()))?;
+        Ok(FeatureStream {
+            rows,
+            ctx: &self.ctx,
+            geom_idx: self.geom_idx,
+            filter: self.filter,
+        })
+    }
+}
+
+/// A streaming iterator over a [`FeatureCursor`]'s rows.
+///
+/// Yields `Result<Feature>` per row and holds one row at a time. Borrows the
+/// cursor that produced it.
+pub struct FeatureStream<'c> {
+    rows: rusqlite::Rows<'c>,
+    ctx: &'c RowContext,
+    geom_idx: Option<usize>,
+    filter: Option<BoundingBox>,
+}
+
+impl std::fmt::Debug for FeatureStream<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `rusqlite::Rows` is not `Debug`, and a cursor mid-scan has no useful
+        // state to print beyond what the query already said.
+        f.debug_struct("FeatureStream")
+            .field("table_name", &self.ctx.table_name)
+            .field("filtered", &self.filter.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Iterator for FeatureStream<'_> {
+    type Item = Result<Feature>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let row = match self.rows.next() {
+                Ok(Some(row)) => row,
+                Ok(None) => return None,
+                Err(e) => return Some(Err(e.into())),
+            };
+            // Decide bbox membership from the geometry blob before converting
+            // any values, so a row outside the box is skipped entirely and
+            // conversion errors surface only for rows the query returns. Same
+            // rule as the materialising path.
+            if let Some(bbox) = &self.filter {
+                match row_in_box(row, self.geom_idx, bbox) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+            return Some(self.ctx.feature_from_row(row, self.geom_idx));
+        }
+    }
+}
+
+/// Everything needed to turn a result row into an owned [`Feature`], owned
+/// rather than borrowed so it can be held by a [`FeatureCursor`].
+#[derive(Debug, Clone)]
+struct RowContext {
+    table_name: String,
+    value_columns: Vec<Column>,
+    value_column_names: Arc<[String]>,
+    options: ConversionOptions,
+    validate_geometry_type: bool,
+    geometry_column: Option<GeometryColumn>,
+}
+
+impl RowContext {
+    /// Build one owned [`Feature`]. The single implementation shared by the
+    /// materialising read methods and the streaming cursor.
     fn feature_from_row(
         &self,
         row: &rusqlite::Row<'_>,

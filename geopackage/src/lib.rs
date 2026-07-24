@@ -121,7 +121,7 @@ pub use error::{Error, Result};
 pub use geopackage_core as core;
 pub use geopackage_core::GpkgVersion;
 pub use index::SpatialIndexStatus;
-pub use layer::{BoundingBox, Feature, Features, Layer, LayerKind};
+pub use layer::{BoundingBox, Feature, FeatureCursor, FeatureStream, Features, Layer, LayerKind};
 pub use open::OpenWarning;
 pub use options::{JournalMode, OpenOptions, Synchronous};
 pub use schema::{Column, GeometryColumn, TableSchema};
