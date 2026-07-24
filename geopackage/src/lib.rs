@@ -18,12 +18,14 @@
 //!   design decision D9: SQL is the query engine).
 //! - [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`], and
 //!   [`Layer::repair_spatial_index`] manage the RTree spatial index (the
-//!   GeoPackage 1.4 trigger set, design decision D7).
+//!   GeoPackage 1.4 trigger set, design decision D7). Building a large index —
+//!   [`Layer::create_spatial_index_with`], or [`Layer::write_all`] into a fresh
+//!   indexed layer — uses the D8 bulk shadow-table build ([`BulkIndexOptions`]).
 //! - [`GeoPackage::open_lenient`] tolerates legacy and lightly malformed files,
 //!   collecting [`OpenWarning`]s instead of failing.
 //!
-//! The bulk-load index path (design decision D8) and the GeoArrow bulk plane
-//! arrive in later milestones — see the repository roadmap.
+//! The GeoArrow bulk plane arrives in a later milestone — see the repository
+//! roadmap.
 //!
 //! ```no_run
 //! # fn main() -> Result<(), geopackage::Error> {

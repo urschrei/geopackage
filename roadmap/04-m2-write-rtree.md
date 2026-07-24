@@ -45,12 +45,26 @@ write performance competitive with GDAL's GPKG driver.
       `gpkg_extensions` table. The extension row uses the spec Annex F.3
       requirement 75/76 strings, reusing the existing `triggers::EXTENSION_*`
       constants.)*
-- [ ] **Bulk build (D8)**: during `write_all` on an indexed layer (or
+- [x] **Bulk build (D8)**: during `write_all` on an indexed layer (or
       `create_spatial_index` on a populated table): drop/defer triggers,
       accumulate `(fid, envelope)`, build rtree in scratch in-memory DB, copy
       `rtree_%_node/parent/rowid` shadow tables in one transaction, reinstall
       triggers. Gate with rtree integrity query + `PRAGMA integrity_check` in
       tests; automatic fallback to triggered path on any anomaly.
+      *(Implemented in `geopackage/src/bulk.rs`. The scratch database is an
+      `ATTACH`ed `:memory:` db built from an `ST_*` envelope scan; its
+      `_node`/`_rowid`/`_parent` shadow tables are copied into the target inside
+      one transaction that also (re)creates the vtab and — via an `after` hook —
+      installs the triggers/`gpkg_extensions` row atomically. The gate is a
+      bijection + containment check of the copied index against the accumulated
+      envelopes plus `PRAGMA integrity_check`; any anomaly drops the copied
+      result and rebuilds through `populate_rtree_sql`. Bulk-vs-triggered is
+      chosen by `BulkIndexOptions` (default 10k rows; `create_spatial_index_with`
+      / `write_all_with` override; `always_bulk`/`never_bulk` force it).
+      `write_all` bulk engages only when the target index is empty (a fresh bulk
+      load), so appends keep the per-row triggered path. A scratch-tamper test
+      seam drives the fallback in a unit test. Full `integrity_check` cost and
+      atomicity across the `ATTACH` boundary are noted below.)*
 - [x] `repair_spatial_index()`: drop legacy `update1`/`update3`, install 1.4
       set, rebuild if `TriggerGeneration::Mixed` (D7). Never automatic.
       *(Replaces every rtree trigger of a `PreV1_4`/`Mixed` generation with the
@@ -64,6 +78,23 @@ write performance competitive with GDAL's GPKG driver.
       checkpoint + reset to DELETE on close/Drop; `synchronous` exposure.
 - [ ] Crash-safety test: kill mid-transaction (child process), reopen,
       verify integrity + no index desync.
+
+### Bulk-build follow-ups (discovered during D8)
+- [ ] Gate cost: the D8 gate runs a whole-database `PRAGMA integrity_check`,
+      which is O(database) and dominates the gate on very large files; a benign
+      pre-existing issue anywhere also forces the (still correct) triggered
+      fallback. Consider scoping the structural check to `rtreecheck(<rtree>)`
+      (available in bundled SQLite 3.53) with `integrity_check` behind an option,
+      once benchmarks quantify the cost.
+- [ ] Bulk-build atomicity: `ATTACH`/`DETACH` require autocommit, so the scratch
+      build and detach sit outside the copy transaction. For `write_all` the row
+      inserts commit before the index rebuild, so a crash between them can leave
+      a stale index needing `repair_spatial_index()`. Fold into the D4
+      journal/durability crash-safety work rather than solving separately.
+- [ ] `write_all` bulk currently engages only for an empty target index; a
+      merge-into-populated-index bulk path (re-index existing + new, or an rstar
+      escalation) is deferred until benchmarks justify it (see 02-ecosystem
+      rstar note).
 
 ### Performance
 - [ ] Criterion benches: 1M and 10M point/line/polygon writes, indexed and
