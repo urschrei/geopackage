@@ -122,11 +122,17 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       `Layer::with_geometry_type_validation()` (see the ticked item under
       "Geometry" above).
 - [ ] **Lazy/streaming feature iterator.** Replace the eager materialisation in
-      `Layer::features`/`features_in`/`select` with a truly lazy cursor that
-      owns both the prepared `Statement` and its `Rows`. Needs a safe
-      self-referential holder (`self_cell`/`ouroboros`) or an owning-cursor
-      addition upstream in rusqlite; blocked today by `#![forbid(unsafe_code)]`.
-      Relevant once very large layers are read outside the GeoArrow bulk plane.
+      `Layer::features`/`features_in`/`select`. This was recorded as blocked by
+      `#![forbid(unsafe_code)]`, needing `self_cell`/`ouroboros` or an upstream
+      rusqlite change. That is wrong, and only true of one design: an iterator
+      that *owns* both the `Statement` and its `Rows` is self-referential, but
+      an iterator that *borrows* a caller-held statement is not. rusqlite's own
+      API has exactly that shape. A prototype compiles under the current lint
+      set with no new dependency and read 100k features in 16 ms against 24 ms
+      for the materialising path, which is also where the read gap against
+      rusqlite-gpkg (#21) appears to live. The open question is API shape, not
+      feasibility: a two-step `layer.cursor()` then `cursor.features()`, keeping
+      the current one-step method as the convenience form.
 
 ### Corpus & verification (details in [08-testing-conformance.md](08-testing-conformance.md))
 - [x] Fixture corpus: five small GDAL-written / `sqlite3`-built fixtures

@@ -11,11 +11,16 @@
 //!
 //! The read methods currently materialise the result set into owned features
 //! before returning the iterator. rusqlite's row cursor (`Rows`) borrows its
-//! `Statement` and resets it on drop, so a truly lazy iterator that owns both
-//! would be a self-referential struct, not expressible under this crate's
-//! `#![forbid(unsafe_code)]` without a helper such as `self_cell`. The
-//! [`Feature`] ownership shape is unaffected; the trade-off is peak memory for
-//! very large result sets, revisited when the GeoArrow bulk plane lands.
+//! `Statement` and resets it on drop, so an iterator that *owns both* would be
+//! a self-referential struct, which this crate's `#![forbid(unsafe_code)]`
+//! rules out without a helper such as `self_cell`.
+//!
+//! That is a constraint on one design, not on streaming as such. Handing the
+//! caller the statement, as rusqlite itself does, keeps the borrow one-way and
+//! needs no self reference and no new dependency. A prototype of that shape
+//! read 100k features in 16 ms against 24 ms for the materialising path here,
+//! with bounded memory. See issue #4; the [`Feature`] ownership shape is
+//! unaffected either way.
 
 use std::sync::Arc;
 
