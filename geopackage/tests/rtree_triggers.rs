@@ -2,6 +2,11 @@
 //! functions + the 1.4 trigger set maintaining a real SQLite rtree —
 //! including the UPSERT case that corrupted pre-1.4 GeoPackages.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"
+)]
+
 use geopackage::GeoPackage;
 use geopackage::core::gpb::{Envelope, encode_header};
 use geopackage::core::triggers;

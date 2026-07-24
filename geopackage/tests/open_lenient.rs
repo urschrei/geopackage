@@ -1,6 +1,11 @@
 //! `GeoPackage::open_lenient` and the warnings it collects, versus strict
 //! `open` (whose behaviour is unchanged).
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"
+)]
+
 use geopackage::core::ddl;
 use geopackage::core::version::{APPLICATION_ID_GP10, APPLICATION_ID_GP11};
 use geopackage::{GeoPackage, GpkgVersion, OpenWarning};

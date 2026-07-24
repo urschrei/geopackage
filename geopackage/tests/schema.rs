@@ -1,5 +1,10 @@
 //! `gpkg_geometry_columns` and `PRAGMA table_info` introspection.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"
+)]
+
 use geopackage::core::types::{ColumnType, GeometryType, ZmFlag};
 use geopackage::{Error, GeoPackage};
 

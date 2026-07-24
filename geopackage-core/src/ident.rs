@@ -30,7 +30,7 @@ mod tests {
     fn quoting() {
         assert_eq!(quote("roads").unwrap(), "\"roads\"");
         assert_eq!(quote("we\"ird").unwrap(), "\"we\"\"ird\"");
-        assert!(quote("").is_err());
-        assert!(quote("a\0b").is_err());
+        quote("").unwrap_err();
+        quote("a\0b").unwrap_err();
     }
 }

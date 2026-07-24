@@ -12,6 +12,12 @@
 //! Run: `scripts/fetch_corpus.sh` then
 //! `cargo test -p geopackage --test corpus_external -- --ignored --nocapture`.
 
+#![expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the panic-family patterns in these helpers are the intended failure mechanism"
+)]
+
 use std::path::PathBuf;
 
 use geopackage::{ContentsDataType, ConversionOptions, GeoPackage};

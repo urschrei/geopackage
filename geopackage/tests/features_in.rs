@@ -9,6 +9,11 @@
 //! so a regression is replayable. Decision recorded in
 //! `roadmap/03-m1-read-path.md`.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"
+)]
+
 use geopackage::core::gpb::{Envelope, encode_header};
 use geopackage::core::triggers;
 use geopackage::{BoundingBox, GeoPackage};

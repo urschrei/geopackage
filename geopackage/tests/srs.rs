@@ -1,5 +1,10 @@
 //! `gpkg_spatial_ref_sys` lookup and registration.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"
+)]
+
 use geopackage::{Error, GeoPackage, Srs};
 
 fn create() -> (tempfile::TempDir, GeoPackage) {

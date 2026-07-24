@@ -1,5 +1,10 @@
 //! `Value` conversion from stored SQLite values, driven by declared types.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"
+)]
+
 use geopackage::core::datetime::{Date, DateTime};
 use geopackage::core::types::ColumnType;
 use geopackage::{ConversionOptions, Error, GeoPackage, Value};

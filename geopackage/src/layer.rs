@@ -546,8 +546,10 @@ impl<'a> Layer<'a> {
     /// against the declared `gpkg_geometry_columns` type.
     fn check_declared_type(&self, blob: &[u8], declared: &GeometryColumn) -> Result<()> {
         let (_, offset) = gpb::parse_header(blob).map_err(|e| Error::Core(e.into()))?;
-        let found =
-            geometry::wkb_geometry_type(&blob[offset..]).map_err(|e| Error::Core(e.into()))?;
+        // `parse_header` guarantees `offset <= blob.len()`; `get` keeps the
+        // slice panic-free.
+        let body = blob.get(offset..).unwrap_or_default();
+        let found = geometry::wkb_geometry_type(body).map_err(|e| Error::Core(e.into()))?;
         if !geometry::geometry_type_matches(found, declared.geometry_type) {
             return Err(Error::GeometryTypeMismatch {
                 table_name: self.table_name.clone(),
@@ -649,7 +651,7 @@ impl Feature {
         self.columns
             .iter()
             .position(|c| c == name)
-            .map(|i| &self.values[i])
+            .and_then(|i| self.values.get(i))
     }
 
     /// A value by position within the value columns (in schema order), or

@@ -45,6 +45,15 @@
 //!   XY only; the Z dimension of the XYZ fixture is confirmed through GDAL's
 //!   `PointZ` layer type separately.
 
+#![expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::string_slice,
+    clippy::indexing_slicing,
+    clippy::unreachable,
+    reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the panic-family patterns in these helpers are the intended failure mechanism"
+)]
+
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;

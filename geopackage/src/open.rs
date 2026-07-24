@@ -9,7 +9,9 @@
 //! — so callers can inspect and iterate a lightly non-conforming file instead
 //! of being turned away. Strict [`GeoPackage::open`] is unchanged.
 
-use crate::{Error, GeoPackage, Result, functions, resolve_table_name, table_exists};
+use crate::{
+    Error, GeoPackage, Result, functions, read_header_u32, resolve_table_name, table_exists,
+};
 use geopackage_core::GpkgVersion;
 use geopackage_core::version::{APPLICATION_ID_GP10, APPLICATION_ID_GP11};
 use rusqlite::{Connection, OpenFlags};
@@ -63,10 +65,8 @@ impl GeoPackage {
     }
 
     fn from_connection_lenient(conn: Connection) -> Result<Self> {
-        let application_id: u32 =
-            conn.pragma_query_value(None, "application_id", |r| r.get::<_, i64>(0))? as u32;
-        let user_version: u32 =
-            conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))? as u32;
+        let application_id = read_header_u32(&conn, "application_id")?;
+        let user_version = read_header_u32(&conn, "user_version")?;
         let version = GpkgVersion::from_pragmas(application_id, user_version).ok_or(
             Error::NotAGeoPackage {
                 reason: "unrecognized application_id/user_version",

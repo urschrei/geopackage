@@ -39,8 +39,11 @@ pub struct SrsDefinition {
 /// Returns `None` for codes outside the vendored subset; callers are then
 /// expected to supply their own [`SrsDefinition`].
 pub fn epsg_definition(code: i32) -> Option<SrsDefinition> {
-    if let Ok(idx) = epsg_wkt::EPSG_WKT1.binary_search_by_key(&code, |r| r.0) {
-        let (code, name, wkt) = epsg_wkt::EPSG_WKT1[idx];
+    if let Some(&(code, name, wkt)) = epsg_wkt::EPSG_WKT1
+        .binary_search_by_key(&code, |r| r.0)
+        .ok()
+        .and_then(|idx| epsg_wkt::EPSG_WKT1.get(idx))
+    {
         return Some(SrsDefinition {
             name: Cow::Borrowed(name),
             organization: Cow::Borrowed("EPSG"),

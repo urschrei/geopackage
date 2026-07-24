@@ -33,7 +33,7 @@ fn create_reopen_validate() {
         .connection()
         .pragma_query_value(None, "application_id", |r| r.get(0))
         .unwrap();
-    assert_eq!(app_id as u32, 0x4750_4B47);
+    assert_eq!(app_id, 0x4750_4B47);
 }
 
 #[test]

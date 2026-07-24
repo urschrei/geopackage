@@ -39,14 +39,15 @@ impl Date {
 
     /// Parse `YYYY-MM-DD`.
     pub fn parse(s: &str) -> Result<Self, DateTimeError> {
-        let b = s.as_bytes();
-        if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        // Slice pattern: matches iff the input is exactly 10 bytes with `-`
+        // separators at positions 4 and 7; any other shape is `Malformed`.
+        let &[y0, y1, y2, y3, b'-', m0, m1, b'-', d0, d1] = s.as_bytes() else {
             return Err(DateTimeError::Malformed);
-        }
+        };
         Self::new(
-            parse_digits(&b[0..4])? as u16,
-            parse_digits(&b[5..7])? as u8,
-            parse_digits(&b[8..10])? as u8,
+            parse_digits(&[y0, y1, y2, y3])? as u16,
+            parse_digits(&[m0, m1])? as u8,
+            parse_digits(&[d0, d1])? as u8,
         )
     }
 
@@ -97,8 +98,37 @@ pub struct DateTime {
 impl DateTime {
     /// Parse the strict 1.4 form `YYYY-MM-DDTHH:MM:SS.SSSZ` and nothing else.
     pub fn parse_strict(s: &str) -> Result<Self, DateTimeError> {
-        let b = s.as_bytes();
-        if b.len() != 24 || b[10] != b'T' || b[19] != b'.' || b[23] != b'Z' {
+        // Exactly 24 bytes with `T` at 10, `.` at 19, `Z` at 23; the digit
+        // and calendar validation is delegated to `parse_lenient`.
+        if !matches!(
+            s.as_bytes(),
+            [
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                b'T',
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                b'.',
+                _,
+                _,
+                _,
+                b'Z'
+            ]
+        ) {
             return Err(DateTimeError::Malformed);
         }
         let dt = Self::parse_lenient(s)?;
@@ -110,53 +140,72 @@ impl DateTime {
     /// `T` or space separator, optional `.` + 1–9 fractional-second digits,
     /// and an optional `Z` or `±HH:MM` / `±HHMM` offset.
     pub fn parse_lenient(s: &str) -> Result<Self, DateTimeError> {
-        let b = s.as_bytes();
-        if b.len() < 19 || (b[10] != b'T' && b[10] != b' ') || b[13] != b':' || b[16] != b':' {
+        // The fixed 19-byte prefix `YYYY-MM-DDsHH:MM:SS` (s is `T` or space),
+        // with `rest` capturing an optional fractional part and/or zone. The
+        // pattern validates every separator; the calendar and clock ranges are
+        // checked below. Any other shape is `Malformed`.
+        let &[
+            y0,
+            y1,
+            y2,
+            y3,
+            b'-',
+            mo0,
+            mo1,
+            b'-',
+            d0,
+            d1,
+            b'T' | b' ',
+            h0,
+            h1,
+            b':',
+            mi0,
+            mi1,
+            b':',
+            s0,
+            s1,
+            ref rest @ ..,
+        ] = s.as_bytes()
+        else {
             return Err(DateTimeError::Malformed);
-        }
-        let date = Date::parse(&s[0..10])?;
-        let hour = parse_digits(&b[11..13])? as u8;
-        let minute = parse_digits(&b[14..16])? as u8;
-        let second = parse_digits(&b[17..19])? as u8;
+        };
+        let date = Date::new(
+            parse_digits(&[y0, y1, y2, y3])? as u16,
+            parse_digits(&[mo0, mo1])? as u8,
+            parse_digits(&[d0, d1])? as u8,
+        )?;
+        let hour = parse_digits(&[h0, h1])? as u8;
+        let minute = parse_digits(&[mi0, mi1])? as u8;
+        let second = parse_digits(&[s0, s1])? as u8;
         if hour > 23 || minute > 59 || second > 59 {
             return Err(DateTimeError::OutOfRange("time of day"));
         }
 
-        let mut pos = 19;
-        let mut nanosecond = 0u32;
-        if pos < b.len() && b[pos] == b'.' {
-            let start = pos + 1;
-            let mut end = start;
-            while end < b.len() && b[end].is_ascii_digit() {
-                end += 1;
+        // Optional `.` + 1-9 fractional-second digits.
+        let (nanosecond, after_frac): (u32, &[u8]) = match rest.split_first() {
+            Some((&b'.', tail)) => {
+                let n_digits = tail.iter().take_while(|&&c| c.is_ascii_digit()).count();
+                if n_digits == 0 || n_digits > 9 {
+                    return Err(DateTimeError::Malformed);
+                }
+                let (frac_bytes, remainder) = tail.split_at(n_digits);
+                let frac = parse_digits(frac_bytes)?;
+                (frac * 10u32.pow(9 - n_digits as u32), remainder)
             }
-            let n_digits = end - start;
-            if n_digits == 0 || n_digits > 9 {
-                return Err(DateTimeError::Malformed);
-            }
-            let frac = parse_digits(&b[start..end])?;
-            nanosecond = frac * 10u32.pow(9 - n_digits as u32);
-            pos = end;
-        }
+            _ => (0, rest),
+        };
 
-        let offset_minutes = match &b[pos..] {
+        // Optional zone: `Z`, `±HH:MM`, `±HHMM`, or `±HH`.
+        let offset_minutes = match after_frac {
             [] => None,
             [b'Z'] => Some(0),
-            rest @ ([b'+', ..] | [b'-', ..]) => {
-                let sign: i16 = if rest[0] == b'+' { 1 } else { -1 };
-                let (h, m) = match rest.len() {
-                    6 if rest[3] == b':' => {
-                        (parse_digits(&rest[1..3])?, parse_digits(&rest[4..6])?)
-                    }
-                    5 => (parse_digits(&rest[1..3])?, parse_digits(&rest[3..5])?),
-                    3 => (parse_digits(&rest[1..3])?, 0),
-                    _ => return Err(DateTimeError::Malformed),
-                };
-                if h > 23 || m > 59 {
-                    return Err(DateTimeError::OutOfRange("utc offset"));
-                }
-                Some(sign * (h as i16 * 60 + m as i16))
+            &[sign @ (b'+' | b'-'), oh0, oh1, b':', om0, om1] => {
+                make_offset(sign, [oh0, oh1], parse_digits(&[om0, om1])?)?
             }
+            &[sign @ (b'+' | b'-'), oh0, oh1, om0, om1] => {
+                make_offset(sign, [oh0, oh1], parse_digits(&[om0, om1])?)?
+            }
+            &[sign @ (b'+' | b'-'), oh0, oh1] => make_offset(sign, [oh0, oh1], 0)?,
             _ => return Err(DateTimeError::Malformed),
         };
 
@@ -208,6 +257,18 @@ pub enum DateTimeError {
     OutOfRange(&'static str),
 }
 
+/// Build a signed UTC offset in minutes from a `+`/`-` sign byte, two hour
+/// digits, and an already-parsed minute value. Returns `Some(offset)`, matching
+/// the caller's `offset_minutes` field, or an `OutOfRange` error.
+fn make_offset(sign: u8, hour_digits: [u8; 2], minute: u32) -> Result<Option<i16>, DateTimeError> {
+    let hour = parse_digits(&hour_digits)?;
+    if hour > 23 || minute > 59 {
+        return Err(DateTimeError::OutOfRange("utc offset"));
+    }
+    let signum: i16 = if sign == b'+' { 1 } else { -1 };
+    Ok(Some(signum * (hour as i16 * 60 + minute as i16)))
+}
+
 fn parse_digits(b: &[u8]) -> Result<u32, DateTimeError> {
     let mut v: u32 = 0;
     for &c in b {
@@ -243,7 +304,7 @@ mod tests {
         assert_eq!((d.year(), d.month(), d.day()), (2026, 7, 24));
         assert_eq!(d.to_string(), "2026-07-24");
 
-        assert!(Date::parse("2024-02-29").is_ok());
+        Date::parse("2024-02-29").unwrap(); // 2024 is a leap year
         assert_eq!(
             Date::parse("2023-02-29"),
             Err(DateTimeError::OutOfRange("day"))

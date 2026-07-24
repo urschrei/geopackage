@@ -2,6 +2,11 @@
 //! through SQL. These are the M1 fallback the M0 build could not do: full WKB
 //! traversal for non-point geometries whose GPB header carries no envelope.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"
+)]
+
 use geo_types::{Geometry, LineString, MultiPolygon, Point, Polygon};
 use geopackage::GeoPackage;
 use geopackage::core::gpb::{Envelope, encode_header};

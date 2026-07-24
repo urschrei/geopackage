@@ -1,6 +1,12 @@
 //! Layer handles ([`GeoPackage::layer`]/`attributes`/`layers`), the streaming
 //! feature read path, and the `select` WHERE-clause passthrough.
 
+#![expect(
+    clippy::unwrap_used,
+    clippy::unreachable,
+    reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the panic-family patterns in these helpers are the intended failure mechanism"
+)]
+
 use geopackage::core::gpb::{Envelope, encode_header};
 use geopackage::{ContentsDataType, Error, GeoPackage, LayerKind, Value};
 use geopackage::{ConversionOptions, core::datetime::DateTime};

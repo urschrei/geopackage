@@ -120,10 +120,8 @@ impl GeoPackage {
     /// Wrap an already-open connection, validating that it is a GeoPackage
     /// and registering the required SQL functions.
     pub fn from_connection(conn: Connection) -> Result<Self> {
-        let application_id: u32 =
-            conn.pragma_query_value(None, "application_id", |r| r.get::<_, i64>(0))? as u32;
-        let user_version: u32 =
-            conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))? as u32;
+        let application_id = read_header_u32(&conn, "application_id")?;
+        let user_version = read_header_u32(&conn, "user_version")?;
         let version = GpkgVersion::from_pragmas(application_id, user_version).ok_or(
             Error::NotAGeoPackage {
                 reason: "unrecognized application_id/user_version",
@@ -183,6 +181,20 @@ impl GeoPackage {
     pub fn into_connection(self) -> Connection {
         self.conn
     }
+}
+
+/// Read a 32-bit SQLite database-header pragma (`application_id` or
+/// `user_version`) as a `u32`.
+///
+/// SQLite reports these fields sign-extended into an `i64`; the values are
+/// 32-bit magics, so reinterpreting the low 32 bits as unsigned (which is what
+/// the sign-extension preserves) is the intended read.
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "application_id/user_version are 32-bit header magics; reading their low bits as unsigned is intentional, and preserves the bit pattern for any header value"
+)]
+pub(crate) fn read_header_u32(conn: &Connection, pragma: &str) -> rusqlite::Result<u32> {
+    Ok(conn.pragma_query_value(None, pragma, |r| r.get::<_, i64>(0))? as u32)
 }
 
 pub(crate) fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {

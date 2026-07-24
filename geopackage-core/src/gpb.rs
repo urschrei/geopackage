@@ -54,16 +54,6 @@ impl Envelope {
         }
     }
 
-    fn n_doubles(indicator: u8) -> Option<usize> {
-        match indicator {
-            0 => Some(0),
-            1 => Some(4),
-            2 | 3 => Some(6),
-            4 => Some(8),
-            _ => None,
-        }
-    }
-
     /// The envelope values as a slice in spec order (empty for `None`).
     pub fn values(&self) -> &[f64] {
         match self {
@@ -76,8 +66,10 @@ impl Envelope {
 
     /// `(minx, maxx, miny, maxy)` if an envelope is present.
     pub fn xy_bounds(&self) -> Option<(f64, f64, f64, f64)> {
-        let v = self.values();
-        (v.len() >= 4).then(|| (v[0], v[1], v[2], v[3]))
+        match *self.values() {
+            [minx, maxx, miny, maxy, ..] => Some((minx, maxx, miny, maxy)),
+            _ => None,
+        }
     }
 }
 
@@ -128,19 +120,20 @@ const HEADER_BASE_LEN: usize = 8;
 /// Reserved flag bits (6–7) are ignored on read; [`encode_header`] always
 /// writes them as zero.
 pub fn parse_header(blob: &[u8]) -> Result<(GpbHeader, usize), GpbError> {
-    if blob.len() < HEADER_BASE_LEN {
+    // Slice pattern for the fixed 8-byte header; `rest` is the envelope
+    // region. A shorter blob has no complete header.
+    let &[m0, m1, version, flags, s0, s1, s2, s3, ref rest @ ..] = blob else {
         return Err(GpbError::Truncated {
             expected: HEADER_BASE_LEN,
             actual: blob.len(),
         });
+    };
+    if [m0, m1] != MAGIC {
+        return Err(GpbError::BadMagic(m0, m1));
     }
-    if blob[0..2] != MAGIC {
-        return Err(GpbError::BadMagic(blob[0], blob[1]));
+    if version != 0 {
+        return Err(GpbError::UnsupportedVersion(version));
     }
-    if blob[2] != 0 {
-        return Err(GpbError::UnsupportedVersion(blob[2]));
-    }
-    let flags = blob[3];
     let byte_order = if flags & 0b1 == 1 {
         ByteOrder::Little
     } else {
@@ -150,37 +143,23 @@ pub fn parse_header(blob: &[u8]) -> Result<(GpbHeader, usize), GpbError> {
     let empty = flags & 0b1_0000 != 0;
     let extended = flags & 0b10_0000 != 0;
 
-    let n = Envelope::n_doubles(indicator).ok_or(GpbError::InvalidEnvelopeIndicator(indicator))?;
-    let body_offset = HEADER_BASE_LEN + n * 8;
-    if blob.len() < body_offset {
-        return Err(GpbError::Truncated {
-            expected: body_offset,
-            actual: blob.len(),
-        });
-    }
-
-    let srs_bytes: [u8; 4] = blob[4..8].try_into().expect("length checked");
+    let srs_bytes = [s0, s1, s2, s3];
     let srs_id = match byte_order {
         ByteOrder::Big => i32::from_be_bytes(srs_bytes),
         ByteOrder::Little => i32::from_le_bytes(srs_bytes),
     };
 
-    let mut vals = [0f64; 8];
-    for (i, chunk) in blob[8..body_offset].chunks_exact(8).enumerate() {
-        let b: [u8; 8] = chunk.try_into().expect("chunks_exact");
-        vals[i] = match byte_order {
-            ByteOrder::Big => f64::from_be_bytes(b),
-            ByteOrder::Little => f64::from_le_bytes(b),
-        };
-    }
+    // Validate the indicator and read the envelope in one match: an invalid
+    // indicator errors before any truncation check, matching the spec order.
     let envelope = match indicator {
         0 => Envelope::None,
-        1 => Envelope::Xy(vals[0..4].try_into().expect("size")),
-        2 => Envelope::Xyz(vals[0..6].try_into().expect("size")),
-        3 => Envelope::Xym(vals[0..6].try_into().expect("size")),
-        4 => Envelope::Xyzm(vals),
-        _ => unreachable!("indicator validated above"),
+        1 => Envelope::Xy(read_doubles(rest, byte_order, blob.len())?),
+        2 => Envelope::Xyz(read_doubles(rest, byte_order, blob.len())?),
+        3 => Envelope::Xym(read_doubles(rest, byte_order, blob.len())?),
+        4 => Envelope::Xyzm(read_doubles(rest, byte_order, blob.len())?),
+        _ => return Err(GpbError::InvalidEnvelopeIndicator(indicator)),
     };
+    let body_offset = HEADER_BASE_LEN + envelope.values().len() * 8;
 
     Ok((
         GpbHeader {
@@ -192,6 +171,36 @@ pub fn parse_header(blob: &[u8]) -> Result<(GpbHeader, usize), GpbError> {
         },
         body_offset,
     ))
+}
+
+/// Read `N` big-/little-endian `f64` envelope values from the start of the
+/// envelope region `rest`. Returns [`GpbError::Truncated`] (with the offset
+/// the full header would need) when fewer than `N * 8` bytes are present.
+fn read_doubles<const N: usize>(
+    rest: &[u8],
+    byte_order: ByteOrder,
+    total_len: usize,
+) -> Result<[f64; N], GpbError> {
+    let Some(region) = rest.get(..N * 8) else {
+        return Err(GpbError::Truncated {
+            expected: HEADER_BASE_LEN + N * 8,
+            actual: total_len,
+        });
+    };
+    let mut vals = [0f64; N];
+    for (slot, bytes) in vals.iter_mut().zip(region.chunks_exact(8)) {
+        // `chunks_exact(8)` only yields 8-byte slices, so this destructure
+        // always binds; the `else` is an unreachable, panic-free fallback.
+        let &[b0, b1, b2, b3, b4, b5, b6, b7] = bytes else {
+            continue;
+        };
+        let word = [b0, b1, b2, b3, b4, b5, b6, b7];
+        *slot = match byte_order {
+            ByteOrder::Big => f64::from_be_bytes(word),
+            ByteOrder::Little => f64::from_le_bytes(word),
+        };
+    }
+    Ok(vals)
 }
 
 /// Encode a GPB header (always little-endian, version 0, reserved bits zero).
@@ -305,6 +314,6 @@ mod tests {
     fn reserved_bits_tolerated_on_read() {
         let mut buf = encode_header(4326, &Envelope::None, false, false);
         buf[3] |= 0b1100_0000;
-        assert!(parse_header(&buf).is_ok());
+        parse_header(&buf).unwrap();
     }
 }

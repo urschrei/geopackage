@@ -71,7 +71,10 @@ impl<'a> GpbGeometry<'a> {
     /// panics on arbitrary input.
     pub fn parse(blob: &'a [u8]) -> Result<Self, GeometryError> {
         let (header, offset) = gpb::parse_header(blob)?;
-        let body = &blob[offset..];
+        // `parse_header` guarantees `offset <= blob.len()`; `get` keeps this
+        // panic-free, and an (impossible) out-of-range offset yields an empty
+        // body that `Wkb::try_new` rejects as a typed error rather than a panic.
+        let body = blob.get(offset..).unwrap_or_default();
         let wkb = Wkb::try_new(body)?;
         Ok(Self { header, body, wkb })
     }
@@ -206,21 +209,21 @@ pub fn geometry_type_matches(actual: GeometryType, declared: GeometryType) -> bo
 /// GeoPackage bodies are ISO WKB; an extended-WKB (EWKB) type flag is handled
 /// defensively but is not expected in a GPB blob.
 pub fn wkb_geometry_type(wkb_body: &[u8]) -> Result<GeometryType, GeometryError> {
-    if wkb_body.len() < 5 {
+    // Byte-order marker plus the four-byte type code; a shorter body is
+    // truncated. `..` ignores any coordinate bytes that follow.
+    let &[order, c0, c1, c2, c3, ..] = wkb_body else {
         return Err(GeometryError::TruncatedWkb);
-    }
-    let little_endian = match wkb_body[0] {
+    };
+    let little_endian = match order {
         0 => false,
         1 => true,
         _ => return Err(GeometryError::TruncatedWkb),
     };
-    let code = {
-        let bytes: [u8; 4] = wkb_body[1..5].try_into().expect("length checked above");
-        if little_endian {
-            u32::from_le_bytes(bytes)
-        } else {
-            u32::from_be_bytes(bytes)
-        }
+    let bytes = [c0, c1, c2, c3];
+    let code = if little_endian {
+        u32::from_le_bytes(bytes)
+    } else {
+        u32::from_be_bytes(bytes)
     };
     // ISO WKB encodes the dimension as a +1000/+2000/+3000 offset on the base
     // type; EWKB instead sets high bit flags and keeps the base type low.
@@ -454,6 +457,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::float_cmp,
+        reason = "asserting the exact bit-level round-trip of the coordinate through WKB; the values are written and read as literals, so exact equality is the property under test"
+    )]
     fn delegates_geometry_trait_to_wkb() {
         let blob = gpb(&wkb_point(3.0, 4.0));
         let g = GpbGeometry::parse(&blob).unwrap();
@@ -470,14 +477,14 @@ mod tests {
 
     #[test]
     fn arbitrary_bytes_error_never_panic() {
-        assert!(GpbGeometry::parse(b"").is_err());
-        assert!(GpbGeometry::parse(b"GP").is_err());
+        GpbGeometry::parse(b"").unwrap_err();
+        GpbGeometry::parse(b"GP").unwrap_err();
         // Valid header, empty WKB body.
-        assert!(GpbGeometry::parse(&gpb(&[])).is_err());
+        GpbGeometry::parse(&gpb(&[])).unwrap_err();
         // Valid header, WKB byte-order marker only.
-        assert!(GpbGeometry::parse(&gpb(&[1])).is_err());
+        GpbGeometry::parse(&gpb(&[1])).unwrap_err();
         // Valid header, truncated point coordinates.
-        assert!(GpbGeometry::parse(&gpb(&wkb_point(1.0, 2.0)[..10])).is_err());
+        GpbGeometry::parse(&gpb(&wkb_point(1.0, 2.0)[..10])).unwrap_err();
     }
 
     #[test]

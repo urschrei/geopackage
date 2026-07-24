@@ -43,23 +43,26 @@ pub fn register(conn: &Connection) -> rusqlite::Result<()> {
         })
     })?;
 
-    for (name, idx) in [
-        ("ST_MinX", 0usize),
-        ("ST_MaxX", 1),
-        ("ST_MinY", 2),
-        ("ST_MaxY", 3),
+    // Each function selects one component of the `[min_x, max_x, min_y, max_y]`
+    // bounds array by destructuring it, so there is no fallible indexing.
+    type Select = fn([f64; 4]) -> f64;
+    for (name, select) in [
+        ("ST_MinX", (|[min_x, _, _, _]| min_x) as Select),
+        ("ST_MaxX", |[_, max_x, _, _]| max_x),
+        ("ST_MinY", |[_, _, min_y, _]| min_y),
+        ("ST_MaxY", |[_, _, _, max_y]| max_y),
     ] {
         conn.create_scalar_function(name, 1, flags, move |ctx| {
             with_blob(ctx, |blob| {
                 let (header, _) = gpb::parse_header(blob)?;
                 if let Some((min_x, max_x, min_y, max_y)) = header.envelope.xy_bounds() {
-                    return Ok(Some([min_x, max_x, min_y, max_y][idx]));
+                    return Ok(Some(select([min_x, max_x, min_y, max_y])));
                 }
                 // No header envelope: traverse the body. An empty geometry has
                 // no spatial extent; report NaN (the rtree triggers guard these
                 // calls with ST_IsEmpty, so a bound is never indexed for one).
                 match GpbGeometry::parse(blob)?.xy_envelope() {
-                    Some(bounds) => Ok(Some(bounds[idx])),
+                    Some(bounds) => Ok(Some(select(bounds))),
                     None => Ok(Some(f64::NAN)),
                 }
             })

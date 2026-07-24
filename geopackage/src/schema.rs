@@ -182,7 +182,7 @@ impl GeoPackage {
                     declared_type,
                     not_null: r.get::<_, i64>(3)? != 0,
                     default_value: r.get(4)?,
-                    primary_key: r.get::<_, i64>(5)? as u32,
+                    primary_key: r.get::<_, u32>(5)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
