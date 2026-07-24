@@ -289,7 +289,8 @@ pub fn write_envelope<G: GeometryTrait<T = f64>>(geom: &G) -> (gpb::Envelope, bo
 
 /// Encode a geometry as a complete GeoPackage Binary (GPB) blob: an
 /// always-little-endian header ([`gpb::encode_header`]) with an envelope per
-/// [`write_envelope`] (D6), followed by the little-endian ISO WKB body written
+/// [`write_envelope`] (design decision D6), followed by the little-endian ISO
+/// WKB body written
 /// by the georust `wkb` crate.
 ///
 /// `srs_id` is written into the header (the geometry column's spatial reference

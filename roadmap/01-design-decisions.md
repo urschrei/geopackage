@@ -100,19 +100,38 @@ operation, not automatic. Mixed generations are surfaced as a warning state.
 [QGIS#36935](https://github.com/qgis/QGIS/issues/36935)). Automatic repair on
 open would mutate files we were only asked to read.
 
-## D8. Bulk-load path: implement GDAL's shadow-table technique
+## D8. Bulk-load path: build the index without the RTree module
 
-**Decision.** Bulk inserts and `create_spatial_index()` on populated tables
-do not fire per-row rtree inserts: accumulate `(fid, envelope)`, build the
-rtree in a scratch in-memory DB, copy the `rtree_%_node/parent/rowid` shadow
-tables into the target in one transaction. Fall back to triggered inserts if
-integrity checks fail.
+**Decision.** Bulk inserts and `create_spatial_index()` on populated tables do
+not fire per-row rtree inserts. The `(fid, envelope)` set is accumulated, the
+tree is constructed in memory and the `rtree_%_node`/`_rowid`/`_parent` shadow
+tables are written directly, in one transaction. Every build is gated (a
+bijection and containment check against the accumulated set, plus
+`rtreecheck`) and falls back to the triggered population on any anomaly.
 
-**Rationale.** GDAL's measured conclusion is that SQLite's rtree module is the
-bulk-load bottleneck (no bulk API); the shadow-table copy is their fix
-([gdal#7614](https://github.com/OSGeo/gdal/issues/7614)). See
-[04-m2-write-rtree.md](04-m2-write-rtree.md) for the rstar alternative we
-considered.
+**Rationale.** SQLite's rtree module has no bulk-load entry point: its only
+write path is the per-row virtual-table update, so every insert descends the
+tree and may split nodes. GDAL reached the same conclusion
+([gdal#7614](https://github.com/OSGeo/gdal/issues/7614)).
+
+**Superseded shape.** This decision originally specified GDAL's technique of
+the time: build the rtree in an `ATTACH`ed scratch in-memory database and copy
+its shadow tables across. That was implemented and then replaced, because
+profiling showed the scratch build had become the dominant cost (4.61 s of a
+7.26 s build at 1M points) for the same reason the original problem existed:
+it still pushed every entry through the rtree module one row at a time.
+Constructing the tree outright removed that, and removed the `ATTACH`, which
+had required autocommit and so forced the index rebuild out of the caller's
+transaction. Current GDAL no longer uses the scratch-database technique either;
+it vendors a library that builds the tree in memory and writes the shadow
+tables, the same category as this. See
+[benchmarks/2026-07-24-packed-nodes.md](benchmarks/2026-07-24-packed-nodes.md)
+and [benchmarks/2026-07-24-gdal-like-for-like.md](benchmarks/2026-07-24-gdal-like-for-like.md).
+
+**Cost of the gate.** The gate is roughly 45% of a bulk build, and GDAL runs no
+equivalent. It is kept because the tree is written by hand into a format SQLite
+does not document as an interface; whether it should become optional is a
+question for 1.0 (see 07-m5-extensions-and-1.0.md).
 
 ## D9. SQL is the query engine
 

@@ -16,7 +16,8 @@
 //! the escape-hatch `rusqlite::Transaction` out of the public surface and lets
 //! the writer maintain the running bounding-box fold and `last_change` at one
 //! commit point. The raw connection ([`crate::GeoPackage::connection`]) remains
-//! available for callers who want to drive their own transaction (D9).
+//! available for callers who want to drive their own transaction (design
+//! decision D9).
 //!
 //! # Bounding box and `last_change`
 //!
@@ -42,7 +43,7 @@
 //! carries the rtree triggers has its index maintained by those triggers (the
 //! `ST_*` functions are registered on every connection).
 //!
-//! [`Layer::write_all`] additionally takes the D8 bulk-build path when it writes
+//! [`Layer::write_all`] additionally takes the bulk-build path when it writes
 //! a large batch into an indexed layer whose index is currently empty (a fresh
 //! bulk load): it drops the triggers, inserts the rows without per-row index
 //! maintenance, rebuilds the index in one bulk shadow-table copy (see
@@ -279,7 +280,7 @@ impl<'a> Layer<'a> {
     /// When the layer carries a spatial index whose contents are currently
     /// empty and `features` advertises at least
     /// [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD) rows (via its
-    /// [`Iterator::size_hint`]), the write takes the D8 bulk-build path instead;
+    /// [`Iterator::size_hint`]), the write takes the bulk-build path instead;
     /// [`Self::write_all_with`] tunes or forces that choice.
     pub fn write_all<G, I>(&self, features: I, batch_size: usize) -> Result<Vec<i64>>
     where
@@ -368,7 +369,7 @@ impl<'a> Layer<'a> {
         Ok(fids)
     }
 
-    /// Whether a `write_all` should take the D8 bulk-build path: the layer has a
+    /// Whether a `write_all` should take the bulk-build path: the layer has a
     /// geometry column and a single-column primary key, a recognised spatial
     /// index, `size_hint_lower` reaches the threshold, and the write is large
     /// enough relative to the existing index to be worth rebuilding it.
@@ -413,7 +414,7 @@ impl<'a> Layer<'a> {
         Ok(size_hint_lower >= indexed / MERGE_REBUILD_RATIO)
     }
 
-    /// The D8 bulk write path: drop the rtree triggers, insert every row in one
+    /// The bulk write path: drop the rtree triggers, insert every row in one
     /// transaction (no per-row index maintenance, but `gpkg_contents` bbox and
     /// `last_change` are still maintained by the writer commit), then rebuild the
     /// index in bulk and reinstall the triggers.

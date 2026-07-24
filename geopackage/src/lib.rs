@@ -38,13 +38,25 @@
 //!   [`Layer::repair_spatial_index`] manage the RTree spatial index (the
 //!   GeoPackage 1.4 trigger set, design decision D7). Building a large index,
 //!   [`Layer::create_spatial_index_with`], or [`Layer::write_all`] into a fresh
-//!   indexed layer, uses the D8 bulk shadow-table build ([`BulkIndexOptions`]).
+//!   indexed layer, uses the bulk build ([`BulkIndexOptions`], design
+//!   decision D8).
 //! - [`OpenOptions`] selects the journal mode ([`JournalMode`], WAL opt-in) and
 //!   [`Synchronous`] level; see the interchange-first close policy on
 //!   [`GeoPackage`].
 //!
 //! The GeoArrow bulk plane arrives in a later milestone; see the repository
 //! roadmap.
+//!
+//! # Design decisions
+//!
+//! Some documentation here cites a numbered decision, such as "design decision
+//! D8". These are entries in the crate's decision record, which states what was
+//! chosen, what was rejected and why:
+//!
+//! <https://github.com/urschrei/geopackage/blob/main/roadmap/01-design-decisions.md>
+//!
+//! The citations are there so a claim about behaviour can be traced to the
+//! reasoning behind it. Nothing in the API requires reading them.
 //!
 //! # Reading untrusted files
 //!

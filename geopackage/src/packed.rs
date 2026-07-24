@@ -1,6 +1,6 @@
 //! Direct construction of SQLite RTree shadow-table contents.
 //!
-//! SQLite's RTree module has no bulk-load entry point, so the D8 build used to
+//! SQLite's RTree module has no bulk-load entry point, so the bulk build used to
 //! insert every entry into a scratch RTree one row at a time and copy the
 //! result. That insertion, not the surrounding work, dominated the build (3.03 s
 //! of 4.87 s for 1M points), because each insert descends the tree and may split

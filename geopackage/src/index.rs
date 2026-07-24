@@ -101,7 +101,7 @@ impl Layer<'_> {
     /// Population takes the per-row triggered path (a single
     /// `INSERT INTO rtree SELECT` driven by the registered `ST_*` functions) for
     /// tables below [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD)
-    /// rows, and the D8 bulk shadow-table build above it. Use
+    /// rows, and the bulk build above it. Use
     /// [`Self::create_spatial_index_with`] to override the threshold.
     ///
     /// # Errors

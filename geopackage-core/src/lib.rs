@@ -19,6 +19,17 @@
 //! SQL text is reproduced verbatim from the spec's normative annexes
 //! (Annex C "Table Definition SQL", Annex F.3 "R-tree Spatial Indexes").
 //!
+//! # Design decisions
+//!
+//! Some documentation here cites a numbered decision, such as "design decision
+//! D8". These are entries in the crate's decision record, which states what was
+//! chosen, what was rejected and why:
+//!
+//! <https://github.com/urschrei/geopackage/blob/main/roadmap/01-design-decisions.md>
+//!
+//! The citations are there so a claim about behaviour can be traced to the
+//! reasoning behind it. Nothing in the API requires reading them.
+//!
 //! # Reading untrusted geometries
 //!
 //! [`GpbGeometry`] parses WKB bodies with the `wkb` crate, whose 0.9.2 reader

@@ -10,7 +10,7 @@
 //!
 //! Design decision D10: schema is declared through an explicit builder, not a
 //! derive macro. Column defaults are raw SQL text, trusted from the caller
-//! (D9); every identifier is quoted via [`ident::quote`].
+//! (design decision D9); every identifier is quoted via [`ident::quote`].
 
 use geopackage_core::ddl;
 use geopackage_core::ident::quote;
@@ -66,7 +66,7 @@ impl ColumnSpec {
 
     /// Set a `DEFAULT` expression, as raw SQL text (e.g. `"0"`, `"'n/a'"`,
     /// `"CURRENT_TIMESTAMP"`). Emitted verbatim, so it is the caller's
-    /// responsibility to supply a valid, safe expression (D9).
+    /// responsibility to supply a valid, safe expression (design decision D9).
     #[must_use]
     pub fn default_value(mut self, sql: impl Into<String>) -> Self {
         self.default = Some(sql.into());

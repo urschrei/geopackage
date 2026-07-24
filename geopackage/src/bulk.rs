@@ -1,4 +1,4 @@
-//! D8 bulk RTree build: construct the index directly and write it.
+//! Bulk RTree build: construct the index directly and write it.
 //!
 //! SQLite's RTree module has no bulk-load entry point, so populating an index
 //! one row at a time, whether through the spec's `INSERT INTO rtree SELECT`
@@ -189,7 +189,7 @@ pub(crate) enum BuildPath {
     /// The per-row triggered population (`INSERT INTO rtree SELECT`), chosen
     /// because the table was below the bulk threshold.
     Triggered,
-    /// The D8 bulk build, gate passed.
+    /// The bulk build, gate passed.
     Bulk,
     /// The bulk build was attempted but its gate failed, so the triggered
     /// population was used as a fallback.
@@ -450,7 +450,7 @@ fn gate(
     Ok(true)
 }
 
-/// Build (or rebuild) the RTree `rtree` for `table`/`geom` via the D8 bulk
+/// Build (or rebuild) the RTree `rtree` for `table`/`geom` via the bulk
 /// shadow-table copy, gated with automatic fallback to the triggered
 /// population.
 ///
