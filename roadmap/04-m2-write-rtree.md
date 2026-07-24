@@ -150,20 +150,83 @@ write performance competitive with GDAL's GPKG driver.
       until this lands (it is outside the domain of geographic coordinates).
 
 ### Performance
-- [ ] Criterion benches: 1M and 10M point/line/polygon writes, indexed and
+- [x] Criterion benches: 1M and 10M point/line/polygon writes, indexed and
       not, vs `gdal` crate as baseline; read-scan throughput vs M1 numbers.
+      *(`geopackage/benches/{write,read}.rs`, criterion `0.8`. Recorded at 1M in
+      `roadmap/benchmarks/2026-07-24-m2.md` (Apple M2 Pro); 10M extrapolated, not
+      run in the matrix — the triggered path is ~18 s/1M and criterion's 10-sample
+      floor makes a 10M matrix run for hours with no new ratio information. The
+      baseline is the `ogr2ogr` CLI, not the `gdal` crate: the crate needs system
+      bindings, and the CLI timing is the honest, documented baseline (it includes
+      GDAL's source read, so it is conservative for a pure write). Benches compile
+      in CI via clippy `--all-targets`; they carry `test = false` so `cargo test`
+      never runs them.)*
 - [ ] Target: bulk indexed write ≥ GDAL parity (its own rtree trick means
-      parity is the honest goal, not a multiple).
+      parity is the honest goal, not a multiple). *(**Not yet met** — the
+      benchmark is the evidence. Unindexed writes are competitive (our write-only
+      point load 0.81 s vs GDAL's 1.22 s read+write); the D8 bulk indexed write is
+      ~3-4x slower than GDAL's indexed `ogr2ogr` copy (7.31 s vs 1.89 s for 1M
+      points). The overhead beyond the raw insert is the gate's whole-database
+      `PRAGMA integrity_check` (O(database)) and the per-row `ST_*` envelope scan
+      (4M function calls) — exactly the two open D8 follow-ups above (scope the
+      structural check to `rtreecheck`; build the scratch RTree in a separate
+      connection). Stays open pending those.)*
 
 ## Acceptance criteria
 
 1. Files produced here validate clean under OGC `ets-gpkg12` (aio jar) and
    the PDOK validator, and open correctly in QGIS and `ogrinfo` (manual 1.4
    checks: trigger names update5/6/7, user_version 10400).
+   *(**Largely verified, 2026-07-24.** A representative file (four indexed
+   feature layers — 2D point, Z point, linestring in EPSG:3857, polygon — a
+   non-spatial attributes table, every attribute type) was written by the new
+   API and checked (`geopackage/tests/gdal_interop.rs`, `#[ignore]`d; run
+   locally):
+   - **ogrinfo** (`-al`) full read: clean, all five layers, `beacons` reported
+     3D Point.
+   - **manual 1.4 checklist**: `user_version` 10400, 28 RTree triggers all the
+     1.4 generation (`update5`/`update6`/`update7` present, no `update1`/
+     `update3`).
+   - **ets-gpkg12 1.3** (`scripts/run_ets_gpkg12.sh`, jar sha256-pinned): 40
+     passed, 71 skipped (not applicable), **1 failed** —
+     `RTreeIndexTests::extensionIndexImplementation`, whose regex hard-codes the
+     GeoPackage **1.2** `update1` trigger and rejects our correct 1.4 set. This
+     is the documented 1.2-vs-1.4 gap (no 1.3/1.4 ETS exists); the 1.4 trigger
+     semantics are covered by the manual checklist above, so this is not a defect
+     in the file.
+   - **PDOK** `pdok-geopackage-validator` 0.14.4
+     (`scripts/run_pdok_validator.sh`): 21 checks; the only findings are RQ13
+     "single SRS across geometry tables" (our file deliberately mixes 4326+3857 —
+     spec-legal; PDOK convention, advisory) and RC19 (the intentional Z layer, a
+     recommendation). All other RQ/RC checks pass.
+   - **QGIS**: not re-exercised in this pass (covered in the M1 corpus via
+     headless `qgis_process`); stays open here.)*
 2. GDAL round-trip: write here → read with ogr2ogr → byte-compare geometries
    (WKB) and values.
+   *(**Verified, 2026-07-24.** `gdal_interop.rs::gdal_roundtrip_wkb_and_values`
+   (`#[ignore]`d): write a point/line/polygon layer with TEXT/INTEGER/DOUBLE/
+   BOOLEAN attributes → `ogr2ogr` GPKG copy → read the copy back with this crate
+   → the geometry WKB bodies (GPB header stripped) and every attribute value are
+   byte-identical for all three shapes.)*
 3. UPSERT + concurrent-reader tests pass on indexed tables; rtree contents
    provably match a full-scan rebuild after arbitrary write sequences
    (property test).
+   *(**Verified (UPSERT + property), 2026-07-24.** `upsert_through_new_index_`
+   `maintains_rtree` and `upsert_works_with_1_4_triggers` cover UPSERT on 1.4
+   indexed tables; the Hegel property tests `rtree_tracks_full_scan_through_`
+   `write_ops` and `bulk_and_triggered_builds_agree` prove the rtree equals a
+   full-scan rebuild after arbitrary insert/update/delete/upsert sequences
+   (both build paths), and `features_in_matches_full_scan_filter` proves the
+   query paths agree — all green in CI. A **dedicated concurrent-reader**
+   (read-during-write) test is not present; WAL round-trip/durability is covered
+   by `wal_journal.rs`/`crash_safety.rs`. The concurrent-reader sub-item stays
+   open.)*
 4. Benchmarks recorded in-repo with hardware notes.
+   *(**Verified, 2026-07-24.** `roadmap/benchmarks/2026-07-24-m2.md` (Apple M2
+   Pro, macOS 15.6.1, SQLite 3.51.3, GDAL 3.12.3): write matrix (point/line/
+   polygon × unindexed/triggered/bulk), read matrix (full scan, `features_in`
+   index vs full-scan), and the `ogr2ogr` baseline, with exact commands.)*
 5. Tag **v0.1.0**; publish `geopackage-core` + `geopackage` to crates.io.
+   *(**Open — maintainer's act.** The workspace version is bumped to `0.1.0`;
+   tagging and publishing are deliberately left to the maintainer and not done
+   here.)*
