@@ -28,6 +28,13 @@ While the version is below 1.0 the API may change in any release.
   `rtree.c` and validated by `rtreecheck()` in the existing build gate ([#20]).
 - The bulk build no longer uses an `ATTACH`ed scratch database, so it no longer
   requires autocommit and runs entirely within one transaction.
+- **A bulk `write_all` is now atomic.** Dropping the RTree triggers, every row
+  insert, the `gpkg_contents` flush, the index rebuild and reinstalling the
+  triggers all commit together, so a crash or error part-way through leaves the
+  file exactly as it was. Previously the rows committed before the index was
+  rebuilt, and a crash in between left a `Stale` index needing
+  `repair_spatial_index()`. That split was forced by the `ATTACH`; removing it
+  removed the window ([#15]).
 - Bulk spatial-index builds are roughly a third faster: 1M-point indexed
   `write_all` goes from 7.31s to 4.95s (criterion, point -32.3%, linestring
   -33.3%, polygon -35.6%, all p < 0.05). Three fixes: the scratch RTree inserts

@@ -49,20 +49,22 @@
 //! [`crate::bulk`]), and reinstalls the triggers. The threshold and forcing are
 //! controlled by [`BulkIndexOptions`] via [`Layer::write_all_with`].
 //!
-//! # Bulk-build crash window
+//! # Atomicity of the bulk path
 //!
-//! The bulk rebuild cannot be a single atomic transaction with the row inserts:
-//! the scratch database it uses is `ATTACH`ed, and `ATTACH` requires autocommit,
-//! so the rows are committed before the index is rebuilt. A process crash in
-//! that window leaves the rows committed but the index desynchronised,
-//! specifically the rtree virtual table present with its triggers dropped, which
-//! [`Layer::spatial_index_status`] reports as [`crate::SpatialIndexStatus::Stale`].
-//! This is not silent corruption: [`Layer::has_spatial_index`] declines a stale
-//! index, so [`Layer::features_in`] falls back to a correct full scan, and
-//! [`Layer::repair_spatial_index`] rebuilds the index and reinstalls the 1.4
-//! triggers. A clean (non-crash) error on the bulk path is handled in-process
-//! the index is restored to a consistent, trigger-maintained state before the
-//! error returns, so this window is only reachable by an actual crash or kill.
+//! The bulk `write_all` is a single transaction: dropping the triggers, every
+//! row insert, the `gpkg_contents` flush, the index rebuild, and reinstalling
+//! the triggers all commit together. A crash or an error at any point rolls the
+//! whole thing back to the state before the call, so the rows can never be
+//! committed against an index that was not rebuilt.
+//!
+//! This was not always so. The rebuild used to run in its own transaction
+//! because it built the index in an `ATTACH`ed scratch database and `ATTACH`
+//! requires autocommit, which left a window where a crash committed the rows but
+//! not the index. Building the tree directly ([`crate::packed`]) removed the
+//! `ATTACH` and with it the window. [`Layer::spatial_index_status`] and
+//! [`Layer::repair_spatial_index`] still exist and still recover a
+//! [`crate::SpatialIndexStatus::Stale`] index, since a file can arrive from
+//! anywhere, but this path no longer produces one.
 
 use geo_traits::{Dimensions, GeometryTrait};
 use geopackage_core::geometry::encode_gpb;
@@ -297,9 +299,25 @@ impl<'a> Layer<'a> {
         G: GeometryTrait<T = f64>,
         I: IntoIterator<Item = NewFeature<G>>,
     {
+        self.write_all_impl(features, batch_size, options, bulk::no_tamper)
+    }
+
+    /// The `write_all_with` core, taking the bulk build's test seam so a test can
+    /// force the index build to fail after the rows have been staged.
+    pub(crate) fn write_all_impl<G, I>(
+        &self,
+        features: I,
+        batch_size: usize,
+        options: BulkIndexOptions,
+        tamper: bulk::ScratchTamper,
+    ) -> Result<Vec<i64>>
+    where
+        G: GeometryTrait<T = f64>,
+        I: IntoIterator<Item = NewFeature<G>>,
+    {
         let iter = features.into_iter();
         if self.bulk_write_applicable(iter.size_hint().0, options)? {
-            self.write_all_bulk(iter, options)
+            self.write_all_bulk(iter, options, tamper)
         } else {
             self.write_all_batched(iter, batch_size)
         }
@@ -375,7 +393,12 @@ impl<'a> Layer<'a> {
     ///
     /// On any failure after the triggers are dropped, the index is restored to a
     /// consistent, trigger-maintained state before the error is returned.
-    fn write_all_bulk<G, I>(&self, features: I, options: BulkIndexOptions) -> Result<Vec<i64>>
+    fn write_all_bulk<G, I>(
+        &self,
+        features: I,
+        options: BulkIndexOptions,
+        tamper: bulk::ScratchTamper,
+    ) -> Result<Vec<i64>>
     where
         G: GeometryTrait<T = f64>,
         I: IntoIterator<Item = NewFeature<G>>,
@@ -401,12 +424,13 @@ impl<'a> Layer<'a> {
         // `fill_index` re-derives the set with its own `ST_*` scan.
         let table_was_empty = bulk::table_row_count(conn, table)? == 0;
 
-        drop_all_rtree_triggers(conn, table, column)?;
-
-        let result = (|| -> Result<Vec<i64>> {
+        (|| -> Result<Vec<i64>> {
             let mut fids = Vec::new();
             let mut entries = Vec::new();
             let mut writer = self.writer()?;
+            // Inside the writer's transaction, so a failure or a crash rolls the
+            // trigger drop back along with everything else.
+            drop_all_rtree_triggers(writer.connection(), table, column)?;
             for feature in features {
                 let fid = match &feature.geometry {
                     Some(geometry) => {
@@ -424,17 +448,19 @@ impl<'a> Layer<'a> {
                 };
                 fids.push(fid);
             }
-            writer.commit()?;
+            // Flush the catalogue metadata but keep the transaction open, so the
+            // rows and the rebuilt index commit together.
+            let tx = writer.flush()?;
             let precomputed = table_was_empty.then_some(entries);
-            bulk::fill_index(
-                conn,
+            bulk::fill_index_in_transaction(
+                &tx,
                 table,
                 column,
                 pk,
                 &rtree,
                 options,
                 precomputed,
-                bulk::no_tamper,
+                tamper,
                 |conn| {
                     for sql in triggers::create_triggers_sql(table, column, pk)? {
                         conn.execute_batch(&sql)?;
@@ -442,46 +468,13 @@ impl<'a> Layer<'a> {
                     Ok(())
                 },
             )?;
+            tx.commit()?;
             Ok(fids)
-        })();
-
-        if result.is_err() {
-            restore_index_after_failed_bulk(conn, table, column, pk, &rtree);
-        }
-        result
+        })()
     }
 }
 
-/// Best-effort restore of a consistent, trigger-maintained index after a bulk
-/// write failed with the triggers dropped: reinstall the trigger set and
-/// rebuild the index content from the current rows. Any error here is ignored,
-/// the caller is already returning the original failure, but the common outcome
-/// is an index that is once again correct and maintained.
-fn restore_index_after_failed_bulk(
-    conn: &Connection,
-    table: &str,
-    column: &str,
-    pk: &str,
-    rtree: &str,
-) {
-    let restore = || -> Result<()> {
-        let tx = conn.unchecked_transaction()?;
-        drop_all_rtree_triggers(&tx, table, column)?;
-        tx.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote(rtree)?))?;
-        tx.execute_batch(&triggers::create_rtree_table_sql(table, column)?)?;
-        for sql in triggers::create_triggers_sql(table, column, pk)? {
-            tx.execute_batch(&sql)?;
-        }
-        tx.execute_batch(&triggers::populate_rtree_sql(table, column, pk)?)?;
-        tx.commit()?;
-        Ok(())
-    };
-    if restore().is_err() {
-        // Deliberately ignored: this is best-effort recovery on an error path.
-    }
-}
-
-impl FeatureWriter<'_> {
+impl<'conn> FeatureWriter<'conn> {
     /// Insert a feature with a geometry, returning its feature id.
     ///
     /// `fid` is `None` to let SQLite assign the id (returned), or `Some(id)` for
@@ -623,6 +616,24 @@ impl FeatureWriter<'_> {
     /// Flush `gpkg_contents` (`last_change`, and the bounding box when a
     /// geometry was written) and commit the transaction.
     pub fn commit(self) -> Result<()> {
+        self.flush()?.commit()?;
+        Ok(())
+    }
+
+    /// The connection underlying this writer's transaction, so a caller holding
+    /// the writer can run additional statements inside the same transaction.
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.tx
+    }
+
+    /// Flush the `gpkg_contents` metadata and hand back the still-open
+    /// transaction, leaving it to the caller to commit.
+    ///
+    /// The bulk `write_all` path uses this to keep the row inserts and the
+    /// index rebuild in one transaction. Dropping the returned transaction
+    /// without committing rolls the whole write back, exactly as dropping the
+    /// writer would have.
+    pub(crate) fn flush(self) -> Result<Transaction<'conn>> {
         let Self {
             tx,
             table_name,
@@ -647,8 +658,7 @@ impl FeatureWriter<'_> {
                 rusqlite::params![min_x, min_y, max_x, max_y, table_name],
             )?;
         }
-        tx.commit()?;
-        Ok(())
+        Ok(tx)
     }
 
     /// Validate the geometry's `z`/`m` against the column and encode it to a GPB
@@ -798,4 +808,87 @@ fn read_contents_bbox(conn: &Connection, table: &str) -> Result<Option<[f64; 4]>
         }
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::packed::PackedRtree;
+    use crate::{GeoPackage, GeometrySpec, TableSchemaBuilder};
+    use geo_types::Point;
+    use geopackage_core::types::GeometryType;
+
+    /// A tamper that fails the index build outright, standing in for a crash or
+    /// an I/O error between staging the rows and rebuilding the index.
+    fn fail_the_build(_: &mut PackedRtree) -> Result<()> {
+        Err(Error::NoSpatialIndex {
+            table_name: "pts".to_owned(),
+            column_name: "geom".to_owned(),
+        })
+    }
+
+    /// An indexed layer over an empty table, which is the state that makes
+    /// `write_all` take the bulk path.
+    fn indexed_empty_layer() -> (tempfile::TempDir, GeoPackage) {
+        let dir = tempfile::tempdir().unwrap();
+        let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+        let layer = gpkg
+            .create_layer(
+                &TableSchemaBuilder::new("pts")
+                    .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+            )
+            .unwrap();
+        layer.create_spatial_index().unwrap();
+        (dir, gpkg)
+    }
+
+    /// A bulk `write_all` that fails during the index build must leave nothing
+    /// behind: not the rows, not a half-built index, not a dropped trigger set.
+    ///
+    /// This is the atomicity the bulk path used to lack. The rebuild ran in its
+    /// own transaction, because building the index in an `ATTACH`ed scratch
+    /// database required autocommit, so the rows were already committed by the
+    /// time it ran and a failure here left them against a stale index. The
+    /// assertions below all fail against that arrangement.
+    #[test]
+    fn failed_bulk_write_rolls_back_rows_and_index() {
+        let (_dir, gpkg) = indexed_empty_layer();
+        let layer = gpkg.layer("pts").unwrap();
+
+        let features: Vec<NewFeature<Point<f64>>> = (1..=50)
+            .map(|i| {
+                let f = f64::from(i);
+                NewFeature::new(Point::new(f, -f), Vec::new()).with_fid(i64::from(i))
+            })
+            .collect();
+
+        let result =
+            layer.write_all_impl(features, 0, BulkIndexOptions::always_bulk(), fail_the_build);
+        assert!(result.is_err(), "the tampered build should have failed");
+
+        // No rows: the inserts rolled back with the failed build.
+        let rows: i64 = gpkg
+            .connection()
+            .query_row("SELECT count(*) FROM pts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "rows survived a failed bulk build");
+
+        // The triggers are dropped inside the same transaction, so the rollback
+        // restores them and the index is usable without a repair.
+        assert_eq!(
+            layer.spatial_index_status().unwrap(),
+            crate::SpatialIndexStatus::Current,
+            "index left desynchronised by a failed bulk build"
+        );
+
+        // And the layer still works: a later write is indexed as normal.
+        let mut writer = layer.writer().unwrap();
+        writer.insert(Some(1), &Point::new(5.0, 5.0), &[]).unwrap();
+        writer.commit().unwrap();
+        let indexed: i64 = gpkg
+            .connection()
+            .query_row("SELECT count(*) FROM rtree_pts_geom", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(indexed, 1, "triggers did not survive the rollback");
+    }
 }

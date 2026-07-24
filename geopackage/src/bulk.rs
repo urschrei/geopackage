@@ -312,11 +312,59 @@ fn gate(
 /// against this very set. `None` scans, which is always sound.
 ///
 /// `tamper` is [`no_tamper`] outside tests.
+///
+/// This opens and commits its own transaction. A caller that already holds one,
+/// and wants the build to be part of it, calls [`fill_index_in_transaction`]
+/// instead.
 #[expect(
     clippy::too_many_arguments,
     reason = "internal build entry point threading the whole build context; a parameter struct would be used by these two call sites alone"
 )]
 pub(crate) fn fill_index<F>(
+    conn: &Connection,
+    table: &str,
+    geom: &str,
+    pk: &str,
+    rtree: &str,
+    options: BulkIndexOptions,
+    precomputed: Option<Vec<(i64, [f64; 4])>>,
+    tamper: ScratchTamper,
+    after: F,
+) -> Result<BuildPath>
+where
+    F: FnOnce(&Connection) -> Result<()>,
+{
+    // Nothing in the build needs autocommit: the tree is constructed in memory
+    // by `packed::pack` and written as ordinary rows, so unlike the previous
+    // `ATTACH`ed scratch database this can all sit inside one transaction.
+    let tx = conn.unchecked_transaction()?;
+    let path = fill_index_in_transaction(
+        &tx,
+        table,
+        geom,
+        pk,
+        rtree,
+        options,
+        precomputed,
+        tamper,
+        after,
+    )?;
+    tx.commit()?;
+    Ok(path)
+}
+
+/// [`fill_index`] without the transaction management: every statement runs on
+/// `conn`, which the caller must already have inside a transaction, and nothing
+/// is committed here.
+///
+/// The bulk `write_all` path uses this so the row inserts and the index build
+/// commit together: a crash cannot then leave rows committed against an index
+/// that was never rebuilt.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "internal build entry point threading the whole build context; a parameter struct would be used by these two call sites alone"
+)]
+pub(crate) fn fill_index_in_transaction<F>(
     conn: &Connection,
     table: &str,
     geom: &str,
@@ -338,11 +386,6 @@ where
     let quoted_rtree = quote(rtree)?;
     let create_vtab = triggers::create_rtree_table_sql(table, geom)?;
 
-    // The whole build is one transaction. Nothing here needs autocommit: the
-    // tree is constructed in memory by `packed::pack` and written as ordinary
-    // rows, so unlike the previous `ATTACH`ed scratch database there is no
-    // window in which the rows are committed but the index is not.
-    let tx = conn.unchecked_transaction()?;
     conn.execute_batch(&format!("DROP TABLE IF EXISTS {quoted_rtree}"))?;
     conn.execute_batch(&create_vtab)?;
 
@@ -364,6 +407,5 @@ where
     };
 
     after(conn)?;
-    tx.commit()?;
     Ok(path)
 }

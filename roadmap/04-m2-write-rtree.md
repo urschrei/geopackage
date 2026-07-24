@@ -51,20 +51,23 @@ write performance competitive with GDAL's GPKG driver.
       `rtree_%_node/parent/rowid` shadow tables in one transaction, reinstall
       triggers. Gate with rtree integrity query + `PRAGMA integrity_check` in
       tests; automatic fallback to triggered path on any anomaly.
-      *(Implemented in `geopackage/src/bulk.rs`. The scratch database is an
-      `ATTACH`ed `:memory:` db built from an `ST_*` envelope scan; its
-      `_node`/`_rowid`/`_parent` shadow tables are copied into the target inside
-      one transaction that also (re)creates the vtab and, via an `after` hook,
-      installs the triggers/`gpkg_extensions` row atomically. The gate is a
-      bijection + containment check of the copied index against the accumulated
-      envelopes plus `PRAGMA integrity_check`; any anomaly drops the copied
-      result and rebuilds through `populate_rtree_sql`. Bulk-vs-triggered is
-      chosen by `BulkIndexOptions` (default 10k rows; `create_spatial_index_with`
-      / `write_all_with` override; `always_bulk`/`never_bulk` force it).
-      `write_all` bulk engages only when the target index is empty (a fresh bulk
-      load), so appends keep the per-row triggered path. A scratch-tamper test
-      seam drives the fallback in a unit test. Full `integrity_check` cost and
-      atomicity across the `ATTACH` boundary are noted below.)*
+      *(Implemented in `geopackage/src/bulk.rs`. The scratch database this item
+      describes was the first shape and is gone: `geopackage/src/packed.rs` now
+      builds the `_node`/`_rowid`/`_parent` contents outright from the entry set
+      and `bulk.rs` writes them, so no entry passes through the RTree module
+      (#20). The entry set comes from an `ST_*` envelope scan, or from the
+      envelopes `write_all` already computed while encoding when it can prove
+      they cover every indexable row. The gate is a bijection + containment check
+      of the written index against those envelopes plus a structural check
+      (`rtreecheck` by default, `PRAGMA integrity_check` opt-in, #16); any
+      anomaly discards the result and rebuilds through `populate_rtree_sql`.
+      Bulk-vs-triggered is chosen by `BulkIndexOptions` (default 10k rows;
+      `create_spatial_index_with` / `write_all_with` override;
+      `always_bulk`/`never_bulk` force it). `write_all` bulk engages only when
+      the target index is empty (a fresh bulk load), so appends keep the per-row
+      triggered path. A tamper test seam drives the fallback in a unit test.
+      Dropping the scratch database removed the `ATTACH`, so the whole build,
+      and for `write_all` the row inserts too, is now one transaction.)*
 - [x] `repair_spatial_index()`: drop legacy `update1`/`update3`, install 1.4
       set, rebuild if `TriggerGeneration::Mixed` (D7). Never automatic.
       *(Replaces every rtree trigger of a `PreV1_4`/`Mixed` generation with the
@@ -127,18 +130,26 @@ write performance competitive with GDAL's GPKG driver.
       to name it, and taught `repair_spatial_index` to recover a `Stale` (or
       orphaned) index by rebuilding + reinstalling the 1.4 triggers; previously
       the file was stuck between `create_spatial_index` (`SpatialIndexExists`)
-      and `repair` (`NoSpatialIndex`). A clean (non-crash) error on the bulk path
-      is still restored in-process, so the `Stale` window is only reachable by an
-      actual crash/kill.)*
-- [ ] (issue #15) Narrow the bulk-build crash window further: build the scratch RTree in a
-      **separate in-memory `Connection`** (not an `ATTACH`ed database) and copy
-      its shadow-table rows out and into the target inside the same transaction
-      as the `write_all` row inserts, so the whole `write_all` becomes atomic and
-      the `Stale` window closes entirely. Deferred from this pass: it reworks the
-      gated `bulk::fill_index` copy mechanism (cross-connection blob copy instead
-      of `INSERT ... SELECT`), so it wants its own change with the existing gate
-      and fallback re-proven. Detect-and-direct (above) covers correctness
-      meanwhile.
+      and `repair` (`NoSpatialIndex`). Superseded by the atomicity work below:
+      the bulk path no longer produces a `Stale` index at all, though the status
+      and the repair remain, since a file can arrive from anywhere.)*
+- [x] (issue #15) Close the bulk-build crash window so the whole `write_all` is
+      atomic and the `Stale` window disappears. *(Done, though not the way this
+      item proposed. It called for building the scratch RTree in a separate
+      in-memory `Connection`; packing the tree directly (#20) removed the scratch
+      database altogether, and with it the `ATTACH` that required autocommit and
+      forced the rebuild into its own transaction. `write_all_bulk` now drops the
+      triggers, inserts the rows, flushes `gpkg_contents`, rebuilds the index and
+      reinstalls the triggers in one transaction: `FeatureWriter::flush` hands
+      back the still-open transaction and `bulk::fill_index_in_transaction` joins
+      it. `restore_index_after_failed_bulk` was deleted, since the rollback now
+      restores the dropped triggers by itself. Pinned by
+      `writer::tests::failed_bulk_write_rolls_back_rows_and_index`, which forces
+      the index build to fail after the rows are staged and asserts nothing
+      survives; it fails against the old arrangement. A mid-bulk `SIGKILL` test
+      in `crash_safety.rs` adds an end-to-end consistency check, though the kill
+      lands during the row inserts, which the old code also rolled back, so that
+      one is not itself proof of the fix.)*
 - [ ] (issue #17) `write_all` bulk currently engages only for an empty target index; a
       merge-into-populated-index bulk path (re-index existing + new, or an rstar
       escalation) is deferred until benchmarks justify it (see 02-ecosystem

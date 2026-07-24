@@ -79,10 +79,10 @@ Data Interface as the bulk data plane.
     bump follows upstream.
   - Smaller open items: a dedicated concurrent-reader (read-during-write) test,
     a QGIS re-check in this pass (M1 already exercises QGIS via the corpus), and
-    the deferred bulk-build follow-ups tracked in
-    [04-m2-write-rtree.md](04-m2-write-rtree.md) (gate-cost scoping #16, the
-    separate-connection bulk path #15, merge-into-populated-index #17; the
-    `f32` sub-normal read-path fix already landed via #13).
+    merge-into-populated-index (#17). The other bulk-build follow-ups have
+    landed: gate-cost scoping (#16), packed node construction (#20), and the
+    bulk `write_all` crash window (#15), which closed as a consequence of #20
+    removing the `ATTACH`. The `f32` sub-normal read-path fix landed via #13.
 
 ## Working conventions
 
