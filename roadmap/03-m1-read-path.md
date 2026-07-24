@@ -55,7 +55,13 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       envelope, so such a geometry cannot be inserted into an rtree-indexed
       table. Needs curve support in georust `wkb` upstream.
 - [ ] Reject/flag geometry column type mismatches (declared POINT, blob says
-      LINESTRING) behind a validation option.
+      LINESTRING) behind a validation option. The primitive exists
+      (`geometry::geometry_type_matches` + `wkb_geometry_type`, and
+      `GpbGeometry::matches_declared`), modelling the spec's instantiable-type
+      rules (exact match; `GEOMETRY` accepts anything; `GEOMETRYCOLLECTION`
+      accepts only collection types) and classifying curve-type bodies the
+      `wkb` reader cannot parse. Still needs wiring into an open/read
+      validation option (part of the read-API chunk).
 
 ### Read API
 - [ ] `gpkg.layer(name) -> Layer` (features) / `gpkg.attributes(name)`;

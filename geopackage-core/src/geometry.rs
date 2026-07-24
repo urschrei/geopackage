@@ -18,6 +18,7 @@
 //! [`GeometryError`].
 
 use crate::gpb::{self, GpbHeader};
+use crate::types::GeometryType;
 
 use geo_traits::{
     CoordTrait, Dimensions, GeometryTrait, LineStringTrait, LineTrait, MultiLineStringTrait,
@@ -40,6 +41,14 @@ pub enum GeometryError {
     /// not yet support, as well as structurally malformed bodies.
     #[error("WKB body is unreadable (unsupported curve type or malformed geometry)")]
     Body(#[from] wkb::error::WkbError),
+    /// The WKB body was too short to contain the one-byte order marker and
+    /// four-byte geometry type code.
+    #[error("WKB body truncated: need at least 5 bytes for the geometry type code")]
+    TruncatedWkb,
+    /// The WKB geometry type code is not one of the GeoPackage geometry types
+    /// (Annex G).
+    #[error("unknown WKB geometry type code {0}")]
+    UnknownWkbType(u32),
 }
 
 /// A GeoPackage geometry: a parsed GPB header plus its ISO WKB body.
@@ -121,6 +130,124 @@ impl<'a> GpbGeometry<'a> {
     pub fn is_empty(&self) -> bool {
         self.header.empty || self.xy_envelope().is_none()
     }
+
+    /// The geometry type of the WKB body, as a [`GeometryType`].
+    ///
+    /// This reflects what the `wkb` crate parsed, so it is always one of the
+    /// seven linear types. To classify a body whose type the `wkb` crate
+    /// cannot read (a curve type), read the raw discriminator with
+    /// [`wkb_geometry_type`] instead.
+    pub fn geometry_type(&self) -> GeometryType {
+        use wkb::reader::GeometryType as WkbType;
+        match self.wkb.geometry_type() {
+            WkbType::Point => GeometryType::Point,
+            WkbType::LineString => GeometryType::LineString,
+            WkbType::Polygon => GeometryType::Polygon,
+            WkbType::MultiPoint => GeometryType::MultiPoint,
+            WkbType::MultiLineString => GeometryType::MultiLineString,
+            WkbType::MultiPolygon => GeometryType::MultiPolygon,
+            WkbType::GeometryCollection => GeometryType::GeometryCollection,
+            // `wkb::reader::GeometryType` is `#[non_exhaustive]`; a future
+            // variant would be a type `wkb` newly learned to read. Report it
+            // as the `GEOMETRY` supertype until this mapping is extended.
+            _ => GeometryType::Geometry,
+        }
+    }
+
+    /// Whether this geometry's type satisfies a column `declared` as a given
+    /// [`GeometryType`], per [`geometry_type_matches`].
+    pub fn matches_declared(&self, declared: GeometryType) -> bool {
+        geometry_type_matches(self.geometry_type(), declared)
+    }
+}
+
+/// Whether the WKB geometry type `actual` satisfies a column declared as
+/// `declared`, per the GeoPackage instantiable-type rules.
+///
+/// The rules are deliberately narrow: there is no general subtype lattice
+/// walk. A value satisfies its column when one of the following holds:
+///
+/// - it is an exact type match; or
+/// - the column is declared `GEOMETRY`, the root supertype, which accepts any
+///   geometry; or
+/// - the column is declared `GEOMETRYCOLLECTION`, which accepts only the
+///   collection types (`GEOMETRYCOLLECTION`, `MULTIPOINT`, `MULTILINESTRING`,
+///   `MULTIPOLYGON`, `MULTICURVE`, `MULTISURFACE`).
+///
+/// In particular a `LINESTRING` does **not** satisfy a `MULTILINESTRING`
+/// column: a multi-geometry is a collection of its parts, not their supertype.
+/// Wiring this into an open/read validation option belongs to the read-API
+/// work; the primitive itself lives here.
+pub fn geometry_type_matches(actual: GeometryType, declared: GeometryType) -> bool {
+    use GeometryType::*;
+    if declared == Geometry || declared == actual {
+        return true;
+    }
+    if declared == GeometryCollection {
+        return matches!(
+            actual,
+            GeometryCollection
+                | MultiPoint
+                | MultiLineString
+                | MultiPolygon
+                | MultiCurve
+                | MultiSurface
+        );
+    }
+    false
+}
+
+/// Read the geometry type discriminator from the start of an ISO WKB body,
+/// without materialising coordinates.
+///
+/// Unlike [`GpbGeometry::geometry_type`], this works on curve types the `wkb`
+/// crate cannot fully read, which is what a declared-type validator needs: a
+/// `CURVEPOLYGON` body in a column declared `POLYGON` must be detectable.
+/// GeoPackage bodies are ISO WKB; an extended-WKB (EWKB) type flag is handled
+/// defensively but is not expected in a GPB blob.
+pub fn wkb_geometry_type(wkb_body: &[u8]) -> Result<GeometryType, GeometryError> {
+    if wkb_body.len() < 5 {
+        return Err(GeometryError::TruncatedWkb);
+    }
+    let little_endian = match wkb_body[0] {
+        0 => false,
+        1 => true,
+        _ => return Err(GeometryError::TruncatedWkb),
+    };
+    let code = {
+        let bytes: [u8; 4] = wkb_body[1..5].try_into().expect("length checked above");
+        if little_endian {
+            u32::from_le_bytes(bytes)
+        } else {
+            u32::from_be_bytes(bytes)
+        }
+    };
+    // ISO WKB encodes the dimension as a +1000/+2000/+3000 offset on the base
+    // type; EWKB instead sets high bit flags and keeps the base type low.
+    let base = if code & 0xE000_0000 != 0 {
+        code & 0x0000_00FF
+    } else {
+        code % 1000
+    };
+    let ty = match base {
+        0 => GeometryType::Geometry,
+        1 => GeometryType::Point,
+        2 => GeometryType::LineString,
+        3 => GeometryType::Polygon,
+        4 => GeometryType::MultiPoint,
+        5 => GeometryType::MultiLineString,
+        6 => GeometryType::MultiPolygon,
+        7 => GeometryType::GeometryCollection,
+        8 => GeometryType::CircularString,
+        9 => GeometryType::CompoundCurve,
+        10 => GeometryType::CurvePolygon,
+        11 => GeometryType::MultiCurve,
+        12 => GeometryType::MultiSurface,
+        13 => GeometryType::Curve,
+        14 => GeometryType::Surface,
+        _ => return Err(GeometryError::UnknownWkbType(code)),
+    };
+    Ok(ty)
 }
 
 /// Accumulator for an XY bounding box over visited coordinates.
@@ -504,5 +631,69 @@ mod tests {
         let blob = gpb(&body);
         let g = GpbGeometry::parse(&blob).unwrap();
         assert_eq!(g.xy_envelope(), Some([1.0, 5.0, -1.0, 2.0]));
+    }
+
+    #[test]
+    fn declared_type_matching_rules() {
+        use GeometryType::*;
+        // Exact match.
+        assert!(geometry_type_matches(Point, Point));
+        assert!(geometry_type_matches(LineString, LineString));
+        // GEOMETRY accepts anything.
+        assert!(geometry_type_matches(Point, Geometry));
+        assert!(geometry_type_matches(CircularString, Geometry));
+        // GEOMETRYCOLLECTION accepts collections only.
+        assert!(geometry_type_matches(MultiPoint, GeometryCollection));
+        assert!(geometry_type_matches(MultiSurface, GeometryCollection));
+        assert!(geometry_type_matches(
+            GeometryCollection,
+            GeometryCollection
+        ));
+        assert!(!geometry_type_matches(Point, GeometryCollection));
+        // A LINESTRING does not satisfy a MULTILINESTRING column.
+        assert!(!geometry_type_matches(LineString, MultiLineString));
+        assert!(!geometry_type_matches(Point, LineString));
+    }
+
+    #[test]
+    fn reads_wkb_type_code_including_curves() {
+        // POINT (ISO type 1), little-endian.
+        assert_eq!(
+            wkb_geometry_type(&wkb_point(0.0, 0.0)).unwrap(),
+            GeometryType::Point
+        );
+        // POINT ZM (ISO type 3001) still classifies as POINT.
+        let mut point_zm = vec![1u8];
+        point_zm.extend_from_slice(&3001u32.to_le_bytes());
+        assert_eq!(wkb_geometry_type(&point_zm).unwrap(), GeometryType::Point);
+        // CIRCULARSTRING (ISO type 8): the wkb reader cannot parse this, but
+        // the raw type-code reader classifies it.
+        let mut circular = vec![1u8];
+        circular.extend_from_slice(&8u32.to_le_bytes());
+        assert_eq!(
+            wkb_geometry_type(&circular).unwrap(),
+            GeometryType::CircularString
+        );
+        // Truncated and unknown-code inputs are typed errors, not panics.
+        assert!(matches!(
+            wkb_geometry_type(b"\x01\x00"),
+            Err(GeometryError::TruncatedWkb)
+        ));
+        let mut unknown = vec![1u8];
+        unknown.extend_from_slice(&99u32.to_le_bytes());
+        assert!(matches!(
+            wkb_geometry_type(&unknown),
+            Err(GeometryError::UnknownWkbType(99))
+        ));
+    }
+
+    #[test]
+    fn matches_declared_on_parsed_geometry() {
+        let blob = gpb(&wkb_point(1.0, 2.0));
+        let g = GpbGeometry::parse(&blob).unwrap();
+        assert_eq!(g.geometry_type(), GeometryType::Point);
+        assert!(g.matches_declared(GeometryType::Point));
+        assert!(g.matches_declared(GeometryType::Geometry));
+        assert!(!g.matches_declared(GeometryType::LineString));
     }
 }
