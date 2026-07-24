@@ -129,10 +129,36 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       Relevant once very large layers are read outside the GeoArrow bulk plane.
 
 ### Corpus & verification (details in [08-testing-conformance.md](08-testing-conformance.md))
-- [ ] Fixture corpus: files written by GDAL (≥3.6 and 3.11+/1.4), QGIS, NGA
-      sample data; commit small ones, script-fetch big ones.
-- [ ] Round-trip comparison test vs `ogrinfo -json` output for each corpus
-      file (feature counts, geometry types, first/last feature equality).
+- [x] Fixture corpus: five small GDAL-written / `sqlite3`-built fixtures
+      committed under `geopackage/tests/fixtures/`, each with an
+      `ogrinfo`-derived JSON snapshot, generated deterministically by
+      `scripts/generate_fixtures.py` (GDAL 3.12.3, spec 1.4 trigger set):
+      GDAL points without GPB envelopes plus lines/polygons with envelopes,
+      XYZ and empty geometries, indexed and non-indexed layers, GPKG 1.2 and
+      1.4, the full attribute-type spread (`BOOLEAN`, `TINYINT`…`INTEGER`,
+      `FLOAT`/`DOUBLE`, non-ASCII `TEXT`, `BLOB`, `DATE`, `DATETIME`, NULL in
+      each), an attribute-only table, and legacy-`application_id` /
+      case-mismatch files for the lenient open path. Larger third-party samples
+      (GDAL 1.0/1.2, OGC, NGA) are script-fetched (`scripts/fetch_corpus.sh`,
+      sha256-pinned) into a git-ignored `corpus/`. **QGIS-written fixtures
+      outstanding**: QGIS is not installed on the generating machine, so none
+      is committed (the scheduled QGIS interop job in
+      [08-testing-conformance.md](08-testing-conformance.md) is still to be
+      wired).
+- [x] Round-trip comparison test vs `ogrinfo -json` output for each corpus file
+      (`geopackage/tests/corpus.rs`): per-layer feature count, fid sequence,
+      per-feature geometry type + coordinates, and every attribute value. Each
+      GDAL-vs-ours representation gap is normalised and documented at the
+      comparison site (GDAL's `YYYY/MM/DD` date and `YYYY/MM/DD HH:MM:SS+00`
+      datetime spelling vs our ISO form, float print precision handled with an
+      epsilon, JSON-omitted binary recovered via GDAL's `hex()`, empty-vs-NULL
+      geometry, Z dropped by `to_geo`) — our read was **not** weakened to pass.
+      Snapshots are committed so the suite runs without GDAL; an `#[ignore]`d
+      test regenerates-and-diffs live. Cross-implementation index compatibility
+      is proven here: a GDAL-built RTree serves `features_in` correctly through
+      our reader. An `#[ignore]`d external soak (`corpus_external.rs`) sweeps
+      the fetched corpus (locally: 6740 features across four files, zero read
+      errors).
 - [x] Property test: `features_in(bbox)` ≡ full-scan filter
       (`geopackage/tests/features_in.rs`). Both the rtree and the full-scan
       paths are checked against an independent oracle (envelopes computed from
@@ -149,10 +175,32 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
 
 ## Acceptance criteria
 
+Status as of 2026-07-24. All four hold **locally**; the milestone's formal bar
+is "pass in CI", and CI has not yet been exercised on GitHub (see
+[README.md](README.md)), so the milestone stays open until that runs green.
+
 1. Every corpus file opens and iterates fully; geometry + attribute values
    match GDAL's read of the same file.
+   → **Met (this chunk).** `corpus.rs` opens all five committed fixtures,
+   iterates every feature and compares against the `ogrinfo` snapshots (counts,
+   fid sequence, geometry type + coordinates, every attribute value); the
+   `corpus_external.rs` soak reads 6740 features across four larger third-party
+   files with zero errors. Caveat: no **QGIS**-written fixture yet (QGIS not
+   installed), so "files produced by … QGIS" from the M1 goal is not yet
+   demonstrated.
 2. bbox queries use the rtree when present (assert via `EXPLAIN QUERY PLAN`)
    and return provably identical results either way.
+   → **Met (held before this chunk).** `features_in.rs` asserts the plan and
+   the seeded property equivalence; the corpus adds a cross-implementation
+   check that our `features_in` reads correctly from a **GDAL-built** RTree.
 3. `ST_MinX` & co. work on envelope-less non-point blobs (fallback complete).
+   → **Met (held before this chunk).** `functions.rs` over the full WKB
+   envelope traversal in `geopackage-core::geometry`; the GDAL points fixture
+   (no header envelope) exercises the same fallback end-to-end.
 4. No `unsafe`, clippy/fmt/docs clean, fuzz target extended to the new
    surface (`GpbGeometry` over arbitrary bodies must never panic).
+   → **Met (held before this chunk).** `#![forbid(unsafe_code)]`; `cargo
+   nextest`, `clippy --all-targets -D warnings`, `fmt --check`, `doc`, and
+   `check --no-default-features` all green locally; the `gpb_geometry` fuzz
+   target covers arbitrary bodies (the one open finding is an upstream `wkb`
+   allocation bug, tracked above, not a panic in our code).
