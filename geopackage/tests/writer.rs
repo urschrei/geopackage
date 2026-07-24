@@ -18,10 +18,11 @@ use geo_types::{LineString, Point, Polygon};
 use geopackage::core::datetime::{Date, DateTime};
 use geopackage::core::geometry::GpbGeometry;
 use geopackage::core::gpb::{Envelope, encode_header};
-use geopackage::core::triggers;
+use geopackage::core::triggers::{self, TriggerGeneration};
 use geopackage::core::types::{ColumnType, GeometryType, ZmFlag};
 use geopackage::{
-    ColumnSpec, Error, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value,
+    BulkIndexOptions, ColumnSpec, Error, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder,
+    Value,
 };
 
 fn gpkg() -> (tempfile::TempDir, GeoPackage) {
@@ -473,6 +474,100 @@ fn writes_into_indexed_table_track_rtree() {
         .map(|r| r.unwrap().fid())
         .collect();
     assert_eq!(hits, vec![fid1]);
+}
+
+/// The full rtree contents `(id, minx, maxx, miny, maxy)` for `pts`, by id.
+fn rtree_full(gpkg: &GeoPackage) -> Vec<(i64, f64, f64, f64, f64)> {
+    let conn = gpkg.connection();
+    let mut stmt = conn
+        .prepare("SELECT id, minx, maxx, miny, maxy FROM rtree_pts_geom ORDER BY id")
+        .unwrap();
+    stmt.query_map([], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+    })
+    .unwrap()
+    .collect::<Result<_, _>>()
+    .unwrap()
+}
+
+/// A manual `ST_*` envelope scan of `pts`, the reference the index must match.
+fn envelope_scan(gpkg: &GeoPackage) -> Vec<(i64, f64, f64, f64, f64)> {
+    let conn = gpkg.connection();
+    let mut stmt = conn
+        .prepare(
+            "SELECT fid, ST_MinX(geom), ST_MaxX(geom), ST_MinY(geom), ST_MaxY(geom) \
+             FROM pts WHERE geom NOT NULL AND NOT ST_IsEmpty(geom) ORDER BY fid",
+        )
+        .unwrap();
+    stmt.query_map([], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+    })
+    .unwrap()
+    .collect::<Result<_, _>>()
+    .unwrap()
+}
+
+fn pts_generation(gpkg: &GeoPackage) -> TriggerGeneration {
+    let conn = gpkg.connection();
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'pts'")
+        .unwrap();
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    triggers::classify_triggers(names.iter().map(String::as_str), "pts", "geom")
+}
+
+#[test]
+fn write_all_bulk_builds_index_matching_full_scan() {
+    // Build a fresh, empty spatial index, then bulk-write into it: the D8 path
+    // drops the triggers, inserts the rows, rebuilds the index in bulk, and
+    // reinstalls the 1.4 triggers.
+    let (_dir, gpkg) = gpkg();
+    point_layer(&gpkg, "pts", GeometryType::Point, ZmFlag::Prohibited);
+    let layer = gpkg.layer("pts").unwrap();
+    layer.create_spatial_index().unwrap();
+    assert!(layer.has_spatial_index().unwrap());
+    assert!(rtree_full(&gpkg).is_empty());
+
+    // Coordinates exact-in-f32 so the index bounds equal the envelope scan.
+    let features: Vec<NewFeature<Point<f64>>> = (0..300)
+        .map(|i| NewFeature::new(Point::new(f64::from(i), f64::from(i * 2)), Vec::new()))
+        .collect();
+    let fids = layer
+        .write_all_with(features, 0, BulkIndexOptions::always_bulk())
+        .unwrap();
+    assert_eq!(fids, (1..=300).collect::<Vec<_>>());
+
+    // The bulk-built index matches the full envelope scan and the 1.4 triggers
+    // are reinstalled.
+    assert_eq!(rtree_full(&gpkg), envelope_scan(&gpkg));
+    assert_eq!(rtree_full(&gpkg).len(), 300);
+    assert_eq!(pts_generation(&gpkg), TriggerGeneration::V1_4);
+
+    // gpkg_contents bbox was maintained across the bulk write.
+    let entry = gpkg
+        .contents()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.table_name == "pts")
+        .unwrap();
+    assert_eq!(entry.min_x, Some(0.0));
+    assert_eq!(entry.max_x, Some(299.0));
+    assert_eq!(entry.max_y, Some(598.0));
+
+    // A later triggered write into the now-populated index is still tracked:
+    // the reinstalled triggers maintain the index, and an append does not take
+    // the bulk path (the index is no longer empty).
+    let more: Vec<NewFeature<Point<f64>>> =
+        vec![NewFeature::new(Point::new(1000.0, 2000.0), Vec::new()).with_fid(301)];
+    layer
+        .write_all_with(more, 0, BulkIndexOptions::always_bulk())
+        .unwrap();
+    assert_eq!(rtree_full(&gpkg), envelope_scan(&gpkg));
+    assert_eq!(rtree_full(&gpkg).len(), 301);
 }
 
 #[test]

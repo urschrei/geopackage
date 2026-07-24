@@ -264,7 +264,11 @@ fn register_extension_row(conn: &Connection, table: &str, column: &str) -> Resul
 /// Triggers fire on the user table, so their `sqlite_master.tbl_name` is
 /// `table`; the ones belonging to this index share the `rtree_<table>_<column>_`
 /// name prefix (the same prefix rule [`triggers::classify_triggers`] uses).
-fn drop_all_rtree_triggers(conn: &Connection, table: &str, column: &str) -> Result<()> {
+///
+/// Shared with the bulk `write_all` path ([`crate::writer`]), which drops the
+/// triggers before a bulk insert so the index is not maintained per-row, then
+/// reinstalls them after the bulk rebuild.
+pub(crate) fn drop_all_rtree_triggers(conn: &Connection, table: &str, column: &str) -> Result<()> {
     let prefix = format!("{}_", triggers::rtree_table_name(table, column));
     let names: Vec<String> = {
         let mut stmt = conn
