@@ -12,17 +12,23 @@
 | `rusqlite` | SQLite | now | `bundled` + `functions`; `serialize` later for from/to-bytes (D5) |
 | `thiserror` | errors | now | |
 
-### CRS definitions (decision needed early in M1)
+### CRS definitions (decided, M1)
 
-Options for `srs_id → WKT` seeding (D3):
-[`crs-definitions`](https://crates.io/crates/crs-definitions) (proj4/WKT for
-all EPSG codes, georust adjacent, adds ~MBs),
-[`epsg-utils`](https://crates.io/crates/epsg-utils) (what rusqlite-gpkg uses),
-or a small vendored table of the ~30 codes that cover real-world gpkg traffic
-(4326, 3857, national grids…) with everything else caller-supplied.
-**Leaning: vendored-subset + caller-supplied**, keeping binary size honest;
-revisit if users push back. Whatever we pick, the lookup lives behind one
-function in one module.
+**Decision: vendored-subset + caller-supplied.** `geopackage-core::srs`
+vendors WKT1 for 26 common EPSG codes (~17 KB, generated from GDAL by
+`scripts/generate_epsg_wkt.py`, EPSG data (c) IOGP) and synthesises all 120
+WGS 84 UTM zones (32601–32660/32701–32760) from a template, verified against
+GDAL reference output in tests. Everything else is caller-supplied via
+`GeoPackage::add_srs`; an unknown code is a typed `UnknownEpsgCode` error.
+Lookup is one function: `srs::epsg_definition(code)`.
+
+Alternatives considered:
+[`crs-definitions`](https://crates.io/crates/crs-definitions) (all EPSG codes,
+adds ~MBs) and [`epsg-utils`](https://crates.io/crates/epsg-utils) (what
+rusqlite-gpkg uses) — both rejected to keep binary size honest; revisit if
+users push back. Geographic 3D CRSs (e.g. 4979) are deliberately absent: they
+cannot be expressed in WKT1 and belong to the `gpkg_crs_wkt` WKT2 extension
+work (M5).
 
 ### Later milestones
 

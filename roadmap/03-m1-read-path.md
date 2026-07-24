@@ -6,9 +6,9 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
 ## Tasks
 
 ### Schema model
-- [ ] `SridDefinition` lookup module (decide vendored-subset vs crate; see
-      [02-ecosystem.md](02-ecosystem.md)) + `srs()` / `add_srs()` on
-      `GeoPackage`.
+- [x] `SrsDefinition` lookup module (vendored subset + synthesised WGS 84 UTM
+      zones; decision recorded in [02-ecosystem.md](02-ecosystem.md)) +
+      `srs()` / `srs_list()` / `add_srs()` / `add_epsg_srs()` on `GeoPackage`.
 - [ ] `gpkg_geometry_columns` model: geometry type name (incl. the non-linear
       extension type names, read-only for now), srs_id, z/m flags (0/1/2).
 - [ ] `TableSchema` introspection: column names, declared gpkg types

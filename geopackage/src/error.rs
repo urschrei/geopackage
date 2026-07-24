@@ -25,6 +25,15 @@ pub enum Error {
     /// `create` was asked to overwrite an existing non-empty file.
     #[error("refusing to create GeoPackage over existing non-empty file: {0}")]
     AlreadyExists(std::path::PathBuf),
+    /// An EPSG code outside the vendored definition subset.
+    #[error(
+        "EPSG:{code} is not in the vendored definition subset; \
+         supply the WKT yourself via GeoPackage::add_srs"
+    )]
+    UnknownEpsgCode {
+        /// The requested EPSG code.
+        code: i32,
+    },
 }
 
 /// Convenience alias.

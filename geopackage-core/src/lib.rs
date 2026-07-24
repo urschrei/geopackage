@@ -5,6 +5,7 @@
 //!
 //! - [`gpb`]: the GeoPackage Binary (GPB) geometry blob header codec
 //! - [`ddl`]: normative `CREATE TABLE` SQL and required `gpkg_spatial_ref_sys` seed rows
+//! - [`srs`]: vendored EPSG WKT1 subset for `gpkg_spatial_ref_sys` seeding
 //! - [`triggers`]: RTree spatial index virtual table and trigger SQL (version-aware)
 //! - [`version`]: `application_id` / `user_version` handling
 //! - [`ident`]: SQL identifier quoting
@@ -21,10 +22,12 @@
 pub mod ddl;
 pub mod gpb;
 pub mod ident;
+pub mod srs;
 pub mod triggers;
 pub mod version;
 
 pub use gpb::{Envelope, GpbError, GpbHeader};
+pub use srs::SrsDefinition;
 pub use version::GpkgVersion;
 
 /// Errors produced by this crate.

@@ -17,10 +17,12 @@
 
 mod error;
 mod functions;
+mod srs;
 
 pub use error::{Error, Result};
 pub use geopackage_core as core;
 pub use geopackage_core::GpkgVersion;
+pub use srs::Srs;
 
 use geopackage_core::{ddl, version};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
