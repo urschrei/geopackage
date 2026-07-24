@@ -17,9 +17,8 @@
 //! the existing rows, using the registered `ST_*` functions and skipping
 //! empty/NULL geometries exactly as the triggers do. At or above the threshold
 //! it is the bulk shadow-table build in [`crate::bulk`]: accumulate the
-//! envelopes, build the index in a scratch in-memory database, and copy the
-//! shadow tables into the target, gated with automatic fallback to the
-//! triggered path.
+//! envelopes, build the tree in memory, and write the shadow tables directly,
+//! gated with automatic fallback to the triggered path.
 
 use geopackage_core::ddl;
 use geopackage_core::ident::quote;

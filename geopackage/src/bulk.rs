@@ -3,11 +3,12 @@
 //! SQLite's RTree module has no bulk-load entry point, so populating an index
 //! one row at a time, whether through the spec's `INSERT INTO rtree SELECT`
 //! statement or through the per-row triggers, pays the node-splitting cost for
-//! every row. GDAL's fix ([gdal#7614](https://github.com/OSGeo/gdal/issues/7614))
-//! is to build the RTree in a scratch in-memory database and copy its shadow
-//! tables into the target, which this module used to reimplement. Measurement
-//! showed the scratch build itself was then the dominant cost, because it still
-//! inserted every entry through the module one row at a time.
+//! every row ([gdal#7614](https://github.com/OSGeo/gdal/issues/7614) is the
+//! same observation from GDAL's side). This module first answered that by
+//! building the RTree in an `ATTACH`ed scratch database and copying its shadow
+//! tables into the target, but measurement showed the scratch build was then the
+//! dominant cost, because it still inserted every entry through the module one
+//! row at a time.
 //!
 //! So the tree is now built outright: [`crate::packed`] lays out the
 //! `rtree_%_node` / `_rowid` / `_parent` contents in memory from the entry set,

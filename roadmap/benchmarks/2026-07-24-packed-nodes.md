@@ -60,6 +60,42 @@ On clustered data, where OMT's data-driven partitioning would be expected to
 pay off, the two are within noise. Hilbert packing is also the smaller
 implementation, so it is what ships.
 
+## What the other implementations do
+
+Worth recording, because an earlier note in this repo described GDAL's approach
+inaccurately and that description was the basis for the first implementation.
+
+- **SQLite's RTree module has no bulk-load entry point.** Confirmed by reading
+  the bundled amalgamation: the module's only write path is the standard
+  virtual-table `xUpdate`, one row at a time, so every insert descends the tree
+  and may split nodes. The only occurrence of the word "bulk" in the module is a
+  comment about `rtreecheck`.
+- **GDAL** no longer uses the scratch-database technique this repo originally
+  copied from the issue description in
+  [gdal#7614](https://github.com/OSGeo/gdal/issues/7614). Current GDAL vendors
+  Rouault's [`sqlite_rtree_bulk_load`](https://github.com/rouault/sqlite_rtree_bulk_load)
+  (`#include "sqlite_rtree_bulk_load/wrapper.h"` in `ogrgeopackagetablelayer.cpp`),
+  which builds the tree in memory and populates `_node` / `_parent` / `_rowid`
+  directly, and it accumulates entries in an `m_aoRTreeEntries` vector flushed in
+  batches, with the index build able to run asynchronously. So GDAL is in the
+  same category as what this crate now does, but the tree construction differs:
+  that library reimplements SQLite's own R*-tree insertion algorithm (minus the
+  forced-reinsertion step) in memory, whereas this crate Hilbert-sorts and packs
+  bottom-up. Reported effect on a 3.2M-row table: 26 s to 6 s.
+- **SpatiaLite** has its own RTree bulk load, described by its author as
+  "completely internal to SpatiaLite and does not depend on SQLite", built
+  around node-splitting functions, and quoted at roughly a two-thirds reduction
+  in load time. Rouault noted in that discussion that it is not bulk loading in
+  the literature sense, since it does not sort by X or Morton code before
+  building, which is the step that produces a better-balanced tree. That sorting
+  step is what this crate does with a Hilbert curve.
+
+The practical difference between replicating R*-tree insertion in memory and
+packing a sorted set bottom-up is node occupancy: packing fills nodes to
+capacity, which gives a smaller tree and slightly better queries but leaves no
+slack, so subsequent inserts split immediately. That suits the bulk-load case
+this path serves, where appends afterwards go through the triggers.
+
 ## Write throughput (1M rows)
 
 | geometry | v0.1.0 | after gate/transaction work | packed | vs v0.1.0 |
