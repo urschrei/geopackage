@@ -78,3 +78,30 @@
   `create()` time — they are created lazily with the first feature table /
   extension registration (spec makes them conditional).
 - MIT OR Apache-2.0, edition 2024, MSRV 1.85.
+
+# M1 — container model + read path (completed 2026-07-24)
+
+Verified by CI run 30101537044 (urschrei/geopackage): 3-OS tests, MSRV 1.95,
+clippy `-D warnings` (strict lint set per D12-adjacent config), fmt, docs,
+fuzz-build — all green. Detail and per-item history in
+[03-m1-read-path.md](03-m1-read-path.md); decisions D3 (CRS vendored subset),
+D12 (unsafe policy) recorded during the milestone.
+
+- [x] `srs` module: vendored EPSG WKT1 subset (26 codes + 120 synthesised
+      WGS 84 UTM zones) + `srs()`/`srs_list()`/`add_srs()`/`add_epsg_srs()`.
+- [x] Schema model: `ColumnType`/`GeometryType`/`ZmFlag` vocabulary,
+      `DATE`/`DATETIME` strict + lenient parsing, `GeometryColumn`,
+      `TableSchema`, `Value` conversion.
+- [x] `GpbGeometry` over georust `wkb` + geo-traits; full WKB envelope
+      traversal replacing the M0 point-only `ST_*` fallback; opt-in
+      declared-type validation; `gpb_geometry` fuzz target (which found an
+      upstream `wkb` OOM, issue #3).
+- [x] Read path: `layers()`/`layer()`/`attributes()`, owned-`Feature`
+      iteration, rtree-accelerated `features_in(bbox)` with f64 re-filtering
+      (property-tested identical to full scan), `select()` passthrough,
+      `open_lenient()` with typed warnings.
+- [x] Corpus: six committed byte-deterministic fixtures (GDAL 1.2/1.4, QGIS
+      4.0.2, raw SQLite) with `ogrinfo -json` snapshot comparison; pinned
+      external soak (6740 features, zero errors).
+- MSRV raised to 1.95 during closing (libsqlite3-sys `cfg_select!`; see
+  [02-ecosystem.md](02-ecosystem.md)).

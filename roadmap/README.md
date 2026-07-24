@@ -26,7 +26,7 @@ Data Interface as the bulk data plane.
   container create/open with validation, `ST_*` function registration, 17 tests
   incl. end-to-end trigger/UPSERT proofs, CI (3 OSes, MSRV 1.85, clippy `-D
   warnings`, fmt, docs, fuzz-build).
-- **M1 implementation complete** (verification bar still open): schema model,
+- **M1 complete** (criteria verified in CI, 2026-07-24): schema model,
   geometry wrapper, and the feature/attribute **read path** —
   `layers()`/`layer()`/`attributes()` handles, `features()`/`features_in(bbox)`
   (rtree-accelerated with a full-scan fallback, results property-tested
@@ -38,12 +38,14 @@ Data Interface as the bulk data plane.
   `corpus_external.rs`). MSRV was raised 1.85 → 1.95 by the first CI run:
   libsqlite3-sys 0.38 (via rusqlite 0.40) uses `cfg_select!`, stable only from
   1.95, and declares no `rust-version` (see the rusqlite row in
-  [02-ecosystem.md](02-ecosystem.md)). All four M1 acceptance criteria hold **locally** and
-  the gates (nextest, clippy `-D warnings`, fmt, docs, `--no-default-features`)
-  are green. The corpus covers GDAL-written, QGIS-written (4.0.2, headless
-  `qgis_process`), raw-SQLite, and fetched third-party files. **One caveat
-  keeps the milestone open:** CI has **not** yet been exercised on GitHub, so
-  the "done when criteria pass in CI" bar is not met.
+  [02-ecosystem.md](02-ecosystem.md)). The corpus covers GDAL-written,
+  QGIS-written (4.0.2, headless `qgis_process`), raw-SQLite, and fetched
+  third-party files. **All four M1 acceptance criteria pass in CI** (run
+  30101537044 on urschrei/geopackage, 2026-07-24: 3-OS tests, MSRV 1.95,
+  clippy `-D warnings` with the strict lint set, fmt, docs, fuzz-build).
+  **M1 is complete**; the GitHub M1 milestone is closed. Deferred follow-ups
+  are tracked as issues #1–#6.
+- **M2 not started.**
 
 ## Working conventions
 
