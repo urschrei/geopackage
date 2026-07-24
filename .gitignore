@@ -7,3 +7,6 @@ geopackage-core/fuzz/artifacts
 geopackage-core/fuzz/coverage
 # Externally fetched corpus (scripts/fetch_corpus.sh); never committed.
 /corpus
+
+# Hegel property-test server cache + failure database.
+.hegel/
