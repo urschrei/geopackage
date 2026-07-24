@@ -33,12 +33,17 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       conversion reachable and testable ahead of `layer()`/`features()`).
 
 ### Geometry
-- [ ] `GpbGeometry<'a>` wrapper: parsed header + WKB body slice, implementing
-      `geo_traits::GeometryTrait` by delegating to `wkb::reader`; `to_geo()`
-      behind the `geo-types` feature; raw header/body accessors.
+- [x] `GpbGeometry<'a>` wrapper (`geopackage_core::geometry`): parsed header +
+      WKB body slice, implementing `geo_traits::GeometryTrait` by delegating to
+      `wkb::reader::Wkb`; `to_geo()` behind the `geo-types` feature; raw
+      header/body accessors. Depends on georust `wkb` 0.9 and `geo-traits` 0.3.
 - [ ] Full WKB envelope traversal for the `ST_*` fallback (replace the M0
-      point-only fallback). Preferred: upstream an envelope visitor to
-      georust `wkb`; interim: local traversal in `geopackage`.
+      point-only fallback). Placement decision: the wrapper and traversal live
+      in **`geopackage-core`**, keeping the fuzz workspace free of the SQLite
+      dependency; coordinates are visited through the `geo-traits` interface
+      rather than a hand-rolled WKB walker. The eventual home is an upstreamed
+      `gpb` feature in georust `wkb` itself (tracked in
+      [02-ecosystem.md](02-ecosystem.md)); until then this is ours.
 - [ ] Reject/flag geometry column type mismatches (declared POINT, blob says
       LINESTRING) behind a validation option.
 

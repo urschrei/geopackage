@@ -23,6 +23,7 @@
 
 pub mod datetime;
 pub mod ddl;
+pub mod geometry;
 pub mod gpb;
 pub mod ident;
 pub mod srs;
@@ -30,6 +31,7 @@ pub mod triggers;
 pub mod types;
 pub mod version;
 
+pub use geometry::{GeometryError, GpbGeometry};
 pub use gpb::{Envelope, GpbError, GpbHeader};
 pub use srs::SrsDefinition;
 pub use types::{ColumnType, GeometryType, ZmFlag};
@@ -42,6 +44,9 @@ pub enum Error {
     /// Invalid GeoPackage Binary blob.
     #[error(transparent)]
     Gpb(#[from] GpbError),
+    /// A GeoPackage geometry that could not be parsed or read.
+    #[error(transparent)]
+    Geometry(#[from] GeometryError),
     /// An SQL identifier that cannot be safely quoted.
     #[error("invalid SQL identifier: {0}")]
     InvalidIdentifier(String),

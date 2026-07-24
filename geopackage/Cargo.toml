@@ -15,5 +15,12 @@ geopackage-core.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
 
+[features]
+default = ["geo-types"]
+## Forward `geopackage-core`'s `geo-types` feature, enabling
+## `GpbGeometry::to_geo` conversions. On by default; opt out with
+## `default-features = false`.
+geo-types = ["geopackage-core/geo-types"]
+
 [dev-dependencies]
 tempfile.workspace = true

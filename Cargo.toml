@@ -14,10 +14,13 @@ keywords = ["geopackage", "gpkg", "gis", "geospatial", "ogc"]
 categories = ["science::geo", "database"]
 
 [workspace.dependencies]
-geopackage-core = { version = "0.0.1", path = "geopackage-core" }
+geopackage-core = { version = "0.0.1", path = "geopackage-core", default-features = false }
 thiserror = "2"
 rusqlite = { version = "0.40", features = ["bundled", "functions"] }
 tempfile = "3"
+wkb = "0.9"
+geo-traits = "0.3"
+geo-types = "0.7"
 
 [profile.release]
 lto = "thin"

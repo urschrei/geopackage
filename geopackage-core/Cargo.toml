@@ -12,3 +12,11 @@ categories.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+wkb.workspace = true
+geo-traits.workspace = true
+geo-types = { workspace = true, optional = true }
+
+[features]
+default = ["geo-types"]
+## Convenience conversions to `geo-types` via `GpbGeometry::to_geo`.
+geo-types = ["dep:geo-types"]
