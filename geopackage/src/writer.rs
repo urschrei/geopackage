@@ -37,18 +37,28 @@
 //!
 //! # Spatial indexes
 //!
-//! Writes go through ordinary SQL `INSERT`/`UPDATE`/`DELETE`, so a table that
-//! already carries the rtree triggers has its index maintained by those
-//! triggers (the `ST_*` functions are registered on every connection). Building
-//! an index is a later chunk; this writer does not create one.
+//! Individual `insert`/`update`/`delete` calls, and the per-batch
+//! [`Layer::write_all`] path, go through ordinary SQL, so a table that already
+//! carries the rtree triggers has its index maintained by those triggers (the
+//! `ST_*` functions are registered on every connection).
+//!
+//! [`Layer::write_all`] additionally takes the D8 bulk-build path when it writes
+//! a large batch into an indexed layer whose index is currently empty (a fresh
+//! bulk load): it drops the triggers, inserts the rows without per-row index
+//! maintenance, rebuilds the index in one bulk shadow-table copy (see
+//! [`crate::bulk`]), and reinstalls the triggers. The threshold and forcing are
+//! controlled by [`BulkIndexOptions`] via [`Layer::write_all_with`].
 
 use geo_traits::{Dimensions, GeometryTrait};
 use geopackage_core::geometry::encode_gpb;
 use geopackage_core::ident::quote;
+use geopackage_core::triggers;
 use geopackage_core::types::ZmFlag;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, Transaction, params_from_iter};
 
+use crate::bulk::{self, BulkIndexOptions};
+use crate::index::drop_all_rtree_triggers;
 use crate::value::value_to_sql;
 use crate::{Error, Layer, Result, Value};
 
@@ -239,7 +249,50 @@ impl<'a> Layer<'a> {
     ///
     /// Rows with `geometry: Some(_)` go through [`FeatureWriter::insert`]; rows
     /// with `None` through [`FeatureWriter::insert_row`].
+    ///
+    /// When the layer carries a spatial index whose contents are currently
+    /// empty and `features` advertises at least
+    /// [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD) rows (via its
+    /// [`Iterator::size_hint`]), the write takes the D8 bulk-build path instead;
+    /// [`Self::write_all_with`] tunes or forces that choice.
     pub fn write_all<G, I>(&self, features: I, batch_size: usize) -> Result<Vec<i64>>
+    where
+        G: GeometryTrait<T = f64>,
+        I: IntoIterator<Item = NewFeature<G>>,
+    {
+        self.write_all_with(features, batch_size, BulkIndexOptions::default())
+    }
+
+    /// [`Self::write_all`] with an explicit [`BulkIndexOptions`] controlling the
+    /// bulk-vs-triggered index-build choice (design decision D8).
+    ///
+    /// The bulk path is taken only when the layer has a spatial index, that
+    /// index is currently empty (bulk building a fresh index; appends to a
+    /// populated index always use the triggered path), and the incoming
+    /// iterator's `size_hint` lower bound reaches `options.bulk_threshold`.
+    /// [`BulkIndexOptions::always_bulk`] drops the size condition (still
+    /// requiring an empty index); [`BulkIndexOptions::never_bulk`] disables it.
+    pub fn write_all_with<G, I>(
+        &self,
+        features: I,
+        batch_size: usize,
+        options: BulkIndexOptions,
+    ) -> Result<Vec<i64>>
+    where
+        G: GeometryTrait<T = f64>,
+        I: IntoIterator<Item = NewFeature<G>>,
+    {
+        let iter = features.into_iter();
+        if self.bulk_write_applicable(iter.size_hint().0, options)? {
+            self.write_all_bulk(iter)
+        } else {
+            self.write_all_batched(iter, batch_size)
+        }
+    }
+
+    /// The per-batch triggered write path: one committed transaction per
+    /// `batch_size` rows (`0` = a single transaction for the whole iterator).
+    fn write_all_batched<G, I>(&self, features: I, batch_size: usize) -> Result<Vec<i64>>
     where
         G: GeometryTrait<T = f64>,
         I: IntoIterator<Item = NewFeature<G>>,
@@ -271,6 +324,117 @@ impl<'a> Layer<'a> {
             drop(batch);
         }
         Ok(fids)
+    }
+
+    /// Whether a `write_all` should take the D8 bulk-build path: the layer has a
+    /// geometry column and a single-column primary key, a recognised spatial
+    /// index whose contents are empty, and `size_hint_lower` reaches the
+    /// threshold.
+    fn bulk_write_applicable(
+        &self,
+        size_hint_lower: usize,
+        options: BulkIndexOptions,
+    ) -> Result<bool> {
+        if size_hint_lower < options.bulk_threshold {
+            return Ok(false);
+        }
+        let Some(geom) = self.geometry_column() else {
+            return Ok(false);
+        };
+        if self.primary_key_column().is_none() || !self.has_spatial_index()? {
+            return Ok(false);
+        }
+        let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
+        let count: i64 = self.gpkg().connection().query_row(
+            &format!("SELECT count(*) FROM {}", quote(&rtree)?),
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(count == 0)
+    }
+
+    /// The D8 bulk write path: drop the rtree triggers, insert every row in one
+    /// transaction (no per-row index maintenance, but `gpkg_contents` bbox and
+    /// `last_change` are still maintained by the writer commit), then rebuild the
+    /// index in bulk and reinstall the triggers.
+    ///
+    /// On any failure after the triggers are dropped, the index is restored to a
+    /// consistent, trigger-maintained state before the error is returned.
+    fn write_all_bulk<G, I>(&self, features: I) -> Result<Vec<i64>>
+    where
+        G: GeometryTrait<T = f64>,
+        I: IntoIterator<Item = NewFeature<G>>,
+    {
+        let geom = self
+            .geometry_column()
+            .ok_or_else(|| Error::NoGeometryColumn {
+                table_name: self.table_name().to_owned(),
+            })?;
+        let pk = self
+            .primary_key_column()
+            .ok_or_else(|| Error::NoPrimaryKey {
+                table_name: self.table_name().to_owned(),
+            })?;
+        let table = self.table_name();
+        let column = &geom.column_name;
+        let rtree = triggers::rtree_table_name(table, column);
+        let conn = self.gpkg().connection();
+
+        drop_all_rtree_triggers(conn, table, column)?;
+
+        let result = (|| -> Result<Vec<i64>> {
+            let mut fids = Vec::new();
+            let mut writer = self.writer()?;
+            for feature in features {
+                let fid = match &feature.geometry {
+                    Some(geometry) => writer.insert(feature.fid, geometry, &feature.values)?,
+                    None => writer.insert_row(feature.fid, &feature.values)?,
+                };
+                fids.push(fid);
+            }
+            writer.commit()?;
+            bulk::fill_index(conn, table, column, pk, &rtree, bulk::no_tamper, |conn| {
+                for sql in triggers::create_triggers_sql(table, column, pk)? {
+                    conn.execute_batch(&sql)?;
+                }
+                Ok(())
+            })?;
+            Ok(fids)
+        })();
+
+        if result.is_err() {
+            restore_index_after_failed_bulk(conn, table, column, pk, &rtree);
+        }
+        result
+    }
+}
+
+/// Best-effort restore of a consistent, trigger-maintained index after a bulk
+/// write failed with the triggers dropped: reinstall the trigger set and
+/// rebuild the index content from the current rows. Any error here is ignored —
+/// the caller is already returning the original failure — but the common outcome
+/// is an index that is once again correct and maintained.
+fn restore_index_after_failed_bulk(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    pk: &str,
+    rtree: &str,
+) {
+    let restore = || -> Result<()> {
+        let tx = conn.unchecked_transaction()?;
+        drop_all_rtree_triggers(&tx, table, column)?;
+        tx.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote(rtree)?))?;
+        tx.execute_batch(&triggers::create_rtree_table_sql(table, column)?)?;
+        for sql in triggers::create_triggers_sql(table, column, pk)? {
+            tx.execute_batch(&sql)?;
+        }
+        tx.execute_batch(&triggers::populate_rtree_sql(table, column, pk)?)?;
+        tx.commit()?;
+        Ok(())
+    };
+    if restore().is_err() {
+        // Deliberately ignored: this is best-effort recovery on an error path.
     }
 }
 
