@@ -60,6 +60,44 @@ pub enum Error {
         /// The requested table name.
         table_name: String,
     },
+    /// A column was requested that the table does not have.
+    #[error("table {table_name:?} has no column {column_name:?}")]
+    NoSuchColumn {
+        /// The table that was queried.
+        table_name: String,
+        /// The requested column name.
+        column_name: String,
+    },
+    /// A stored value's SQLite storage class is incompatible with the column's
+    /// declared GeoPackage type; the value is surfaced rather than coerced.
+    #[error("column {column:?} declared {declared:?} holds an incompatible {found} value")]
+    ValueTypeMismatch {
+        /// The column that was read.
+        column: String,
+        /// The column's declared GeoPackage type.
+        declared: geopackage_core::types::ColumnType,
+        /// The SQLite storage class actually found: one of `NULL`, `INTEGER`,
+        /// `REAL`, `TEXT`, or `BLOB`.
+        found: &'static str,
+    },
+    /// A `DATE` or `DATETIME` column holds text that does not parse.
+    #[error("column {column:?} holds invalid date/datetime text {text:?}")]
+    InvalidDateTimeValue {
+        /// The column that was read.
+        column: String,
+        /// The offending text as stored.
+        text: String,
+        /// The underlying parse error.
+        #[source]
+        source: geopackage_core::datetime::DateTimeError,
+    },
+    /// A geometry column was read through the value API, which handles only
+    /// non-geometry columns; geometry is read through the feature API.
+    #[error("column {column:?} is a geometry column and cannot be read as a Value")]
+    GeometryValueUnsupported {
+        /// The geometry column that was read.
+        column: String,
+    },
 }
 
 /// Convenience alias.

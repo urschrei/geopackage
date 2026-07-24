@@ -9,15 +9,28 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
 - [x] `SrsDefinition` lookup module (vendored subset + synthesised WGS 84 UTM
       zones; decision recorded in [02-ecosystem.md](02-ecosystem.md)) +
       `srs()` / `srs_list()` / `add_srs()` / `add_epsg_srs()` on `GeoPackage`.
-- [ ] `gpkg_geometry_columns` model: geometry type name (incl. the non-linear
+- [x] `gpkg_geometry_columns` model: geometry type name (incl. the non-linear
       extension type names, read-only for now), srs_id, z/m flags (0/1/2).
-- [ ] `TableSchema` introspection: column names, declared gpkg types
+      `GeometryColumn` + `ZmFlag` (core) + `geometry_column()` /
+      `geometry_columns()`; a missing table reads as no rows.
+- [x] `TableSchema` introspection: column names, declared gpkg types
       (BOOLEAN, TINYINT, SMALLINT, MEDIUMINT, INT/INTEGER, FLOAT, DOUBLE/REAL,
       TEXT(maxlen), BLOB(maxlen), DATE, DATETIME, geometry types), pk column
       discovery (`fid` convention but never assumed — read `PRAGMA table_info`).
-- [ ] `Value` enum mapping SQLite storage classes ↔ gpkg column types;
+      `TableSchema` + `Column` + `table_schema()`; composite pks surfaced via
+      `primary_key_columns()`, single-pk convenience via `primary_key()`.
+- [x] `Value` enum mapping SQLite storage classes ↔ gpkg column types;
       strict DATETIME parsing (`YYYY-MM-DDTHH:MM:SS.SSSZ` — 1.4 kept the
-      strict form) with a lenient read option.
+      strict form) with a lenient read option (`ConversionOptions` /
+      `DateTimeParsing`). Non-geometry only; storage/type mismatch is a typed
+      error. Reachable via the `column_values()` building block.
+- [ ] Revisit `Value` conversion leniencies once a validation option exists:
+      `BOOLEAN` currently maps any non-zero INTEGER to `true`, and a whole
+      number stored with integer affinity in a `FLOAT`/`DOUBLE` column is
+      widened to `Value::Float` rather than rejected.
+- [ ] Fold the `column_values()` building block into the streaming feature/
+      attribute read path when it lands (it was added here only to make `Value`
+      conversion reachable and testable ahead of `layer()`/`features()`).
 
 ### Geometry
 - [ ] `GpbGeometry<'a>` wrapper: parsed header + WKB body slice, implementing
