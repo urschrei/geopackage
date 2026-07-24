@@ -328,11 +328,16 @@ impl<'a> Layer<'a> {
         let (sql, geom_idx, uses_rtree) = self.features_in_plan()?;
         let params = if uses_rtree {
             use rusqlite::types::Value as Sql;
+            // SQLite's RTree coerces bound f64 constraints to f32, and at
+            // sub-normal magnitudes that coercion is not conservative: a
+            // truly-intersecting candidate can be excluded before the f64
+            // re-test runs. Widen each bound one f32 ULP outward before
+            // binding; the exact f64 re-filter below restores precision.
             vec![
-                Sql::Real(bbox.max_x),
-                Sql::Real(bbox.min_x),
-                Sql::Real(bbox.max_y),
-                Sql::Real(bbox.min_y),
+                Sql::Real(widen_up(bbox.max_x)),
+                Sql::Real(widen_down(bbox.min_x)),
+                Sql::Real(widen_up(bbox.max_y)),
+                Sql::Real(widen_down(bbox.min_y)),
             ]
         } else {
             Vec::new()
@@ -617,6 +622,17 @@ fn blob_xy_envelope(blob: &[u8]) -> Result<Option<[f64; 4]>> {
     Ok(GpbGeometry::parse(blob)
         .map_err(|e| Error::Core(e.into()))?
         .xy_envelope())
+}
+
+/// Round a query upper bound outward: to `f32` (nearest), then one ULP up.
+/// Conservative for any input; the `f64` re-filter restores exactness.
+fn widen_up(v: f64) -> f64 {
+    f64::from((v as f32).next_up())
+}
+
+/// Round a query lower bound outward: to `f32` (nearest), then one ULP down.
+fn widen_down(v: f64) -> f64 {
+    f64::from((v as f32).next_down())
 }
 
 /// Qualify an identifier with an optional table prefix, quoting it.

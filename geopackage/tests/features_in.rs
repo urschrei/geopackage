@@ -44,23 +44,19 @@ fn linestring_blob(pts: &[(f64, f64)]) -> Vec<u8> {
     b
 }
 
-/// A realistic-magnitude `f64` coordinate in `[-100, 100]`, quantised to 6
-/// decimal places. It is generally not representable in `f32` (so it still
-/// stresses the RTree's `f32` bound rounding and the candidate re-test), but its
-/// magnitude stays out of the `f32` sub-normal band (`|x| < ~1.2e-38`).
+/// An arbitrary finite `f64` coordinate in `[-100, 100]`, un-quantised.
 ///
-/// Un-quantised draws let hegel reach sub-normal-magnitude coordinates, where
-/// SQLite's RTree coerces the `f64` query constraints to `f32` non-conservatively
-/// and drops a truly-intersecting candidate before `features_in`'s `f64` re-test
-/// runs. That is a real (M1 read-path) edge outside the domain of geographic
-/// coordinates — flagged in `roadmap/04-m2-write-rtree.md`, not exercised here.
+/// The full range — including the `f32` sub-normal band (`|x| < ~1.2e-38`)
+/// that originally broke path equivalence (issue #12) — is deliberately in
+/// play: `features_in` widens its RTree query bounds one `f32` ULP outward
+/// before binding, so the vtab candidate set is a conservative superset at
+/// every magnitude and the `f64` re-filter restores exactness.
 fn draw_coord(tc: &hegel::TestCase) -> f64 {
-    let v = tc.draw(
+    tc.draw(
         generators::floats::<f64>()
             .min_value(-100.0)
             .max_value(100.0),
-    );
-    (v * 1_000_000.0).round() / 1_000_000.0
+    )
 }
 
 /// A drawn point or short linestring geometry blob (no header envelope, forcing
