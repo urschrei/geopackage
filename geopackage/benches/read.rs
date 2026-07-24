@@ -38,14 +38,25 @@ fn coord(i: usize) -> (f64, f64) {
     (x, y)
 }
 
-/// Build a point GeoPackage of `n` rows, optionally with a spatial index. The
-/// returned `TempDir` must outlive the handle.
+/// Build a point GeoPackage of `n` rows, optionally with a spatial index, then
+/// close it and reopen it for reading. The returned `TempDir` must outlive the
+/// handle.
+///
+/// The reopen is deliberate. Querying through the same connection that built
+/// the index measures a connection warmed as a side effect of index
+/// construction rather than the query itself: with the pre-0.2 gate, the
+/// build's whole-database `PRAGMA integrity_check` read every page and left
+/// index queries roughly 4x faster than on a freshly opened file, for a
+/// byte-identical index. Reopening measures what a caller querying an existing
+/// `.gpkg` actually gets, and makes the figures independent of how the fixture
+/// was built.
 fn build(n: usize, indexed: bool) -> (tempfile::TempDir, GeoPackage) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let gpkg = GeoPackage::create(dir.path().join("read.gpkg")).expect("create gpkg");
-    let builder =
-        TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326));
+    let path = dir.path().join("read.gpkg");
     {
+        let gpkg = GeoPackage::create(&path).expect("create gpkg");
+        let builder =
+            TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326));
         let layer = gpkg.create_layer(&builder).expect("create layer");
         let features: Vec<NewFeature<Geometry<f64>>> = (0..n)
             .map(|i| {
@@ -57,7 +68,9 @@ fn build(n: usize, indexed: bool) -> (tempfile::TempDir, GeoPackage) {
         if indexed {
             layer.create_spatial_index().expect("create spatial index");
         }
+        gpkg.close().expect("close gpkg");
     }
+    let gpkg = GeoPackage::open(&path).expect("reopen gpkg");
     (dir, gpkg)
 }
 
