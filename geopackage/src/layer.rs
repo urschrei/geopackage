@@ -396,6 +396,18 @@ impl<'a> Layer<'a> {
         if !table_exists(conn, &rtree)? {
             return Ok(false);
         }
+        Ok(self.classify_rtree_triggers(&geom.column_name)? != TriggerGeneration::None)
+    }
+
+    /// Classify the RTree trigger generation present on this layer's table for
+    /// `column`, reading the trigger names from `sqlite_master`.
+    ///
+    /// This is the classification the read path
+    /// ([`Self::has_spatial_index`]) and the index-repair path
+    /// ([`Self::repair_spatial_index`]) share; it inspects only trigger names,
+    /// not the virtual table or primary key.
+    pub(crate) fn classify_rtree_triggers(&self, column: &str) -> Result<TriggerGeneration> {
+        let conn = self.gpkg.connection();
         let names: Vec<String> = {
             let mut stmt = conn.prepare(
                 "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?1",
@@ -403,12 +415,11 @@ impl<'a> Layer<'a> {
             stmt.query_map([self.table_name.as_str()], |r| r.get(0))?
                 .collect::<rusqlite::Result<_>>()?
         };
-        let generation = triggers::classify_triggers(
+        Ok(triggers::classify_triggers(
             names.iter().map(String::as_str),
             &self.table_name,
-            &geom.column_name,
-        );
-        Ok(generation != TriggerGeneration::None)
+            column,
+        ))
     }
 
     fn features_in_plan(&self) -> Result<(String, Option<usize>, bool)> {

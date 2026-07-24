@@ -16,11 +16,14 @@
 //!   identical results.
 //! - [`Layer::select`] appends a caller-supplied `WHERE` clause (raw SQL, per
 //!   design decision D9: SQL is the query engine).
+//! - [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`], and
+//!   [`Layer::repair_spatial_index`] manage the RTree spatial index (the
+//!   GeoPackage 1.4 trigger set, design decision D7).
 //! - [`GeoPackage::open_lenient`] tolerates legacy and lightly malformed files,
 //!   collecting [`OpenWarning`]s instead of failing.
 //!
-//! Feature/attribute writes, spatial index maintenance from Rust, and the
-//! GeoArrow bulk plane arrive in later milestones — see the repository roadmap.
+//! The bulk-load index path (design decision D8) and the GeoArrow bulk plane
+//! arrive in later milestones — see the repository roadmap.
 //!
 //! ```no_run
 //! # fn main() -> Result<(), geopackage::Error> {
@@ -36,6 +39,7 @@
 mod create;
 mod error;
 mod functions;
+mod index;
 mod layer;
 mod open;
 mod schema;
