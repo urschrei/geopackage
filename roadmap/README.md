@@ -58,12 +58,18 @@ Data Interface as the bulk data plane.
   tagged at `b3649cc` with a GitHub release, and `geopackage-core` 0.1.0 and
   `geopackage` 0.1.0 are on crates.io and building on docs.rs. Released with the
   following still open:
-  - **GDAL-parity performance target**: not yet met. Unindexed writes are
-    competitive, but the D8 bulk indexed write is ~3-4x slower than GDAL's
-    indexed `ogr2ogr` copy at 1M rows — the whole-database `integrity_check`
-    gate and the per-row `ST_*` envelope scan dominate. The two open D8
-    follow-ups (scope the structural check to `rtreecheck`; build the scratch
-    RTree in a separate connection) target this; see the 2026-07-24 benchmark.
+  - **GDAL-parity performance target**: not yet met, but improved after the
+    release. Unindexed writes are competitive; the D8 bulk indexed write went
+    from ~3.9x GDAL's indexed `ogr2ogr` copy to ~2.6x (7.31 s to 4.95 s at 1M
+    points) by committing the scratch inserts in one transaction, gating on
+    `rtreecheck` instead of a whole-database `integrity_check` (#16, closed),
+    and reusing `write_all`'s encode-time envelopes. The release-time
+    attribution was wrong: the `ST_*` scan was 0.26 s of 7.26 s, while the
+    scratch RTree build was 4.61 s. That build (now 3.03 s) is SQLite's own
+    per-row RTree insertion and is what remains; closing the gap needs packed
+    node construction (#20). See
+    [benchmarks/2026-07-24-bulk-build.md](benchmarks/2026-07-24-bulk-build.md),
+    which also records why the read benchmark's fixture had to change.
   - **Shipped known limitation**: the `wkb` 0.9.2 untrusted-count OOM (#3) was
     scoped "before v0.1" but no upstream fix has been released (0.9.2 is still
     latest), so 0.1.0 ships with it. Now documented as a known limitation in the

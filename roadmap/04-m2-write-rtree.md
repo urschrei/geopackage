@@ -103,12 +103,17 @@ write performance competitive with GDAL's GPKG driver.
       `geopackage/tests/wal_journal.rs`.)*
 
 ### Bulk-build follow-ups (discovered during D8)
-- [ ] (issue #16) Gate cost: the D8 gate runs a whole-database `PRAGMA integrity_check`,
-      which is O(database) and dominates the gate on very large files; a benign
-      pre-existing issue anywhere also forces the (still correct) triggered
-      fallback. Consider scoping the structural check to `rtreecheck(<rtree>)`
-      (available in bundled SQLite 3.53) with `integrity_check` behind an option,
-      once benchmarks quantify the cost.
+- [x] (issue #16) Gate cost: the D8 gate ran a whole-database `PRAGMA integrity_check`,
+      which is O(database) and dominated the gate on very large files; a benign
+      pre-existing issue anywhere also forced the (still correct) triggered
+      fallback. *(Done. The gate now runs `rtreecheck(<rtree>)` on the index just
+      built, 0.97 s to 0.50 s at 1M rows; `rtreecheck` has existed since SQLite
+      3.26, so the bundled 3.51.3 has it (the earlier note saying 3.53 was wrong).
+      The whole-database check stays available as
+      `StructuralCheck::FullDatabase`. Removing it from the default also exposed
+      that the read benchmark was measuring a connection warmed by
+      `integrity_check` rather than the query; see
+      [benchmarks/2026-07-24-bulk-build.md](benchmarks/2026-07-24-bulk-build.md).)*
 - [x] Bulk-build atomicity: `ATTACH`/`DETACH` require autocommit, so the scratch
       build and detach sit outside the copy transaction. For `write_all` the row
       inserts commit before the index rebuild, so a crash between them can leave
@@ -162,16 +167,21 @@ write performance competitive with GDAL's GPKG driver.
       GDAL's source read, so it is conservative for a pure write). Benches compile
       in CI via clippy `--all-targets`; they carry `test = false` so `cargo test`
       never runs them.)*
-- [ ] Target: bulk indexed write ≥ GDAL parity (its own rtree trick means
-      parity is the honest goal, not a multiple). *(**Not yet met** — the
-      benchmark is the evidence. Unindexed writes are competitive (our write-only
-      point load 0.81 s vs GDAL's 1.22 s read+write); the D8 bulk indexed write is
-      ~3-4x slower than GDAL's indexed `ogr2ogr` copy (7.31 s vs 1.89 s for 1M
-      points). The overhead beyond the raw insert is the gate's whole-database
-      `PRAGMA integrity_check` (O(database)) and the per-row `ST_*` envelope scan
-      (4M function calls) — exactly the two open D8 follow-ups above (scope the
-      structural check to `rtreecheck`; build the scratch RTree in a separate
-      connection). Stays open pending those.)*
+- [ ] Target: bulk indexed write >= GDAL parity (its own rtree trick means
+      parity is the goal, not a multiple). *(**Not yet met**, but closer.
+      Unindexed writes are competitive (our write-only point load 0.81 s vs
+      GDAL's 1.22 s read+write). The D8 bulk indexed write went from ~3.9x
+      GDAL's indexed `ogr2ogr` copy to ~2.6x (7.31 s to 4.95 s against 1.89 s
+      for 1M points) via three fixes: the scratch inserts now run in one
+      transaction, the gate uses `rtreecheck` rather than a whole-database
+      `integrity_check` (#16), and `write_all` reuses its encode-time envelopes
+      instead of rescanning. The original attribution was wrong: the `ST_*` scan
+      was only 0.26 s of 7.26 s, while the scratch RTree build was 4.61 s.
+      What remains is that scratch build (3.03 s), which is SQLite's own per-row
+      RTree insertion; Hilbert-ordered insertion and a larger scratch page size
+      were both tried and do not help. Closing the gap needs packed node
+      construction in Rust (#20). See
+      [benchmarks/2026-07-24-bulk-build.md](benchmarks/2026-07-24-bulk-build.md).)*
 
 ## Acceptance criteria
 

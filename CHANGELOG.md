@@ -8,6 +8,28 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- `StructuralCheck` and `BulkIndexOptions::with_structural_check`, selecting how
+  thoroughly the bulk-build gate checks database structure after copying the
+  shadow tables: `RtreeOnly` (the new default, `rtreecheck()` on the index just
+  built) or `FullDatabase` (additionally a whole-database
+  `PRAGMA integrity_check`, the previous behaviour).
+
+### Changed
+
+- Bulk spatial-index builds are roughly a third faster: 1M-point indexed
+  `write_all` goes from 7.31s to 4.95s (criterion, point -32.3%, linestring
+  -33.3%, polygon -35.6%, all p < 0.05). Three fixes: the scratch RTree inserts
+  now run in one transaction rather than one implicit transaction per row; the
+  gate uses `rtreecheck()` instead of a whole-database `integrity_check` ([#16]);
+  and `write_all` reuses the envelopes it computes while encoding instead of
+  re-deriving them with an `ST_*` scan. The index produced is byte-identical.
+- The read benchmark now closes and reopens its fixture before measuring, rather
+  than querying through the connection that built it. Its figures are therefore
+  slower than, and not comparable to, the v0.1.0 set. See
+  `roadmap/benchmarks/2026-07-24-bulk-build.md`.
+
 ## [0.1.0] - 2026-07-24
 
 First release: the GeoPackage 1.4 read path (M1) and write path with
@@ -71,8 +93,10 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   malformed geometry can drive a multi-gigabyte allocation; do not parse
   untrusted files with this release ([#3]).
 - Bulk indexed writes are roughly 3-4x slower than an indexed `ogr2ogr` copy at
-  1M rows, dominated by the bulk-build gate's whole-database `integrity_check`
-  and the per-row `ST_*` envelope scan ([#15], [#16]).
+  1M rows ([#15], [#16]). The cost attributed here at release time was wrong:
+  profiling afterwards put 4.61s of the 7.26s in the scratch RTree build, not in
+  the gate's `integrity_check` (0.97s) or the `ST_*` envelope scan (0.26s). Much
+  of this is addressed in Unreleased; the remainder is [#20].
 - Non-linear curve types cannot have envelopes computed and so cannot be
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
@@ -84,3 +108,4 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
 [#5]: https://github.com/urschrei/geopackage/issues/5
 [#15]: https://github.com/urschrei/geopackage/issues/15
 [#16]: https://github.com/urschrei/geopackage/issues/16
+[#20]: https://github.com/urschrei/geopackage/issues/20
