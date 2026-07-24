@@ -179,20 +179,18 @@ write performance competitive with GDAL's GPKG driver.
       GDAL's source read, so it is conservative for a pure write). Benches compile
       in CI via clippy `--all-targets`; they carry `test = false` so `cargo test`
       never runs them.)*
-- [x] Target: bulk indexed write >= GDAL parity (its own rtree trick means
-      parity is the goal, not a multiple). *(**Met on the benchmark, with a
-      caveat.** At 1M rows the packed build is ~2.08 s (point), ~2.08 s
-      (linestring) and ~2.14 s (polygon) against GDAL's indexed `ogr2ogr` at
-      1.89 / 2.03 / 2.13 s: lines and polygons at parity, points within ~10%.
-      The caveat is the one the original write-up recorded and which now
-      dominates the reading: `ogr2ogr`'s figure includes reading its source
-      file, ours is write-only from memory, so GDAL is doing more work for the
-      same number. Parity here is not parity on equal work. Getting there took
-      four changes, in decreasing order of effect: packed node construction
-      (#20), the scratch inserts running in one transaction, the `rtreecheck`
-      gate (#16), and reusing `write_all`'s encode-time envelopes. History:
-      7.31 s at v0.1.0, 4.95 s after the first three, ~2.08 s packed. See
-      [benchmarks/2026-07-24-packed-nodes.md](benchmarks/2026-07-24-packed-nodes.md).)*
+- [ ] Target: bulk indexed write >= GDAL parity (its own rtree trick means
+      parity is the goal, not a multiple). *(**Not met.** This was ticked on
+      2026-07-24 and is now unticked: the measurement it rested on was not a
+      like-for-like test. It compared our write-only path against `ogr2ogr`
+      copying a whole GeoPackage, so GDAL's figure also carried a source read, a
+      geometry parse and a file write. Measuring the same operation on the same
+      file, via GDAL's `CreateSpatialIndex` SQL function, our index build is
+      **1.25x slower** on uniform points and **1.73x slower** on clustered ones
+      at 1M rows. What the packed build does win is size: a third fewer nodes
+      (20,002 against 29,890) for equivalent query latency. See
+      [benchmarks/2026-07-24-gdal-like-for-like.md](benchmarks/2026-07-24-gdal-like-for-like.md)
+      and `scripts/compare_gdal_index.sh`.)*
 
 - [x] (issue #20) Build the RTree without the module: pack `%_node`/`%_rowid`/
       `%_parent` directly from the entry set rather than inserting row by row

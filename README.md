@@ -120,6 +120,12 @@ for the detailed results.
 
 ## Known limitations
 
+- **Index building is slower than GDAL's.** Measured on the same operation over
+  the same file, building the RTree is 1.25x slower than GDAL on uniformly
+  spread points and 1.73x slower on clustered points at 1M rows. The tree
+  produced is a third smaller for equivalent query latency. See
+  [the like-for-like comparison](https://github.com/urschrei/geopackage/blob/main/roadmap/benchmarks/2026-07-24-gdal-like-for-like.md).
+
 - **Untrusted files can trigger a large allocation.** The `wkb` 0.9.2 reader
   pre-allocates from element counts read out of the geometry blob without
   bounding them against the buffer, so a malformed 17-byte GPB blob declaring a

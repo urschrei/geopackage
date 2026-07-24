@@ -1,5 +1,12 @@
 # Packed RTree node construction
 
+> **The GDAL comparison in this document is superseded by
+> [2026-07-24-gdal-like-for-like.md](2026-07-24-gdal-like-for-like.md).** The
+> "Ours vs GDAL" section below compares against `ogr2ogr`, whose figure includes
+> reading a source file, and concludes parity. Measured on the same operation
+> over the same file, our build is 1.25x to 1.73x slower. The write-throughput
+> and read-throughput figures here stand; the parity conclusion does not.
+
 Follow-up to [2026-07-24-bulk-build.md](2026-07-24-bulk-build.md), which left
 the scratch RTree build as the dominant remaining cost. Same machine and
 software as the earlier runs (Apple M2 Pro, macOS 15.6.1, SQLite 3.51.3
