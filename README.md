@@ -4,12 +4,11 @@
 [![crates.io](https://img.shields.io/crates/v/geopackage.svg)](https://crates.io/crates/geopackage)
 [![docs.rs](https://docs.rs/geopackage/badge.svg)](https://docs.rs/geopackage)
 
-A fast, robust, production-quality Rust implementation of the
+A fast, robust, Rust implementation of the
 [OGC GeoPackage 1.4](https://www.geopackage.org/spec140/) format, intended for
-use from Rust and, via a C ABI with the Arrow C Data Interface as the bulk
-data plane, from higher-level languages.
+use from Rust and via a C ABI which implements the Arrow C Data Interface.
 
-**Status: pre-alpha (0.1.0).** The read and write paths are complete and
+**Status: pre-alpha (0.1.x).** The read and write paths are complete and
 validated against external tooling (see [Conformance](#conformance)), but the
 API will change without notice before 1.0.
 

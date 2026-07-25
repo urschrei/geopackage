@@ -41,6 +41,11 @@ more complex code than feature-based equivalents, impedance mismatches between
 native and Arrow types, and Arrow types being a moving target. The DATETIME
 mapping below is exactly that kind of mismatch.
 
+The slides do not say what the "tricks" are, so the driver was read directly:
+[benchmarks/2026-07-25-gdal-arrow-techniques.md](benchmarks/2026-07-25-gdal-arrow-techniques.md).
+It settles several questions below, and confirms from their source what we had
+assumed about GPB bodies being usable as WKB without a parse.
+
 ## Tasks
 
 ### Arrow / GeoArrow (feature `arrow`)
@@ -55,18 +60,34 @@ mapping below is exactly that kind of mismatch.
       row. Reusing the row path is the obvious way to write this and is the
       shape that measured 0.61x above. This is a correctness-of-approach item,
       so it is pinned by the criteria rather than by a unit test.
+      Write the direct statement loop first and measure it. GDAL goes further,
+      filling each batch from a SQLite *aggregate function* so that the whole
+      batch is produced inside one `sqlite3_exec` (see the study note); that is
+      expressible in safe Rust via rusqlite, but it removes an overhead that is
+      larger in C++ than it is here, and it is a substantial complication. Hold
+      it in reserve for the case where the direct loop misses criterion 1.
 - [ ] Parallel `read_arrow`: one connection per thread over disjoint primary-key
       ranges, since SQLite permits concurrent readers and `rusqlite::Connection`
-      is `Send`, so handle-per-thread needs no `unsafe`. Open questions to
-      settle when it is built: whether batches are delivered in key order or
-      the order is documented as unspecified; how ranges are chosen when keys are
-      sparse (an even split of the key space is not an even split of the rows);
-      how a bbox query splits its rtree candidate set; the default thread count;
-      and whether a scoped-thread implementation suffices or a work-stealing
-      dependency earns its place under the 02-ecosystem policy. A `:memory:`
-      database cannot be shared between connections, so the parallel path
-      requires a file and the property tests that use `:memory:` exercise the
-      single-threaded path only.
+      is `Send`, so handle-per-thread needs no `unsafe`. The shape is settled by
+      reading GDAL's driver (see the study note): read-only connections only,
+      which removes the writer-under-readers question rather than answering it;
+      batches delivered in feature-id order, which falls out of assigning each
+      task a fixed start offset and consuming the queue FIFO; a default of
+      `min(4, cpus)` threads. Sparse primary keys are not solved but detected:
+      the parallel path engages only when `min(fid) == 1` and
+      `max(fid) == row count`, so `WHERE fid BETWEEN a AND b` is a rowid range
+      scan, and anything else falls back to the single-threaded path. Still open:
+      how a bbox query splits its rtree candidate set, and whether scoped threads
+      suffice or a work-stealing dependency earns its place under the
+      02-ecosystem policy. A `:memory:` database cannot be shared between
+      connections, so the parallel path requires a file and the property tests
+      that use `:memory:` exercise the single-threaded path only.
+- [ ] Decide the WKB column's Arrow type. `BinaryArray` carries int32 offsets, so
+      one batch cannot hold more than 2 GB of WKB, which large polygons reach.
+      GDAL cuts the batch short against a byte budget of `min(INT32_MAX,
+      RAM / 4)`; `LargeBinaryArray` avoids the ceiling instead. Check which the
+      `geoarrow.wkb` encoding permits before choosing. Default batch size 65536,
+      following GDAL.
 - [ ] `layer.write_arrow(reader: impl RecordBatchReader)`: schema→TableSchema
       mapping, batched writes through the M2 bulk path (rtree shadow-table
       build included; this is the pyogrio-shaped fast path). A
