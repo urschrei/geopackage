@@ -8,6 +8,10 @@ geopackage-core/fuzz/coverage
 # Externally fetched corpus (scripts/fetch_corpus.sh); never committed.
 /corpus
 
+# Externally fetched benchmark datasets (scripts/bench_datasets.sh); several
+# gigabytes, and never committed.
+/benchdata
+
 # Default output path of the bulk_load example when run without an argument.
 /bulk_load.gpkg
 
