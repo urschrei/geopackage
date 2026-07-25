@@ -55,7 +55,8 @@ use arrow_array::builder::{
     BinaryBuilder, BooleanBuilder, Date32Builder, Float64Builder, Int64Builder, StringBuilder,
     TimestampMicrosecondBuilder,
 };
-use arrow_array::{ArrayRef, RecordBatch, RecordBatchReader};
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef, TimeUnit};
 use geopackage_core::datetime::{Date, DateTime};
 use geopackage_core::gpb;
@@ -68,7 +69,7 @@ use rusqlite::types::ValueRef;
 
 use crate::schema::{Column, GeometryColumn};
 use crate::value::DateTimeParsing;
-use crate::{Error, Layer, Result};
+use crate::{Error, Layer, Result, Value};
 
 /// Default number of rows per [`RecordBatch`].
 ///
@@ -1351,4 +1352,372 @@ fn micros_since_epoch(stamp: DateTime) -> i64 {
     let offset_seconds = i64::from(stamp.offset_minutes.unwrap_or(0)) * 60;
     let seconds = days * 86_400 + seconds_of_day - offset_seconds;
     seconds * MICROS_PER_SECOND + i64::from(stamp.nanosecond / 1_000)
+}
+
+/// One row taken from a [`RecordBatch`], ready for the write path.
+///
+/// Geometry stays as the WKB bytes the batch holds, so the write path can put a
+/// header in front of them rather than parsing a geometry and writing it back
+/// out. See [`crate::writer::WritableRow`].
+struct ArrowRow {
+    fid: Option<i64>,
+    wkb: Option<Vec<u8>>,
+    values: Vec<Value>,
+}
+
+impl crate::writer::WritableRow for ArrowRow {
+    fn write(self, writer: &mut crate::FeatureWriter<'_>) -> Result<(i64, Option<[f64; 4]>)> {
+        match &self.wkb {
+            Some(wkb) => writer.insert_wkb(self.fid, wkb, &self.values),
+            None => writer
+                .insert_row(self.fid, &self.values)
+                .map(|fid| (fid, None)),
+        }
+    }
+}
+
+impl Layer<'_> {
+    /// Write Arrow [`RecordBatch`]es into this layer.
+    ///
+    /// The columnar counterpart of [`crate::Layer::write_all`], and it shares
+    /// that path: batching, the bulk spatial-index decision and the single
+    /// transaction all behave identically. What differs is that a geometry
+    /// arrives as WKB and stays as WKB, gaining a GPB header rather than being
+    /// parsed into a geometry object and serialised again.
+    ///
+    /// The reader's schema must name columns this layer has. Extra columns in
+    /// the batch are an error rather than being ignored, since silently dropping
+    /// data a caller asked to write is worse than refusing it. A column of the
+    /// layer that the batch does not name is left to its default.
+    ///
+    /// A [`RecordBatchReader`] does not say how many rows it will produce, which
+    /// is the case the bulk index path buffers for rather than trusting a size
+    /// hint (issue #17).
+    ///
+    /// Returns the assigned feature ids, in the order the rows were written.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ArrowValueMismatch`] for a column whose Arrow type does not fit
+    /// the layer's declared type, [`Error`] for the write itself, and any error
+    /// the reader yields.
+    pub fn write_arrow<R>(&self, batches: R, batch_size: usize) -> Result<Vec<i64>>
+    where
+        R: IntoIterator<Item = std::result::Result<RecordBatch, ArrowError>>,
+    {
+        self.write_arrow_with(batches, batch_size, crate::BulkIndexOptions::default())
+    }
+
+    /// [`Self::write_arrow`] with an explicit [`crate::BulkIndexOptions`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::write_arrow`].
+    pub fn write_arrow_with<R>(
+        &self,
+        batches: R,
+        batch_size: usize,
+        options: crate::BulkIndexOptions,
+    ) -> Result<Vec<i64>>
+    where
+        R: IntoIterator<Item = std::result::Result<RecordBatch, ArrowError>>,
+    {
+        let geometry_column = self.geometry_column().map(|g| g.column_name.clone());
+        let value_columns: Vec<String> = self
+            .value_columns()
+            .iter()
+            .filter(|column| Some(column.name.as_str()) != self.primary_key_column())
+            .map(|column| column.name.clone())
+            .collect();
+        let primary_key = self.primary_key_column().map(str::to_owned);
+
+        // Rows are produced lazily, so the bulk path sees an unsized iterator
+        // and buffers to decide, exactly as it does for any other lazy source.
+        let mut failure = None;
+        let rows = batches
+            .into_iter()
+            .flat_map(|batch| match batch {
+                Ok(batch) => rows_of(
+                    &batch,
+                    primary_key.as_deref(),
+                    geometry_column.as_deref(),
+                    &value_columns,
+                )
+                .unwrap_or_else(|error| {
+                    failure.get_or_insert(error);
+                    Vec::new()
+                }),
+                Err(error) => {
+                    failure.get_or_insert(Error::Arrow(error));
+                    Vec::new()
+                }
+            })
+            .collect::<Vec<ArrowRow>>();
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        self.write_all_impl(rows, batch_size, options, crate::bulk::no_fault)
+    }
+}
+
+/// Take one batch apart into rows the write path can consume.
+fn rows_of(
+    batch: &RecordBatch,
+    primary_key: Option<&str>,
+    geometry: Option<&str>,
+    value_columns: &[String],
+) -> Result<Vec<ArrowRow>> {
+    let schema = batch.schema();
+    for field in schema.fields() {
+        let known = Some(field.name().as_str()) == primary_key
+            || Some(field.name().as_str()) == geometry
+            || value_columns.iter().any(|name| name == field.name());
+        if !known {
+            return Err(Error::NoSuchColumn {
+                table_name: String::new(),
+                column_name: field.name().clone(),
+            });
+        }
+    }
+
+    let rows = batch.num_rows();
+    let mut out = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let fid = match primary_key.and_then(|name| batch.column_by_name(name)) {
+            Some(column) => read_i64(column, row)?,
+            None => None,
+        };
+        let wkb = match geometry.and_then(|name| batch.column_by_name(name)) {
+            Some(column) => read_binary(column, row)?,
+            None => None,
+        };
+        let mut values = Vec::with_capacity(value_columns.len());
+        for name in value_columns {
+            values.push(match batch.column_by_name(name) {
+                Some(column) => read_value(column, row, name)?,
+                None => Value::Null,
+            });
+        }
+        out.push(ArrowRow { fid, wkb, values });
+    }
+    Ok(out)
+}
+
+/// Read one `Int64` cell, for the feature id.
+fn read_i64(column: &ArrayRef, row: usize) -> Result<Option<i64>> {
+    if column.is_null(row) {
+        return Ok(None);
+    }
+    let values = column
+        .as_primitive_opt::<arrow_array::types::Int64Type>()
+        .ok_or_else(|| Error::ArrowValueMismatch {
+            column: String::new(),
+            expected: "Int64",
+            found: "other",
+        })?;
+    Ok(Some(values.value(row)))
+}
+
+/// Read one binary cell, for the geometry.
+fn read_binary(column: &ArrayRef, row: usize) -> Result<Option<Vec<u8>>> {
+    if column.is_null(row) {
+        return Ok(None);
+    }
+    if let Some(binary) = column.as_binary_opt::<i32>() {
+        return Ok(Some(binary.value(row).to_vec()));
+    }
+    if let Some(binary) = column.as_binary_opt::<i64>() {
+        return Ok(Some(binary.value(row).to_vec()));
+    }
+    Err(Error::ArrowValueMismatch {
+        column: String::new(),
+        expected: "Binary or LargeBinary",
+        found: "other",
+    })
+}
+
+/// Read one attribute cell as a [`Value`].
+///
+/// The inverse of the read path's mapping, and deliberately narrower: it accepts
+/// the types [`Layer::arrow_schema`] produces, so a round trip works, plus the
+/// narrower integer and float widths another producer is likely to emit.
+fn read_value(column: &ArrayRef, row: usize, name: &str) -> Result<Value> {
+    use arrow_array::types::{
+        Date32Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+        TimestampMicrosecondType, TimestampMillisecondType,
+    };
+
+    if column.is_null(row) {
+        return Ok(Value::Null);
+    }
+    let mismatch = |expected: &'static str| Error::ArrowValueMismatch {
+        column: name.to_owned(),
+        expected,
+        found: "an unsupported Arrow type",
+    };
+    Ok(match column.data_type() {
+        DataType::Boolean => Value::Boolean(
+            column
+                .as_boolean_opt()
+                .ok_or_else(|| mismatch("Boolean"))?
+                .value(row),
+        ),
+        DataType::Int8 => Value::Integer(i64::from(
+            column
+                .as_primitive_opt::<Int8Type>()
+                .ok_or_else(|| mismatch("Int8"))?
+                .value(row),
+        )),
+        DataType::Int16 => Value::Integer(i64::from(
+            column
+                .as_primitive_opt::<Int16Type>()
+                .ok_or_else(|| mismatch("Int16"))?
+                .value(row),
+        )),
+        DataType::Int32 => Value::Integer(i64::from(
+            column
+                .as_primitive_opt::<Int32Type>()
+                .ok_or_else(|| mismatch("Int32"))?
+                .value(row),
+        )),
+        DataType::Int64 => Value::Integer(
+            column
+                .as_primitive_opt::<Int64Type>()
+                .ok_or_else(|| mismatch("Int64"))?
+                .value(row),
+        ),
+        DataType::Float32 => Value::Float(f64::from(
+            column
+                .as_primitive_opt::<Float32Type>()
+                .ok_or_else(|| mismatch("Float32"))?
+                .value(row),
+        )),
+        DataType::Float64 => Value::Float(
+            column
+                .as_primitive_opt::<Float64Type>()
+                .ok_or_else(|| mismatch("Float64"))?
+                .value(row),
+        ),
+        DataType::Utf8 => Value::Text(
+            column
+                .as_string_opt::<i32>()
+                .ok_or_else(|| mismatch("Utf8"))?
+                .value(row)
+                .to_owned(),
+        ),
+        DataType::LargeUtf8 => Value::Text(
+            column
+                .as_string_opt::<i64>()
+                .ok_or_else(|| mismatch("LargeUtf8"))?
+                .value(row)
+                .to_owned(),
+        ),
+        DataType::Binary => Value::Blob(
+            column
+                .as_binary_opt::<i32>()
+                .ok_or_else(|| mismatch("Binary"))?
+                .value(row)
+                .to_vec(),
+        ),
+        DataType::LargeBinary => Value::Blob(
+            column
+                .as_binary_opt::<i64>()
+                .ok_or_else(|| mismatch("LargeBinary"))?
+                .value(row)
+                .to_vec(),
+        ),
+        DataType::Date32 => Value::Date(date_from_days(
+            column
+                .as_primitive_opt::<Date32Type>()
+                .ok_or_else(|| mismatch("Date32"))?
+                .value(row),
+        )?),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Value::DateTime(datetime_from_micros(
+            column
+                .as_primitive_opt::<TimestampMicrosecondType>()
+                .ok_or_else(|| mismatch("Timestamp"))?
+                .value(row),
+        )?),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => Value::DateTime(datetime_from_micros(
+            column
+                .as_primitive_opt::<TimestampMillisecondType>()
+                .ok_or_else(|| mismatch("Timestamp"))?
+                .value(row)
+                .saturating_mul(1_000),
+        )?),
+        other => {
+            return Err(Error::UnsupportedArrowType {
+                data_type: other.to_string(),
+            });
+        }
+    })
+}
+
+/// The civil date `days` after the Unix epoch: the inverse of
+/// [`days_since_epoch`].
+///
+/// Howard Hinnant's `civil_from_days`, the counterpart of the `days_from_civil`
+/// used on the read side. Like it, this is an interim arrangement pending issue
+/// #24.
+fn date_from_days(days: i32) -> Result<Date> {
+    let days = i64::from(days) + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = if month <= 2 { year + 1 } else { year };
+
+    let out_of_range = || Error::UnsupportedArrowType {
+        data_type: format!("Date32 value {days} outside the representable range"),
+    };
+    Date::new(
+        u16::try_from(year).ok().ok_or_else(out_of_range)?,
+        u8::try_from(month).ok().ok_or_else(out_of_range)?,
+        u8::try_from(day).ok().ok_or_else(out_of_range)?,
+    )
+    .map_err(|source| Error::InvalidDateTimeValue {
+        column: String::new(),
+        text: format!("Date32 {days}"),
+        source,
+    })
+}
+
+/// The UTC instant `micros` after the Unix epoch: the inverse of
+/// [`micros_since_epoch`].
+fn datetime_from_micros(micros: i64) -> Result<DateTime> {
+    const MICROS_PER_SECOND: i64 = 1_000_000;
+    const SECONDS_PER_DAY: i64 = 86_400;
+
+    // Floor division, so instants before the epoch land on the right day rather
+    // than rounding toward zero into the next one.
+    let seconds = micros.div_euclid(MICROS_PER_SECOND);
+    let sub_second = micros.rem_euclid(MICROS_PER_SECOND);
+    let days = seconds.div_euclid(SECONDS_PER_DAY);
+    let seconds_of_day = seconds.rem_euclid(SECONDS_PER_DAY);
+
+    let days = i32::try_from(days)
+        .ok()
+        .ok_or_else(|| Error::UnsupportedArrowType {
+            data_type: format!("timestamp {micros} outside the representable range"),
+        })?;
+    let date = date_from_days(days)?;
+    Ok(DateTime {
+        date,
+        hour: u8::try_from(seconds_of_day / 3600).unwrap_or(0),
+        minute: u8::try_from((seconds_of_day % 3600) / 60).unwrap_or(0),
+        second: u8::try_from(seconds_of_day % 60).unwrap_or(0),
+        nanosecond: u32::try_from(sub_second.saturating_mul(1_000)).unwrap_or(0),
+        // Always UTC: that is what the column means, and what the read side
+        // normalised to when it produced the timestamp.
+        offset_minutes: Some(0),
+    })
 }

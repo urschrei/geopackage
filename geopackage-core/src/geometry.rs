@@ -305,25 +305,40 @@ pub fn write_envelope<G: GeometryTrait<T = f64>>(geom: &G) -> (gpb::Envelope, bo
 /// Only the geometry's own extent is copied, not any trailing bytes the input
 /// slice may carry beyond it.
 ///
-/// Returns the blob and its XY envelope, as [`encode_gpb`] does.
+/// Returns the blob, its XY envelope as [`encode_gpb`] does, and the dimensions
+/// the body carries. The dimensions come back because the caller has to check
+/// them against the column's `z`/`m` constraints, and parsing twice to learn
+/// them would undo the point of this function.
 ///
 /// # Errors
 ///
 /// [`GeometryError`] if `wkb_body` is not a geometry the `wkb` reader accepts.
-pub fn encode_gpb_from_wkb(
-    wkb_body: &[u8],
-    srs_id: i32,
-) -> Result<(Vec<u8>, Option<[f64; 4]>), GeometryError> {
+pub fn encode_gpb_from_wkb(wkb_body: &[u8], srs_id: i32) -> Result<EncodedGpb, GeometryError> {
     let geometry = Wkb::try_new(wkb_body)?;
     let (envelope, empty) = write_envelope(&geometry);
-    let xy = envelope
+    let xy_envelope = envelope
         .xy_bounds()
         .map(|(min_x, max_x, min_y, max_y)| [min_x, max_x, min_y, max_y]);
     let body = geometry.buf();
     let mut blob = gpb::encode_header(srs_id, &envelope, empty, false);
     blob.reserve(body.len());
     blob.extend_from_slice(body);
-    Ok((blob, xy))
+    Ok(EncodedGpb {
+        blob,
+        xy_envelope,
+        dimensions: geometry.dim(),
+    })
+}
+
+/// What [`encode_gpb_from_wkb`] produced.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EncodedGpb {
+    /// The complete GPB blob: header followed by the ISO WKB body.
+    pub blob: Vec<u8>,
+    /// The geometry's XY envelope, or `None` when it is empty.
+    pub xy_envelope: Option<[f64; 4]>,
+    /// The dimensions the WKB body declares, for checking against the column.
+    pub dimensions: Dimensions,
 }
 
 /// Encode a geometry as a complete GeoPackage Binary (GPB) blob: an
@@ -967,9 +982,9 @@ mod encode_from_wkb_tests {
             let (expected, expected_xy) = encode_gpb(&geometry, 4326).unwrap();
             // Take the body the round-trip encoder wrote, and feed it back.
             let (_, offset) = gpb::parse_header(&expected).unwrap();
-            let (actual, actual_xy) = encode_gpb_from_wkb(&expected[offset..], 4326).unwrap();
-            assert_eq!(actual, expected, "blob differs");
-            assert_eq!(actual_xy, expected_xy, "envelope differs");
+            let actual = encode_gpb_from_wkb(&expected[offset..], 4326).unwrap();
+            assert_eq!(actual.blob, expected, "blob differs");
+            assert_eq!(actual.xy_envelope, expected_xy, "envelope differs");
         }
     }
 
@@ -978,9 +993,9 @@ mod encode_from_wkb_tests {
         let (blob, _) = encode_gpb(&Point::new(3.0, 4.0), 4326).unwrap();
         let (_, offset) = gpb::parse_header(&blob).unwrap();
         let mut body = blob[offset..].to_vec();
-        let clean = encode_gpb_from_wkb(&body, 4326).unwrap().0;
+        let clean = encode_gpb_from_wkb(&body, 4326).unwrap().blob;
         body.extend_from_slice(b"trailing rubbish");
-        let padded = encode_gpb_from_wkb(&body, 4326).unwrap().0;
+        let padded = encode_gpb_from_wkb(&body, 4326).unwrap().blob;
         assert_eq!(clean, padded, "trailing bytes reached the blob");
     }
 

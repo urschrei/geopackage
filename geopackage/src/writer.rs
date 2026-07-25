@@ -74,6 +74,8 @@
 
 use geo_traits::{Dimensions, GeometryTrait};
 use geopackage_core::geometry::encode_gpb;
+#[cfg(feature = "arrow")]
+use geopackage_core::geometry::encode_gpb_from_wkb;
 use geopackage_core::ident::quote;
 use geopackage_core::triggers;
 use geopackage_core::types::ZmFlag;
@@ -133,6 +135,31 @@ impl<G> NewFeature<G> {
     pub fn with_fid(mut self, fid: i64) -> Self {
         self.fid = Some(fid);
         self
+    }
+}
+
+/// A row that [`Layer::write_all`] and its bulk counterpart can write.
+///
+/// Implemented by [`NewFeature`], whose geometry is an object to be encoded, and
+/// by the columnar write path, whose geometry is already ISO WKB and only needs
+/// a header. Both paths share the batching, the bulk-index decision and the
+/// transaction handling; they differ only in how one row reaches the database,
+/// which is what this trait names.
+pub(crate) trait WritableRow {
+    /// Write this row through `writer`, returning its assigned feature id and
+    /// the XY envelope of its geometry, or `None` when it has no indexable
+    /// geometry.
+    fn write(self, writer: &mut FeatureWriter<'_>) -> Result<(i64, Option<[f64; 4]>)>;
+}
+
+impl<G: GeometryTrait<T = f64>> WritableRow for NewFeature<G> {
+    fn write(self, writer: &mut FeatureWriter<'_>) -> Result<(i64, Option<[f64; 4]>)> {
+        match &self.geometry {
+            Some(geometry) => writer.insert_returning_envelope(self.fid, geometry, &self.values),
+            None => writer
+                .insert_row(self.fid, &self.values)
+                .map(|fid| (fid, None)),
+        }
     }
 }
 
@@ -321,7 +348,7 @@ impl<'a> Layer<'a> {
 
     /// The `write_all_with` core, taking a [`bulk::TestFault`] so that a test
     /// can force the index build to fail after the rows have been staged.
-    pub(crate) fn write_all_impl<G, I>(
+    pub(crate) fn write_all_impl<R, I>(
         &self,
         features: I,
         batch_size: usize,
@@ -329,8 +356,8 @@ impl<'a> Layer<'a> {
         fault: bulk::TestFault,
     ) -> Result<Vec<i64>>
     where
-        G: GeometryTrait<T = f64>,
-        I: IntoIterator<Item = NewFeature<G>>,
+        R: WritableRow,
+        I: IntoIterator<Item = R>,
     {
         let mut iter = features.into_iter();
         let (bulk, buffered) = self.bulk_write_engages(&mut iter, options)?;
@@ -366,14 +393,13 @@ impl<'a> Layer<'a> {
     /// Buffering is therefore bounded by `options.bulk_threshold` rows and never
     /// by the length of the input. Raising the threshold raises that bound for
     /// unsized iterators.
-    fn bulk_write_engages<G, I>(
+    fn bulk_write_engages<R, I>(
         &self,
         features: &mut I,
         options: BulkIndexOptions,
-    ) -> Result<(bool, Vec<NewFeature<G>>)>
+    ) -> Result<(bool, Vec<R>)>
     where
-        G: GeometryTrait<T = f64>,
-        I: Iterator<Item = NewFeature<G>>,
+        I: Iterator<Item = R>,
     {
         let threshold = options.bulk_threshold;
         // `never_bulk`: the caller has ruled the bulk path out, so there is
@@ -412,10 +438,10 @@ impl<'a> Layer<'a> {
 
     /// The per-batch triggered write path: one committed transaction per
     /// `batch_size` rows (`0` = a single transaction for the whole iterator).
-    fn write_all_batched<G, I>(&self, features: I, batch_size: usize) -> Result<Vec<i64>>
+    fn write_all_batched<R, I>(&self, features: I, batch_size: usize) -> Result<Vec<i64>>
     where
-        G: GeometryTrait<T = f64>,
-        I: IntoIterator<Item = NewFeature<G>>,
+        R: WritableRow,
+        I: IntoIterator<Item = R>,
     {
         let mut fids = Vec::new();
         let mut iter = features.into_iter();
@@ -423,10 +449,7 @@ impl<'a> Layer<'a> {
         let mut in_batch = 0usize;
         let mut wrote_any = false;
         for feature in iter.by_ref() {
-            let fid = match &feature.geometry {
-                Some(geometry) => batch.insert(feature.fid, geometry, &feature.values)?,
-                None => batch.insert_row(feature.fid, &feature.values)?,
-            };
+            let (fid, _) = feature.write(&mut batch)?;
             fids.push(fid);
             wrote_any = true;
             in_batch += 1;
@@ -453,15 +476,15 @@ impl<'a> Layer<'a> {
     ///
     /// On any failure after the triggers are dropped, the index is restored to a
     /// consistent, trigger-maintained state before the error is returned.
-    fn write_all_bulk<G, I>(
+    fn write_all_bulk<R, I>(
         &self,
         features: I,
         options: BulkIndexOptions,
         fault: bulk::TestFault,
     ) -> Result<Vec<i64>>
     where
-        G: GeometryTrait<T = f64>,
-        I: IntoIterator<Item = NewFeature<G>>,
+        R: WritableRow,
+        I: IntoIterator<Item = R>,
     {
         let geom = self
             .geometry_column()
@@ -504,20 +527,10 @@ impl<'a> Layer<'a> {
             let indexed = rtree_entry_count(conn, &rtree)?;
 
             for feature in features {
-                let fid = match &feature.geometry {
-                    Some(geometry) => {
-                        let (fid, envelope) = writer.insert_returning_envelope(
-                            feature.fid,
-                            geometry,
-                            &feature.values,
-                        )?;
-                        if let Some(envelope) = envelope {
-                            entries.push((fid, envelope));
-                        }
-                        fid
-                    }
-                    None => writer.insert_row(feature.fid, &feature.values)?,
-                };
+                let (fid, envelope) = feature.write(&mut writer)?;
+                if let Some(envelope) = envelope {
+                    entries.push((fid, envelope));
+                }
                 fids.push(fid);
             }
             // Flush the catalogue metadata but keep the transaction open, so the
@@ -677,6 +690,56 @@ impl<'conn> FeatureWriter<'conn> {
         }
         self.dirty = true;
         Ok((assigned, xy))
+    }
+
+    /// Insert a feature whose geometry is already ISO WKB, returning its
+    /// feature id and XY envelope.
+    ///
+    /// The counterpart of [`Self::insert_returning_envelope`] for a caller
+    /// holding bytes rather than a geometry object, which is what an Arrow
+    /// GeoArrow column is. The bytes go into the blob after a header rather than
+    /// being parsed into a geometry and written back out, though they are still
+    /// parsed once: the envelope has to be computed for the header and the
+    /// index, and parsing is what rejects a body that is not ISO WKB.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::insert_returning_envelope`], plus [`Error::Core`] if the bytes
+    /// are not a geometry the `wkb` reader accepts.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn insert_wkb(
+        &mut self,
+        fid: Option<i64>,
+        wkb: &[u8],
+        values: &[Value],
+    ) -> Result<(i64, Option<[f64; 4]>)> {
+        self.check_values(values)?;
+        let geom = self
+            .geometry
+            .as_ref()
+            .ok_or_else(|| Error::NoGeometryColumn {
+                table_name: self.table_name.clone(),
+            })?;
+        let encoded = encode_gpb_from_wkb(wkb, geom.srs_id).map_err(|e| Error::Core(e.into()))?;
+        let has_z = matches!(encoded.dimensions, Dimensions::Xyz | Dimensions::Xyzm);
+        let has_m = matches!(encoded.dimensions, Dimensions::Xym | Dimensions::Xyzm);
+        self.check_zm("z", geom.z, has_z, &geom.name)?;
+        self.check_zm("m", geom.m, has_m, &geom.name)?;
+
+        let sql = self.insert_sql(fid.is_some(), true);
+        let mut binds: Vec<SqlValue> = Vec::with_capacity(values.len() + 2);
+        if let Some(id) = fid {
+            binds.push(SqlValue::Integer(id));
+        }
+        binds.extend(values.iter().map(value_to_sql));
+        binds.push(SqlValue::Blob(encoded.blob));
+        let assigned = self.exec_insert(&sql, &binds, fid)?;
+        if let Some(envelope) = encoded.xy_envelope {
+            self.bbox.add(envelope);
+            self.bbox_dirty = true;
+        }
+        self.dirty = true;
+        Ok((assigned, encoded.xy_envelope))
     }
 
     /// Insert a row with no geometry (a NULL geometry on a feature table, or an

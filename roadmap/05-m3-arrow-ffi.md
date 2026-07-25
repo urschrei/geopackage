@@ -127,12 +127,23 @@ assumed about GPB bodies being usable as WKB without a parse.
       RAM / 4)`; `LargeBinaryArray` avoids the ceiling instead. Check which the
       `geoarrow.wkb` encoding permits before choosing. Default batch size 65536,
       following GDAL.
-- [ ] `layer.write_arrow(reader: impl RecordBatchReader)`: schema→TableSchema
+- [x] `layer.write_arrow(reader: impl RecordBatchReader)`: schema→TableSchema
       mapping, batched writes through the M2 bulk path (rtree shadow-table
       build included; this is the pyogrio-shaped fast path). A
       `RecordBatchReader` is an unsized source, which is what issue #17 was
       for: the bulk path engages for it by buffering to the threshold rather
       than trusting a size hint.
+      *(Done, sharing the M2 write path rather than duplicating it. That took a
+      refactor: `write_all` was generic over `NewFeature<G: GeometryTrait>` and
+      encoded through `encode_gpb`, which would have parsed each WKB geometry
+      into a trait view and serialised it straight back out. The batching, the
+      bulk-index decision and the transaction handling are now generic over a
+      `WritableRow`, so both paths share them and differ only in how one row
+      reaches the database. Geometry goes in as `geopackage_core::geometry::
+      encode_gpb_from_wkb`, which puts a header in front of the bytes; it still
+      parses them once, because the envelope is needed for the header and the
+      index anyway and because parsing is what rejects EWKB. Layer creation from
+      an Arrow schema is not done: this writes into a layer that exists.)*
 - [ ] Parallel `write_arrow`, within what SQLite allows: **one writer, always.**
       SQLite takes a single write lock per database, so this means moving CPU
       work off the writing thread, not concurrent inserts. Candidates are
