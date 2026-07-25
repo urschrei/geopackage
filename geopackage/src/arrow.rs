@@ -328,18 +328,36 @@ impl Layer<'_> {
             Some(pk) => quote(pk)?,
             None => "rowid".to_owned(),
         };
+        // The pagination key has to be selected, but it is usually a column of
+        // the table as well, in which case selecting it twice would cost a
+        // whole extra value fetch per row. Measured over 200k rows of 11
+        // columns, per-value fetching is about half the read's total time, so a
+        // twelfth column is not free.
+        let key_field = self.primary_key_column().and_then(|pk| {
+            schema
+                .fields()
+                .iter()
+                .position(|field| *field.name() == *pk)
+        });
         let mut selected = String::new();
         for field in schema.fields() {
-            selected.push(',');
+            if !selected.is_empty() {
+                selected.push(',');
+            }
             selected.push_str(&quote(field.name())?);
         }
-        // The key is selected first, for pagination, and again among the
-        // columns if it is one of them. A duplicate result column costs nothing
-        // and keeps the column indices uniform.
-        let sql = format!(
-            "SELECT {key}{selected} FROM {table} WHERE {key} >= ?1 ORDER BY {key} LIMIT ?2",
-            table = quote(self.table_name())?
-        );
+        let sql = match key_field {
+            Some(_) => format!(
+                "SELECT {selected} FROM {table} WHERE {key} >= ?1 ORDER BY {key} LIMIT ?2",
+                table = quote(self.table_name())?
+            ),
+            // No primary-key column in the schema, so the rowid (or a key that
+            // is not a column) is selected ahead of the fields.
+            None => format!(
+                "SELECT {key},{selected} FROM {table} WHERE {key} >= ?1 ORDER BY {key} LIMIT ?2",
+                table = quote(self.table_name())?
+            ),
+        };
         let geometry_index = self.geometry_column().and_then(|geom| {
             schema
                 .fields()
@@ -350,6 +368,7 @@ impl Layer<'_> {
             conn: self.gpkg().connection(),
             schema,
             sql,
+            key_field,
             geometry_index,
             datetime: self.conversion_options().datetime,
             batch_size: options.batch_size.max(1),
@@ -368,6 +387,9 @@ pub struct ArrowBatches<'a> {
     conn: &'a Connection,
     schema: SchemaRef,
     sql: String,
+    /// Index of the field that is also the pagination key, when it is one of
+    /// them. `None` means the key is selected as an extra leading column.
+    key_field: Option<usize>,
     /// Index of the geometry field, whose values need the GPB header stripped.
     geometry_index: Option<usize>,
     datetime: DateTimeParsing,
@@ -380,15 +402,32 @@ pub struct ArrowBatches<'a> {
 impl ArrowBatches<'_> {
     /// Read one batch, or `None` once the layer is exhausted.
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        // Pre-size the arrays so a batch does not spend its time growing them.
+        // Capped rather than taken from `batch_size` directly, so an enormous
+        // batch size does not reserve enormous buffers for a small table.
+        let capacity = self.batch_size.min(DEFAULT_BATCH_SIZE);
         let mut builders: Vec<ColumnBuilder> = self
             .schema
             .fields()
             .iter()
             .enumerate()
             .map(|(index, field)| {
-                ColumnBuilder::new(field.data_type(), Some(index) == self.geometry_index)
+                ColumnBuilder::new(
+                    field.data_type(),
+                    Some(index) == self.geometry_index,
+                    capacity,
+                )
             })
             .collect::<Result<_>>()?;
+
+        // Names are only needed to describe a failure, but looking one up per
+        // value per row is work in the hot path, so they are hoisted here.
+        let names: Vec<&str> = self
+            .schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
 
         let mut rows_read = 0usize;
         let mut last_key = None;
@@ -398,12 +437,14 @@ impl ArrowBatches<'_> {
                 self.next_key,
                 i64::try_from(self.batch_size).unwrap_or(i64::MAX)
             ])?;
+            // Where the fields start: at 0 when the key is one of them, at 1
+            // when it had to be selected separately.
+            let offset = usize::from(self.key_field.is_none());
             while let Some(row) = rows.next()? {
-                last_key = Some(row.get::<_, i64>(0)?);
+                last_key = Some(row.get::<_, i64>(self.key_field.unwrap_or(0))?);
                 for (index, builder) in builders.iter_mut().enumerate() {
-                    // Column 0 is the pagination key; the fields start at 1.
-                    let name = self.schema.field(index).name();
-                    builder.append(name, row.get_ref(index + 1)?, self.datetime)?;
+                    let name = names.get(index).copied().unwrap_or_default();
+                    builder.append(name, row.get_ref(index + offset)?, self.datetime)?;
                 }
                 rows_read += 1;
             }
@@ -473,19 +514,38 @@ enum ColumnBuilder {
 }
 
 impl ColumnBuilder {
-    /// The builder for one field of the schema.
-    fn new(data_type: &DataType, is_geometry: bool) -> Result<Self> {
+    /// The builder for one field of the schema, sized for `capacity` rows.
+    ///
+    /// The byte estimates for the variable-width types only decide the first
+    /// allocation; a longer value grows the buffer as usual.
+    fn new(data_type: &DataType, is_geometry: bool, capacity: usize) -> Result<Self> {
+        /// Assumed bytes per WKB geometry, enough for a point or a short line.
+        const GEOMETRY_BYTES: usize = 64;
+        /// Assumed bytes per text or blob value.
+        const VALUE_BYTES: usize = 16;
+
         if is_geometry {
-            return Ok(Self::Geometry(BinaryBuilder::new()));
+            return Ok(Self::Geometry(BinaryBuilder::with_capacity(
+                capacity,
+                capacity * GEOMETRY_BYTES,
+            )));
         }
         Ok(match data_type {
-            DataType::Boolean => Self::Boolean(BooleanBuilder::new()),
-            DataType::Int64 => Self::Int64(Int64Builder::new()),
-            DataType::Float64 => Self::Float64(Float64Builder::new()),
-            DataType::Utf8 => Self::Utf8(StringBuilder::new()),
-            DataType::Binary => Self::Binary(BinaryBuilder::new()),
-            DataType::Date32 => Self::Date32(Date32Builder::new()),
-            DataType::Timestamp(_, _) => Self::Timestamp(TimestampMicrosecondBuilder::new()),
+            DataType::Boolean => Self::Boolean(BooleanBuilder::with_capacity(capacity)),
+            DataType::Int64 => Self::Int64(Int64Builder::with_capacity(capacity)),
+            DataType::Float64 => Self::Float64(Float64Builder::with_capacity(capacity)),
+            DataType::Utf8 => Self::Utf8(StringBuilder::with_capacity(
+                capacity,
+                capacity * VALUE_BYTES,
+            )),
+            DataType::Binary => Self::Binary(BinaryBuilder::with_capacity(
+                capacity,
+                capacity * VALUE_BYTES,
+            )),
+            DataType::Date32 => Self::Date32(Date32Builder::with_capacity(capacity)),
+            DataType::Timestamp(_, _) => {
+                Self::Timestamp(TimestampMicrosecondBuilder::with_capacity(capacity))
+            }
             // `arrow_schema` produces nothing else, so this is unreachable in
             // practice and is an error rather than a panic if that changes.
             other => {
@@ -624,6 +684,10 @@ fn storage_class(value: ValueRef<'_>) -> &'static str {
 /// Howard Hinnant's `days_from_civil`, which is exact over the proleptic
 /// Gregorian calendar and needs no lookup tables. Dates before 1970 give a
 /// negative count, which `Date32` represents.
+///
+/// This and [`micros_since_epoch`] are an interim arrangement: calendar
+/// arithmetic is not something this crate should be maintaining, and issue #24
+/// tracks deferring it to `jiff` along with the rest of the datetime handling.
 fn days_since_epoch(date: Date) -> i32 {
     let year = i64::from(date.year());
     let month = i64::from(date.month());

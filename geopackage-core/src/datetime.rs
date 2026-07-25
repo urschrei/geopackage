@@ -10,6 +10,11 @@
 //! These are calendar-validated value types, not a datetime library: no time
 //! zone database, no arithmetic. Convert to your preferred datetime crate at
 //! the boundary.
+//!
+//! Under revision (issue #24): the intention is to defer as much of this as
+//! possible to [jiff](https://docs.rs/jiff), keeping only the parsing and
+//! formatting policy the spec dictates. The Arrow path already needs calendar
+//! arithmetic these types deliberately do not provide.
 
 use std::fmt;
 
