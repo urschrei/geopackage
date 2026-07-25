@@ -43,20 +43,25 @@
 //! carries the rtree triggers has its index maintained by those triggers (the
 //! `ST_*` functions are registered on every connection).
 //!
-//! [`Layer::write_all`] additionally takes the bulk-build path when it writes
-//! a large batch into an indexed layer whose index is currently empty (a fresh
-//! bulk load): it drops the triggers, inserts the rows without per-row index
-//! maintenance, rebuilds the index in one bulk shadow-table copy (see
-//! [`crate::bulk`]), and reinstalls the triggers. The threshold and forcing are
-//! controlled by [`BulkIndexOptions`] via [`Layer::write_all_with`].
+//! [`Layer::write_all`] additionally takes the bulk path when it writes a large
+//! batch into an indexed layer: it drops the triggers, inserts the rows without
+//! per-row index maintenance, brings the index up to date in one operation, and
+//! reinstalls the triggers. How the index is brought up to date depends on the
+//! size of the write against the size of the index, and is chosen once the rows
+//! are written and both counts are known: a write large enough to be worth it
+//! rebuilds the index outright (see [`crate::bulk`]), and a smaller one adds the
+//! new entries to the existing index instead. The threshold at which the whole
+//! path engages, and forcing it either way, are controlled by
+//! [`BulkIndexOptions`] via [`Layer::write_all_with`].
 //!
 //! # Atomicity of the bulk path
 //!
 //! The bulk `write_all` is a single transaction: dropping the triggers, every
-//! row insert, the `gpkg_contents` flush, the index rebuild, and reinstalling
-//! the triggers all commit together. A crash or an error at any point rolls the
-//! whole thing back to the state before the call, so the rows can never be
-//! committed against an index that was not rebuilt.
+//! row insert, the `gpkg_contents` flush, the index work at the end (rebuild or
+//! append), and reinstalling the triggers all commit together. A crash or an
+//! error at any point rolls the whole thing back to the state before the call,
+//! so the rows can never be committed against an index that was not brought up
+//! to date with them.
 //!
 //! This was not always so. The rebuild used to run in its own transaction
 //! because it built the index in an `ATTACH`ed scratch database and `ATTACH`
@@ -81,9 +86,8 @@ use crate::bulk::{self, BulkIndexOptions};
 /// index, before the bulk path rebuilds that index instead of letting the
 /// triggers append to it.
 ///
-/// A write of at least `existing / MERGE_REBUILD_RATIO` new rows takes the
-/// rebuild. See [`Layer::bulk_write_applicable`] for the measurements behind
-/// the value.
+/// A write of at least `existing / MERGE_REBUILD_RATIO` new entries takes the
+/// rebuild. See [`rebuild_beats_append`] for the measurements behind the value.
 const MERGE_REBUILD_RATIO: usize = 10;
 use crate::index::drop_all_rtree_triggers;
 use crate::value::value_to_sql;
@@ -340,8 +344,14 @@ impl<'a> Layer<'a> {
         }
     }
 
-    /// Whether this write takes the bulk path, along with any rows that had to
-    /// be pulled from `features` to decide.
+    /// Whether this write is large enough to take the bulk path, along with any
+    /// rows that had to be pulled from `features` to decide.
+    ///
+    /// This is the one decision that has to be made before a row is written,
+    /// because the bulk path drops the RTree triggers first and dropping them
+    /// for a handful of rows would cost more in schema churn than it saves.
+    /// Whether the index is then rebuilt or appended to is settled after the
+    /// write, from the exact counts (see [`rebuild_beats_append`]).
     ///
     /// The size condition is answered from [`Iterator::size_hint`] whenever the
     /// hint settles it, which covers every `Vec`-like source at no cost. An
@@ -378,14 +388,16 @@ impl<'a> Layer<'a> {
             return Ok((false, Vec::new()));
         }
         // A lower bound that already clears the threshold settles it the other
-        // way, again without pulling a row.
+        // way, again without pulling a row. `has_spatial_index` already requires
+        // a geometry column and a single-column primary key, which are the other
+        // two things the bulk path needs, so it is the whole availability test.
         if lower >= threshold {
-            return Ok((self.bulk_write_applicable(lower)?, Vec::new()));
+            return Ok((self.has_spatial_index()?, Vec::new()));
         }
-        // Neither bound settles it, so buffer up to the threshold. Checking the
+        // Neither bound settles it, so buffer up to the threshold. Testing the
         // layer first means an unindexed layer, which can never take the bulk
         // path, does not buffer rows only to discard the decision.
-        if self.indexed_entry_count()?.is_none() {
+        if !self.has_spatial_index()? {
             return Ok((false, Vec::new()));
         }
         let mut buffered = Vec::new();
@@ -395,8 +407,7 @@ impl<'a> Layer<'a> {
             };
             buffered.push(feature);
         }
-        let engages = self.bulk_write_applicable(buffered.len())?;
-        Ok((engages, buffered))
+        Ok((true, buffered))
     }
 
     /// The per-batch triggered write path: one committed transaction per
@@ -435,58 +446,10 @@ impl<'a> Layer<'a> {
         Ok(fids)
     }
 
-    /// Whether a `write_all` of `new_rows` rows should take the bulk-build path,
-    /// given that it has already cleared `options.bulk_threshold`: the layer can
-    /// take the path at all, and the write is large enough relative to the
-    /// existing index to be worth rebuilding it.
-    ///
-    /// An empty index is the clear case: there is nothing to preserve, so the
-    /// bulk build is a straight win. A populated index is a trade, because the
-    /// bulk path rebuilds the whole thing rather than appending to it. Measured
-    /// at 1M and 100k existing rows, a rebuild costs roughly 1.5 us per row of
-    /// the *total* table while a triggered append costs roughly 18 to 40 us per
-    /// *new* row, rising with table size as the index deepens. Rebuilding
-    /// therefore wins once the new rows are somewhere between 5% and 10% of the
-    /// existing ones. [`MERGE_REBUILD_RATIO`] takes the conservative end: at
-    /// 100k existing rows a 10k-row append measured 187 ms triggered against
-    /// 149 ms rebuilt, and at 1M existing a 100k-row append measured 2938 ms
-    /// against 1783 ms.
-    fn bulk_write_applicable(&self, new_rows: usize) -> Result<bool> {
-        let Some(indexed) = self.indexed_entry_count()? else {
-            return Ok(false);
-        };
-        if indexed == 0 {
-            return Ok(true);
-        }
-        // Rebuilding a populated index has to pay for the rows already in it,
-        // so it is only worth it for a large enough write.
-        Ok(new_rows >= indexed / MERGE_REBUILD_RATIO)
-    }
-
-    /// The number of entries already in this layer's spatial index, or `None`
-    /// when the layer cannot take the bulk path at all: no geometry column, no
-    /// single-column primary key to index by, or no recognised spatial index to
-    /// rebuild.
-    fn indexed_entry_count(&self) -> Result<Option<usize>> {
-        let Some(geom) = self.geometry_column() else {
-            return Ok(None);
-        };
-        if self.primary_key_column().is_none() || !self.has_spatial_index()? {
-            return Ok(None);
-        }
-        let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
-        let indexed: i64 = self.gpkg().connection().query_row(
-            &format!("SELECT count(*) FROM {}", quote(&rtree)?),
-            [],
-            |r| r.get(0),
-        )?;
-        Ok(Some(usize::try_from(indexed).unwrap_or(usize::MAX)))
-    }
-
     /// The bulk write path: drop the rtree triggers, insert every row in one
     /// transaction (no per-row index maintenance, but `gpkg_contents` bbox and
-    /// `last_change` are still maintained by the writer commit), then rebuild the
-    /// index in bulk and reinstall the triggers.
+    /// `last_change` are still maintained by the writer commit), then bring the
+    /// index up to date and reinstall the triggers.
     ///
     /// On any failure after the triggers are dropped, the index is restored to a
     /// consistent, trigger-maintained state before the error is returned.
@@ -520,6 +483,11 @@ impl<'a> Layer<'a> {
         // empty table before the write is the cheap, sufficient proof; otherwise
         // `fill_index` re-derives the set with its own `ST_*` scan.
         let table_was_empty = bulk::table_row_count(conn, table)? == 0;
+        // Only the triggers maintain this index, and this path drops them, so
+        // its size cannot change while the rows are being written. Reading it
+        // once here is enough to choose between rebuilding and appending
+        // afterwards.
+        let indexed = rtree_entry_count(conn, &rtree)?;
 
         (|| -> Result<Vec<i64>> {
             let mut fids = Vec::new();
@@ -546,29 +514,106 @@ impl<'a> Layer<'a> {
                 fids.push(fid);
             }
             // Flush the catalogue metadata but keep the transaction open, so the
-            // rows and the rebuilt index commit together.
+            // rows and the index commit together.
             let tx = writer.flush()?;
-            let precomputed = table_was_empty.then_some(entries);
-            bulk::fill_index_in_transaction(
-                &tx,
-                table,
-                column,
-                pk,
-                &rtree,
-                options,
-                precomputed,
-                tamper,
-                |conn| {
-                    for sql in triggers::create_triggers_sql(table, column, pk)? {
-                        conn.execute_batch(&sql)?;
-                    }
-                    Ok(())
-                },
-            )?;
+
+            // Reinstalling the trigger set is the last thing either branch does,
+            // and it happens inside the same transaction as the drop, so a
+            // failure anywhere rolls both back together.
+            let reinstall = |conn: &Connection| -> Result<()> {
+                for sql in triggers::create_triggers_sql(table, column, pk)? {
+                    conn.execute_batch(&sql)?;
+                }
+                Ok(())
+            };
+
+            if rebuild_beats_append(entries.len(), indexed) {
+                let precomputed = table_was_empty.then_some(entries);
+                bulk::fill_index_in_transaction(
+                    &tx,
+                    table,
+                    column,
+                    pk,
+                    &rtree,
+                    options,
+                    precomputed,
+                    tamper,
+                    reinstall,
+                )?;
+            } else {
+                append_entries(&tx, &rtree, &entries)?;
+                reinstall(&tx)?;
+            }
             tx.commit()?;
             Ok(fids)
         })()
     }
+}
+
+/// Whether a bulk `write_all` that produced `new_entries` index entries against
+/// an index already holding `indexed` of them should rebuild that index rather
+/// than append the new entries to it.
+///
+/// This is decided after the rows are written rather than before, so both counts
+/// are exact. Deciding it up front meant guessing the size of the write from
+/// [`Iterator::size_hint`], which can only ever supply a lower bound, and an
+/// iterator that supplies none at all could not be placed on either side of the
+/// ratio.
+///
+/// An empty index is the clear case: there is nothing to preserve, so the
+/// rebuild is a straight win. A populated index is a trade, because a rebuild
+/// pays for the rows already in it. Measured at 1M and 100k existing rows, a
+/// rebuild costs roughly 1.5 us per row of the *total* table while an append
+/// costs roughly 18 to 40 us per *new* row, rising with table size as the index
+/// deepens. Rebuilding therefore wins once the new entries are somewhere between
+/// 5% and 10% of the existing ones. [`MERGE_REBUILD_RATIO`] takes the
+/// conservative end: at 100k existing rows a 10k-row append measured 187 ms
+/// against 149 ms rebuilt, and at 1M existing a 100k-row append measured 2938 ms
+/// against 1783 ms.
+fn rebuild_beats_append(new_entries: usize, indexed: usize) -> bool {
+    if indexed == 0 {
+        return true;
+    }
+    new_entries >= indexed / MERGE_REBUILD_RATIO
+}
+
+/// Add one RTree entry per newly written row, leaving the existing index in
+/// place.
+///
+/// This is the work the `_insert` trigger would have done had it still been
+/// installed: the same `INSERT OR REPLACE`, the same values, in the same row
+/// order, so the index this leaves behind is the one a triggered write would
+/// have produced. The envelopes were computed while encoding the geometries, and
+/// a row whose geometry is NULL or empty contributed none, which is exactly the
+/// trigger's `NEW.geom NOT NULL AND NOT ST_IsEmpty(NEW.geom)` condition.
+///
+/// Nothing gates the result. The bulk build is gated because it writes a tree by
+/// hand into an on-disk format SQLite does not document as an interface; these
+/// inserts go through the RTree module itself and need no more checking than the
+/// triggers do.
+fn append_entries(conn: &Connection, rtree: &str, entries: &[(i64, [f64; 4])]) -> Result<()> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let sql = format!(
+        "INSERT OR REPLACE INTO {} VALUES (?1, ?2, ?3, ?4, ?5)",
+        quote(rtree)?
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
+    for &(fid, [min_x, max_x, min_y, max_y]) in entries {
+        stmt.execute(rusqlite::params![fid, min_x, max_x, min_y, max_y])?;
+    }
+    Ok(())
+}
+
+/// The number of entries currently in the RTree `rtree`.
+fn rtree_entry_count(conn: &Connection, rtree: &str) -> Result<usize> {
+    let count: i64 = conn.query_row(
+        &format!("SELECT count(*) FROM {}", quote(rtree)?),
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(usize::try_from(count).unwrap_or(usize::MAX))
 }
 
 impl<'conn> FeatureWriter<'conn> {

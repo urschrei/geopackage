@@ -108,6 +108,21 @@ fn rtree_rows(conn: &Connection) -> Vec<(i64, f64, f64, f64, f64)> {
     .unwrap()
 }
 
+/// The packed node blobs behind the rtree, as `(nodeno, data)` ordered by node.
+///
+/// Where [`rtree_rows`] compares what an index contains, this compares the tree
+/// it is stored as: two indexes holding the same entries still differ here if
+/// they were built by different means or in a different order.
+fn rtree_nodes(conn: &Connection) -> Vec<(i64, Vec<u8>)> {
+    let mut stmt = conn
+        .prepare("SELECT nodeno, data FROM rtree_pts_geom_node ORDER BY nodeno")
+        .unwrap();
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
 /// A manual envelope scan of the user table via the registered `ST_*`
 /// functions, with the same NULL/empty guard the population statement uses:
 /// `(fid, minx, maxx, miny, maxy)` ordered by fid. This is the reference the
@@ -931,25 +946,61 @@ fn large_append_into_a_populated_index_rebuilds_it() {
     assert_eq!(rtree_rows(conn), envelope_scan(conn));
 }
 
-/// A small append into a populated index keeps the triggered path: rebuilding
-/// the whole index to add a handful of rows would cost more than it saves.
+/// A small append into a populated index adds the new entries to that index
+/// rather than rebuilding it, which for a handful of rows would cost far more
+/// than it saves.
+///
+/// The bulk path still runs here, because the write cleared the threshold, but
+/// the index work at the end of it is the work the triggers would have done: the
+/// same statement, the same values, the same order. So the index must come out
+/// identical, node for node, to the one produced by writing the same rows with
+/// the bulk path disabled altogether.
 #[test]
-fn small_append_into_a_populated_index_keeps_the_triggers() {
+fn small_append_into_a_populated_index_appends_to_it() {
     let existing: Vec<(i64, f64, f64)> = (1..=200).map(|i| (i, i as f64, -(i as f64))).collect();
+    // 5 new rows against 200 existing is under the ratio.
+    let new = || -> Vec<NewFeature<Point<f64>>> {
+        (201..=205)
+            .map(|i| {
+                NewFeature::new(Point::new(i as f64, -(i as f64)), vec![Value::Null]).with_fid(i)
+            })
+            .collect()
+    };
+
     let gpkg = in_memory_with_points(&existing);
     let layer = gpkg.layer("pts").unwrap();
     layer.create_spatial_index().unwrap();
-
-    // 5 new rows against 200 existing is under the ratio.
-    let new: Vec<NewFeature<Point<f64>>> = (201..=205)
-        .map(|i| NewFeature::new(Point::new(i as f64, -(i as f64)), vec![Value::Null]).with_fid(i))
-        .collect();
     layer
-        .write_all_with(new, 0, BulkIndexOptions::with_threshold(1))
+        .write_all_with(new(), 0, BulkIndexOptions::with_threshold(1))
+        .unwrap();
+
+    // The reference: the same rows written with the bulk path disabled, so the
+    // triggers maintain the index row by row.
+    let reference = in_memory_with_points(&existing);
+    let ref_layer = reference.layer("pts").unwrap();
+    ref_layer.create_spatial_index().unwrap();
+    ref_layer
+        .write_all_with(new(), 0, BulkIndexOptions::never_bulk())
         .unwrap();
 
     let conn = gpkg.connection();
     assert_eq!(rtree_rows(conn).len(), 205);
+    assert_eq!(rtree_rows(conn), envelope_scan(conn));
+    assert_eq!(
+        rtree_nodes(conn),
+        rtree_nodes(reference.connection()),
+        "the append built a different tree from the one the triggers build"
+    );
+
+    // And the triggers are back afterwards, so a later single write is indexed.
+    {
+        let mut writer = layer.writer().unwrap();
+        writer
+            .insert(Some(206), &Point::new(206.0, -206.0), &[Value::Null])
+            .unwrap();
+        writer.commit().unwrap();
+    }
+    assert_eq!(rtree_rows(conn).len(), 206);
     assert_eq!(rtree_rows(conn), envelope_scan(conn));
 }
 
