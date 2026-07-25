@@ -297,3 +297,119 @@ fn a_large_columnar_write_builds_the_index_in_bulk() {
         "the triggers are back"
     );
 }
+
+/// A layer created from an Arrow schema receives that schema's data, and the
+/// copy matches the original.
+///
+/// This is the shape a `gpkg copy` command needs: read a layer, create the
+/// target from what the read describes, write into it, without the caller
+/// restating the schema.
+#[test]
+fn a_layer_can_be_created_from_an_arrow_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = GeoPackage::create(dir.path().join("s.gpkg")).unwrap();
+    typed_layer(&source, "pts");
+    populate(&source, "pts", 40);
+
+    let schema = source.layer("pts").unwrap().arrow_schema().unwrap();
+    let target = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+    let builder = TableSchemaBuilder::new("pts")
+        .from_arrow_schema(&schema)
+        .unwrap();
+    target.create_layer(&builder).unwrap();
+
+    let read = batches(&source, "pts", ArrowReadOptions::default());
+    target
+        .layer("pts")
+        .unwrap()
+        .write_arrow(read.into_iter().map(Ok), 0)
+        .unwrap();
+
+    let before = batches(&source, "pts", ArrowReadOptions::default());
+    let after = batches(&target, "pts", ArrowReadOptions::default());
+    assert_eq!(
+        before[0], after[0],
+        "the derived layer holds different data"
+    );
+}
+
+/// The derived schema carries the SRS across, and declares a geometry column
+/// that accepts anything, since WKB does not say what it will contain.
+#[test]
+fn a_derived_layer_keeps_the_srs_and_takes_any_geometry() {
+    // A non-4326 SRS, so the test would notice a hard-coded default. It has to
+    // be registered in a file before a layer there can use it.
+    let british_grid = || geopackage::Srs {
+        name: "OSGB36 / British National Grid".into(),
+        srs_id: 27700,
+        organization: "EPSG".into(),
+        organization_coordsys_id: 27700,
+        definition: "undefined".into(),
+        description: None,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = GeoPackage::create(dir.path().join("s.gpkg")).unwrap();
+    source.add_srs(&british_grid()).unwrap();
+    source
+        .create_layer(
+            &TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 27700)),
+        )
+        .unwrap();
+
+    let schema = source.layer("pts").unwrap().arrow_schema().unwrap();
+    let target = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+    target.add_srs(&british_grid()).unwrap();
+    target
+        .create_layer(
+            &TableSchemaBuilder::new("pts")
+                .from_arrow_schema(&schema)
+                .unwrap(),
+        )
+        .unwrap();
+
+    let geometry = target
+        .layer("pts")
+        .unwrap()
+        .geometry_column()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        geometry.srs_id, 27700,
+        "the EPSG code survived the round trip"
+    );
+    assert_eq!(
+        geometry.geometry_type,
+        GeometryType::Geometry,
+        "WKB does not declare a type, so the column must accept any"
+    );
+}
+
+/// The primary key is not turned into an attribute column: the builder makes
+/// it, so the schema's `fid` field is skipped.
+#[test]
+fn the_primary_key_field_is_not_duplicated() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = GeoPackage::create(dir.path().join("s.gpkg")).unwrap();
+    typed_layer(&source, "pts");
+
+    let schema = source.layer("pts").unwrap().arrow_schema().unwrap();
+    let target = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+    target
+        .create_layer(
+            &TableSchemaBuilder::new("pts")
+                .from_arrow_schema(&schema)
+                .unwrap(),
+        )
+        .unwrap();
+
+    let layer = target.layer("pts").unwrap();
+    assert_eq!(layer.primary_key_column(), Some("fid"));
+    let fid_columns = layer
+        .schema()
+        .columns
+        .iter()
+        .filter(|column| column.name == "fid")
+        .count();
+    assert_eq!(fid_columns, 1, "fid appears once, as the key");
+}

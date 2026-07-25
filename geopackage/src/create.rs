@@ -190,6 +190,11 @@ impl TableSchemaBuilder {
         self
     }
 
+    /// The primary-key column name this builder will use.
+    pub fn primary_key_name(&self) -> &str {
+        &self.primary_key
+    }
+
     /// Set `gpkg_contents.identifier` (a human-readable name). Defaults to the
     /// table name when left unset.
     #[must_use]

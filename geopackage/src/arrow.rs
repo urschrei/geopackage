@@ -61,7 +61,7 @@ use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef, TimeUnit};
 use geopackage_core::datetime::{Date, DateTime};
 use geopackage_core::gpb;
 use geopackage_core::ident::quote;
-use geopackage_core::types::ColumnType;
+use geopackage_core::types::{ColumnType, GeometryType};
 use rusqlite::Connection;
 use rusqlite::functions::{Aggregate, Context, FunctionFlags};
 use rusqlite::limits::Limit;
@@ -1720,4 +1720,102 @@ fn datetime_from_micros(micros: i64) -> Result<DateTime> {
         // normalised to when it produced the timestamp.
         offset_minutes: Some(0),
     })
+}
+
+impl crate::TableSchemaBuilder {
+    /// Derive a layer definition from an Arrow schema.
+    ///
+    /// The inverse of [`Layer::arrow_schema`], for creating a layer to receive
+    /// [`Layer::write_arrow`]. Everything the builder normally takes can still
+    /// be overridden afterwards.
+    ///
+    /// The mapping is the read mapping run backwards, with three things worth
+    /// knowing:
+    ///
+    /// - **Integer widths are honoured here but not on the way out.** `Int8`
+    ///   becomes `TINYINT`, `Int16` `SMALLINT`, `Int32` `MEDIUMINT`, `Int64`
+    ///   `INTEGER`. Reading collapses all four to `Int64`, because SQLite does
+    ///   not enforce a declared width, so a layer round-tripped through Arrow
+    ///   comes back with every integer column widened to `INTEGER`. The data is
+    ///   unchanged; the declared type is not.
+    /// - **The geometry column is found by its `geoarrow.wkb` extension name**,
+    ///   not by position or by name. Its declared type is `GEOMETRY`, which
+    ///   accepts any geometry, because WKB does not say what it will contain.
+    ///   The SRS comes from the field's CRS metadata when that is an
+    ///   `EPSG:<code>` authority code, and is otherwise `0`, the spec's
+    ///   undefined value.
+    /// - **A field named as the primary key is skipped**, not made an attribute
+    ///   column, since the builder creates the key itself. Call
+    ///   [`crate::TableSchemaBuilder::primary_key`] before this if the key is
+    ///   not named `fid`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedArrowType`] for a field whose type has no GeoPackage
+    /// equivalent.
+    pub fn from_arrow_schema(self, schema: &Schema) -> Result<Self> {
+        let mut builder = self;
+        for field in schema.fields() {
+            if *field.name() == builder.primary_key_name() {
+                continue;
+            }
+            if field.metadata().get(EXTENSION_NAME_KEY).map(String::as_str) == Some(GEOARROW_WKB) {
+                let srs_id = field
+                    .metadata()
+                    .get(EXTENSION_METADATA_KEY)
+                    .and_then(|json| epsg_code(json))
+                    .unwrap_or(0);
+                builder = builder.geometry(
+                    crate::GeometrySpec::new(GeometryType::Geometry, srs_id)
+                        .column_name(field.name()),
+                );
+                continue;
+            }
+            let column_type = column_type_for(field.data_type())?;
+            let mut column = crate::ColumnSpec::new(field.name(), column_type);
+            if !field.is_nullable() {
+                column = column.not_null();
+            }
+            builder = builder.column(column);
+        }
+        Ok(builder)
+    }
+}
+
+/// The GeoPackage column type for an Arrow type, the inverse of the mapping in
+/// the [module documentation](self).
+fn column_type_for(data_type: &DataType) -> Result<ColumnType> {
+    Ok(match data_type {
+        DataType::Boolean => ColumnType::Boolean,
+        DataType::Int8 | DataType::UInt8 => ColumnType::TinyInt,
+        DataType::Int16 | DataType::UInt16 => ColumnType::SmallInt,
+        DataType::Int32 | DataType::UInt32 => ColumnType::MediumInt,
+        DataType::Int64 | DataType::UInt64 => ColumnType::Integer,
+        DataType::Float32 => ColumnType::Float,
+        DataType::Float64 => ColumnType::Double,
+        DataType::Utf8 | DataType::LargeUtf8 => ColumnType::Text(None),
+        DataType::Binary | DataType::LargeBinary => ColumnType::Blob(None),
+        DataType::Date32 => ColumnType::Date,
+        DataType::Timestamp(_, _) => ColumnType::DateTime,
+        other => {
+            return Err(Error::UnsupportedArrowType {
+                data_type: other.to_string(),
+            });
+        }
+    })
+}
+
+/// The numeric part of an `EPSG:<code>` authority code in GeoArrow CRS
+/// metadata, if that is the form it takes.
+///
+/// Deliberately not a JSON parse. The only form this crate emits is the one
+/// [`crs_metadata`] writes, and a full parse would mean a JSON dependency in
+/// order to read back a string we produced. A CRS in any other form, PROJJSON
+/// included, yields `None` and the caller sets the SRS themselves. Widening this
+/// is part of issue #23.
+fn epsg_code(metadata: &str) -> Option<i32> {
+    let start = metadata.find("EPSG:")? + "EPSG:".len();
+    let rest = metadata.get(start..)?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
