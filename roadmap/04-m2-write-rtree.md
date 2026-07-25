@@ -151,10 +151,27 @@ write performance competitive with GDAL's GPKG driver.
       inserts, which the old code also rolled back cleanly, so it passed against
       the arrangement it was meant to catch and was earning nothing against the
       cost of spawning processes.)*
-- [ ] (issue #17) `write_all` bulk currently engages only for an empty target index; a
-      merge-into-populated-index bulk path (re-index existing + new, or an rstar
-      escalation) is deferred until benchmarks justify it (see 02-ecosystem
-      rstar note).
+- [x] (issue #17) `write_all` bulk engages for a merge into a populated index,
+      and for an iterator that does not advertise its length.
+      *(Two parts. The merge landed first: a write of at least
+      `indexed / MERGE_REBUILD_RATIO` new entries rebuilds the index rather than
+      letting the triggers append, the ratio taken from the measurements in the
+      issue. The second part removed the up-front guessing that fed it. The size
+      of a write used to come from `Iterator::size_hint`, whose lower bound is 0
+      for most iterators not backed by a collection, so a streaming source never
+      reached the threshold however large it turned out to be. The engagement
+      question is now settled by buffering up to `bulk_threshold` rows when the
+      hint cannot settle it, and the rebuild-or-append question is deferred until
+      after the write, where both counts are exact. That also gave the path a
+      branch it lacked: a write that clears the threshold but not the ratio now
+      adds its entries to the existing index directly, running the `_insert`
+      trigger's own statement over the encode-time envelopes, instead of falling
+      back to per-row trigger maintenance. Recorded as a refinement of D8 in
+      [01-design-decisions.md](01-design-decisions.md).)*
+      Not done, and not needed for either: the rstar escalation (see 02-ecosystem
+      rstar note). `write_all` also still holds one `(fid, envelope)` pair per
+      written row, so it is not a streaming-memory path; that is a separate
+      question from this one.
 - [x] Read-path finding (from the hegel port of the `features_in` property
       test): for a coordinate of `f32` sub-normal magnitude (`|x| < ~1.2e-38`,
       e.g. `3e-39`), SQLite coerces the `f64` query-box constraint to `f32`

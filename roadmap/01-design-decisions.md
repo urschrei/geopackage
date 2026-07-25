@@ -133,6 +133,21 @@ equivalent. It is kept because the tree is written by hand into a format SQLite
 does not document as an interface; whether it should become optional is a
 question for 1.0 (see 07-m5-extensions-and-1.0.md).
 
+**When the path engages (refinement, issue #17).** `write_all` makes two
+decisions, not one, and they need different evidence. Whether to drop the
+triggers at all has to be settled before the first row is written, and is
+settled from the write's size: from `Iterator::size_hint` where the hint can
+settle it, and otherwise by buffering rows up to `bulk_threshold`, which is what
+lets an iterator that does not know its own length reach the path at all.
+Whether to then rebuild the index or add the new entries to it does *not* have to
+be settled up front, so it is not: it waits until the rows are written, when the
+number of new entries and the number already indexed are both exact, rather than
+resting on the lower bound a size hint supplies. The append branch runs the
+`_insert` trigger's own statement over the envelopes computed during encoding, so
+it produces the tree the triggers would have, and is not gated (nothing is
+hand-written into the shadow tables). Buffering is bounded by `bulk_threshold`
+and never by the length of the input or the size of the table.
+
 ## D9. SQL is the query engine
 
 **Decision.** We provide typed CRUD, bbox queries, and WHERE-clause

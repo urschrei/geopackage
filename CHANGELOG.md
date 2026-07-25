@@ -8,6 +8,25 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Changed
+
+- **`write_all` reaches the bulk index path for streaming sources.** The size of
+  a write was taken from `Iterator::size_hint`, whose lower bound is 0 for most
+  iterators not backed by a collection, so such a write stayed on the per-row
+  triggered path however large it turned out to be unless the caller passed
+  `always_bulk`. Where the hint cannot settle the question, rows are now buffered
+  up to `bulk_threshold` to settle it, which is bounded by the threshold and
+  never by the length of the input. Sized sources are unaffected ([#17]).
+
+- **The index is rebuilt or appended to, decided after the write.** A bulk
+  `write_all` used to choose between rebuilding the index and leaving it to the
+  triggers before writing a row, from that same lower bound. It now writes the
+  rows first and chooses with both counts exact. A write too small to be worth a
+  rebuild adds its entries to the existing index directly, running the statement
+  the `_insert` trigger would have run over the envelopes computed during
+  encoding, rather than falling back to per-row trigger maintenance. The
+  resulting index is identical to a triggered write's ([#17]).
+
 ## [0.1.2] - 2026-07-24
 
 Performance across all three index and read paths, plus a streaming read. No
