@@ -137,6 +137,51 @@ reachable as SQL through `GeoPackage::connection()`.
   has one, and WKT2 through the `gpkg_crs_wkt_1_1` extension otherwise (for
   codes with no WKT1 form, such as the geographic 3D EPSG:4979), matching GDAL.
 
+## Performance
+
+Measured over three published datasets rather than generated fixtures, since
+what these paths cost depends on how many vertices a geometry carries and how
+unevenly the features are spread. Apple M2 Pro, 12 cores, 16 GB, release build,
+warm page cache, median of three repetitions.
+
+| | `buildings` | `rivers` | `admin` |
+|---|---|---|---|
+| source | [Microsoft Building Footprints](https://github.com/microsoft/USBuildingFootprints), California | [HydroRIVERS](https://www.hydrosheds.org/products/hydrorivers) v1.0, global | [GADM](https://gadm.org/data.html) 4.1, global |
+| rows | 11,542,912 | 8,477,883 | 356,508 |
+| geometry | Polygon | LineString | MultiPolygon |
+| attribute columns | 4 | 16 | 54 |
+| file | 2.37 GB | 2.03 GB | 2.74 GB |
+
+| operation | `buildings` | `rivers` | `admin` |
+|---|---|---|---|
+| columnar read, `read_arrow` | 2.1 s | 1.9 s | ~2.9 s |
+| scalar read, `cursor` | 4.3 s | 6.9 s | 2.4 s |
+| write from Arrow batches | 12.7 s | 12.9 s | 8.4 s |
+| the same write, index built as it goes | 31.0 s | 21.7 s | 8.9 s |
+| `create_spatial_index` afterwards instead | 26.0 s | 14.6 s | 8.5 s |
+| bounding-box query, indexed | 80 ms | 199 ms | 178 ms |
+| the same query with no index | 1.7 s | 2.2 s | 1.3 s |
+| features that query returned | 70,130 | 180,544 | 36,556 |
+
+Reading is bound by bytes, not rows: the columnar path holds 0.95 to 1.13 GB/s
+across three layers whose rows differ by a factor of 37 in size. The index is
+the other way round, tracking row count at 42,000 to 581,000 rows/s built and
+about 40 bytes per row stored, whatever the geometry. Building it during the
+write rather than afterwards saves 20% to 47%, because the bulk path reuses the
+envelopes it computed while encoding; that is why `create_layer` leaves an empty
+index in place for `write_all` to fill.
+
+The `admin` columnar read is given as approximate because it is: 7.7 kB rows
+produce six batches of roughly 450 MB, and with the default four reader threads
+holding one each, the figure follows host memory rather than the read path
+(1.7 s to 5.1 s observed here). `ArrowReadOptions::with_batch_size` and
+`with_max_batch_bytes` bound what is in flight.
+
+Method, per-dataset detail and the rest of the caveats are in
+[the benchmark write-up](https://github.com/urschrei/geopackage/blob/main/roadmap/benchmarks/2026-07-25-real-datasets.md);
+[`scripts/bench_datasets.sh`](https://github.com/urschrei/geopackage/blob/main/scripts/bench_datasets.sh)
+fetches the datasets and reproduces the table.
+
 ## Conformance
 
 Files written by this crate are checked against OGC
