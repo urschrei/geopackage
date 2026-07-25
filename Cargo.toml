@@ -32,9 +32,9 @@ wkb = "0.9"
 geo-traits = "0.3"
 geo-types = "0.7"
 # Calendar arithmetic and validation for the DATE/DATETIME types (issue #24).
-# No timezone database: a GeoPackage DATETIME is UTC by definition, and D3 keeps
-# this crate out of the transformation business, so `tz-*` and `tzdb-*` are all
-# off. `std` alone is the whole of what is needed.
+# No timezone database: a GeoPackage DATETIME is UTC by definition, and this
+# workspace transforms neither coordinates nor times, so `tz-*` and `tzdb-*` are
+# all off. `std` alone is the whole of what is needed.
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 # EPSG definitions beyond the vendored WKT1 subset (issue #23): WKT2 for the
 # gpkg_crs_wkt_1_1 extension column, and PROJJSON for GeoArrow's CRS metadata,
@@ -53,8 +53,7 @@ arrow-schema = "59"
 
 # Inherited by every member via `[lints] workspace = true`. The planned
 # `geopackage-ffi` crate (M3) is the sole intended exception: it will not
-# inherit these lints, confining `unsafe` to the C ABI boundary (see roadmap
-# decision D12).
+# inherit these lints, confining `unsafe` to the C ABI boundary.
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

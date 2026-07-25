@@ -223,7 +223,7 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
 - **Spatial index.** `create_spatial_index`, `drop_spatial_index`,
   `has_spatial_index` and `repair_spatial_index` over the GeoPackage 1.4
   trigger set (`update5`/`update6`/`update7`), with pre-1.4 and mixed
-  generations detected and repairable rather than silently mixed. The D8 bulk
+  generations detected and repairable rather than silently mixed. The bulk
   shadow-table build (`BulkIndexOptions`) accelerates fresh index construction,
   gated by a bijection/containment check plus `PRAGMA integrity_check` with an
   automatic fallback to the triggered path on any anomaly.
