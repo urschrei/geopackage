@@ -79,3 +79,9 @@ required-features = ["arrow"]
 [[example]]
 name = "arrow_bench"
 required-features = ["arrow"]
+
+# Times both the scalar and the columnar paths over a real file, so it needs
+# the Arrow data plane for the same reason `arrow_bench` does.
+[[example]]
+name = "dataset_bench"
+required-features = ["arrow"]
