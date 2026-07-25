@@ -123,7 +123,15 @@
 //! [`DEFAULT_BATCH_SIZE`](arrow::DEFAULT_BATCH_SIZE), 65,536) and how many
 //! threads may read at once ([`threads`](arrow::ArrowReadOptions::threads),
 //! default `0`, meaning `min(4, available parallelism)`; `1` reads on the
-//! calling thread). The columnar write has no options type of its own:
+//! calling thread). It also carries a ceiling on the geometry bytes one batch
+//! may hold ([`max_batch_bytes`](arrow::ArrowReadOptions::max_batch_bytes),
+//! default [`default_max_batch_bytes`](arrow::default_max_batch_bytes), which
+//! is `min(INT32_MAX, RAM / 4)`). A
+//! batch that would cross it is emitted short, and the rows that did not fit
+//! begin the next one, so a layer of very large geometries still reads. The
+//! ceiling exists because the geometry column's Arrow offsets are 32-bit, so
+//! no batch can address more than 2 GB of WKB whatever the row count says.
+//! The columnar write has no options type of its own:
 //! [`Layer::write_arrow_with`] takes the same [`BulkIndexOptions`] as
 //! [`Layer::write_all_with`].
 //!

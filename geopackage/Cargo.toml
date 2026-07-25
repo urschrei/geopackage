@@ -30,6 +30,7 @@ thiserror.workspace = true
 arrow-array = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+sysinfo = { workspace = true, optional = true }
 
 [features]
 default = ["geo-types"]
@@ -41,7 +42,7 @@ geo-types = ["geopackage-core/geo-types"]
 ## GeoArrow WKB column. Off by default: it pulls the `arrow-array` and
 ## `arrow-schema` crates, which a caller using only the scalar API does not
 ## need.
-arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:serde_json"]
+arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:serde_json", "dep:sysinfo"]
 
 [dev-dependencies]
 tempfile.workspace = true

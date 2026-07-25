@@ -87,11 +87,9 @@ pub const DEFAULT_BATCH_SIZE: usize = 65_536;
 /// carries on, so the ceiling costs nothing except on layers whose geometries
 /// are large enough to reach it.
 ///
-/// GDAL's driver takes the same approach for the same reason, cutting its
-/// batch short against `min(INT32_MAX, usable_RAM / 4)`. We use only the fixed
-/// part: reading total system memory needs either `unsafe` or a dependency,
-/// and this crate forbids the first and is sparing with the second. A caller
-/// that wants the memory-proportional behaviour can set it with
+/// This is the hard ceiling, and no setting can raise a batch past it. The
+/// default a read actually uses is [`default_max_batch_bytes`], which follows
+/// GDAL in taking `min(INT32_MAX, RAM / 4)`; a caller can set its own with
 /// [`ArrowReadOptions::with_max_batch_bytes`].
 ///
 /// The alternative was Arrow `LargeBinary`, whose `i64` offsets have no such
@@ -100,6 +98,32 @@ pub const DEFAULT_BATCH_SIZE: usize = 65_536;
 /// matching GDAL keeps our batches interchangeable with the encoding the
 /// ecosystem already reads. The `geoarrow.wkb` encoding permits either.
 pub const DEFAULT_MAX_BATCH_BYTES: usize = i32::MAX as usize;
+
+/// The byte ceiling a read uses when the caller sets none: GDAL's
+/// `min(INT32_MAX, RAM / 4)`.
+///
+/// The memory term only binds below about 8 GB of RAM, since a quarter of
+/// anything larger already exceeds [`DEFAULT_MAX_BATCH_BYTES`]. It is there so
+/// a small machine does not spend a quarter of itself on a single batch.
+///
+/// The system's memory is read once and cached. It is queried to choose a
+/// default, not to track a machine whose memory changes while we run.
+#[must_use]
+pub fn default_max_batch_bytes() -> usize {
+    static RESOLVED: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *RESOLVED.get_or_init(|| {
+        let mut system = sysinfo::System::new();
+        system.refresh_memory();
+        let quarter = usize::try_from(system.total_memory() / 4).unwrap_or(usize::MAX);
+        // An unavailable reading comes back as 0, which would put one row in
+        // every batch. Treat it as no information and keep the fixed ceiling.
+        if quarter == 0 {
+            DEFAULT_MAX_BATCH_BYTES
+        } else {
+            quarter.min(DEFAULT_MAX_BATCH_BYTES)
+        }
+    })
+}
 
 /// The Arrow extension-name metadata key, from the Arrow columnar spec.
 const EXTENSION_NAME_KEY: &str = "ARROW:extension:name";
@@ -227,15 +251,12 @@ fn geometry_field(name: &str, not_null: bool, srs_id: i32) -> Field {
 /// The GeoArrow extension metadata for a geometry column: a JSON object whose
 /// `crs` names the SRS.
 ///
-/// PROJJSON is what GeoArrow prefers and what a consumer would rather have. We
-/// do not carry a PROJJSON representation of an arbitrary SRS, so this emits an
-/// authority code, which GeoArrow permits, for the EPSG codes that a `srs_id`
-/// conventionally is. `srs_id` 0 and -1 are the spec's undefined values and
-/// carry no CRS at all.
-///
-/// Whether to carry PROJJSON is part of the CRS-definitions question in issue
-/// #23: the vendored subset behind [`geopackage_core::srs`] could not supply it
-/// for an arbitrary code even if this emitted it.
+/// PROJJSON is what GeoArrow prefers, because an authority code leaves the
+/// reader to resolve it against a registry it may not have, so that is what
+/// this emits wherever the EPSG registry has a definition. A `srs_id` the
+/// registry does not know falls back to an `EPSG:<code>` authority string,
+/// which GeoArrow permits. `srs_id` 0 and -1 are the spec's undefined values
+/// and carry no CRS at all.
 fn crs_metadata(srs_id: i32) -> String {
     if srs_id <= 0 {
         return "{}".to_owned();
@@ -254,6 +275,24 @@ fn crs_metadata(srs_id: i32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_default_ceiling_never_exceeds_the_offset_limit() {
+        let resolved = default_max_batch_bytes();
+        assert!(resolved > 0, "a zero ceiling would put one row in a batch");
+        assert!(
+            resolved <= DEFAULT_MAX_BATCH_BYTES,
+            "i32 offsets cannot address {resolved} bytes"
+        );
+        // Cached, so a second call cannot disagree with the first.
+        assert_eq!(resolved, default_max_batch_bytes());
+    }
+
+    #[test]
+    fn a_caller_cannot_raise_the_ceiling_past_the_offset_limit() {
+        let options = ArrowReadOptions::default().with_max_batch_bytes(usize::MAX);
+        assert_eq!(options.max_batch_bytes, DEFAULT_MAX_BATCH_BYTES);
+    }
 
     #[test]
     fn epsg_code_reads_the_crs_id_not_a_nested_one() {
@@ -348,7 +387,7 @@ impl Default for ArrowReadOptions {
     fn default() -> Self {
         Self {
             batch_size: DEFAULT_BATCH_SIZE,
-            max_batch_bytes: DEFAULT_MAX_BATCH_BYTES,
+            max_batch_bytes: default_max_batch_bytes(),
             threads: 0,
         }
     }

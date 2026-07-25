@@ -44,6 +44,10 @@ jiff = { version = "0.2", default-features = false, features = ["std"] }
 # rusqlite-gpkg author, which is the coordination 02-ecosystem asks for.
 epsg-utils = "0.0.3"
 serde_json = "1"
+# Total system memory, for the Arrow read path's default batch byte ceiling.
+# Only the `system` feature: the default set also probes disks, networks,
+# components and users, none of which we ask anything about.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # M3 Arrow data plane. `arrow-array`/`arrow-schema` only: the GeoArrow WKB
 # encoding is a Binary field carrying extension metadata, so `geoarrow-array`
 # would add a dependency without adding capability. Revisit if native GeoArrow

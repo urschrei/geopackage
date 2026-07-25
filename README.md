@@ -115,6 +115,7 @@ usually change:
 | The row count at which an index is built in bulk, how thoroughly that build then checks itself, and how full each RTree node is packed | `BulkIndexOptions` | 10,000 rows, `RtreeOnly`, `1.0` |
 | `DATETIME` strictness, and whether a value its declared type does not strictly permit is read or rejected | `ConversionOptions` | strict, lenient |
 | Rows per Arrow batch, and threads the columnar read uses | `ArrowReadOptions` | 65,536 rows, `min(4, available parallelism)` |
+| Geometry bytes one Arrow batch may hold, above which it is emitted short | `ArrowReadOptions::max_batch_bytes` | `min(INT32_MAX, RAM / 4)`; the column's Arrow offsets are 32-bit, so 2 GB is a hard ceiling |
 
 The crate documentation's
 [Configuration](https://docs.rs/geopackage/latest/geopackage/#configuration)
