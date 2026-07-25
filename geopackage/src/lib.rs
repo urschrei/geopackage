@@ -91,7 +91,6 @@
 //! )?;
 //!
 //! let layer = gpkg.layer("cities")?;
-//! layer.create_spatial_index()?;
 //!
 //! layer.write_all(
 //!     vec![
