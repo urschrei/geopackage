@@ -83,8 +83,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params_from_iter};
 use crate::bulk::{self, BulkIndexOptions};
 
 /// How large a `write_all` must be, relative to the rows already in a spatial
-/// index, before the bulk path rebuilds that index instead of letting the
-/// triggers append to it.
+/// index, before the bulk path rebuilds that index instead of adding its
+/// entries to it.
 ///
 /// A write of at least `existing / MERGE_REBUILD_RATIO` new entries takes the
 /// rebuild. See [`rebuild_beats_append`] for the measurements behind the value.
