@@ -119,14 +119,48 @@ the comparison script prints should be read as "not engaged" rather than as
 The first run being slower (522.8 ms) is page-cache warming, not a thread-count
 effect: it was simply first in the sequence.
 
+## After building it
+
+The aggregate path landed and was re-measured the same way.
+
+| | before | after |
+|---|---|---|
+| `arrow/read_arrow`, 200k polygons | 189.1 ms | **111.2 ms** |
+| against GDAL, 1M rows | 904.1 ms (2.34x) | **544.6 ms (1.39x)** |
+| against `row/cursor`, 200k | 1.09x | **1.86x** |
+
+A 38.6% reduction, and the ratio against GDAL falls from 2.34x to 1.39x.
+Criterion 3 asks for 1.25x, so it is still not met, but the remaining gap has
+moved: fetching is no longer where the time goes.
+
+**Array building is now the gap.** Subtracting `aggregate_fetch` from the total
+leaves about 59 ms of 111 ms, against roughly 39 ms when subtracting
+`step_and_fetch` from the old total. Those two figures cannot both be right, and
+neither is exact: `step_and_fetch` overstates fetching because the benchmark
+forces every value into memory, and `aggregate_fetch` may understate it for the
+same reason in reverse. What the pair does establish is a bracket, and the
+bracket says building is now between a third and a half of the read, where GDAL
+fits its whole non-SQLite cost into less than our building alone. That is the
+next thing to look at, and it wants a profiler rather than another subtraction.
+
+**A note on criterion 1's share test.** That criterion asks for the
+array-building share to be under 30%, measured as the total above the fetch
+floor. Against the aggregate floor it now reads about 53%, not because it slowed
+because the denominator collapsed. The sub-test compares against whichever floor
+the implementation actually uses, and a falling total with a rising share is the
+opposite of the failure it was written to catch. It needs rethinking rather than
+a pass or a fail; flagged rather than quietly adjusted.
+
 ## Consequences
 
-1. **Criterion 3 is not met** by the direct loop, at 2.34x against a target of
-   1.25x. Recorded as the number reached and why, rather than the criterion
-   being softened, per the note at the end of the M3 acceptance criteria.
-2. **The aggregate-function technique comes out of reserve.** The roadmap said
-   to reach for it if the direct loop fell short of a target; it has, and the
-   projection above says the technique closes the gap.
+1. **Criterion 3 is not met**: 2.34x by the direct loop, 1.39x with the
+   aggregate, against a target of 1.25x. Recorded as the numbers reached and
+   why, rather than the criterion being softened, per the note at the end of the
+   M3 acceptance criteria.
+2. **The aggregate-function technique came out of reserve and is built.** It
+   took 38.6% off the read. The projection said about 91 ms at 200k and the
+   result was 111 ms, so the projection was optimistic by about a fifth, which
+   is the part it attributed to array building staying put.
 3. **Array building deserves a second look** after that. Our builders account
    for 43 ms of 189 ms, and GDAL's whole non-SQLite cost is 36 ms, so
    `arrow-rs` builders may not be the cheapest way to fill these arrays.

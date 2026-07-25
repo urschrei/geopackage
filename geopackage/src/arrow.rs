@@ -48,7 +48,8 @@
 //! NULL.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use arrow_array::builder::{
     BinaryBuilder, BooleanBuilder, Date32Builder, Float64Builder, Int64Builder, StringBuilder,
@@ -61,6 +62,8 @@ use geopackage_core::gpb;
 use geopackage_core::ident::quote;
 use geopackage_core::types::ColumnType;
 use rusqlite::Connection;
+use rusqlite::functions::{Aggregate, Context, FunctionFlags};
+use rusqlite::limits::Limit;
 use rusqlite::types::ValueRef;
 
 use crate::schema::{Column, GeometryColumn};
@@ -86,6 +89,10 @@ const GEOARROW_WKB: &str = "geoarrow.wkb";
 
 /// The time unit `DATETIME` columns are represented in.
 const DATETIME_UNIT: TimeUnit = TimeUnit::Microsecond;
+
+/// Alias for the pagination key when it is not itself one of the columns, so
+/// the aggregate can name it as an argument.
+const KEY_ALIAS: &str = "__gpkg_key";
 
 impl Layer<'_> {
     /// The Arrow schema this layer's rows are read into.
@@ -346,35 +353,221 @@ impl Layer<'_> {
             }
             selected.push_str(&quote(field.name())?);
         }
-        let sql = match key_field {
-            Some(_) => format!(
-                "SELECT {selected} FROM {table} WHERE {key} >= ?1 ORDER BY {key} LIMIT ?2",
-                table = quote(self.table_name())?
-            ),
-            // No primary-key column in the schema, so the rowid (or a key that
-            // is not a column) is selected ahead of the fields.
-            None => format!(
-                "SELECT {key},{selected} FROM {table} WHERE {key} >= ?1 ORDER BY {key} LIMIT ?2",
-                table = quote(self.table_name())?
+        // When the key is not one of the fields it is selected ahead of them, so
+        // the reader can paginate, under an alias the aggregate can name.
+        let (row_columns, aggregate_arguments) = match key_field {
+            Some(_) => (selected.clone(), selected),
+            None => (
+                format!("{key} AS \"{KEY_ALIAS}\",{selected}"),
+                format!("\"{KEY_ALIAS}\",{selected}"),
             ),
         };
+        let table = quote(self.table_name())?;
+        let rows_sql =
+            format!("SELECT {row_columns} FROM {table} WHERE {key} >= ?1 ORDER BY {key} LIMIT ?2");
+        let sql = rows_sql.clone();
         let geometry_index = self.geometry_column().and_then(|geom| {
             schema
                 .fields()
                 .iter()
                 .position(|field| *field.name() == geom.column_name)
         });
+        let conn = self.gpkg().connection();
+        let datetime = self.conversion_options().datetime;
+        let names: Vec<String> = schema
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect();
+
+        // The aggregate path needs one function argument per selected column.
+        // A table wider than SQLite's function-argument limit cannot use it, so
+        // it falls back to the direct loop rather than failing. GDAL splits the
+        // call across several aggregates instead; the fallback costs less to
+        // maintain and the case is rare.
+        let arg_count =
+            i32::try_from(names.len() + usize::from(key_field.is_none())).unwrap_or(i32::MAX);
+        let aggregate = if arg_count <= conn.limit(Limit::SQLITE_LIMIT_FUNCTION_ARG)? {
+            Some(AggregateState::register(
+                conn,
+                arg_count,
+                BatchFiller {
+                    names: names.clone(),
+                    types: schema
+                        .fields()
+                        .iter()
+                        .map(|field| field.data_type().clone())
+                        .collect(),
+                    key_argument: key_field.unwrap_or(0),
+                    field_offset: usize::from(key_field.is_none()),
+                    geometry_index,
+                    datetime,
+                    capacity: options.batch_size.clamp(1, DEFAULT_BATCH_SIZE),
+                    output: Arc::new(Mutex::new(None)),
+                    failure: Arc::new(Mutex::new(None)),
+                },
+            )?)
+        } else {
+            None
+        };
+
+        // The batch has to be bounded by the inner query. An aggregate collapses
+        // its input to a single result row, so a LIMIT beside it would bound the
+        // aggregate's own output at one row and scan the whole table underneath.
+        // GDAL avoids this by slicing with `BETWEEN` on a dense key instead;
+        // wrapping the paginated query keeps this path working on any key.
+        let aggregate_sql = aggregate
+            .as_ref()
+            .map(|state| {
+                format!(
+                    "SELECT {}({aggregate_arguments}) FROM ({rows_sql})",
+                    state.name
+                )
+            })
+            .unwrap_or_default();
+
         Ok(ArrowBatches {
-            conn: self.gpkg().connection(),
+            conn,
             schema,
             sql,
+            aggregate_sql,
             key_field,
             geometry_index,
-            datetime: self.conversion_options().datetime,
+            names,
+            datetime,
             batch_size: options.batch_size.max(1),
             next_key: i64::MIN,
             exhausted: false,
+            aggregate,
         })
+    }
+}
+
+/// A registered aggregate function and the slot its finaliser leaves the
+/// finished builders in.
+struct AggregateState {
+    name: String,
+    arg_count: i32,
+    output: Arc<Mutex<Option<FilledBatch>>>,
+    failure: Arc<Mutex<Option<Error>>>,
+}
+
+impl AggregateState {
+    /// Register the function under a name unique to this reader.
+    ///
+    /// Unique because two readers can share a connection, and a shared name
+    /// would have the second overwrite the first's function and the first's
+    /// drop remove the second's.
+    fn register(conn: &Connection, arg_count: i32, filler: BatchFiller) -> Result<Self> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let name = format!(
+            "geopackage_fill_arrow_{}",
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let output = Arc::clone(&filler.output);
+        let failure = Arc::clone(&filler.failure);
+        conn.create_aggregate_function(
+            name.as_str(),
+            arg_count,
+            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+            filler,
+        )?;
+        Ok(Self {
+            name,
+            arg_count,
+            output,
+            failure,
+        })
+    }
+}
+
+/// The aggregate that fills one batch, registered as a SQL function.
+///
+/// This is the technique GDAL's GeoPackage driver uses, and the reason for it is
+/// measured rather than assumed: fetching every value of every row costs a tenth
+/// as much through an aggregate as through the row loop, because the loop stays
+/// inside SQLite instead of returning into this crate once per row (see
+/// `roadmap/benchmarks/2026-07-25-gdal-arrow-comparison.md`).
+///
+/// The builders live in the accumulator rather than here, so appending a row
+/// needs no synchronisation at all; [`Aggregate::finalize`] moves them into
+/// `output` once per batch, which is the only time the lock is taken.
+struct BatchFiller {
+    names: Vec<String>,
+    types: Vec<DataType>,
+    /// Which argument carries the pagination key.
+    key_argument: usize,
+    /// Where the schema fields start among the arguments: 1 when the key had to
+    /// be selected separately, 0 when it is one of the fields.
+    field_offset: usize,
+    geometry_index: Option<usize>,
+    datetime: DateTimeParsing,
+    capacity: usize,
+    output: Arc<Mutex<Option<FilledBatch>>>,
+    /// The first append failure, kept so a typed error survives instead of
+    /// becoming a bare SQL error.
+    ///
+    /// Beside the accumulator rather than inside it, because the accumulator
+    /// must be `UnwindSafe` and [`Error`] is not: it boxes a `dyn Error` whose
+    /// interior mutability the compiler cannot rule out. Failures are rare, so
+    /// taking a lock for one costs nothing that matters.
+    failure: Arc<Mutex<Option<Error>>>,
+}
+
+/// One batch under construction, the aggregate's accumulator.
+struct FilledBatch {
+    builders: Vec<ColumnBuilder>,
+    rows: usize,
+    last_key: Option<i64>,
+}
+
+impl Aggregate<FilledBatch, i64> for BatchFiller {
+    fn init(&self, _: &mut Context<'_>) -> rusqlite::Result<FilledBatch> {
+        let mut builders = Vec::with_capacity(self.types.len());
+        for (index, data_type) in self.types.iter().enumerate() {
+            let is_geometry = Some(index) == self.geometry_index;
+            builders.push(
+                ColumnBuilder::new(data_type, is_geometry, self.capacity)
+                    .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?,
+            );
+        }
+        Ok(FilledBatch {
+            builders,
+            rows: 0,
+            last_key: None,
+        })
+    }
+
+    fn step(&self, ctx: &mut Context<'_>, acc: &mut FilledBatch) -> rusqlite::Result<()> {
+        if let ValueRef::Integer(key) = ctx.get_raw(self.key_argument) {
+            acc.last_key = Some(key);
+        }
+        for (index, builder) in acc.builders.iter_mut().enumerate() {
+            let name = self.names.get(index).map_or("", String::as_str);
+            let value = ctx.get_raw(index + self.field_offset);
+            if let Err(error) = builder.append(name, value, self.datetime) {
+                if let Ok(mut slot) = self.failure.lock() {
+                    *slot = Some(error);
+                }
+                // Stop the scan. The finaliser still runs, so the typed error
+                // above is what the caller sees rather than this one.
+                return Err(rusqlite::Error::UserFunctionError(
+                    "geopackage: columnar read failed".into(),
+                ));
+            }
+        }
+        acc.rows += 1;
+        Ok(())
+    }
+
+    fn finalize(&self, _: &mut Context<'_>, acc: Option<FilledBatch>) -> rusqlite::Result<i64> {
+        let rows = acc.as_ref().map_or(0, |batch| batch.rows);
+        if let Some(batch) = acc
+            && let Ok(mut slot) = self.output.lock()
+        {
+            *slot = Some(batch);
+        }
+        Ok(i64::try_from(rows).unwrap_or(i64::MAX))
     }
 }
 
@@ -386,22 +579,113 @@ impl Layer<'_> {
 pub struct ArrowBatches<'a> {
     conn: &'a Connection,
     schema: SchemaRef,
+    /// The direct-loop query, selecting the columns as ordinary result columns.
     sql: String,
+    /// The aggregate-path query, wrapping the same columns in the registered
+    /// function. Built on first use.
+    aggregate_sql: String,
     /// Index of the field that is also the pagination key, when it is one of
     /// them. `None` means the key is selected as an extra leading column.
     key_field: Option<usize>,
     /// Index of the geometry field, whose values need the GPB header stripped.
     geometry_index: Option<usize>,
+    names: Vec<String>,
     datetime: DateTimeParsing,
     batch_size: usize,
     /// Rows with a key at or above this are still to be read.
     next_key: i64,
     exhausted: bool,
+    /// The aggregate function, when this reader uses it. `None` falls back to
+    /// the direct loop.
+    aggregate: Option<AggregateState>,
+}
+
+impl Drop for ArrowBatches<'_> {
+    fn drop(&mut self) {
+        if let Some(state) = &self.aggregate {
+            // Best effort: the reader is going away either way, and a failure
+            // here would only leave an unused function registered on the
+            // connection under a name nothing else uses.
+            drop(
+                self.conn
+                    .remove_function(state.name.as_str(), state.arg_count),
+            );
+        }
+    }
 }
 
 impl ArrowBatches<'_> {
     /// Read one batch, or `None` once the layer is exhausted.
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if self.aggregate.is_some() {
+            return self.next_batch_aggregate();
+        }
+        self.next_batch_direct()
+    }
+
+    /// The aggregate path: one function call per row, inside SQLite's own loop.
+    fn next_batch_aggregate(&mut self) -> Result<Option<RecordBatch>> {
+        let queried = self.conn.query_row(
+            &self.aggregate_sql,
+            rusqlite::params![
+                self.next_key,
+                i64::try_from(self.batch_size).unwrap_or(i64::MAX)
+            ],
+            |row| row.get::<_, i64>(0),
+        );
+        // A failed append stops the scan and stores the real reason; the error
+        // the query returns is only the signal that it stopped.
+        if let Some(state) = &self.aggregate
+            && let Ok(mut slot) = state.failure.lock()
+            && let Some(error) = slot.take()
+        {
+            self.exhausted = true;
+            return Err(error);
+        }
+        let rows_read = queried?;
+
+        let filled = self
+            .aggregate
+            .as_ref()
+            .and_then(|state| state.output.lock().ok().and_then(|mut slot| slot.take()));
+        let Some(filled) = filled else {
+            self.exhausted = true;
+            return Ok(None);
+        };
+
+        let rows_read = usize::try_from(rows_read).unwrap_or(0);
+        if rows_read == 0 {
+            self.exhausted = true;
+            return Ok(None);
+        }
+        self.advance(filled.last_key, rows_read);
+
+        let arrays: Vec<ArrayRef> = filled
+            .builders
+            .into_iter()
+            .map(ColumnBuilder::finish)
+            .collect();
+        Ok(Some(RecordBatch::try_new(
+            Arc::clone(&self.schema),
+            arrays,
+        )?))
+    }
+
+    /// Record where the next batch starts, and whether there can be one.
+    fn advance(&mut self, last_key: Option<i64>, rows_read: usize) {
+        match last_key.and_then(|key| key.checked_add(1)) {
+            Some(next) => self.next_key = next,
+            // The key space is exhausted at i64::MAX; there can be no next row.
+            None => self.exhausted = true,
+        }
+        if rows_read < self.batch_size {
+            self.exhausted = true;
+        }
+    }
+
+    /// The direct path: step the rows and fetch each value. Kept as the
+    /// fallback for a table too wide for the aggregate's argument list.
+    fn next_batch_direct(&mut self) -> Result<Option<RecordBatch>> {
         // Pre-size the arrays so a batch does not spend its time growing them.
         // Capped rather than taken from `batch_size` directly, so an enormous
         // batch size does not reserve enormous buffers for a small table.
@@ -420,15 +704,6 @@ impl ArrowBatches<'_> {
             })
             .collect::<Result<_>>()?;
 
-        // Names are only needed to describe a failure, but looking one up per
-        // value per row is work in the hot path, so they are hoisted here.
-        let names: Vec<&str> = self
-            .schema
-            .fields()
-            .iter()
-            .map(|field| field.name().as_str())
-            .collect();
-
         let mut rows_read = 0usize;
         let mut last_key = None;
         {
@@ -443,7 +718,7 @@ impl ArrowBatches<'_> {
             while let Some(row) = rows.next()? {
                 last_key = Some(row.get::<_, i64>(self.key_field.unwrap_or(0))?);
                 for (index, builder) in builders.iter_mut().enumerate() {
-                    let name = names.get(index).copied().unwrap_or_default();
+                    let name = self.names.get(index).map_or("", String::as_str);
                     builder.append(name, row.get_ref(index + offset)?, self.datetime)?;
                 }
                 rows_read += 1;
@@ -454,14 +729,7 @@ impl ArrowBatches<'_> {
             self.exhausted = true;
             return Ok(None);
         }
-        match last_key.and_then(|key| key.checked_add(1)) {
-            Some(next) => self.next_key = next,
-            // The key space is exhausted at i64::MAX; there can be no next row.
-            None => self.exhausted = true,
-        }
-        if rows_read < self.batch_size {
-            self.exhausted = true;
-        }
+        self.advance(last_key, rows_read);
 
         let arrays: Vec<ArrayRef> = builders.into_iter().map(ColumnBuilder::finish).collect();
         Ok(Some(RecordBatch::try_new(

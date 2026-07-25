@@ -13,6 +13,7 @@ use geo_types::Point;
 use geopackage::arrow::ArrowReadOptions;
 use geopackage::core::types::{ColumnType, GeometryType};
 use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value};
+use rusqlite::limits::Limit;
 
 /// A points layer with one attribute of each interesting type.
 fn layer_with_rows(rows: usize) -> (tempfile::TempDir, GeoPackage) {
@@ -253,4 +254,56 @@ fn the_reader_reports_its_schema() {
     let batches: Vec<_> = reader.collect::<Result<Vec<_>, _>>().unwrap();
     assert_eq!(batches[0].schema(), schema);
     assert_eq!(schema, layer.arrow_schema().unwrap());
+}
+
+/// A layer the aggregate cannot serve falls back to the direct row loop, and
+/// reads exactly the same.
+///
+/// The aggregate passes one function argument per column, so a table wider than
+/// SQLite's function-argument limit cannot use it. Rather than build a
+/// thousand-column table, the limit is lowered on the connection, which is the
+/// same condition from the code's point of view and is also how an embedder
+/// could reach this path on an ordinary table.
+///
+/// Every other test in this file goes through the aggregate, so without this one
+/// the fallback would be unexercised and free to rot. Verified to fail when the
+/// fallback is broken.
+#[test]
+fn a_layer_the_aggregate_cannot_serve_falls_back() {
+    let (_dir, gpkg) = layer_with_rows(5);
+
+    // Below the eleven columns this layer has, so `read_arrow` must fall back.
+    gpkg.connection()
+        .set_limit(Limit::SQLITE_LIMIT_FUNCTION_ARG, 4)
+        .unwrap();
+
+    let batches = read_all(&gpkg, ArrowReadOptions::with_batch_size(2));
+    assert_eq!(batches.len(), 3, "5 rows at 2 per batch, via the fallback");
+
+    let fids: Vec<i64> = batches
+        .iter()
+        .flat_map(|batch| {
+            batch
+                .column_by_name("fid")
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .values()
+                .to_vec()
+        })
+        .collect();
+    assert_eq!(fids, vec![1, 2, 3, 4, 5]);
+
+    // Values and geometry, not just shape: the fallback converts as the
+    // aggregate does.
+    let name = batches[0]
+        .column_by_name("name")
+        .unwrap()
+        .as_string::<i32>();
+    assert_eq!(name.value(0), "row 1");
+    let geom = batches[0]
+        .column_by_name("geom")
+        .unwrap()
+        .as_binary::<i32>();
+    assert!(!geom.is_null(0));
+    assert!(matches!(geom.value(0)[0], 0 | 1), "WKB byte-order marker");
 }

@@ -24,7 +24,9 @@ categories = ["science::geo", "database"]
 [workspace.dependencies]
 geopackage-core = { version = "0.1.2", path = "geopackage-core", default-features = false }
 thiserror = "2"
-rusqlite = { version = "0.40", features = ["bundled", "functions"] }
+# `limits` is for SQLITE_LIMIT_FUNCTION_ARG: the Arrow read path passes one
+# function argument per column, so it has to know when a table is too wide.
+rusqlite = { version = "0.40", features = ["bundled", "functions", "limits"] }
 tempfile = "3"
 wkb = "0.9"
 geo-traits = "0.3"
