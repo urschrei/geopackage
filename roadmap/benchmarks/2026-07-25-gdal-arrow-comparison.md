@@ -71,11 +71,27 @@ building also appears leaner than ours, since 36 ms covers both of their phases
 where our building alone is 43 ms; they write into raw buffers through an
 internal NanoArrow-like helper rather than through `arrow-rs` builders.
 
-**The projection this justifies.** Removing per-value dispatch entirely would
-put us at roughly 44 + 43 = 87 ms at 200,000 rows, against GDAL's 80.8 ms: a
-ratio of **1.08x**, inside criterion 3. That is the case for implementing the
-aggregate function, and it is now arithmetic over measurements rather than a
-guess.
+**The technique measured, before building it.** Rather than project, the bench
+gained an arm that fetches every column of every row through a SQLite aggregate
+function, doing the same work as `step_and_fetch` by the means GDAL uses. Over
+200,000 polygon rows of fifteen columns:
+
+| | time | per-value fetching |
+|---|---|---|
+| `sqlite/step_only` | 41.7 ms | |
+| `sqlite/step_and_fetch` (row loop) | 142.3 ms | 100.6 ms |
+| `sqlite/aggregate_fetch` (aggregate) | **51.7 ms** | **10.0 ms** |
+
+Fetching costs a tenth as much. That is far more than the one saved FFI call
+per value the source reading suggested (`Context::get_raw` is a slice index plus
+two FFI calls where `Row::get_ref` makes three, since it asks SQLite for the
+column count to bounds-check every index). The rest is the per-row return into
+application code disappearing: the whole loop stays inside SQLite's VDBE.
+
+**The projection this justifies.** Our array building currently costs 39.0 ms
+(181.3 - 142.3). On top of `aggregate_fetch` that is about **91 ms**, against
+GDAL's 80.8 ms at the same row count: a ratio of **1.12x**, inside criterion 3.
+Arithmetic over measurements rather than a guess, and the case for building it.
 
 ## What this run does not establish
 

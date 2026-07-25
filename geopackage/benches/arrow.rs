@@ -49,6 +49,40 @@ use geopackage::arrow::ArrowReadOptions;
 use geopackage::core::datetime::DateTime;
 use geopackage::core::types::{ColumnType, GeometryType};
 use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value};
+use rusqlite::functions::{Aggregate, Context, FunctionFlags};
+
+/// Fetches every column of every row through a SQLite aggregate function,
+/// mirroring what `sqlite/step_and_fetch` does through the ordinary row loop.
+///
+/// This is the technique GDAL's driver uses to fill an Arrow batch: the callback
+/// runs inside SQLite's own loop and receives each column as a `sqlite3_value*`,
+/// so there is no return into application code per row, and `Context::get_raw`
+/// is a slice index plus two FFI calls where `Row::get_ref` makes three (it asks
+/// SQLite for the column count on every value, to bounds-check the index).
+///
+/// Measuring it here, against the same file and the same work, says what the
+/// technique is worth before any of it is built for real.
+struct FetchEveryColumn {
+    columns: usize,
+}
+
+impl Aggregate<usize, i64> for FetchEveryColumn {
+    fn init(&self, _: &mut Context<'_>) -> rusqlite::Result<usize> {
+        Ok(0)
+    }
+
+    fn step(&self, ctx: &mut Context<'_>, rows: &mut usize) -> rusqlite::Result<()> {
+        for column in 0..self.columns {
+            black_box(ctx.get_raw(column));
+        }
+        *rows += 1;
+        Ok(())
+    }
+
+    fn finalize(&self, _: &mut Context<'_>, rows: Option<usize>) -> rusqlite::Result<i64> {
+        Ok(i64::try_from(rows.unwrap_or(0)).unwrap_or(i64::MAX))
+    }
+}
 
 fn rows() -> usize {
     std::env::var("GPKG_BENCH_ROWS")
@@ -282,6 +316,33 @@ fn bench_shape(c: &mut Criterion, shape: &str, gpkg: &GeoPackage, names: &[&str]
                 total += 1;
             }
             black_box(total)
+        });
+    });
+
+    group.bench_function("sqlite/aggregate_fetch", |b| {
+        let conn = gpkg.connection();
+        conn.create_aggregate_function(
+            "fetch_every_column",
+            i32::try_from(column_count).expect("column count fits i32"),
+            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+            FetchEveryColumn {
+                columns: column_count,
+            },
+        )
+        .expect("create aggregate");
+        let aggregate_sql = format!(
+            "SELECT fetch_every_column({}) FROM features",
+            names
+                .iter()
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        b.iter(|| {
+            let rows: i64 = conn
+                .query_row(&aggregate_sql, [], |row| row.get(0))
+                .expect("aggregate query");
+            black_box(rows)
         });
     });
 
