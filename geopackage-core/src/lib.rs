@@ -4,9 +4,11 @@
 //! expressed without a database connection:
 //!
 //! - [`gpb`]: the GeoPackage Binary (GPB) geometry blob header codec
-//! - [`geometry`]: the parsed geometry wrapper ([`GpbGeometry`])
+//! - [`geometry`]: the parsed geometry wrapper ([`GpbGeometry`]), and the GPB
+//!   encoders, from a geometry object or from bytes that are already ISO WKB
 //! - [`types`]: column and geometry type vocabulary (spec Table 1, Annex G)
-//! - [`datetime`]: `DATE`/`DATETIME` text form parsing (strict and lenient)
+//! - [`datetime`]: `DATE`/`DATETIME` text form parsing (strict and lenient),
+//!   calendar validation, and epoch conversion
 //! - [`ddl`]: normative `CREATE TABLE` SQL and required `gpkg_spatial_ref_sys` seed rows
 //! - [`srs`]: vendored EPSG WKT1 subset for `gpkg_spatial_ref_sys` seeding
 //! - [`triggers`]: RTree spatial index virtual table and trigger SQL (version-aware)
@@ -14,10 +16,20 @@
 //! - [`ident`]: SQL identifier quoting
 //!
 //! It is deliberately dependency-light so that other implementations (e.g. `geozero`)
-//! can share it. Database I/O lives in the `geopackage` crate.
+//! can share it. Database I/O lives in the `geopackage` crate, and so does
+//! everything that needs a file to act on: a code outside the vendored [`srs`]
+//! subset is resolved against the EPSG registry there, not here.
 //!
 //! SQL text is reproduced verbatim from the spec's normative annexes
 //! (Annex C "Table Definition SQL", Annex F.3 "R-tree Spatial Indexes").
+//!
+//! # Cargo features
+//!
+//! - **`geo-types`** (on by default): adds [`GpbGeometry::to_geo`], converting
+//!   a parsed geometry to an owned `geo-types` value. Decline it with
+//!   `default-features = false`; the [`geo_traits`] implementation, which is
+//!   how coordinates are read without materialising anything, does not depend
+//!   on it.
 //!
 //! # Reading untrusted geometries
 //!
