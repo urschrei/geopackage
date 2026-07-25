@@ -122,6 +122,16 @@ engineering.
   descriptions, since C++ internals don't transliterate usefully. Cite
   [gdal#7614](https://github.com/OSGeo/gdal/issues/7614) and RFC 86 at the
   implementation sites.
+  For M3, the measurements to beat are in Even Rouault's
+  [Paris meetup slides](https://download.osgeo.org/gdal/presentations/GDAL_%20integrating%20columnar%20formats%20into%20a%20row-oriented%20framework.pdf)
+  (18 June 2026), reproduced and read in
+  [05-m3-arrow-ffi.md](05-m3-arrow-ffi.md). He
+  [notes](https://mastodon.social/@EvenRouault/116980004256229761) that the
+  GeoPackage driver's Arrow path now performs "not very far away from Parquet
+  using some tricks and multithreading"; on slide 10's benchmark it is in fact
+  ahead of GeoParquet at four threads. What those tricks are is not in the
+  slides, so the driver's `GetArrowStream` override is the place to look, under
+  the technique-not-transliteration rule above.
 - **NGA geopackage-java**: mine its test suite and published sample/corrupt
   .gpkg files for the conformance corpus; its layered core/platform split
   already shaped D10.
