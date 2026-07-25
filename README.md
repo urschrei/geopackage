@@ -142,7 +142,7 @@ reachable as SQL through `GeoPackage::connection()`.
 Measured over three published datasets rather than generated fixtures, since
 what these paths cost depends on how many vertices a geometry carries and how
 unevenly the features are spread. Apple M2 Pro, 12 cores, 16 GB, release build,
-warm page cache, median of three repetitions.
+warm page cache, medians over repeated runs.
 
 | | `buildings` | `rivers` | `admin` |
 |---|---|---|---|
