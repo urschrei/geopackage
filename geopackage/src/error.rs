@@ -10,6 +10,38 @@ pub enum Error {
     /// Spec-level error from `geopackage-core`.
     #[error(transparent)]
     Core(#[from] geopackage_core::Error),
+    /// Underlying Arrow error (feature `arrow`).
+    #[cfg(feature = "arrow")]
+    #[error(transparent)]
+    Arrow(#[from] arrow_schema::ArrowError),
+    /// A stored value's storage class cannot go into the Arrow array its column
+    /// maps to (feature `arrow`).
+    ///
+    /// The columnar counterpart of [`Self::ValueTypeMismatch`], reported
+    /// separately because it names an Arrow type rather than a declared
+    /// GeoPackage one.
+    #[cfg(feature = "arrow")]
+    #[error("column {column:?} maps to Arrow {expected} but holds a {found} value")]
+    ArrowValueMismatch {
+        /// The column that was read.
+        column: String,
+        /// The Arrow type the column maps to.
+        expected: &'static str,
+        /// The SQLite storage class actually found: one of `NULL`, `INTEGER`,
+        /// `REAL`, `TEXT`, or `BLOB`.
+        found: &'static str,
+    },
+    /// A schema field whose Arrow type the columnar reader has no builder for
+    /// (feature `arrow`).
+    ///
+    /// Unreachable from a schema this crate derived; it exists so that adding a
+    /// mapping without adding its builder is an error rather than a panic.
+    #[cfg(feature = "arrow")]
+    #[error("no columnar builder for Arrow type {data_type}")]
+    UnsupportedArrowType {
+        /// The Arrow type that has no builder.
+        data_type: String,
+    },
     /// The file is not identifiable as a GeoPackage.
     #[error(
         "not a GeoPackage: {reason} (application_id={application_id:#010x}, user_version={user_version})"
