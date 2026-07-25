@@ -1,6 +1,6 @@
 //! Connection options for opening or creating a [`GeoPackage`]: the
 //! [`OpenOptions`] builder and its typed [`JournalMode`] and [`Synchronous`]
-//! settings (design decision D4, D10).
+//! settings.
 //!
 //! [`OpenOptions`] mirrors [`std::fs::OpenOptions`]: build up the settings, then
 //! call a terminal [`OpenOptions::create`], [`OpenOptions::open`],
@@ -17,7 +17,7 @@ use rusqlite::OpenFlags;
 
 use crate::{GeoPackage, Result};
 
-/// SQLite journal mode for a GeoPackage connection (design decision D4).
+/// SQLite journal mode for a GeoPackage connection.
 ///
 /// The default is interchange-first: an unspecified journal mode leaves the
 /// file as it is, and a file created fresh is [`JournalMode::Delete`] (SQLite's
@@ -79,7 +79,7 @@ impl Synchronous {
 }
 
 /// A builder for opening or creating a [`GeoPackage`] with an explicit journal
-/// mode and/or `synchronous` level (design decisions D4, D10).
+/// mode and/or `synchronous` level.
 ///
 /// ```no_run
 /// # fn main() -> Result<(), geopackage::Error> {

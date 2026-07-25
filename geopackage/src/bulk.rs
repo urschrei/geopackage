@@ -86,7 +86,7 @@ pub const DEFAULT_BULK_THRESHOLD: usize = 10_000;
 /// index will be appended to heavily.
 pub const DEFAULT_FILL_FACTOR: f64 = 1.0;
 
-/// Tuning for the RTree bulk-build path (design decision D8).
+/// Tuning for the RTree bulk-build path.
 ///
 /// Passed to [`crate::Layer::create_spatial_index_with`] (and the bulk
 /// `write_all` path). The default threshold is [`DEFAULT_BULK_THRESHOLD`];
@@ -454,8 +454,7 @@ fn gate(
     // index just built, cross-checking every entry against its parent's bounds
     // and the `%_rowid`/`%_parent` mappings against `%_node`, and reports `ok`
     // or a description of what is wrong. Its cost is proportional to the index;
-    // `PRAGMA integrity_check` is O(database) and opt-in (design decision D8,
-    // issue #16).
+    // `PRAGMA integrity_check` is O(database), so it is opt-in (issue #16).
     let rtree_report: String = conn.query_row("SELECT rtreecheck(?1)", [rtree], |r| r.get(0))?;
     if rtree_report != "ok" {
         return Ok(false);

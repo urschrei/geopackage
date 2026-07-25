@@ -124,10 +124,27 @@ assumed about GPB bodies being usable as WKB without a parse.
       what a read bound by pulling pages rather than by cores looks like, which
       is why the automatic count stops there. The density rule is
       `max - min + 1 == count`, slightly wider than GDAL's, and each of the three
-      conditions declines to the single-threaded path rather than failing. The
-      bbox-splitting question is still open; it does not arise until
-      `features_in` has an Arrow counterpart.)*
-- [ ] Decide the WKB column's Arrow type. `BinaryArray` carries int32 offsets, so
+      conditions declines to the single-threaded path rather than failing.
+      The bbox-splitting approach is now chosen, though it does not arise until
+      `features_in` has an Arrow counterpart: one thread runs the rtree scan
+      and hands candidate ids to workers in blocks, so the scan happens once,
+      no feature is returned twice, the first batch does not wait for the whole
+      scan, and memory stays bounded. Splitting the query rectangle was
+      rejected because data clusters, so the shares come out uneven, and a
+      feature straddling a boundary is returned by two workers, which needs
+      dedup. Striping by `fid % n` was rejected because every worker then pays
+      the whole rtree scan. The cost the chosen approach carries is that
+      fetching an arbitrary id list is index lookups rather than a rowid range
+      scan, so it is worth measuring whether bbox results are typically large
+      enough for any of this to pay.)*
+- [x] Decide the WKB column's Arrow type. **Chosen: `Binary`, cut short on a
+      byte budget, mirroring GDAL.** `LargeBinary` was declined because it
+      hands every consumer 64-bit offsets to solve a problem only very large
+      geometries have; `geoarrow.wkb` permits either. We take only the fixed
+      `INT32_MAX` part of GDAL's `min(INT32_MAX, RAM / 4)`, since reading total
+      system memory needs `unsafe` or a dependency, and expose the budget as
+      `ArrowReadOptions::max_batch_bytes` for callers who want the rest.
+      Original note: `BinaryArray` carries int32 offsets, so
       one batch cannot hold more than 2 GB of WKB, which large polygons reach.
       GDAL cuts the batch short against a byte budget of `min(INT32_MAX,
       RAM / 4)`; `LargeBinaryArray` avoids the ceiling instead. Check which the

@@ -40,8 +40,15 @@ use case). Same pattern as other georust crates (wkb, geoarrow-rs).
 
 **Decision.** No PROJ dependency or coordinate transformation in the
 core. `gpkg_spatial_ref_sys` rows for common EPSG codes come from vendored
-definitions (see [02-ecosystem.md](02-ecosystem.md)); users can supply
-arbitrary WKT; `gpkg_crs_wkt_1_1` (WKT2 + epoch) written when WKT2 is supplied.
+definitions (see [02-ecosystem.md](02-ecosystem.md)), falling back to
+`epsg-utils` for the rest of the registry; users can supply arbitrary WKT;
+`gpkg_crs_wkt_1_1` (WKT2 + epoch) written when WKT2 is supplied, and for any
+code with no WKT1 form of its own.
+
+Reading a definition is not transforming with it, so this stays inside the
+decision: nothing here converts a coordinate. It does mean shipping more of the
+EPSG registry than the original vendored subset, which issue #23 recorded as
+too parsimonious for real-world input.
 
 **Rationale.** [HY26]'s observation: a GPKG **writer** is forced to
 know CRS/WKT definitions ("actually requires PROJ if the writer wants to

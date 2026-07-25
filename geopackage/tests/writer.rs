@@ -34,7 +34,11 @@ fn gpkg() -> (tempfile::TempDir, GeoPackage) {
 /// A point layer with no attribute columns (only `fid` + `geom`).
 fn point_layer(gpkg: &GeoPackage, table: &str, geom_type: GeometryType, z: ZmFlag) {
     gpkg.create_layer(
-        &TableSchemaBuilder::new(table).geometry(GeometrySpec::new(geom_type, 4326).z(z)),
+        &TableSchemaBuilder::new(table)
+            .geometry(GeometrySpec::new(geom_type, 4326).z(z))
+            // The index tests in this file install it themselves, sometimes
+            // with raw trigger SQL, so they start from an unindexed layer.
+            .spatial_index(false),
     )
     .unwrap();
 }
@@ -198,7 +202,7 @@ fn roundtrip_z_geometry_writes_xyz_envelope() {
     assert_eq!(features.len(), 1);
     let g = features[0].geometry().unwrap().unwrap();
     assert_eq!(features[0].fid(), fid);
-    // The always-envelope policy (D6) wrote an XYZ envelope, and the body is
+    // The writer always emits an envelope, widened to Z here, and the body is
     // XYZ WKB.
     assert_eq!(
         g.header().envelope,
@@ -522,9 +526,9 @@ fn pts_generation(gpkg: &GeoPackage) -> TriggerGeneration {
 
 #[test]
 fn write_all_bulk_builds_index_matching_full_scan() {
-    // Build a fresh, empty spatial index, then bulk-write into it: the D8 path
-    // drops the triggers, inserts the rows, rebuilds the index in bulk, and
-    // reinstalls the 1.4 triggers.
+    // Build a fresh, empty spatial index, then bulk-write into it: the bulk
+    // path drops the triggers, inserts the rows, rebuilds the index in bulk,
+    // and reinstalls the 1.4 triggers.
     let (_dir, gpkg) = gpkg();
     point_layer(&gpkg, "pts", GeometryType::Point, ZmFlag::Prohibited);
     let layer = gpkg.layer("pts").unwrap();

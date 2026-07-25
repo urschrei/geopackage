@@ -1,5 +1,5 @@
 //! The README quickstart, kept compilable: create a file, declare a point
-//! layer, write features, index it, and query by bounding box.
+//! layer, write features, and query by bounding box.
 
 use geo_types::Point;
 use geopackage::core::types::{ColumnType, GeometryType};
@@ -19,8 +19,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
     )?;
 
+    // `create_layer` builds the spatial index; `.spatial_index(false)` on the
+    // builder declines it.
     let layer = gpkg.layer("cities")?;
-    layer.create_spatial_index()?;
 
     layer.write_all(
         vec![

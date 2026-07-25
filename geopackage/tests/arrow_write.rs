@@ -25,7 +25,10 @@ fn typed_layer(gpkg: &GeoPackage, name: &str) {
         .column(ColumnSpec::new("born", ColumnType::Date))
         .column(ColumnSpec::new("seen", ColumnType::DateTime))
         .column(ColumnSpec::new("payload", ColumnType::Blob(None)))
-        .geometry(GeometrySpec::new(GeometryType::Point, 4326));
+        .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+        // One test builds the index itself to drive the bulk path; the rest do
+        // not need one, and leaving it off keeps them comparing like with like.
+        .spatial_index(false);
     gpkg.create_layer(&builder).unwrap();
 }
 

@@ -8,7 +8,71 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-25
+
 ### Added
+
+- **A ceiling on the geometry bytes one Arrow batch may hold**
+  (`ArrowReadOptions::max_batch_bytes`, with `DEFAULT_MAX_BATCH_BYTES` and
+  `default_max_batch_bytes`). The geometry column is Arrow `Binary`, whose
+  offsets are `i32`, so one batch cannot address more than 2 GB of WKB. At the
+  default 65,536 rows that needs only 32 KB of geometry per feature, which large
+  polygons exceed. A batch that would cross the ceiling is emitted short and the
+  rows that did not fit begin the next one, on both the single-threaded and
+  threaded paths. The default follows GDAL in taking `min(INT32_MAX, RAM / 4)`.
+- **Columnar read and write through Apache Arrow, behind a new `arrow`
+  feature.** `Layer::read_arrow` returns an `ArrowBatches`, which implements
+  `RecordBatchReader`; `Layer::write_arrow` writes record batches back through
+  the same batching, bulk-index decision and transaction handling as
+  `write_all`. Attribute columns follow a documented type mapping, and the
+  geometry column is WKB carrying the `geoarrow.wkb` extension name, which costs
+  nothing because a GPB body already is ISO WKB.
+
+  Reads are threaded by default: `min(4, available parallelism)` workers, each
+  with its own read-only connection over a disjoint primary-key range, with
+  batches still arriving in key order. 259.5ms at the default against 529.6ms
+  pinned to one thread over the same file. The threaded path declines to the
+  single-threaded one rather than failing when its conditions do not hold: an
+  in-memory database, a primary key with gaps, or fewer than two batches of
+  rows. `ArrowReadOptions` sets the rows per batch (`DEFAULT_BATCH_SIZE`,
+  65,536) and the thread count, where `1` reads on the calling thread.
+
+  Neither direction goes through `Feature` or `Value`. Arrays are built from the
+  statement's column values inside a SQLite aggregate function, and a row being
+  written binds straight out of the Arrow buffers. That is a constraint on the
+  implementation rather than an optimisation of it: GDAL measured its generic
+  Arrow path, which does materialise a row, as slower than the row API it wraps.
+
+  `Layer::arrow_schema` and `TableSchemaBuilder::from_arrow_schema` are the two
+  directions of the type mapping, so a layer can be copied into a new file
+  without its schema being restated; `TableSchemaBuilder::primary_key_name` is
+  public for the same reason. New error variants: `Error::Arrow`,
+  `Error::ArrowValueMismatch` and `Error::UnsupportedArrowType`.
+
+- **EPSG codes outside the vendored WKT1 subset now register.**
+  `GeoPackage::add_epsg_srs` refused anything the vendored subset did not carry.
+  It now falls back to the EPSG registry, and a code with no WKT1 form at all,
+  such as the geographic 3D EPSG:4979, is written as WKT2 into the
+  `definition_12_063` column of the `gpkg_crs_wkt_1_1` extension, with
+  `definition` holding the literal `undefined`. That is what the spec and GDAL
+  both do for these codes; GDAL reads such a layer back as geographic 3D and
+  normalises the WKT2 to a string identical to its own.
+
+  Adding the extension columns, backfilling WKT2 for rows already present and
+  inserting the new row share one transaction, so a failure leaves the file as it
+  was rather than half-carrying an extension. Only a code in neither the subset
+  nor the registry is still `Error::UnknownEpsgCode` ([#23]).
+
+- **`geopackage-core` primitives the columnar paths needed, useful on their
+  own.** `gpb::body_offset` gives a blob's WKB body offset without decoding the
+  envelope. `geometry::encode_gpb_from_wkb` and `EncodedGpb` put a GPB header in
+  front of bytes that are already ISO WKB, rather than parsing a geometry and
+  serialising it straight back out; the body is still parsed, because the
+  envelope has to be computed and because parsing is what rejects a body that is
+  not ISO WKB, such as PostGIS EWKB. `Date::days_since_epoch`,
+  `DateTime::micros_since_epoch` and their inverses give callers the boundary
+  conversion the `datetime` module docs recommend without their having to take a
+  datetime crate ([#24]).
 
 - **`StorageStrictness`, controlling the two `Value` conversion leniencies.** A
   `BOOLEAN` column holding an integer other than 0 or 1, and an integer reaching
@@ -20,6 +84,66 @@ While the version is below 1.0 the API may change in any release.
   and `with_storage` set the two axes independently ([#1]).
 
 ### Changed
+
+- **GeoArrow CRS metadata is PROJJSON**, which is the form that specification
+  prefers; it says an authority code "should only be used as a last resort",
+  because it leaves the reader to resolve the code against a registry it may not
+  have. An `EPSG:<code>` string remains the fallback for a code the registry
+  does not know.
+
+  Reading it back is a JSON parse rather than a scan for the first code. A CRS
+  object nests identifiers for its coordinate system, datum and ellipsoid, and
+  in EPSG:4326 the first to appear is 6422, the ellipsoidal coordinate system;
+  only the top-level identifier names the CRS. The reader therefore also accepts
+  PROJJSON written by other producers, which the earlier substring match could
+  not ([#23]).
+
+- **Calendar arithmetic is deferred to [jiff](https://docs.rs/jiff).** `Date`
+  validates against jiff's calendar instead of carrying its own
+  `days_in_month`/`is_leap_year`, and the new epoch conversions replace four
+  hand-rolled implementations that had accumulated in the columnar path. The
+  0-9999 year bound stays, since it comes from the spec's four-digit text form
+  rather than from the calendar.
+
+  jiff is configured with no timezone database at all: a GeoPackage `DATETIME`
+  is UTC by definition and this workspace transforms neither coordinates nor
+  times, so none of the `tz-*` or `tzdb-*` features are wanted. Measured at
+  about 1.2 KB on a release binary, because only the entry points used survive
+  dead-code elimination. No jiff type appears in any signature, so a jiff major
+  version is not a breaking change here, and which text forms are accepted on
+  read and written back is unchanged ([#24]).
+
+- **The scalar write path is faster.** `FeatureWriter` composed its `INSERT`
+  statement on every call: for a fifteen-column table roughly seventeen
+  allocations per row, to produce one of four fixed strings. The four are now
+  built once per writer and indexed by whether the row carries an explicit id
+  and whether it carries a geometry. 22.6% off an unindexed point write and
+  16.0% off a bulk one, measured at the same row count. This cost has been in
+  the released write path since that path existed; it was found by asking what
+  remained once the columnar-specific candidates were gone.
+
+- **`create_layer` now builds a spatial index by default** ([#26]). Previously a
+  feature layer came back unindexed and the caller asked for an index
+  separately. Decline it with `TableSchemaBuilder::spatial_index(false)`.
+
+  This changes the bytes a file gets: an indexed layer carries the
+  `rtree_<table>_<column>` virtual table, its shadow tables, the GeoPackage 1.4
+  trigger set and a `gpkg_extensions` row. All of that is spec-legal and is what
+  `ogr2ogr` produces, but it is a change rather than an improvement in disguise.
+
+  The reasoning: every other implementation indexes by default, and without an
+  index `Layer::features_in` still answers correctly by falling back to a full
+  scan, so the absence is invisible until someone profiles it. Building it at
+  layer-creation time also makes it empty, which is the state that lets a
+  subsequent large `write_all` or `write_arrow` fill it in one bulk pass instead
+  of row by row through the triggers, so the default arrangement is also the fast
+  one.
+
+  Attribute tables are unaffected, having no geometry column.
+
+  The table and its index are created in one transaction, so a failure building
+  the index leaves nothing behind rather than a registered feature table with no
+  index for the caller to notice and clean up.
 
 - **`ConversionOptions::strict()` is now strict on both axes**, so it is no
   longer the same value as `ConversionOptions::default()`. `default()` is
@@ -162,10 +286,7 @@ README, neither of which can be corrected in place.
 
 - Both crates now render their README on crates.io. 0.1.0 showed none.
 - The `repository` URL now points at the real repository rather than at
-  `github.com/georust/geopackage`, which does not exist. Note that it still does
-  not resolve for anyone else: the repository is private until the move to the
-  georust org, so the link on crates.io and docs.rs remains a 404 for readers.
-  An earlier wording of this entry claimed the link was fixed, which was wrong.
+  `github.com/georust/geopackage`, which does not exist.
 - The crate documentation now states the untrusted-input limitation ([#3]) that
   0.1.0 shipped with but did not mention: the `wkb` 0.9.2 reader pre-allocates
   from unbounded element counts, so a malformed geometry can drive a very large
@@ -200,7 +321,7 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
 - **Spatial index.** `create_spatial_index`, `drop_spatial_index`,
   `has_spatial_index` and `repair_spatial_index` over the GeoPackage 1.4
   trigger set (`update5`/`update6`/`update7`), with pre-1.4 and mixed
-  generations detected and repairable rather than silently mixed. The D8 bulk
+  generations detected and repairable rather than silently mixed. The bulk
   shadow-table build (`BulkIndexOptions`) accelerates fresh index construction,
   gated by a bijection/containment check plus `PRAGMA integrity_check` with an
   automatic fallback to the triggered path on any anomaly.
@@ -238,18 +359,19 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   1M rows ([#15], [#16]). The cost attributed here at release time was wrong:
   profiling afterwards put 4.61s of the 7.26s in the scratch RTree build, not in
   the gate's `integrity_check` (0.97s) or the `ST_*` envelope scan (0.26s). Much
-  of this is addressed in Unreleased; the remainder is [#20].
+  of this is addressed in 0.1.1; the remainder is [#20].
 - Non-linear curve types cannot have envelopes computed and so cannot be
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/urschrei/geopackage/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/urschrei/geopackage/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/urschrei/geopackage/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/urschrei/geopackage/releases/tag/v0.1.0
 [#1]: https://github.com/urschrei/geopackage/issues/1
+[#26]: https://github.com/urschrei/geopackage/issues/26
 [#3]: https://github.com/urschrei/geopackage/issues/3
-[#4]: https://github.com/urschrei/geopackage/issues/4
 [#4]: https://github.com/urschrei/geopackage/issues/4
 [#5]: https://github.com/urschrei/geopackage/issues/5
 [#15]: https://github.com/urschrei/geopackage/issues/15
@@ -257,3 +379,5 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
 [#17]: https://github.com/urschrei/geopackage/issues/17
 [#20]: https://github.com/urschrei/geopackage/issues/20
 [#22]: https://github.com/urschrei/geopackage/pull/22
+[#23]: https://github.com/urschrei/geopackage/issues/23
+[#24]: https://github.com/urschrei/geopackage/issues/24

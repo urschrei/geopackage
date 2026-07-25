@@ -4,7 +4,7 @@ exclude = ["geopackage-core/fuzz"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 # 1.95 is forced by libsqlite3-sys 0.38 (via rusqlite 0.40), whose build
 # script uses cfg_select!, stabilised in 1.95. Revisit lowering once upstream
@@ -22,7 +22,7 @@ keywords = ["geopackage", "gpkg", "gis", "geospatial", "ogc"]
 categories = ["science::geo", "database"]
 
 [workspace.dependencies]
-geopackage-core = { version = "0.1.2", path = "geopackage-core", default-features = false }
+geopackage-core = { version = "0.2.0", path = "geopackage-core", default-features = false }
 thiserror = "2"
 # `limits` is for SQLITE_LIMIT_FUNCTION_ARG: the Arrow read path passes one
 # function argument per column, so it has to know when a table is too wide.
@@ -32,10 +32,22 @@ wkb = "0.9"
 geo-traits = "0.3"
 geo-types = "0.7"
 # Calendar arithmetic and validation for the DATE/DATETIME types (issue #24).
-# No timezone database: a GeoPackage DATETIME is UTC by definition, and D3 keeps
-# this crate out of the transformation business, so `tz-*` and `tzdb-*` are all
-# off. `std` alone is the whole of what is needed.
+# No timezone database: a GeoPackage DATETIME is UTC by definition, and this
+# workspace transforms neither coordinates nor times, so `tz-*` and `tzdb-*` are
+# all off. `std` alone is the whole of what is needed.
 jiff = { version = "0.2", default-features = false, features = ["std"] }
+# EPSG definitions beyond the vendored WKT1 subset (issue #23): WKT2 for the
+# gpkg_crs_wkt_1_1 extension column, and PROJJSON for GeoArrow's CRS metadata,
+# which is the form that spec recommends. Its data is flate2-compressed, so it
+# costs about 1.1 MB against crs-definitions' 4.3 MB for WKT1 alone, and it
+# covers the geographic 3D codes WKT1 cannot express. MIT, and by the
+# rusqlite-gpkg author, which is the coordination 02-ecosystem asks for.
+epsg-utils = "0.0.3"
+serde_json = "1"
+# Total system memory, for the Arrow read path's default batch byte ceiling.
+# Only the `system` feature: the default set also probes disks, networks,
+# components and users, none of which we ask anything about.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # M3 Arrow data plane. `arrow-array`/`arrow-schema` only: the GeoArrow WKB
 # encoding is a Binary field carrying extension metadata, so `geoarrow-array`
 # would add a dependency without adding capability. Revisit if native GeoArrow
@@ -45,8 +57,7 @@ arrow-schema = "59"
 
 # Inherited by every member via `[lints] workspace = true`. The planned
 # `geopackage-ffi` crate (M3) is the sole intended exception: it will not
-# inherit these lints, confining `unsafe` to the C ABI boundary (see roadmap
-# decision D12).
+# inherit these lints, confining `unsafe` to the C ABI boundary.
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

@@ -1,5 +1,4 @@
-//! Write-path throughput benchmarks (design decision D8; M2 acceptance
-//! criterion 4).
+//! Write-path throughput benchmarks (M2 acceptance criterion 4).
 //!
 //! Measures [`geopackage::Layer::write_all`] for point, linestring, and polygon
 //! layers across the three index configurations:
@@ -7,8 +6,8 @@
 //! - `unindexed`:  no spatial index; plain batched inserts.
 //! - `triggered`:  an empty 1.4 spatial index present, maintained per row by
 //!   the RTree triggers as each row lands (`never_bulk`).
-//! - `bulk`:       an empty 1.4 spatial index present, built by the D8
-//!   shadow-table copy after the rows are inserted with triggers dropped
+//! - `bulk`:       an empty 1.4 spatial index present, built by writing the
+//!   shadow tables after the rows are inserted with triggers dropped
 //!   (`always_bulk`).
 //!
 //! Row count defaults to 1,000,000; override with `GPKG_BENCH_ROWS`. Data is
@@ -151,7 +150,9 @@ fn prepare(geom: GeomKind, mode: Mode, master: &[NewFeature<Geometry<f64>>]) -> 
     let gpkg = GeoPackage::create(dir.path().join("bench.gpkg")).expect("create gpkg");
     let table = geom.label().to_owned();
     let builder = TableSchemaBuilder::new(table.clone())
-        .geometry(GeometrySpec::new(geom.geometry_type(), 4326));
+        .geometry(GeometrySpec::new(geom.geometry_type(), 4326))
+        // Each arm decides for itself, so the unindexed one stays unindexed.
+        .spatial_index(false);
     {
         let layer = gpkg.create_layer(&builder).expect("create layer");
         if matches!(mode, Mode::Triggered | Mode::Bulk) {

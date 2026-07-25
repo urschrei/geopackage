@@ -7,18 +7,19 @@
 //! This module drives it against the live connection and maintains the
 //! `gpkg_extensions` registration row (spec Annex F.3 requirements 75/76).
 //!
-//! Design decision D7: a new index always gets the 1.4 trigger set
-//! (`update5`/`update6`/`update7`), which is UPSERT-safe. Older generations are
-//! never repaired automatically: [`Layer::repair_spatial_index`] is the sole,
-//! explicitly user-invoked path that rewrites an existing trigger set.
+//! A new index always gets the 1.4 trigger set (`update5`/`update6`/`update7`),
+//! which is UPSERT-safe. Older generations are never repaired automatically:
+//! [`Layer::repair_spatial_index`] is the sole, explicitly user-invoked path
+//! that rewrites an existing trigger set, because reading a file must not
+//! mutate it.
 //!
-//! Population takes one of two paths (design decision D8). Below the
-//! [`BulkIndexOptions`] threshold it is a single `INSERT INTO rtree SELECT` over
-//! the existing rows, using the registered `ST_*` functions and skipping
-//! empty/NULL geometries exactly as the triggers do. At or above the threshold
-//! it is the bulk shadow-table build in [`crate::bulk`]: accumulate the
-//! envelopes, build the tree in memory, and write the shadow tables directly,
-//! gated with automatic fallback to the triggered path.
+//! Population takes one of two paths. Below the [`BulkIndexOptions`] threshold
+//! it is a single `INSERT INTO rtree SELECT` over the existing rows, using the
+//! registered `ST_*` functions and skipping empty/NULL geometries exactly as
+//! the triggers do. At or above the threshold it is the bulk shadow-table build
+//! in [`crate::bulk`]: accumulate the envelopes, build the tree in memory, and
+//! write the shadow tables directly, gated with automatic fallback to the
+//! triggered path.
 
 use geopackage_core::ddl;
 use geopackage_core::ident::quote;
@@ -45,14 +46,15 @@ pub enum SpatialIndexStatus {
     Current,
     /// A present index maintained by a legacy (pre-1.4) or mixed trigger set.
     /// Usable, but the pre-1.4 `update1` trigger corrupts the index under
-    /// `UPSERT`; [`Layer::repair_spatial_index`] upgrades it to the 1.4 set
-    /// (design decision D7).
+    /// `UPSERT`; [`Layer::repair_spatial_index`] upgrades it to the 1.4 set.
     Legacy,
     /// A desynchronised index: the virtual table exists but its triggers are
-    /// missing (or triggers exist with no table). The state an interrupted bulk
-    /// build leaves: for example a crash during [`Layer::write_all`] after the
-    /// rows commit but before the index is rebuilt, since the `ATTACH` the bulk
-    /// build needs cannot join that final transaction (design decision D8).
+    /// missing (or triggers exist with no table). This crate's own writes
+    /// cannot produce it. A bulk [`Layer::write_all`] drops the triggers,
+    /// inserts the rows, rebuilds the index and reinstalls the triggers in one
+    /// transaction, so an interrupted call rolls back to the state before it.
+    /// The state is reachable from a file another tool wrote, or from SQL run
+    /// directly against the connection.
     ///
     /// The index is **not** silently trusted: [`Layer::has_spatial_index`]
     /// reports `false` for it, so [`Layer::features_in`] falls back to a correct
@@ -65,8 +67,8 @@ impl Layer<'_> {
     /// Classify this layer's RTree spatial index (see [`SpatialIndexStatus`]).
     ///
     /// A layer with no geometry column is [`SpatialIndexStatus::Absent`]. This
-    /// is the detector for the interrupted-bulk-build case (design decision D8):
-    /// a [`SpatialIndexStatus::Stale`] result directs the caller to
+    /// is the detector for the interrupted-bulk-build case: a
+    /// [`SpatialIndexStatus::Stale`] result directs the caller to
     /// [`Self::repair_spatial_index`].
     pub fn spatial_index_status(&self) -> Result<SpatialIndexStatus> {
         let Some(geom) = self.geometry_column() else {
@@ -93,10 +95,11 @@ impl Layer<'_> {
     /// Build an RTree spatial index over this feature layer's geometry column.
     ///
     /// Creates the `rtree_<table>_<column>` virtual table, installs the
-    /// GeoPackage 1.4 trigger set (design decision D7), populates the index from
-    /// the existing rows (skipping NULL and empty geometries), and registers the
-    /// `gpkg_rtree_index` extension in `gpkg_extensions` (creating that table on
-    /// first use). The whole operation is one transaction.
+    /// GeoPackage 1.4 trigger set (the UPSERT-safe generation), populates the
+    /// index from the existing rows (skipping NULL and empty geometries), and
+    /// registers the `gpkg_rtree_index` extension in `gpkg_extensions`
+    /// (creating that table on first use). The whole operation is one
+    /// transaction.
     ///
     /// Population takes the per-row triggered path (a single
     /// `INSERT INTO rtree SELECT` driven by the registered `ST_*` functions) for
@@ -116,8 +119,7 @@ impl Layer<'_> {
         self.create_spatial_index_with(BulkIndexOptions::default())
     }
 
-    /// Build the RTree spatial index with an explicit choice of build path
-    /// (design decision D8).
+    /// Build the RTree spatial index with an explicit choice of build path.
     ///
     /// Identical to [`Self::create_spatial_index`] but with a caller-supplied
     /// [`BulkIndexOptions`] controlling the bulk-vs-triggered threshold.
@@ -154,12 +156,7 @@ impl Layer<'_> {
 
         if bulk::table_row_count(conn, table)? < options.bulk_threshold {
             let tx = conn.unchecked_transaction()?;
-            tx.execute_batch(&triggers::create_rtree_table_sql(table, column)?)?;
-            for sql in triggers::create_triggers_sql(table, column, pk)? {
-                tx.execute_batch(&sql)?;
-            }
-            tx.execute_batch(&triggers::populate_rtree_sql(table, column, pk)?)?;
-            register_extension_row(&tx, table, column)?;
+            create_index_in_transaction(&tx, table, column, pk)?;
             tx.commit()?;
             return Ok(BuildPath::Triggered);
         }
@@ -224,8 +221,7 @@ impl Layer<'_> {
     }
 
     /// Repair a legacy, inconsistent, or desynchronised RTree spatial index:
-    /// install the GeoPackage 1.4 trigger set and rebuild the index content
-    /// (design decisions D7, D8).
+    /// install the GeoPackage 1.4 trigger set and rebuild the index content.
     ///
     /// The pre-1.4 `update1` trigger corrupts an index under `UPSERT`; 1.4
     /// renamed the fixed triggers so the repaired state is detectable by name.
@@ -275,8 +271,8 @@ impl Layer<'_> {
         }
 
         // Everything else is repairable by rebuilding: a legacy/mixed trigger
-        // set (D7), a stale index left by an interrupted bulk build (a virtual
-        // table with no triggers, D8), or orphaned triggers with no table.
+        // set, a stale index left by an interrupted bulk build (a virtual table
+        // with no triggers), or orphaned triggers with no table.
         let tx = conn.unchecked_transaction()?;
         drop_all_rtree_triggers(&tx, self.table_name(), &geom.column_name)?;
         for sql in triggers::create_triggers_sql(self.table_name(), &geom.column_name, pk)? {
@@ -324,6 +320,31 @@ impl Layer<'_> {
 /// `gpkg_extensions` on first use. The `extension_name`, `definition`, and
 /// `scope` values are the spec-prescribed constants from
 /// [`geopackage_core::triggers`] (Annex F.3, requirements 75/76).
+/// Create the RTree virtual table, install the GeoPackage 1.4 trigger set,
+/// populate it from the table's existing rows, and register the extension.
+///
+/// Every statement runs on `conn`, which the caller must already have inside a
+/// transaction, and nothing is committed here. Two callers want that: the
+/// triggered branch of [`Layer::create_spatial_index`], which opens its own, and
+/// [`crate::GeoPackage::create_layer`], which builds the layer and its index in
+/// one transaction so a failure cannot leave a table behind without one.
+///
+/// The population statement is a no-op on the fresh, empty table `create_layer`
+/// hands it.
+pub(crate) fn create_index_in_transaction(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    pk: &str,
+) -> Result<()> {
+    conn.execute_batch(&triggers::create_rtree_table_sql(table, column)?)?;
+    for sql in triggers::create_triggers_sql(table, column, pk)? {
+        conn.execute_batch(&sql)?;
+    }
+    conn.execute_batch(&triggers::populate_rtree_sql(table, column, pk)?)?;
+    register_extension_row(conn, table, column)
+}
+
 fn register_extension_row(conn: &Connection, table: &str, column: &str) -> Result<()> {
     if !table_exists(conn, "gpkg_extensions")? {
         conn.execute_batch(ddl::CREATE_GPKG_EXTENSIONS)?;
@@ -379,8 +400,10 @@ mod tests {
     fn populated(points: &[(i64, f64, f64)]) -> (tempfile::TempDir, GeoPackage) {
         let dir = tempfile::tempdir().unwrap();
         let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
-        let builder =
-            TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326));
+        let builder = TableSchemaBuilder::new("pts")
+            .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+            // These tests drive the index lifecycle themselves.
+            .spatial_index(false);
         let layer = gpkg.create_layer(&builder).unwrap();
         let mut writer = layer.writer().unwrap();
         for &(fid, x, y) in points {

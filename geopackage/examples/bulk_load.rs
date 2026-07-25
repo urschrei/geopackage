@@ -1,10 +1,12 @@
 //! Bulk-load a large point layer and build its spatial index the fast way.
 //!
-//! The order matters. Creating the (empty) spatial index *before* writing lets
-//! `write_all` take the D8 bulk build: it drops the RTree triggers, inserts
-//! every row without per-row index maintenance, then constructs the index in
-//! one shadow-table copy. Writing first and indexing afterwards also works and
-//! is bulk-built, but pays for the triggers to be installed and dropped.
+//! The order matters, and the default arrangement is the fast one.
+//! `create_layer` leaves an empty spatial index in place, which is what lets
+//! `write_all` take the bulk build: it drops the RTree triggers, inserts every
+//! row without per-row index maintenance, then constructs the index in one
+//! pass. Declining the index with `.spatial_index(false)` and building it
+//! afterwards also gets a bulk-built index, but pays for the triggers to be
+//! installed and dropped.
 //!
 //! ```sh
 //! cargo run --release --example bulk_load -- 200000 out.gpkg
@@ -42,10 +44,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .column(ColumnSpec::new("weight", ColumnType::Double))
             .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
     )?;
+    // `create_layer` builds the index, and builds it empty, which is what lets
+    // the write_all below fill it in one bulk pass instead of row by row
+    // through the triggers.
     let layer = gpkg.layer("points")?;
-
-    // Index first, so write_all bulk-builds it.
-    layer.create_spatial_index()?;
 
     let features: Vec<_> = (0..rows)
         .map(|i| {

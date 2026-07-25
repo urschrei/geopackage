@@ -3,7 +3,7 @@
 //!
 //! These exercise the write-side index management on top of the read-side
 //! `has_spatial_index` / `features_in` from M1: building an index over an
-//! already-populated table, its `gpkg_extensions` registration, and the D7
+//! already-populated table, its `gpkg_extensions` registration, and the
 //! legacy-trigger repair path.
 
 #![expect(
@@ -52,7 +52,10 @@ fn gpb_point(srs_id: i32, x: f64, y: f64) -> Vec<u8> {
 fn add_points_layer(gpkg: &GeoPackage, points: &[(i64, f64, f64)]) {
     let builder = TableSchemaBuilder::new("pts")
         .column(ColumnSpec::new("name", ColumnType::Text(None)))
-        .geometry(GeometrySpec::new(GeometryType::Point, 4326));
+        .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+        // This file tests the index lifecycle, so it builds the index itself
+        // rather than taking the one `create_layer` now makes by default.
+        .spatial_index(false);
     let layer = gpkg.create_layer(&builder).unwrap();
     let mut writer = layer.writer().unwrap();
     for &(fid, x, y) in points {
@@ -544,7 +547,7 @@ fn upsert_null(conn: &Connection, fid: i64) {
 
 /// M2 acceptance criterion 3: the RTree contents provably match a full-scan
 /// rebuild after an arbitrary insert/update/delete/upsert sequence, with the
-/// initial index built through both the triggered and the bulk (D8) path.
+/// initial index built through both the triggered and the bulk path.
 ///
 /// The oracle is independent of the index: `envelope_scan` recomputes the
 /// expected contents directly from the current table rows via the `ST_*`
@@ -604,8 +607,8 @@ fn rtree_tracks_full_scan_through_write_ops(tc: hegel::TestCase) {
     }
 }
 
-/// The bulk (D8) and triggered build paths produce byte-identical index
-/// contents, and both equal the full-scan rebuild, for an arbitrary feature set.
+/// The bulk and triggered build paths produce byte-identical index contents,
+/// and both equal the full-scan rebuild, for an arbitrary feature set.
 #[hegel::test]
 fn bulk_and_triggered_builds_agree(tc: hegel::TestCase) {
     // Above the 51-entry node capacity, so the generated trees span the
@@ -704,7 +707,8 @@ fn write_all_bulk_with_preexisting_rows_indexes_every_row() {
     let gpkg = GeoPackage::create(dir.path().join("m.gpkg")).unwrap();
     let builder = TableSchemaBuilder::new("pts")
         .column(ColumnSpec::new("name", ColumnType::Text(None)))
-        .geometry(GeometrySpec::new(GeometryType::Point, 4326));
+        .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+        .spatial_index(false);
     let layer = gpkg.create_layer(&builder).unwrap();
 
     // Two NULL-geometry rows: indexable-row count stays zero.
@@ -1150,4 +1154,141 @@ fn bulk_build_indexes_envelope_less_geometries() {
         .find(|r| r.0 == 2)
         .expect("envelope-less geometry should be indexed");
     assert!((row.1 - 12.5).abs() < 1e-6 && (row.3 - (-3.25)).abs() < 1e-6);
+}
+
+/// A feature layer gets a spatial index without being asked (issue #26).
+///
+/// The default every other implementation has: GDAL's driver creates one unless
+/// told otherwise. Without it `features_in` still answers correctly by falling
+/// back to a full scan, so the absence is invisible until someone profiles.
+#[test]
+fn create_layer_builds_a_spatial_index_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("d.gpkg")).unwrap();
+    let layer = gpkg
+        .create_layer(
+            &TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+        )
+        .unwrap();
+
+    assert!(layer.has_spatial_index().unwrap());
+    assert_eq!(
+        layer.spatial_index_status().unwrap(),
+        geopackage::SpatialIndexStatus::Current,
+        "the 1.4 trigger set is installed, not just the virtual table"
+    );
+
+    // Empty, which is what lets a later large write build it in one bulk pass.
+    assert!(rtree_rows(gpkg.connection()).is_empty());
+
+    // And it is maintained: a write through the triggers reaches the index.
+    {
+        let mut writer = layer.writer().unwrap();
+        writer.insert(Some(1), &Point::new(1.0, 2.0), &[]).unwrap();
+        writer.commit().unwrap();
+    }
+    assert_eq!(rtree_rows(gpkg.connection()).len(), 1);
+}
+
+/// The opt-out leaves the layer unindexed, and `create_spatial_index` still
+/// works afterwards.
+#[test]
+fn the_spatial_index_can_be_declined() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("o.gpkg")).unwrap();
+    let layer = gpkg
+        .create_layer(
+            &TableSchemaBuilder::new("pts")
+                .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+                .spatial_index(false),
+        )
+        .unwrap();
+
+    assert!(!layer.has_spatial_index().unwrap());
+    assert_eq!(
+        layer.spatial_index_status().unwrap(),
+        geopackage::SpatialIndexStatus::Absent
+    );
+    layer.create_spatial_index().unwrap();
+    assert!(layer.has_spatial_index().unwrap());
+}
+
+/// An attributes table has no geometry to index, so the default is simply not
+/// applicable rather than an error.
+#[test]
+fn an_attributes_table_is_unaffected_by_the_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("a.gpkg")).unwrap();
+    let layer = gpkg
+        .create_attributes_table(
+            &TableSchemaBuilder::new("notes")
+                .column(ColumnSpec::new("body", ColumnType::Text(None))),
+        )
+        .unwrap();
+    assert!(!layer.has_spatial_index().unwrap());
+}
+
+/// A layer whose index cannot be built leaves no table behind (issue #26).
+///
+/// The two were separate transactions until this was threaded, so a failure
+/// between them left a feature table with no index, registered in
+/// `gpkg_contents`, that the caller had to notice and clean up. Nothing in the
+/// return value said so.
+///
+/// The failure is forced by squatting on the name the RTree virtual table will
+/// want, which is reachable rather than contrived: it is what a file already
+/// carrying a stale `rtree_pts_geom` from an interrupted build looks like.
+#[test]
+fn a_layer_whose_index_fails_leaves_no_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("f.gpkg")).unwrap();
+    gpkg.connection()
+        .execute_batch("CREATE TABLE rtree_pts_geom (squatter INTEGER)")
+        .unwrap();
+
+    let result = gpkg.create_layer(
+        &TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+    );
+    assert!(result.is_err(), "the index build should have failed");
+
+    let conn = gpkg.connection();
+    let tables: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'pts'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(tables, 0, "the user table survived a failed create_layer");
+
+    let contents: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM gpkg_contents WHERE table_name = 'pts'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(contents, 0, "a gpkg_contents row survived");
+
+    // `gpkg_geometry_columns` is created on first use, so a complete rollback
+    // takes the catalogue table itself with it. Accept either shape: absent, or
+    // present with no row for this layer.
+    let geometry_columns: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master \
+             WHERE type = 'table' AND name = 'gpkg_geometry_columns'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    if geometry_columns > 0 {
+        let rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM gpkg_geometry_columns WHERE table_name = 'pts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0, "a gpkg_geometry_columns row survived");
+    }
 }

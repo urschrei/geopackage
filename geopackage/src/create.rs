@@ -8,13 +8,16 @@
 //! rows in one transaction. `gpkg_geometry_columns` is created lazily on first
 //! use from the normative [`ddl::CREATE_GPKG_GEOMETRY_COLUMNS`].
 //!
-//! Design decision D10: schema is declared through an explicit builder, not a
-//! derive macro. Column defaults are raw SQL text, trusted from the caller
-//! (design decision D9); every identifier is quoted via [`ident::quote`].
+//! Schema is declared through an explicit builder, not a derive macro, so a
+//! table's shape can be chosen at run time rather than fixed at compile time.
+//! Column defaults are raw SQL text, trusted from the caller; every identifier
+//! is quoted via [`ident::quote`].
 
 use geopackage_core::ddl;
 use geopackage_core::ident::quote;
 use geopackage_core::types::{ColumnType, GeometryType, ZmFlag};
+
+use rusqlite::Connection;
 
 use crate::{Error, GeoPackage, Layer, Result, table_exists};
 
@@ -66,7 +69,7 @@ impl ColumnSpec {
 
     /// Set a `DEFAULT` expression, as raw SQL text (e.g. `"0"`, `"'n/a'"`,
     /// `"CURRENT_TIMESTAMP"`). Emitted verbatim, so it is the caller's
-    /// responsibility to supply a valid, safe expression (design decision D9).
+    /// responsibility to supply a valid, safe expression.
     #[must_use]
     pub fn default_value(mut self, sql: impl Into<String>) -> Self {
         self.default = Some(sql.into());
@@ -165,6 +168,7 @@ pub struct TableSchemaBuilder {
     primary_key: String,
     columns: Vec<ColumnSpec>,
     geometry: Option<GeometrySpec>,
+    spatial_index: bool,
 }
 
 impl TableSchemaBuilder {
@@ -180,6 +184,7 @@ impl TableSchemaBuilder {
             primary_key: DEFAULT_PRIMARY_KEY.to_owned(),
             columns: Vec::new(),
             geometry: None,
+            spatial_index: true,
         }
     }
 
@@ -193,6 +198,29 @@ impl TableSchemaBuilder {
     /// The primary-key column name this builder will use.
     pub fn primary_key_name(&self) -> &str {
         &self.primary_key
+    }
+
+    /// Whether [`GeoPackage::create_layer`] should build a spatial index for
+    /// this layer. Defaults to `true`.
+    ///
+    /// An indexed feature layer is what every other implementation produces:
+    /// GDAL's driver creates one unless told otherwise, so a file from
+    /// `ogr2ogr` has one. Without an index [`crate::Layer::features_in`] still
+    /// answers correctly, by falling back to a full scan, so the absence is
+    /// invisible until someone profiles it. A spatial format whose spatial
+    /// queries are quietly linear is a poor default.
+    ///
+    /// Creating it here also costs less than adding it later: the index is
+    /// empty, which is the state that lets a subsequent large
+    /// [`crate::Layer::write_all`] or [`crate::Layer::write_arrow`] build the
+    /// whole tree in one bulk pass rather than through the per-row triggers.
+    ///
+    /// Ignored for a builder with no geometry column, which has nothing to
+    /// index.
+    #[must_use]
+    pub fn spatial_index(mut self, spatial_index: bool) -> Self {
+        self.spatial_index = spatial_index;
+        self
     }
 
     /// Set `gpkg_contents.identifier` (a human-readable name). Defaults to the
@@ -279,7 +307,20 @@ impl GeoPackage {
             .ok_or_else(|| Error::MissingGeometrySpec {
                 table_name: builder.table_name.clone(),
             })?;
-        self.create_table(builder, Some(geometry))?;
+        // The table and its index are one transaction: a failure building the
+        // index must not leave a table behind without one, which is the state a
+        // caller would have to notice and clean up.
+        let tx = self.connection().unchecked_transaction()?;
+        self.create_table_in(&tx, builder, Some(geometry))?;
+        if builder.spatial_index {
+            crate::index::create_index_in_transaction(
+                &tx,
+                &builder.table_name,
+                &geometry.column_name,
+                &builder.primary_key,
+            )?;
+        }
+        tx.commit()?;
         self.layer(&builder.table_name)
     }
 
@@ -309,6 +350,20 @@ impl GeoPackage {
         builder: &TableSchemaBuilder,
         geometry: Option<&GeometrySpec>,
     ) -> Result<()> {
+        let tx = self.connection().unchecked_transaction()?;
+        self.create_table_in(&tx, builder, geometry)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// [`Self::create_table`] without the transaction management: every
+    /// statement runs on `tx`, which the caller owns and commits.
+    fn create_table_in(
+        &self,
+        tx: &Connection,
+        builder: &TableSchemaBuilder,
+        geometry: Option<&GeometrySpec>,
+    ) -> Result<()> {
         let name = &builder.table_name;
         if name
             .get(..5)
@@ -318,7 +373,7 @@ impl GeoPackage {
                 table_name: name.clone(),
             });
         }
-        if table_exists(self.connection(), name)? {
+        if table_exists(tx, name)? {
             return Err(Error::TableAlreadyExists {
                 table_name: name.clone(),
             });
@@ -346,8 +401,7 @@ impl GeoPackage {
         let description = builder.description.clone().unwrap_or_default();
         let contents_srs: Option<i32> = geometry.map(|g| g.srs_id);
 
-        let tx = self.connection().unchecked_transaction()?;
-        if geometry.is_some() && !table_exists(&tx, "gpkg_geometry_columns")? {
+        if geometry.is_some() && !table_exists(tx, "gpkg_geometry_columns")? {
             tx.execute_batch(ddl::CREATE_GPKG_GEOMETRY_COLUMNS)?;
         }
         tx.execute_batch(&create_sql)?;
@@ -372,7 +426,6 @@ impl GeoPackage {
                 ],
             )?;
         }
-        tx.commit()?;
         Ok(())
     }
 }

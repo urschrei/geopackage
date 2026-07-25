@@ -11,16 +11,26 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# The `arrow` module is behind an off-by-default feature. Without this, docs.rs
+# would build the default feature set only, so the columnar API would be absent
+# from the published documentation and the crate root's links into it would
+# render as plain text.
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
 [dependencies]
+epsg-utils.workspace = true
 geopackage-core.workspace = true
 geo-traits.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
 arrow-array = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+sysinfo = { workspace = true, optional = true }
 
 [features]
 default = ["geo-types"]
@@ -32,7 +42,7 @@ geo-types = ["geopackage-core/geo-types"]
 ## GeoArrow WKB column. Off by default: it pulls the `arrow-array` and
 ## `arrow-schema` crates, which a caller using only the scalar API does not
 ## need.
-arrow = ["dep:arrow-array", "dep:arrow-schema"]
+arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:serde_json", "dep:sysinfo"]
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -44,7 +54,9 @@ arrow-array.workspace = true
 rusqlite.workspace = true
 wkb.workspace = true
 geo-types.workspace = true
-serde_json = "1"
+# Also used by the Arrow schema test, to inspect the PROJJSON in the geometry
+# field's metadata.
+serde_json.workspace = true
 hegeltest = "0.28.2"
 criterion = "0.8"
 gungraun = "=0.19.2"
@@ -65,3 +77,16 @@ required-features = ["arrow"]
 [[bench]]
 name = "alloc"
 harness = false
+
+# Uses the Arrow data plane, so it cannot build without it. The bench above
+# already declares this; without it here, `cargo nextest r -p geopackage`
+# fails to build the example.
+[[example]]
+name = "arrow_bench"
+required-features = ["arrow"]
+
+# Times both the scalar and the columnar paths over a real file, so it needs
+# the Arrow data plane for the same reason `arrow_bench` does.
+[[example]]
+name = "dataset_bench"
+required-features = ["arrow"]

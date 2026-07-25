@@ -1,76 +1,15 @@
 //! Read and write [OGC GeoPackage](https://www.geopackage.org/spec140/) files.
 //!
-//! **Status: pre-alpha (0.1.0).** The read and write paths are complete and
-//! validated against external tooling, but the API will change without notice
-//! before 1.0.
+//! A GeoPackage is an SQLite database with a standardised schema for vector
+//! features. [`GeoPackage::create`], [`GeoPackage::open`] and
+//! [`GeoPackage::open_read_only`] open the container with pragma and schema
+//! validation;
+//! [`GeoPackage::layer`] returns a [`Layer`] handle for reading and writing
+//! features, and [`GeoPackage::layers`] enumerates them.
 //!
-//! The container is created and opened with pragma and schema validation
-//! ([`GeoPackage::create`], [`GeoPackage::open`], [`GeoPackage::open_read_only`],
-//! [`GeoPackage::from_connection`]), and the required RTree SQL functions are
-//! registered on every connection. On top of `gpkg_contents`,
-//! `gpkg_spatial_ref_sys` ([`Srs`]) and per-table schema introspection
-//! ([`TableSchema`]):
+//! # Quick start
 //!
-//! **Reading**
-//!
-//! - [`GeoPackage::layers`] enumerates feature layers; [`GeoPackage::layer`]
-//!   and [`GeoPackage::attributes`] return typed [`Layer`] handles.
-//! - [`Layer::features`] iterates a layer as owned [`Feature`]s, with by-name
-//!   and by-index value access and lazy geometry parsing.
-//! - [`Layer::features_in`] runs a bounding-box query, using the RTree spatial
-//!   index when one is present and a full scan otherwise, with provably
-//!   identical results.
-//! - [`Layer::select`] appends a caller-supplied `WHERE` clause (raw SQL, per
-//!   design decision D9: SQL is the query engine).
-//! - [`GeoPackage::open_lenient`] tolerates legacy and lightly malformed files,
-//!   collecting [`OpenWarning`]s instead of failing.
-//!
-//! **Writing**
-//!
-//! - [`TableSchemaBuilder`] declares a table's columns, primary key and
-//!   geometry column; [`GeoPackage::create_layer`] and
-//!   [`GeoPackage::create_attributes_table`] emit the user-table DDL and the
-//!   catalogue rows in one transaction.
-//! - [`Layer::writer`] returns a [`FeatureWriter`] owning a transaction, with
-//!   `insert`/`update`/`delete` over any `impl GeometryTrait<T = f64>`;
-//!   [`Layer::write_all`] is the batched bulk-load path.
-//! - [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`], and
-//!   [`Layer::repair_spatial_index`] manage the RTree spatial index (the
-//!   GeoPackage 1.4 trigger set, design decision D7). Building a large index,
-//!   [`Layer::create_spatial_index_with`], or [`Layer::write_all`] into a fresh
-//!   indexed layer, uses the bulk build ([`BulkIndexOptions`], design
-//!   decision D8).
-//! - [`OpenOptions`] selects the journal mode ([`JournalMode`], WAL opt-in) and
-//!   [`Synchronous`] level; see the interchange-first close policy on
-//!   [`GeoPackage`].
-//!
-//! The GeoArrow bulk plane arrives in a later milestone; see the repository
-//! roadmap.
-//!
-//! # Design decisions
-//!
-//! Some documentation here cites a numbered decision, such as "design decision
-//! D8". These are entries in the crate's decision record, which states what was
-//! chosen, what was rejected and why:
-//!
-//! <https://github.com/urschrei/geopackage/blob/main/roadmap/01-design-decisions.md>
-//!
-//! The citations are there so a claim about behaviour can be traced to the
-//! reasoning behind it. Nothing in the API requires reading them.
-//!
-//! # Reading untrusted files
-//!
-//! The `wkb` 0.9.2 reader this crate parses geometry with pre-allocates from
-//! element counts read out of the blob without bounding them against the
-//! buffer, so a malformed geometry declaring a `0xFFFFFFFF`-member collection
-//! drives a multi-gigabyte allocation. The fix belongs upstream in
-//! [georust/wkb](https://github.com/georust/wkb); until it lands and this crate
-//! bumps its dependency, do not parse GeoPackage files from untrusted sources.
-//!
-//! # Example
-//!
-//! Create a file, declare a point layer, write features, index it, and query by
-//! bounding box:
+//! Create a file, define a point layer, write features, query by bounding box:
 //!
 //! ```
 //! use geo_types::Point;
@@ -91,24 +30,263 @@
 //! )?;
 //!
 //! let layer = gpkg.layer("cities")?;
-//!
 //! layer.write_all(
 //!     vec![
 //!         NewFeature::new(Point::new(-6.26, 53.35), vec![Value::Text("Dublin".into())]),
 //!         NewFeature::new(Point::new(-0.13, 51.51), vec![Value::Text("London".into())]),
 //!     ],
-//!     1000,
+//!     0,
 //! )?;
 //!
-//! // Uses the RTree index when one is present, a full scan otherwise.
-//! let found = layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))?;
-//! assert_eq!(found.len(), 1);
+//! // Served by the layer's RTree index, which `create_layer` builds unless
+//! // `TableSchemaBuilder::spatial_index(false)` declines it.
+//! for feature in layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))? {
+//!     let feature = feature?;
+//!     assert_eq!(feature.value("name"), Some(&Value::Text("Dublin".into())));
+//! }
 //! # Ok(()) }
 //! ```
+//!
+//! [`Layer::features`] iterates every row as an owned [`Feature`];
+//! [`Layer::select`] appends a caller-supplied raw SQL `WHERE` clause;
+//! [`Layer::features_in`] runs the bounding-box query, served by the RTree
+//! index when one is present and a full scan otherwise, with identical
+//! results. Each has a streaming counterpart ([`Layer::cursor`],
+//! [`Layer::cursor_select`], [`Layer::cursor_in`]) that reads one row at a
+//! time and holds no result set. For writing, [`Layer::write_all`] batch-loads
+//! and [`Layer::writer`] opens a transaction with per-row
+//! `insert`/`update`/`delete` ([`FeatureWriter`]).
+//! [`GeoPackage::create_attributes_table`] and [`GeoPackage::attributes`] are
+//! the same for non-spatial attribute tables, and [`GeoPackage::add_epsg_srs`]
+//! registers an EPSG code in `gpkg_spatial_ref_sys`.
+//! [`GeoPackage::open_lenient`] tolerates legacy and lightly malformed files,
+//! collecting [`OpenWarning`]s instead of failing.
+//!
+//! # Geometry round trips
+//!
+//! [`Feature::geometry`] parses the stored blob into a
+//! [`GpbGeometry`](core::GpbGeometry), a view over the row's bytes that
+//! implements [`geo_traits::GeometryTrait`], and every write method accepts
+//! any `impl GeometryTrait<T = f64>`. A geometry can therefore be streamed
+//! out of one file, measured, and written into another without being
+//! converted to a `geo-types` value in either direction if need be: the analysis reads
+//! coordinates from the stored encoding, and the writer encodes WKB from the
+//! same view. What _does_ allocate is each row's blob, copied out of SQLite,
+//! and the new blob the writer serialises; an algorithm that produces new
+//! geometry also allocates its output.
+//!
+//! ```
+//! use geo_traits::{CoordTrait, GeometryTrait, GeometryType as Kind, LineStringTrait};
+//! use geopackage::core::types::{ColumnType, GeometryType};
+//! use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, TableSchemaBuilder, Value};
+//!
+//! /// Planar length, read from the trait: no geometry object is built.
+//! fn length(geometry: &impl GeometryTrait<T = f64>) -> f64 {
+//!     let Kind::LineString(line) = geometry.as_type() else {
+//!         return 0.0;
+//!     };
+//!     let mut sum = 0.0;
+//!     let mut prev: Option<(f64, f64)> = None;
+//!     for coord in line.coords() {
+//!         let (x, y) = (coord.x(), coord.y());
+//!         if let Some((px, py)) = prev {
+//!             sum += ((x - px).powi(2) + (y - py).powi(2)).sqrt();
+//!         }
+//!         prev = Some((x, y));
+//!     }
+//!     sum
+//! }
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # let dir = tempfile::tempdir()?;
+//! # let src_path = dir.path().join("roads.gpkg");
+//! # let dst_path = dir.path().join("measured.gpkg");
+//! # {
+//! #     let src = GeoPackage::create(&src_path)?;
+//! #     src.create_layer(
+//! #         &TableSchemaBuilder::new("roads")
+//! #             .geometry(GeometrySpec::new(GeometryType::LineString, 4326)),
+//! #     )?;
+//! #     src.layer("roads")?.write_all(
+//! #         vec![
+//! #             geopackage::NewFeature::new(
+//! #                 geo_types::LineString::from(vec![(0.0, 0.0), (3.0, 4.0)]),
+//! #                 vec![],
+//! #             ),
+//! #             geopackage::NewFeature::new(
+//! #                 geo_types::LineString::from(vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]),
+//! #                 vec![],
+//! #             ),
+//! #         ],
+//! #         0,
+//! #     )?;
+//! # }
+//! let src = GeoPackage::open_read_only(&src_path)?;
+//! let dst = GeoPackage::create(&dst_path)?;
+//! dst.create_layer(
+//!     &TableSchemaBuilder::new("measured")
+//!         .column(ColumnSpec::new("length", ColumnType::Double))
+//!         .geometry(GeometrySpec::new(GeometryType::LineString, 4326)),
+//! )?;
+//!
+//! let roads = src.layer("roads")?;
+//! let measured = dst.layer("measured")?;
+//! let mut writer = measured.writer()?;
+//! let mut cursor = roads.cursor()?;
+//! for feature in cursor.features()? {
+//!     let feature = feature?;
+//!     if let Some(geometry) = feature.geometry()? {
+//!         // `geometry` borrows the row's blob; `length` reads coordinates
+//!         // from it, and `insert` encodes WKB from the same view.
+//!         let l = length(&geometry);
+//!         writer.insert(None, &geometry, &[Value::Float(l)])?;
+//!     }
+//! }
+//! writer.commit()?;
+//!
+//! let mut total = 0.0;
+//! for feature in measured.features()? {
+//!     if let Some(Value::Float(l)) = feature?.value("length") {
+//!         total += l;
+//!     }
+//! }
+//! assert_eq!(total, 7.0);
+//! # Ok(()) }
+//! ```
+//!
+//! # Columnar I/O
+//!
+//! Enabled by the `arrow` feature, [`Layer::read_arrow`] reads a layer as Arrow
+//! record batches, multithreaded by default, and [`Layer::write_arrow`]
+//! writes batches back through the same path as [`Layer::write_all`].
+//! Geometry is a GeoArrow WKB column whose metadata includes the CRS as
+//! PROJJSON. [`TableSchemaBuilder::from_arrow_schema`] is the layer
+//! definition an Arrow schema implies, so a layer can be copied without its
+//! schema being restated; the type mapping both directions share is
+//! documented on the [`arrow`] module.
+//!
+//! ```
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # #[cfg(feature = "arrow")]
+//! # {
+//! # use geo_types::Point;
+//! # use geopackage::core::types::{ColumnType, GeometryType};
+//! # use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value};
+//! # let dir = tempfile::tempdir()?;
+//! # let src_path = dir.path().join("cities.gpkg");
+//! # let dst_path = dir.path().join("copy.gpkg");
+//! # {
+//! #     let src = GeoPackage::create(&src_path)?;
+//! #     src.create_layer(
+//! #         &TableSchemaBuilder::new("cities")
+//! #             .column(ColumnSpec::new("name", ColumnType::Text(None)))
+//! #             .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+//! #     )?;
+//! #     src.layer("cities")?.write_all(
+//! #         vec![
+//! #             NewFeature::new(Point::new(-6.26, 53.35), vec![Value::Text("Dublin".into())]),
+//! #             NewFeature::new(Point::new(-0.13, 51.51), vec![Value::Text("London".into())]),
+//! #         ],
+//! #         0,
+//! #     )?;
+//! # }
+//! use geopackage::arrow::ArrowReadOptions;
+//!
+//! let src = GeoPackage::open_read_only(&src_path)?;
+//! let cities = src.layer("cities")?;
+//!
+//! let dst = GeoPackage::create(&dst_path)?;
+//! let schema = cities.arrow_schema()?;
+//! dst.create_layer(&TableSchemaBuilder::new("cities").from_arrow_schema(&schema)?)?;
+//!
+//! let batches = cities.read_arrow(ArrowReadOptions::default())?;
+//! dst.layer("cities")?.write_arrow(batches, 0)?;
+//! assert_eq!(dst.layer("cities")?.features()?.len(), 2);
+//! # }
+//! # Ok(()) }
+//! ```
+//!
+//! # Cargo features
+//!
+//! - **`geo-types`** (on by default): forwards `geopackage-core`'s feature of
+//!   the same name, which adds
+//!   [`GpbGeometry::to_geo`](geopackage_core::geometry::GpbGeometry::to_geo).
+//!   Decline it with `default-features = false`.
+//! - **`arrow`** (off by default): the columnar paths above. It pulls in
+//!   `arrow-array` and `arrow-schema`, which a caller using only the scalar API
+//!   does not need.
+//!
+//! # Configuration
+//!
+//! The defaults are intended to support the common case: a single-file GeoPackage, an indexed
+//! feature layer, and values read in keeping with other popular implementations.
+//! Each of these types documents possible trade-off behind its defaults:
+//!
+//! - [`OpenOptions`]: the journal mode ([`JournalMode`], where
+//!   [`JournalMode::Wal`] is opt-in) and the `synchronous` durability level
+//!   ([`Synchronous`]). Left unset, the file keeps SQLite's own defaults. A
+//!   handle that opted into WAL resets the file to a single `DELETE`-journal
+//!   file on close, so the `.gpkg` handed on has no sidecar files; see
+//!   [`GeoPackage`].
+//! - [`TableSchemaBuilder`]: a new layer's columns ([`ColumnSpec`]), primary
+//!   key (default [`DEFAULT_PRIMARY_KEY`], `fid`), geometry column
+//!   ([`GeometrySpec`], named [`DEFAULT_GEOMETRY_COLUMN`], `geom`, unless told
+//!   otherwise), and whether it is indexed
+//!   ([`TableSchemaBuilder::spatial_index`], default `true`).
+//!   [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`] and
+//!   [`Layer::repair_spatial_index`] manage the index after creation.
+//! - [`BulkIndexOptions`]: how an RTree index is built, for
+//!   [`Layer::create_spatial_index_with`] and [`Layer::write_all_with`]: the
+//!   row count at which the bulk build takes over from the per-row triggers
+//!   ([`BulkIndexOptions::bulk_threshold`], default [`DEFAULT_BULK_THRESHOLD`],
+//!   10,000 rows), the self-check it then runs ([`StructuralCheck`], default
+//!   [`StructuralCheck::RtreeOnly`]), and how full each node of the tree is
+//!   packed ([`BulkIndexOptions::fill_factor`], default
+//!   [`DEFAULT_FILL_FACTOR`], `1.0`).
+//! - [`ConversionOptions`]: how stored values are read back, through
+//!   [`Layer::with_conversion_options`]: which `DATETIME` text forms are
+//!   accepted ([`DateTimeParsing`], default [`DateTimeParsing::Strict`]) and
+//!   whether a value its declared type does not strictly permit is read or
+//!   rejected ([`StorageStrictness`], default [`StorageStrictness::Lenient`]).
+//!
+//! Two settings are available outside the options types. [`Layer::write_all`] and
+//! [`Layer::write_arrow`] take a `batch_size`, the number of rows sharing a
+//! transaction, where `0` writes all of them in one.
+//! [`Layer::with_geometry_type_validation`] checks each geometry against its
+//! column's declared type while reading, and is **off** by default.
+//!
+//! Under the `arrow` feature, [`ArrowReadOptions`](arrow::ArrowReadOptions)
+//! configures the columnar read: rows per batch
+//! ([`batch_size`](arrow::ArrowReadOptions::batch_size), default
+//! [`DEFAULT_BATCH_SIZE`](arrow::DEFAULT_BATCH_SIZE), 65,536), how many
+//! threads may read at once ([`threads`](arrow::ArrowReadOptions::threads),
+//! default `0`, meaning `min(4, available parallelism)`), and a ceiling on
+//! the geometry bytes one batch may hold
+//! ([`max_batch_bytes`](arrow::ArrowReadOptions::max_batch_bytes), default
+//! [`default_max_batch_bytes`](arrow::default_max_batch_bytes),
+//! `min(INT32_MAX, RAM / 4)`): the geometry column's Arrow offsets are
+//! 32-bit, so no batch can address more than 2 GB of WKB, and a batch that
+//! would cross the ceiling is emitted short so a layer of very large
+//! geometries still reads. The columnar write has no options type of its own:
+//! [`Layer::write_arrow_with`] takes the same [`BulkIndexOptions`] as
+//! [`Layer::write_all_with`].
+//!
+//! Anything not covered here is reachable as SQL: [`GeoPackage::connection`]
+//! hands back the underlying rusqlite connection.
+//!
+//! # Reading untrusted files
+//!
+//! The `wkb` 0.9.2 reader this crate parses geometry with pre-allocates from
+//! element counts read out of the blob without bounding them against the
+//! buffer, so a malformed geometry declaring a `0xFFFFFFFF`-member collection
+//! drives a multi-gigabyte allocation. The fix belongs upstream in
+//! [georust/wkb](https://github.com/georust/wkb); until it lands and this crate
+//! bumps its dependency, you should take care when parsing GeoPackage files from untrusted sources.
 
 // `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
-// workspace lints table (root Cargo.toml); see roadmap decision D12 for the
-// unsafe policy and its single planned exception (`geopackage-ffi`, M3).
+// workspace lints table (root Cargo.toml). This crate never uses `unsafe`; the
+// planned `geopackage-ffi` crate (M3) is the sole intended exception, and will
+// opt out of the workspace lints rather than relax them here.
 
 #[cfg(feature = "arrow")]
 pub mod arrow;
@@ -148,12 +326,12 @@ use std::path::Path;
 
 /// An open GeoPackage.
 ///
-/// # Interchange-first close (design decision D4)
+/// # Interchange-first close
 ///
-/// A handle opened or created in [`JournalMode::Wal`] holds `-wal`/`-shm`
+/// A handle opened or created in [`JournalMode::Wal`] creates `-wal`/`-shm`
 /// sidecar files while it is live. On [`GeoPackage::close`] and on drop such a
 /// handle checkpoints the WAL and resets the file to [`JournalMode::Delete`], so
-/// the `.gpkg` handed on is a single file. Prefer the explicit
+/// the resulting`.gpkg` is a single file. Prefer the explicit
 /// [`GeoPackage::close`], which surfaces any error; the drop path is
 /// best-effort and never panics. [`GeoPackage::into_connection`] opts out of
 /// this guarantee: the returned connection keeps whatever journal mode it was
@@ -321,11 +499,11 @@ impl GeoPackage {
 
     /// Consume, returning the underlying connection.
     ///
-    /// This **opts out** of the interchange-first close guarantee (design
-    /// decision D4): the returned connection keeps whatever journal mode it is
-    /// in, so a handle that was in [`JournalMode::Wal`] hands back a WAL
-    /// connection with its `-wal`/`-shm` sidecars intact. Use
-    /// [`Self::close`] instead when the resulting file is to be handed over.
+    /// This **opts out** of the interchange-first close guarantee: the returned
+    /// connection keeps whatever journal mode it is in, so a handle that was in
+    /// [`JournalMode::Wal`] returns a WAL connection with its `-wal`/`-shm`
+    /// sidecars intact. Use [`Self::close`] instead when the resulting file is
+    /// to be handed over.
     pub fn into_connection(mut self) -> Connection {
         // Taking the connection leaves `self.conn == None`, so the `Drop` below
         // runs its finalise on nothing.
@@ -335,7 +513,7 @@ impl GeoPackage {
     }
 
     /// Close the GeoPackage, finalising a [`JournalMode::Wal`] file back to a
-    /// single [`JournalMode::Delete`] file (design decision D4).
+    /// single [`JournalMode::Delete`] file.
     ///
     /// For a WAL handle this checkpoints the WAL (`TRUNCATE`) and resets the
     /// journal mode to `DELETE`, removing the `-wal`/`-shm` sidecars, then
@@ -357,8 +535,8 @@ impl GeoPackage {
 impl Drop for GeoPackage {
     fn drop(&mut self) {
         // Interchange-first: a WAL handle resets the file to a single DELETE
-        // file. Best-effort and must never panic (design decision D4): an
-        // un-checkpointed WAL file is still valid and recovers on next open.
+        // file. Best-effort and must never panic: an un-checkpointed WAL file
+        // is still valid and recovers on next open.
         if self.journal_mode == JournalMode::Wal
             && let Some(conn) = self.conn.as_ref()
             && finalize_wal_to_delete(conn).is_err()

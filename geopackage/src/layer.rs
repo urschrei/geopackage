@@ -46,7 +46,7 @@ use crate::{
 /// An XY bounding box for spatial queries ([`Layer::features_in`]).
 ///
 /// Fields are ordinary map coordinates in the layer's own spatial reference
-/// system; this crate never transforms coordinates (design decision D3).
+/// system; this crate never transforms coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoundingBox {
     /// Minimum x (west edge).
@@ -375,8 +375,8 @@ impl<'a> Layer<'a> {
     ///
     /// `where_clause` is appended (parenthesised) to the layer's base query and
     /// is **raw SQL, trusted from the caller**: this crate does not parse or
-    /// sanitise it (design decision D9: SQL is the query engine;
-    /// [`GeoPackage::connection`] is the full escape hatch). `params` bind its
+    /// sanitise it, and provides no query DSL of its own
+    /// ([`GeoPackage::connection`] is the full escape hatch). `params` bind its
     /// placeholders; they are this crate's [`Value`] enum, converted internally
     /// so rusqlite types stay out of the public API. [`Value::Date`] and
     /// [`Value::DateTime`] bind as their canonical text form.
@@ -443,7 +443,7 @@ impl<'a> Layer<'a> {
     }
 
     /// A streaming `WHERE` query: the same rows as [`Self::select`], with the
-    /// same raw-SQL contract (design decision D9).
+    /// same raw-SQL contract.
     pub fn cursor_select(&self, where_clause: &str, params: &[Value]) -> Result<FeatureCursor<'_>> {
         let (base, geom_idx) = self.base_select()?;
         let sql = format!("{base} WHERE ({where_clause})");

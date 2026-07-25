@@ -1,8 +1,8 @@
-//! Crash safety (design decision D4): a child process opens the GeoPackage,
-//! commits one write, holds a second write uncommitted, and is `SIGKILL`ed
-//! mid-flight; the parent reopens and asserts `PRAGMA integrity_check` is `ok`,
-//! the committed rows survive, the uncommitted row is gone, and the RTree index
-//! is not desynchronised.
+//! Crash safety: a child process opens the GeoPackage, commits one write, holds
+//! a second write uncommitted, and is `SIGKILL`ed mid-flight; the parent
+//! reopens and asserts `PRAGMA integrity_check` is `ok`, the committed rows
+//! survive, the uncommitted row is gone, and the RTree index is not
+//! desynchronised.
 //!
 //! The child is this same test binary, re-invoked to run only the ignored
 //! `crash_child` entry point with the role/path/marker passed through the
@@ -112,7 +112,8 @@ fn run_crash_case(role: &str) {
         let layer = gpkg
             .create_layer(
                 &TableSchemaBuilder::new("pts")
-                    .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+                    .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+                    .spatial_index(false),
             )
             .unwrap();
         layer.create_spatial_index().unwrap();
