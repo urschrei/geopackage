@@ -78,6 +78,29 @@ use crate::{Error, Layer, Result};
 /// stays a sensible allocation.
 pub const DEFAULT_BATCH_SIZE: usize = 65_536;
 
+/// The default ceiling on the geometry bytes one [`RecordBatch`] may carry.
+///
+/// The geometry column is Arrow `Binary`, whose offsets are `i32`, so a single
+/// batch cannot address more than 2 GB of WKB. This is a hard limit of the
+/// type rather than a tuning choice: a batch that crossed it could not be
+/// represented at all. A read that would cross it emits a short batch and
+/// carries on, so the ceiling costs nothing except on layers whose geometries
+/// are large enough to reach it.
+///
+/// GDAL's driver takes the same approach for the same reason, cutting its
+/// batch short against `min(INT32_MAX, usable_RAM / 4)`. We use only the fixed
+/// part: reading total system memory needs either `unsafe` or a dependency,
+/// and this crate forbids the first and is sparing with the second. A caller
+/// that wants the memory-proportional behaviour can set it with
+/// [`ArrowReadOptions::with_max_batch_bytes`].
+///
+/// The alternative was Arrow `LargeBinary`, whose `i64` offsets have no such
+/// ceiling. It was declined because it would hand every consumer 64-bit
+/// offsets to solve a problem only very large geometries have, and because
+/// matching GDAL keeps our batches interchangeable with the encoding the
+/// ecosystem already reads. The `geoarrow.wkb` encoding permits either.
+pub const DEFAULT_MAX_BATCH_BYTES: usize = i32::MAX as usize;
+
 /// The Arrow extension-name metadata key, from the Arrow columnar spec.
 const EXTENSION_NAME_KEY: &str = "ARROW:extension:name";
 
@@ -307,6 +330,10 @@ mod tests {
 pub struct ArrowReadOptions {
     /// Rows per [`RecordBatch`]. Defaults to [`DEFAULT_BATCH_SIZE`].
     pub batch_size: usize,
+    /// Ceiling on the geometry bytes one [`RecordBatch`] may carry. Defaults
+    /// to [`DEFAULT_MAX_BATCH_BYTES`]. A batch that would cross it is emitted
+    /// short, and the rows that did not fit begin the next one.
+    pub max_batch_bytes: usize,
     /// How many threads may read at once. `0` chooses
     /// `min(4, available parallelism)`, matching GDAL's default for the same
     /// path; `1` reads on the calling thread.
@@ -321,6 +348,7 @@ impl Default for ArrowReadOptions {
     fn default() -> Self {
         Self {
             batch_size: DEFAULT_BATCH_SIZE,
+            max_batch_bytes: DEFAULT_MAX_BATCH_BYTES,
             threads: 0,
         }
     }
@@ -333,6 +361,18 @@ impl ArrowReadOptions {
             batch_size: batch_size.max(1),
             ..Self::default()
         }
+    }
+
+    /// Set the ceiling on geometry bytes per batch. See
+    /// [`DEFAULT_MAX_BATCH_BYTES`] for what it is for and why it cannot simply
+    /// be raised past `i32::MAX`.
+    ///
+    /// Values above `i32::MAX` are clamped to it, since Arrow `Binary` cannot
+    /// address more than that within one batch whatever the caller asks for.
+    #[must_use]
+    pub fn with_max_batch_bytes(mut self, max_batch_bytes: usize) -> Self {
+        self.max_batch_bytes = max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES);
+        self
     }
 
     /// Set the thread count. `0` chooses a default, `1` reads on the calling
@@ -504,6 +544,7 @@ impl Layer<'_> {
                     geometry_index,
                     datetime,
                     capacity: options.batch_size.clamp(1, DEFAULT_BATCH_SIZE),
+                    max_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
                     output: Arc::new(Mutex::new(None)),
                     failure: Arc::new(Mutex::new(None)),
                 },
@@ -539,6 +580,8 @@ impl Layer<'_> {
                 names,
                 datetime,
                 batch_size: options.batch_size.max(1),
+                max_batch_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
+                last_batch_rows: 0,
                 next_key: i64::MIN,
                 exhausted: false,
                 aggregate,
@@ -571,6 +614,7 @@ impl Layer<'_> {
             self.conversion_options(),
             span,
             batch_size,
+            options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
             options.resolved_threads(),
         )))
     }
@@ -623,7 +667,7 @@ fn dense_key_span(conn: &Connection, table: &str, key: &str) -> Result<Option<(i
 /// holds one batch, so the memory in flight is bounded by the thread count.
 struct ParallelBatches {
     /// One receiver per worker, drained in rotation.
-    receivers: Vec<std::sync::mpsc::Receiver<std::result::Result<RecordBatch, ArrowError>>>,
+    receivers: Vec<std::sync::mpsc::Receiver<std::result::Result<WorkerMessage, ArrowError>>>,
     workers: Vec<std::thread::JoinHandle<()>>,
     /// Which worker to take from next.
     turn: usize,
@@ -637,6 +681,7 @@ impl ParallelBatches {
         conversion: crate::ConversionOptions,
         (first, last): (i64, i64),
         batch_size: usize,
+        max_batch_bytes: usize,
         threads: usize,
     ) -> Self {
         let mut receivers = Vec::with_capacity(threads);
@@ -649,7 +694,16 @@ impl ParallelBatches {
             let table = table.clone();
             let handle = std::thread::spawn(move || {
                 run_worker(
-                    &path, &table, conversion, first, last, batch_size, threads, worker, &tx,
+                    &path,
+                    &table,
+                    conversion,
+                    first,
+                    last,
+                    batch_size,
+                    max_batch_bytes,
+                    threads,
+                    worker,
+                    &tx,
                 );
             });
             receivers.push(rx);
@@ -671,20 +725,25 @@ impl Iterator for ParallelBatches {
         if self.done {
             return None;
         }
-        let received = self.receivers.get(self.turn)?.recv();
-        self.turn = (self.turn + 1) % self.receivers.len().max(1);
-        match received {
-            Ok(batch) => {
-                if batch.is_err() {
-                    self.done = true;
+        loop {
+            match self.receivers.get(self.turn)?.recv() {
+                Ok(Ok(WorkerMessage::Batch(batch))) => return Some(Ok(batch)),
+                // This worker's window is done, so the next window in key
+                // order belongs to the next worker.
+                Ok(Ok(WorkerMessage::WindowEnd)) => {
+                    self.turn = (self.turn + 1) % self.receivers.len().max(1);
                 }
-                Some(batch)
-            }
-            // The worker whose turn it is has finished, and workers are assigned
-            // batches in rotation, so every later worker has finished too.
-            Err(_) => {
-                self.done = true;
-                None
+                Ok(Err(error)) => {
+                    self.done = true;
+                    return Some(Err(error));
+                }
+                // The worker whose turn it is has finished, and workers are
+                // assigned windows in rotation, so every later worker has
+                // finished too.
+                Err(_) => {
+                    self.done = true;
+                    return None;
+                }
             }
         }
     }
@@ -714,9 +773,10 @@ fn run_worker(
     first: i64,
     last: i64,
     batch_size: usize,
+    max_batch_bytes: usize,
     threads: usize,
     worker: usize,
-    tx: &std::sync::mpsc::SyncSender<std::result::Result<RecordBatch, ArrowError>>,
+    tx: &std::sync::mpsc::SyncSender<std::result::Result<WorkerMessage, ArrowError>>,
 ) {
     let send_error = |error: Error| {
         drop(tx.send(Err(ArrowError::ExternalError(Box::new(error)))));
@@ -730,7 +790,9 @@ fn run_worker(
         Err(error) => return send_error(error),
     };
     // Threads of its own would recurse; this reader is the thread.
-    let options = ArrowReadOptions::with_batch_size(batch_size).with_threads(1);
+    let options = ArrowReadOptions::with_batch_size(batch_size)
+        .with_threads(1)
+        .with_max_batch_bytes(max_batch_bytes);
     let mut batches = match layer.read_arrow(options) {
         Ok(batches) => batches,
         Err(error) => return send_error(error),
@@ -753,20 +815,51 @@ fn run_worker(
 
     let mut key = start;
     while key <= last {
-        match source.read_batch_at(key) {
-            Ok(Some(batch)) => {
-                if tx.send(Ok(batch)).is_err() {
-                    return; // the consumer stopped
+        // One window of `batch_size` rows, which is usually one batch. The
+        // byte ceiling can split it into several, and every one of them
+        // belongs to this worker: skipping to the next window on a short batch
+        // would drop the rows that did not fit.
+        let mut remaining = batch_size;
+        let mut at = key;
+        while remaining > 0 {
+            match source.read_batch_at(at, remaining) {
+                Ok(Some(batch)) => {
+                    let rows = source.last_batch_rows;
+                    if tx.send(Ok(WorkerMessage::Batch(batch))).is_err() {
+                        return; // the consumer stopped
+                    }
+                    if rows == 0 {
+                        break;
+                    }
+                    remaining -= rows.min(remaining);
+                    at = source.next_key;
                 }
+                // The layer ends inside this window, so it ends for this
+                // worker too: every later window starts beyond it.
+                Ok(None) => return,
+                Err(error) => return send_error(error),
             }
-            Ok(None) => return,
-            Err(error) => return send_error(error),
+        }
+        if tx.send(Ok(WorkerMessage::WindowEnd)).is_err() {
+            return; // the consumer stopped
         }
         match key.checked_add(stride) {
             Some(next) => key = next,
             None => return,
         }
     }
+}
+
+/// What a worker sends for each window it reads.
+///
+/// Batches arrive in key order because each worker owns a fixed, repeating
+/// slice of the key space and the consumer takes their windows in rotation.
+/// The byte ceiling can split one window into several batches, so a worker
+/// marks where its window ends rather than the consumer assuming one batch per
+/// turn.
+enum WorkerMessage {
+    Batch(RecordBatch),
+    WindowEnd,
 }
 
 /// A registered aggregate function and the slot its finaliser leaves the
@@ -829,6 +922,8 @@ struct BatchFiller {
     geometry_index: Option<usize>,
     datetime: DateTimeParsing,
     capacity: usize,
+    /// Ceiling on the geometry bytes one batch may carry.
+    max_bytes: usize,
     output: Arc<Mutex<Option<FilledBatch>>>,
     /// The first append failure, kept so a typed error survives instead of
     /// becoming a bare SQL error.
@@ -845,6 +940,12 @@ struct FilledBatch {
     builders: Vec<ColumnBuilder>,
     rows: usize,
     last_key: Option<i64>,
+    /// Geometry bytes appended so far, against the batch's byte ceiling.
+    bytes: usize,
+    /// Set once the ceiling is reached. Rows after it are left for the next
+    /// batch rather than appended, and `last_key` stops advancing, so the
+    /// pagination cursor resumes at the first row that did not fit.
+    truncated: bool,
 }
 
 impl Aggregate<FilledBatch, i64> for BatchFiller {
@@ -861,10 +962,35 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
             builders,
             rows: 0,
             last_key: None,
+            bytes: 0,
+            truncated: false,
         })
     }
 
     fn step(&self, ctx: &mut Context<'_>, acc: &mut FilledBatch) -> rusqlite::Result<()> {
+        // SQLite has already been asked for this row, so the cheapest correct
+        // response once the ceiling is reached is to drop it and let the next
+        // batch fetch it again. The waste is bounded by one batch, and it only
+        // arises on layers whose geometries are large enough to hit the limit.
+        if acc.truncated {
+            return Ok(());
+        }
+        let geometry_bytes = self.geometry_index.map_or(0, |index| {
+            match ctx.get_raw(index + self.field_offset) {
+                // The GPB header is stripped before the body is appended, so
+                // this over-counts by a header per row. Erring high is the
+                // right direction for a ceiling that must not be crossed.
+                ValueRef::Blob(blob) => blob.len(),
+                _ => 0,
+            }
+        });
+        // The row count guard means a batch always carries at least one row,
+        // so a geometry larger than the whole budget still makes progress
+        // instead of stalling the read.
+        if acc.rows > 0 && acc.bytes.saturating_add(geometry_bytes) > self.max_bytes {
+            acc.truncated = true;
+            return Ok(());
+        }
         if let ValueRef::Integer(key) = ctx.get_raw(self.key_argument) {
             acc.last_key = Some(key);
         }
@@ -882,6 +1008,7 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
             }
         }
         acc.rows += 1;
+        acc.bytes = acc.bytes.saturating_add(geometry_bytes);
         Ok(())
     }
 
@@ -912,6 +1039,11 @@ struct SequentialBatches<'a> {
     geometry_index: Option<usize>,
     names: Vec<String>,
     datetime: DateTimeParsing,
+    /// Ceiling on the geometry bytes one batch may carry.
+    max_batch_bytes: usize,
+    /// Rows in the batch just produced. The parallel path reads it to tell a
+    /// batch cut short by the byte ceiling from one that filled its window.
+    last_batch_rows: usize,
     batch_size: usize,
     /// Rows with a key at or above this are still to be read.
     next_key: i64,
@@ -936,14 +1068,21 @@ impl Drop for SequentialBatches<'_> {
 }
 
 impl SequentialBatches<'_> {
-    /// Read the batch starting at `key`, ignoring where the reader had got to.
+    /// Read up to `limit` rows starting at `key`, ignoring where the reader
+    /// had got to.
     ///
     /// Used by the parallel path, whose workers each read whole batches at
     /// offsets assigned to them rather than walking the layer in sequence.
-    fn read_batch_at(&mut self, key: i64) -> Result<Option<RecordBatch>> {
+    /// `limit` is what remains of the worker's window: the byte ceiling can
+    /// cut a batch short, and the rest of that window still has to be read.
+    fn read_batch_at(&mut self, key: i64, limit: usize) -> Result<Option<RecordBatch>> {
         self.next_key = key;
         self.exhausted = false;
-        self.next_batch()
+        let full = self.batch_size;
+        self.batch_size = limit.max(1);
+        let batch = self.next_batch();
+        self.batch_size = full;
+        batch
     }
 
     /// Read one batch, or `None` once the layer is exhausted.
@@ -989,7 +1128,11 @@ impl SequentialBatches<'_> {
             self.exhausted = true;
             return Ok(None);
         }
-        self.advance(filled.last_key, rows_read);
+        // The aggregate counts every row it was given, including any it left
+        // for the next batch, so the appended count is what the builders hold.
+        let rows_appended = filled.rows;
+        self.last_batch_rows = rows_appended;
+        self.advance(filled.last_key, rows_appended, filled.truncated);
 
         let arrays: Vec<ArrayRef> = filled
             .builders
@@ -1003,13 +1146,16 @@ impl SequentialBatches<'_> {
     }
 
     /// Record where the next batch starts, and whether there can be one.
-    fn advance(&mut self, last_key: Option<i64>, rows_read: usize) {
+    fn advance(&mut self, last_key: Option<i64>, rows_read: usize, truncated: bool) {
         match last_key.and_then(|key| key.checked_add(1)) {
             Some(next) => self.next_key = next,
             // The key space is exhausted at i64::MAX; there can be no next row.
             None => self.exhausted = true,
         }
-        if rows_read < self.batch_size {
+        // A short batch normally means the layer ran out. It does not when the
+        // byte ceiling cut the batch short: there are rows left, and treating
+        // this as the end would silently drop them.
+        if rows_read < self.batch_size && !truncated {
             self.exhausted = true;
         }
     }
@@ -1037,6 +1183,8 @@ impl SequentialBatches<'_> {
 
         let mut rows_read = 0usize;
         let mut last_key = None;
+        let mut bytes = 0usize;
+        let mut truncated = false;
         {
             let mut stmt = self.conn.prepare_cached(&self.sql)?;
             let mut rows = stmt.query(rusqlite::params![
@@ -1047,6 +1195,19 @@ impl SequentialBatches<'_> {
             // when it had to be selected separately.
             let offset = usize::from(self.key_field.is_none());
             while let Some(row) = rows.next()? {
+                let geometry_bytes = match self.geometry_index {
+                    Some(index) => match row.get_ref(index + offset)? {
+                        ValueRef::Blob(blob) => blob.len(),
+                        _ => 0,
+                    },
+                    None => 0,
+                };
+                // Same ceiling as the aggregate path, for the same reason: the
+                // geometry column's i32 offsets cannot address more.
+                if rows_read > 0 && bytes.saturating_add(geometry_bytes) > self.max_batch_bytes {
+                    truncated = true;
+                    break;
+                }
                 last_key = Some(row.get::<_, i64>(self.key_field.unwrap_or(0))?);
                 for (index, builder) in builders.iter_mut().enumerate() {
                     builder.append(
@@ -1057,6 +1218,7 @@ impl SequentialBatches<'_> {
                     )?;
                 }
                 rows_read += 1;
+                bytes = bytes.saturating_add(geometry_bytes);
             }
         }
 
@@ -1064,7 +1226,8 @@ impl SequentialBatches<'_> {
             self.exhausted = true;
             return Ok(None);
         }
-        self.advance(last_key, rows_read);
+        self.last_batch_rows = rows_read;
+        self.advance(last_key, rows_read, truncated);
 
         let arrays: Vec<ArrayRef> = builders.into_iter().map(ColumnBuilder::finish).collect();
         Ok(Some(RecordBatch::try_new(

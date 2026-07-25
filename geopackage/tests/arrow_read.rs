@@ -435,3 +435,136 @@ fn abandoning_a_threaded_read_stops_its_workers() {
         5000
     );
 }
+
+/// A tiny byte ceiling forces the split that only very large geometries would
+/// reach in practice, so the path is exercised without a 2 GB fixture.
+mod byte_ceiling {
+    use geo_types::{Coord, LineString};
+    use geopackage::arrow::ArrowReadOptions;
+    use geopackage::{GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value};
+    use geopackage_core::GeometryType;
+
+    /// Each feature carries a line string of `points` vertices, so the geometry
+    /// column has predictable, non-trivial size.
+    fn layer_with_fat_geometries(rows: usize, points: usize) -> (tempfile::TempDir, GeoPackage) {
+        let dir = tempfile::tempdir().unwrap();
+        let gpkg = GeoPackage::create(dir.path().join("fat.gpkg")).unwrap();
+        gpkg.create_layer(
+            &TableSchemaBuilder::new("fat")
+                .geometry(GeometrySpec::new(GeometryType::LineString, 4326)),
+        )
+        .unwrap();
+        let layer = gpkg.layer("fat").unwrap();
+        let features: Vec<_> = (0..rows)
+            .map(|row| {
+                let line = LineString::from(
+                    (0..points)
+                        .map(|i| Coord {
+                            x: f64::from(u32::try_from(i).unwrap()) + row as f64,
+                            y: 1.0,
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                NewFeature::new(line, Vec::<Value>::new())
+            })
+            .collect();
+        layer.write_all(features, 1000).unwrap();
+        drop(layer);
+        (dir, gpkg)
+    }
+
+    fn read_all(gpkg: &GeoPackage, options: ArrowReadOptions) -> (usize, usize) {
+        let layer = gpkg.layer("fat").unwrap();
+        let batches = layer.read_arrow(options).unwrap();
+        let mut rows = 0;
+        let mut count = 0;
+        for batch in batches {
+            let batch = batch.unwrap();
+            rows += batch.num_rows();
+            count += 1;
+        }
+        (rows, count)
+    }
+
+    #[test]
+    fn a_tight_ceiling_splits_batches_without_losing_rows() {
+        let (_dir, gpkg) = layer_with_fat_geometries(200, 50);
+        // Baseline: one batch, every row.
+        let (rows, batches) = read_all(&gpkg, ArrowReadOptions::default().with_threads(1));
+        assert_eq!(rows, 200);
+        assert_eq!(batches, 1, "the whole layer should fit one default batch");
+
+        // A ceiling of a few hundred bytes cannot hold 50 vertices, so every
+        // batch is cut short, and no row may go missing.
+        let (rows, batches) = read_all(
+            &gpkg,
+            ArrowReadOptions::default()
+                .with_threads(1)
+                .with_max_batch_bytes(500),
+        );
+        assert_eq!(rows, 200, "every row must survive the split");
+        assert!(batches > 1, "the ceiling should have split the read");
+    }
+
+    #[test]
+    fn the_ceiling_holds_on_the_threaded_path() {
+        let (_dir, gpkg) = layer_with_fat_geometries(400, 40);
+        let (rows, batches) = read_all(
+            &gpkg,
+            ArrowReadOptions::with_batch_size(64)
+                .with_threads(4)
+                .with_max_batch_bytes(600),
+        );
+        assert_eq!(rows, 400, "a worker must finish its window after a split");
+        assert!(batches > 1);
+    }
+
+    /// Splitting a window into several batches must not disturb the order
+    /// batches arrive in, which is the property the worker rotation exists to
+    /// provide.
+    #[test]
+    fn a_split_window_still_arrives_in_key_order() {
+        use arrow_array::{Array, Int64Array};
+
+        let (_dir, gpkg) = layer_with_fat_geometries(400, 40);
+        let layer = gpkg.layer("fat").unwrap();
+        let batches = layer
+            .read_arrow(
+                ArrowReadOptions::with_batch_size(64)
+                    .with_threads(4)
+                    .with_max_batch_bytes(600),
+            )
+            .unwrap();
+
+        let mut seen = Vec::new();
+        for batch in batches {
+            let batch = batch.unwrap();
+            let fid = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("the primary key is the first column");
+            for i in 0..fid.len() {
+                seen.push(fid.value(i));
+            }
+        }
+        assert_eq!(seen.len(), 400);
+        let mut sorted = seen.clone();
+        sorted.sort_unstable();
+        assert_eq!(seen, sorted, "batches must arrive in primary-key order");
+    }
+
+    /// A single geometry larger than the whole budget must still be delivered,
+    /// rather than stalling the read on a batch that can never fit.
+    #[test]
+    fn one_oversized_geometry_still_makes_progress() {
+        let (_dir, gpkg) = layer_with_fat_geometries(8, 100);
+        let (rows, _) = read_all(
+            &gpkg,
+            ArrowReadOptions::default()
+                .with_threads(1)
+                .with_max_batch_bytes(1),
+        );
+        assert_eq!(rows, 8, "one row per batch, but all of them");
+    }
+}
