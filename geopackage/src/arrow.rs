@@ -69,7 +69,7 @@ use rusqlite::types::ValueRef;
 
 use crate::schema::{Column, GeometryColumn};
 use crate::value::DateTimeParsing;
-use crate::{Error, Layer, Result, Value};
+use crate::{Error, Layer, Result};
 
 /// Default number of rows per [`RecordBatch`].
 ///
@@ -1354,15 +1354,25 @@ fn micros_since_epoch(stamp: DateTime) -> i64 {
     seconds * MICROS_PER_SECOND + i64::from(stamp.nanosecond / 1_000)
 }
 
-/// One row taken from a [`RecordBatch`], ready for the write path.
+/// Where each of a layer's columns sits in a batch, shared by all its rows.
+struct RowLayout {
+    fid: Option<usize>,
+    geometry: Option<usize>,
+    /// Batch column index for each of the layer's value columns, in order.
+    /// `None` for a column the batch does not carry, which is written as NULL.
+    values: Vec<Option<usize>>,
+}
+
+/// One row of a [`RecordBatch`], as a view rather than a copy.
 ///
-/// Geometry stays as the WKB bytes the batch holds, so the write path can put a
-/// header in front of them rather than parsing a geometry and writing it back
-/// out. See [`crate::writer::WritableRow`].
+/// Holding the batch and an index, rather than owned values, is what lets the
+/// write path bind strings and blobs straight out of the Arrow arrays. Both
+/// handles are `Arc`, so a row costs two reference-count bumps where owning its
+/// values cost an allocation per text cell plus a copy of the geometry.
 struct ArrowRow {
-    fid: Option<i64>,
-    wkb: Option<Vec<u8>>,
-    values: Vec<Value>,
+    batch: Arc<RecordBatch>,
+    layout: Arc<RowLayout>,
+    row: usize,
 }
 
 /// A row, or the failure that stopped one being made.
@@ -1387,11 +1397,34 @@ impl crate::writer::WritableRow for ArrowRowResult {
 
 impl crate::writer::WritableRow for ArrowRow {
     fn write(self, writer: &mut crate::FeatureWriter<'_>) -> Result<(i64, Option<[f64; 4]>)> {
-        match &self.wkb {
-            Some(wkb) => writer.insert_wkb(self.fid, wkb, &self.values),
-            None => writer
-                .insert_row(self.fid, &self.values)
-                .map(|fid| (fid, None)),
+        let fid = match self
+            .layout
+            .fid
+            .and_then(|index| self.batch.columns().get(index))
+        {
+            Some(column) => read_i64(column, self.row)?,
+            None => None,
+        };
+
+        let mut values = Vec::with_capacity(self.layout.values.len());
+        for (position, index) in self.layout.values.iter().enumerate() {
+            let bound = match index.and_then(|index| self.batch.columns().get(index)) {
+                Some(column) => bind_value(column, self.row, position, &self.batch)?,
+                None => rusqlite::types::ToSqlOutput::Borrowed(rusqlite::types::ValueRef::Null),
+            };
+            values.push(bound);
+        }
+
+        let geometry = self
+            .layout
+            .geometry
+            .and_then(|index| self.batch.columns().get(index));
+        match geometry {
+            Some(column) if !column.is_null(self.row) => {
+                let wkb = binary_at(column, self.row)?;
+                writer.insert_wkb_bound(fid, wkb, &values)
+            }
+            _ => writer.insert_row_bound(fid, &values).map(|fid| (fid, None)),
         }
     }
 }
@@ -1476,7 +1509,11 @@ impl Layer<'_> {
     }
 }
 
-/// Take one batch apart into rows the write path can consume.
+/// Work out where each of the layer's columns sits in this batch, and hand back
+/// one view per row.
+///
+/// The layout is computed once per batch and shared, so a row carries two `Arc`
+/// handles rather than a copy of anything.
 fn rows_of(
     batch: &RecordBatch,
     primary_key: Option<&str>,
@@ -1496,27 +1533,35 @@ fn rows_of(
         }
     }
 
-    let rows = batch.num_rows();
-    let mut out = Vec::with_capacity(rows);
-    for row in 0..rows {
-        let fid = match primary_key.and_then(|name| batch.column_by_name(name)) {
-            Some(column) => read_i64(column, row)?,
-            None => None,
-        };
-        let wkb = match geometry.and_then(|name| batch.column_by_name(name)) {
-            Some(column) => read_binary(column, row)?,
-            None => None,
-        };
-        let mut values = Vec::with_capacity(value_columns.len());
-        for name in value_columns {
-            values.push(match batch.column_by_name(name) {
-                Some(column) => read_value(column, row, name)?,
-                None => Value::Null,
-            });
-        }
-        out.push(ArrowRow { fid, wkb, values });
+    let index_of = |name: &str| schema.fields().iter().position(|f| f.name() == name);
+    let layout = Arc::new(RowLayout {
+        fid: primary_key.and_then(index_of),
+        geometry: geometry.and_then(index_of),
+        values: value_columns.iter().map(|name| index_of(name)).collect(),
+    });
+    let batch = Arc::new(batch.clone());
+    Ok((0..batch.num_rows())
+        .map(|row| ArrowRow {
+            batch: Arc::clone(&batch),
+            layout: Arc::clone(&layout),
+            row,
+        })
+        .collect())
+}
+
+/// The bytes of a binary cell, borrowed from the array.
+fn binary_at(column: &ArrayRef, row: usize) -> Result<&[u8]> {
+    if let Some(binary) = column.as_binary_opt::<i32>() {
+        return Ok(binary.value(row));
     }
-    Ok(out)
+    if let Some(binary) = column.as_binary_opt::<i64>() {
+        return Ok(binary.value(row));
+    }
+    Err(Error::ArrowValueMismatch {
+        column: String::new(),
+        expected: "Binary or LargeBinary",
+        found: "another Arrow type",
+    })
 }
 
 /// Read one `Int64` cell, for the feature id.
@@ -1534,139 +1579,152 @@ fn read_i64(column: &ArrayRef, row: usize) -> Result<Option<i64>> {
     Ok(Some(values.value(row)))
 }
 
-/// Read one binary cell, for the geometry.
-fn read_binary(column: &ArrayRef, row: usize) -> Result<Option<Vec<u8>>> {
-    if column.is_null(row) {
-        return Ok(None);
-    }
-    if let Some(binary) = column.as_binary_opt::<i32>() {
-        return Ok(Some(binary.value(row).to_vec()));
-    }
-    if let Some(binary) = column.as_binary_opt::<i64>() {
-        return Ok(Some(binary.value(row).to_vec()));
-    }
-    Err(Error::ArrowValueMismatch {
-        column: String::new(),
-        expected: "Binary or LargeBinary",
-        found: "other",
-    })
-}
-
-/// Read one attribute cell as a [`Value`].
+/// Bind one attribute cell, borrowing from the array wherever that is possible.
 ///
 /// The inverse of the read path's mapping, and deliberately narrower: it accepts
-/// the types [`Layer::arrow_schema`] produces, so a round trip works, plus the
+/// what [`Layer::arrow_schema`] produces, so a round trip works, plus the
 /// narrower integer and float widths another producer is likely to emit.
-fn read_value(column: &ArrayRef, row: usize, name: &str) -> Result<Value> {
+///
+/// Strings and blobs are bound as slices into the Arrow buffers, which is the
+/// point of this function: they are already contiguous there, so copying them
+/// into a `Value` first would allocate once per cell for nothing. `DATE` and
+/// `DATETIME` are the exception, because a GeoPackage stores them as text and
+/// the text has to be produced.
+fn bind_value<'a>(
+    column: &'a ArrayRef,
+    row: usize,
+    position: usize,
+    batch: &RecordBatch,
+) -> Result<rusqlite::types::ToSqlOutput<'a>> {
     use arrow_array::types::{
         Date32Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
         TimestampMicrosecondType, TimestampMillisecondType,
     };
+    use rusqlite::types::{ToSqlOutput, Value as SqlV, ValueRef};
+
+    let borrowed = |value: ValueRef<'a>| Ok(ToSqlOutput::Borrowed(value));
+    let owned = |value: SqlV| Ok(ToSqlOutput::Owned(value));
 
     if column.is_null(row) {
-        return Ok(Value::Null);
+        return borrowed(ValueRef::Null);
     }
-    let mismatch = |expected: &'static str| Error::ArrowValueMismatch {
-        column: name.to_owned(),
-        expected,
-        found: "an unsupported Arrow type",
+    // Only built when something is wrong, so the happy path does not pay for
+    // naming the column.
+    let name = || {
+        batch
+            .schema()
+            .fields()
+            .get(position)
+            .map(|field| field.name().clone())
+            .unwrap_or_default()
     };
-    Ok(match column.data_type() {
-        DataType::Boolean => Value::Boolean(
+    let mismatch = |expected: &'static str| Error::ArrowValueMismatch {
+        column: name(),
+        expected,
+        found: "an array of another type",
+    };
+
+    match column.data_type() {
+        DataType::Boolean => owned(SqlV::Integer(i64::from(
             column
                 .as_boolean_opt()
                 .ok_or_else(|| mismatch("Boolean"))?
                 .value(row),
-        ),
-        DataType::Int8 => Value::Integer(i64::from(
+        ))),
+        DataType::Int8 => owned(SqlV::Integer(i64::from(
             column
                 .as_primitive_opt::<Int8Type>()
                 .ok_or_else(|| mismatch("Int8"))?
                 .value(row),
-        )),
-        DataType::Int16 => Value::Integer(i64::from(
+        ))),
+        DataType::Int16 => owned(SqlV::Integer(i64::from(
             column
                 .as_primitive_opt::<Int16Type>()
                 .ok_or_else(|| mismatch("Int16"))?
                 .value(row),
-        )),
-        DataType::Int32 => Value::Integer(i64::from(
+        ))),
+        DataType::Int32 => owned(SqlV::Integer(i64::from(
             column
                 .as_primitive_opt::<Int32Type>()
                 .ok_or_else(|| mismatch("Int32"))?
                 .value(row),
-        )),
-        DataType::Int64 => Value::Integer(
+        ))),
+        DataType::Int64 => borrowed(ValueRef::Integer(
             column
                 .as_primitive_opt::<Int64Type>()
                 .ok_or_else(|| mismatch("Int64"))?
                 .value(row),
-        ),
-        DataType::Float32 => Value::Float(f64::from(
+        )),
+        DataType::Float32 => owned(SqlV::Real(f64::from(
             column
                 .as_primitive_opt::<Float32Type>()
                 .ok_or_else(|| mismatch("Float32"))?
                 .value(row),
-        )),
-        DataType::Float64 => Value::Float(
+        ))),
+        DataType::Float64 => borrowed(ValueRef::Real(
             column
                 .as_primitive_opt::<Float64Type>()
                 .ok_or_else(|| mismatch("Float64"))?
                 .value(row),
-        ),
-        DataType::Utf8 => Value::Text(
+        )),
+        DataType::Utf8 => borrowed(ValueRef::Text(
             column
                 .as_string_opt::<i32>()
                 .ok_or_else(|| mismatch("Utf8"))?
                 .value(row)
-                .to_owned(),
-        ),
-        DataType::LargeUtf8 => Value::Text(
+                .as_bytes(),
+        )),
+        DataType::LargeUtf8 => borrowed(ValueRef::Text(
             column
                 .as_string_opt::<i64>()
                 .ok_or_else(|| mismatch("LargeUtf8"))?
                 .value(row)
-                .to_owned(),
-        ),
-        DataType::Binary => Value::Blob(
+                .as_bytes(),
+        )),
+        DataType::Binary => borrowed(ValueRef::Blob(
             column
                 .as_binary_opt::<i32>()
                 .ok_or_else(|| mismatch("Binary"))?
-                .value(row)
-                .to_vec(),
-        ),
-        DataType::LargeBinary => Value::Blob(
+                .value(row),
+        )),
+        DataType::LargeBinary => borrowed(ValueRef::Blob(
             column
                 .as_binary_opt::<i64>()
                 .ok_or_else(|| mismatch("LargeBinary"))?
-                .value(row)
-                .to_vec(),
-        ),
-        DataType::Date32 => Value::Date(date_from_days(
-            column
-                .as_primitive_opt::<Date32Type>()
-                .ok_or_else(|| mismatch("Date32"))?
                 .value(row),
-        )?),
-        DataType::Timestamp(TimeUnit::Microsecond, _) => Value::DateTime(datetime_from_micros(
-            column
-                .as_primitive_opt::<TimestampMicrosecondType>()
-                .ok_or_else(|| mismatch("Timestamp"))?
-                .value(row),
-        )?),
-        DataType::Timestamp(TimeUnit::Millisecond, _) => Value::DateTime(datetime_from_micros(
-            column
-                .as_primitive_opt::<TimestampMillisecondType>()
-                .ok_or_else(|| mismatch("Timestamp"))?
-                .value(row)
-                .saturating_mul(1_000),
-        )?),
-        other => {
-            return Err(Error::UnsupportedArrowType {
-                data_type: other.to_string(),
-            });
-        }
-    })
+        )),
+        DataType::Date32 => owned(SqlV::Text(
+            date_from_days(
+                column
+                    .as_primitive_opt::<Date32Type>()
+                    .ok_or_else(|| mismatch("Date32"))?
+                    .value(row),
+            )?
+            .to_string(),
+        )),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => owned(SqlV::Text(
+            datetime_from_micros(
+                column
+                    .as_primitive_opt::<TimestampMicrosecondType>()
+                    .ok_or_else(|| mismatch("Timestamp"))?
+                    .value(row),
+            )?
+            .to_string(),
+        )),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => owned(SqlV::Text(
+            datetime_from_micros(
+                column
+                    .as_primitive_opt::<TimestampMillisecondType>()
+                    .ok_or_else(|| mismatch("Timestamp"))?
+                    .value(row)
+                    .saturating_mul(1_000),
+            )?
+            .to_string(),
+        )),
+        other => Err(Error::UnsupportedArrowType {
+            data_type: other.to_string(),
+        }),
+    }
 }
 
 /// The civil date `days` after the Unix epoch: the inverse of

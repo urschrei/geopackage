@@ -75,12 +75,44 @@ again.
 It made no measurable difference to the time (1.54x to 1.55x, noise). It was a
 memory and correctness fix, and is not claimed as anything else.
 
+## First change: move values into the bindings instead of cloning them
+
+`value_to_sql` took `&Value` and cloned, so every string and blob was copied a
+second time on the way to SQLite. The columnar path now owns its values and
+moves them, through `value_into_sql`. The scalar path keeps the borrowing form,
+since it is handed a slice it does not own.
+
+Measured over the same fixture: **1.54x to 1.51x** without an index, **1.55x to
+1.50x** with. About 3%, which is roughly what removing one of the two copies of
+four short strings per row should be worth.
+
+Note the absolute figures rose on both sides between runs (671 to 699 ms for us,
+434 to 461 ms for GDAL), which is machine drift rather than a regression; the
+ratio is the figure to read.
+
+## Second change: bind straight from the Arrow arrays
+
+A row now holds `Arc<RecordBatch>`, a shared column layout and an index, rather
+than owned values. Strings and blobs are bound as slices into the Arrow buffers
+through `ToSqlOutput::Borrowed`, and only `DATE` and `DATETIME` are owned,
+because a GeoPackage stores them as text that has to be produced.
+`ToSqlOutput` carrying both cases is what made this straightforward; an earlier
+sketch with a separate buffer of owned strings could not satisfy the borrow
+checker without two passes.
+
+**1.51x to 1.32x** without an index, **1.50x to 1.30x** with.
+
+## Where this leaves criterion 3
+
+Still unmet at 1.30x, down from 1.55x. The two changes above took out the copies
+that were visible in the code; what is left is not yet attributed.
+
 ## Next
 
-Bind directly from the Arrow arrays, without a `Value` per cell, mirroring what
-the read path does. That is the change with a reason behind it rather than a
-guess: the double copy of every text value is visible in the code, not inferred
-from a measurement.
-
-Until then criterion 3's write side is unmet at 1.55x, recorded as the number
-reached rather than the bar moved.
+The remaining per-row allocations are the two `Vec`s of bindings and the GPB
+blob
+itself. The blob is unavoidable, since it is a new buffer by construction. The
+binding vectors could be reused across rows if the write loop held a scratch,
+but
+that means threading one through `WritableRow`, and there is no measurement yet
+saying it would be worth the shape.

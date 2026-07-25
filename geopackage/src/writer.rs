@@ -284,7 +284,7 @@ impl<'a> Layer<'a> {
         let mut bbox = BboxFold::new();
         bbox.seed(existing);
 
-        Ok(FeatureWriter {
+        let writer = FeatureWriter {
             tx,
             table_name: self.table_name().to_owned(),
             quoted_table: quote(self.table_name())?,
@@ -294,7 +294,8 @@ impl<'a> Layer<'a> {
             bbox,
             dirty: false,
             bbox_dirty: false,
-        })
+        };
+        Ok(writer)
     }
 
     /// Write every item of `features` in batches, each batch its own committed
@@ -692,28 +693,33 @@ impl<'conn> FeatureWriter<'conn> {
         Ok((assigned, xy))
     }
 
-    /// Insert a feature whose geometry is already ISO WKB, returning its
-    /// feature id and XY envelope.
+    /// Insert a feature whose geometry is already ISO WKB, with its non-geometry
+    /// values already prepared as bindings.
     ///
-    /// The counterpart of [`Self::insert_returning_envelope`] for a caller
-    /// holding bytes rather than a geometry object, which is what an Arrow
-    /// GeoArrow column is. The bytes go into the blob after a header rather than
-    /// being parsed into a geometry and written back out, though they are still
-    /// parsed once: the envelope has to be computed for the header and the
-    /// index, and parsing is what rejects a body that is not ISO WKB.
+    /// The counterpart of [`Self::insert_returning_envelope`] for the columnar
+    /// path, and the reason it takes bindings rather than [`Value`]s: an Arrow
+    /// batch already holds every string and blob contiguously, so a binding that
+    /// borrows from it costs nothing, where building a `Value` would allocate
+    /// per cell and copy. Only `DATE` and `DATETIME` have to be owned, because
+    /// they are formatted rather than copied.
+    ///
+    /// The WKB is parsed once, for the envelope the header and the index both
+    /// need, and to reject a body that is not ISO WKB.
     ///
     /// # Errors
     ///
     /// As [`Self::insert_returning_envelope`], plus [`Error::Core`] if the bytes
     /// are not a geometry the `wkb` reader accepts.
     #[cfg(feature = "arrow")]
-    pub(crate) fn insert_wkb(
+    pub(crate) fn insert_wkb_bound(
         &mut self,
         fid: Option<i64>,
         wkb: &[u8],
-        values: &[Value],
+        values: &[rusqlite::types::ToSqlOutput<'_>],
     ) -> Result<(i64, Option<[f64; 4]>)> {
-        self.check_values(values)?;
+        use rusqlite::types::{ToSqlOutput, Value as SqlV, ValueRef};
+
+        self.check_value_count(values.len())?;
         let geom = self
             .geometry
             .as_ref()
@@ -727,19 +733,42 @@ impl<'conn> FeatureWriter<'conn> {
         self.check_zm("m", geom.m, has_m, &geom.name)?;
 
         let sql = self.insert_sql(fid.is_some(), true);
-        let mut binds: Vec<SqlValue> = Vec::with_capacity(values.len() + 2);
+        let mut binds: Vec<ToSqlOutput<'_>> = Vec::with_capacity(values.len() + 2);
         if let Some(id) = fid {
-            binds.push(SqlValue::Integer(id));
+            binds.push(ToSqlOutput::Borrowed(ValueRef::Integer(id)));
         }
-        binds.extend(values.iter().map(value_to_sql));
-        binds.push(SqlValue::Blob(encoded.blob));
-        let assigned = self.exec_insert(&sql, &binds, fid)?;
+        binds.extend(values.iter().cloned());
+        // The blob was just built, so it moves into the binding rather than
+        // being borrowed from something that has to outlive the statement.
+        binds.push(ToSqlOutput::Owned(SqlV::Blob(encoded.blob)));
+        let assigned = self.exec_insert_bound(&sql, &binds, fid)?;
         if let Some(envelope) = encoded.xy_envelope {
             self.bbox.add(envelope);
             self.bbox_dirty = true;
         }
         self.dirty = true;
         Ok((assigned, encoded.xy_envelope))
+    }
+
+    /// [`Self::insert_wkb_bound`] for a row with no geometry.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn insert_row_bound(
+        &mut self,
+        fid: Option<i64>,
+        values: &[rusqlite::types::ToSqlOutput<'_>],
+    ) -> Result<i64> {
+        use rusqlite::types::{ToSqlOutput, ValueRef};
+
+        self.check_value_count(values.len())?;
+        let sql = self.insert_sql(fid.is_some(), false);
+        let mut binds: Vec<ToSqlOutput<'_>> = Vec::with_capacity(values.len() + 1);
+        if let Some(id) = fid {
+            binds.push(ToSqlOutput::Borrowed(ValueRef::Integer(id)));
+        }
+        binds.extend(values.iter().cloned());
+        let assigned = self.exec_insert_bound(&sql, &binds, fid)?;
+        self.dirty = true;
+        Ok(assigned)
     }
 
     /// Insert a row with no geometry (a NULL geometry on a feature table, or an
@@ -926,13 +955,20 @@ impl<'conn> FeatureWriter<'conn> {
     }
 
     fn check_values(&self, values: &[Value]) -> Result<()> {
-        if values.len() == self.value_columns.len() {
+        self.check_value_count(values.len())
+    }
+
+    /// [`Self::check_values`] against a count, for a caller whose values are not
+    /// a `Value` slice.
+    fn check_value_count(&self, found: usize) -> Result<()> {
+        if found == self.value_columns.len() {
             return Ok(());
         }
+        let _ = found;
         Err(Error::ValueCountMismatch {
             table_name: self.table_name.clone(),
             expected: self.value_columns.len(),
-            found: values.len(),
+            found,
         })
     }
 
@@ -986,6 +1022,19 @@ impl<'conn> FeatureWriter<'conn> {
             assignments.join(", "),
             self.pk_expr
         )
+    }
+
+    /// [`Self::exec_insert`] for bindings that may borrow rather than own.
+    #[cfg(feature = "arrow")]
+    fn exec_insert_bound(
+        &self,
+        sql: &str,
+        binds: &[rusqlite::types::ToSqlOutput<'_>],
+        fid: Option<i64>,
+    ) -> Result<i64> {
+        let mut stmt = self.tx.prepare_cached(sql)?;
+        stmt.execute(params_from_iter(binds.iter()))?;
+        Ok(fid.unwrap_or_else(|| self.tx.last_insert_rowid()))
     }
 
     fn exec_insert(&self, sql: &str, binds: &[SqlValue], fid: Option<i64>) -> Result<i64> {

@@ -207,14 +207,23 @@ impl GeoPackage {
 /// This keeps rusqlite types out of the public API: callers pass our [`Value`]
 /// enum and conversion happens here.
 pub(crate) fn value_to_sql(value: &Value) -> rusqlite::types::Value {
+    value_into_sql(value.clone())
+}
+
+/// [`value_to_sql`] for a caller that owns its value, so a string or blob moves
+/// into the binding instead of being copied.
+///
+/// The columnar write path builds a value per cell and then binds it once, so
+/// cloning there would copy every string twice before it reached SQLite.
+pub(crate) fn value_into_sql(value: Value) -> rusqlite::types::Value {
     use rusqlite::types::Value as Sql;
     match value {
         Value::Null => Sql::Null,
-        Value::Boolean(b) => Sql::Integer(i64::from(*b)),
-        Value::Integer(i) => Sql::Integer(*i),
-        Value::Float(f) => Sql::Real(*f),
-        Value::Text(s) => Sql::Text(s.clone()),
-        Value::Blob(b) => Sql::Blob(b.clone()),
+        Value::Boolean(b) => Sql::Integer(i64::from(b)),
+        Value::Integer(i) => Sql::Integer(i),
+        Value::Float(f) => Sql::Real(f),
+        Value::Text(s) => Sql::Text(s),
+        Value::Blob(b) => Sql::Blob(b),
         Value::Date(d) => Sql::Text(d.to_string()),
         Value::DateTime(dt) => Sql::Text(dt.to_string()),
     }
