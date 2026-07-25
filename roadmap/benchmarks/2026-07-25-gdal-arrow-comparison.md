@@ -143,13 +143,18 @@ bracket says building is now between a third and a half of the read, where GDAL
 fits its whole non-SQLite cost into less than our building alone. That is the
 next thing to look at, and it wants a profiler rather than another subtraction.
 
-**A note on criterion 1's share test.** That criterion asks for the
-array-building share to be under 30%, measured as the total above the fetch
-floor. Against the aggregate floor it now reads about 53%, not because it slowed
-because the denominator collapsed. The sub-test compares against whichever floor
-the implementation actually uses, and a falling total with a rising share is the
-opposite of the failure it was written to catch. It needs rethinking rather than
-a pass or a fail; flagged rather than quietly adjusted.
+**Criterion 1's share test was dropped because of this.** That criterion asked
+for array building to be under 30% of the total, measured as the total above the
+fetch floor. Against the aggregate floor it reads about 53%, not because
+building slowed but because the denominator collapsed: a falling total with a
+rising share is the opposite of the failure it was written to catch. The
+residual also disagrees with itself, 43 ms against 59 ms for unchanged code,
+because the two floors are approximate in opposite directions.
+
+It was also redundant. A columnar path built on the row path pays everything
+`row/cursor` pays and then builds arrays, so it cannot beat `row/cursor`, which
+criterion 1's other conditions already require. See
+[05-m3-arrow-ffi.md](../05-m3-arrow-ffi.md) for the trimmed criterion.
 
 ## Parallel reads
 

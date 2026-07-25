@@ -81,8 +81,8 @@ assumed about GPB bodies being usable as WKB without a parse.
       loop is the fallback when a table has more columns than SQLite's
       function-argument limit, and is tested by lowering that limit on the
       connection.)*
-- [ ] Revisit array building, which is now the gap. *(Partly done, and the gap
-      persists at about 1.41x. `gpb::body_offset` stopped the geometry column
+- [ ] (issue #25) Revisit array building, which is now the gap. *(Partly done,
+      and the gap persists at about 1.41x. `gpb::body_offset` stopped the geometry column
       decoding an envelope it discards, worth 4.3%; moving the column-name lookup
       off the hot path was worth nothing and is kept only because it is the
       better shape. A per-type decomposition ranks the cost datetime > text >
@@ -93,7 +93,8 @@ assumed about GPB bodies being usable as WKB without a parse.
       constant, so building cost can be separated from the cost of reading a
       bigger row, which the current decomposition conflates; then the text path,
       the only line item large enough to supply the ~11% that criterion 3 still
-      needs.)*
+      needs. Tracked as issue #25; nothing is blocked on it now that threaded
+      reading is the default and the single-threaded gap is accepted.)*
 - [x] Parallel `read_arrow`: one connection per thread over disjoint primary-key
       ranges, since SQLite permits concurrent readers and `rusqlite::Connection`
       is `Send`, so handle-per-thread needs no `unsafe`. The shape is settled by
@@ -182,25 +183,37 @@ Performance first, and every figure like for like: same file, same rows, same
 work, thread counts stated for both sides. A number that cannot be reproduced
 from the recorded methodology does not count, which is the M2 lesson.
 
-1. **The columnar path is not layered over the row path.** Three conditions,
-   all from one run of the `arrow` bench, over both workload shapes:
-   `read_arrow` is faster than `row/cursor`, the faster of our two row APIs;
-   its time above `sqlite/step_and_fetch`, which is the array-building share, is
-   **under 30%** of the total; and it is faster than `row/features`.
+1. **The columnar path is not layered over the row path.** Two conditions, both
+   from one run of the `arrow` bench, over both workload shapes: `read_arrow`
+   pinned to one thread is faster than `row/cursor`, the faster of our two row
+   APIs, and faster than `row/features`.
 
-   *This criterion was originally "at least 3x `row/cursor`", taken from GDAL's
-   ratio for its own driver. That was mis-calibrated and has been restated
-   rather than softened: the profile in
+   That is sufficient because a columnar path built on the row path, which is
+   what GDAL's generic implementation is and what measures 0.61x for their
+   Shapefile driver, pays everything `row/cursor` pays and then builds arrays on
+   top. It is necessarily slower than the API it wraps, so beating that API
+   cannot be faked.
+
+   *Restated once and trimmed once, both recorded rather than quietly applied.
+   Originally "at least 3x `row/cursor`", taken from GDAL's ratio for its own
+   driver, which was mis-calibrated: the profile in
    [benchmarks/2026-07-25-arrow-read-profile.md](benchmarks/2026-07-25-arrow-read-profile.md)
    shows 3x is unreachable by any implementation of this path, because even
    eliminating per-value accessor dispatch entirely leaves 2.37x. GDAL's
    headroom is in their row baseline, which allocates a feature object per row;
-   ours does not, so the ratio measures our row path's quality more than our
-   columnar path's. The failure this criterion exists to catch, a columnar path
-   built on the row path as GDAL's generic implementation is, cannot produce an
-   array-building share of under 30% and would not beat `row/cursor` at all.
-   Measured at the time of restatement: 1.16x and 1.09x over `row/cursor`, with
-   building shares of 21% and 23%.*
+   ours does not, so the ratio graded our row path more than our columnar one.*
+
+   *The restatement then carried a third condition, that array building be under
+   30% of the total, measured as the total above the fetch floor. It was dropped
+   for two reasons. It duplicated what the two conditions above already catch,
+   and it was not stable: building is a residual against a floor that moves when
+   the implementation moves, so when the aggregate function collapsed the fetch
+   cost the share went from 23% to 53% on unchanged building code, reading as a
+   failure because the read got 40% faster. The residual also disagreed with
+   itself, 43 ms against 59 ms for the same code, because the two floors are
+   approximate in opposite directions. The property it was reaching for, that no
+   `Feature` or `Value` is constructed per row, is a fact about the code and is
+   stated as a constraint in the task list above, where review can enforce it.*
 2. **Threads scale.** Parallel `read_arrow` is at least **2.5x** faster on four
    threads than on one, over the same file. GDAL measures 3.1x (2.2 s to 0.7 s);
    2.5x leaves room for our own contention without letting a token

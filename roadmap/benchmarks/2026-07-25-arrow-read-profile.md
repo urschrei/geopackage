@@ -93,10 +93,17 @@ for GDAL's Shapefile driver. A ratio against our own row API turns out to be a
 poor test of that, because our row API is fast enough to make any honest
 implementation look unimpressive.
 
-The floors are the better test, and they come from the same benchmark run: an
-implementation layered over the row path could not have an array-building share
-of a quarter, nor sit below `row/cursor` at all. Criterion 1 is restated in
-those terms in [05-m3-arrow-ffi.md](../05-m3-arrow-ffi.md).
+Beating `row/cursor` is the better test, and it comes from the same benchmark
+run: a path layered over the row API pays everything that API pays and then
+builds arrays on top, so it is necessarily slower than the thing it wraps.
+Criterion 1 is restated in those terms in
+[05-m3-arrow-ffi.md](../05-m3-arrow-ffi.md).
+
+The restatement first carried a share test as well, that building be under 30%
+of the total. That was dropped later the same day: it duplicated the condition
+above, and it measured building as a residual against a floor that moves when
+the implementation moves, so the aggregate function made it read as a failure by
+making the read faster.
 
 The performance weight moves to criterion 3, the GDAL comparison, which is the
 number an outside reader can check, and to the parallel path, where GDAL's own
