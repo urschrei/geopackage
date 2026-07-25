@@ -3,7 +3,7 @@
 //!
 //! These exercise the write-side index management on top of the read-side
 //! `has_spatial_index` / `features_in` from M1: building an index over an
-//! already-populated table, its `gpkg_extensions` registration, and the D7
+//! already-populated table, its `gpkg_extensions` registration, and the
 //! legacy-trigger repair path.
 
 #![expect(
@@ -547,7 +547,7 @@ fn upsert_null(conn: &Connection, fid: i64) {
 
 /// M2 acceptance criterion 3: the RTree contents provably match a full-scan
 /// rebuild after an arbitrary insert/update/delete/upsert sequence, with the
-/// initial index built through both the triggered and the bulk (D8) path.
+/// initial index built through both the triggered and the bulk path.
 ///
 /// The oracle is independent of the index: `envelope_scan` recomputes the
 /// expected contents directly from the current table rows via the `ST_*`
@@ -607,7 +607,7 @@ fn rtree_tracks_full_scan_through_write_ops(tc: hegel::TestCase) {
     }
 }
 
-/// The bulk (D8) and triggered build paths produce byte-identical index
+/// The bulk and triggered build paths produce byte-identical index
 /// contents, and both equal the full-scan rebuild, for an arbitrary feature set.
 #[hegel::test]
 fn bulk_and_triggered_builds_agree(tc: hegel::TestCase) {
