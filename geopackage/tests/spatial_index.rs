@@ -1227,3 +1227,68 @@ fn an_attributes_table_is_unaffected_by_the_default() {
         .unwrap();
     assert!(!layer.has_spatial_index().unwrap());
 }
+
+/// A layer whose index cannot be built leaves no table behind (issue #26).
+///
+/// The two were separate transactions until this was threaded, so a failure
+/// between them left a feature table with no index, registered in
+/// `gpkg_contents`, that the caller had to notice and clean up. Nothing in the
+/// return value said so.
+///
+/// The failure is forced by squatting on the name the RTree virtual table will
+/// want, which is reachable rather than contrived: it is what a file already
+/// carrying a stale `rtree_pts_geom` from an interrupted build looks like.
+#[test]
+fn a_layer_whose_index_fails_leaves_no_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("f.gpkg")).unwrap();
+    gpkg.connection()
+        .execute_batch("CREATE TABLE rtree_pts_geom (squatter INTEGER)")
+        .unwrap();
+
+    let result = gpkg.create_layer(
+        &TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+    );
+    assert!(result.is_err(), "the index build should have failed");
+
+    let conn = gpkg.connection();
+    let tables: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'pts'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(tables, 0, "the user table survived a failed create_layer");
+
+    let contents: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM gpkg_contents WHERE table_name = 'pts'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(contents, 0, "a gpkg_contents row survived");
+
+    // `gpkg_geometry_columns` is created on first use, so a complete rollback
+    // takes the catalogue table itself with it. Accept either shape: absent, or
+    // present with no row for this layer.
+    let geometry_columns: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master \
+             WHERE type = 'table' AND name = 'gpkg_geometry_columns'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    if geometry_columns > 0 {
+        let rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM gpkg_geometry_columns WHERE table_name = 'pts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0, "a gpkg_geometry_columns row survived");
+    }
+}

@@ -44,7 +44,8 @@ write performance competitive with GDAL's GPKG driver.
       idempotent and removes any trigger generation, leaving the
       `gpkg_extensions` table. Since issue #26, `create_layer` calls
       `create_spatial_index` itself unless the builder declines it, so `create`
-      is the opt-out path rather than the opt-in one. The extension row uses the
+      is the opt-out path rather than the opt-in one, and the two happen in one
+      transaction so a failed index build rolls the table back with it. The extension row uses the
       spec Annex F.3 requirement 75/76 strings, reusing the existing
       `triggers::EXTENSION_*` constants.)*
 - [x] **Bulk build (D8)**: during `write_all` on an indexed layer (or

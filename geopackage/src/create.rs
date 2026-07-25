@@ -16,6 +16,8 @@ use geopackage_core::ddl;
 use geopackage_core::ident::quote;
 use geopackage_core::types::{ColumnType, GeometryType, ZmFlag};
 
+use rusqlite::Connection;
+
 use crate::{Error, GeoPackage, Layer, Result, table_exists};
 
 /// The conventional primary-key column name for a GeoPackage feature or
@@ -304,11 +306,20 @@ impl GeoPackage {
             .ok_or_else(|| Error::MissingGeometrySpec {
                 table_name: builder.table_name.clone(),
             })?;
-        self.create_table(builder, Some(geometry))?;
-        let layer = self.layer(&builder.table_name)?;
+        // The table and its index are one transaction: a failure building the
+        // index must not leave a table behind without one, which is the state a
+        // caller would have to notice and clean up.
+        let tx = self.connection().unchecked_transaction()?;
+        self.create_table_in(&tx, builder, Some(geometry))?;
         if builder.spatial_index {
-            layer.create_spatial_index()?;
+            crate::index::create_index_in_transaction(
+                &tx,
+                &builder.table_name,
+                &geometry.column_name,
+                &builder.primary_key,
+            )?;
         }
+        tx.commit()?;
         self.layer(&builder.table_name)
     }
 
@@ -338,6 +349,20 @@ impl GeoPackage {
         builder: &TableSchemaBuilder,
         geometry: Option<&GeometrySpec>,
     ) -> Result<()> {
+        let tx = self.connection().unchecked_transaction()?;
+        self.create_table_in(&tx, builder, geometry)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// [`Self::create_table`] without the transaction management: every
+    /// statement runs on `tx`, which the caller owns and commits.
+    fn create_table_in(
+        &self,
+        tx: &Connection,
+        builder: &TableSchemaBuilder,
+        geometry: Option<&GeometrySpec>,
+    ) -> Result<()> {
         let name = &builder.table_name;
         if name
             .get(..5)
@@ -347,7 +372,7 @@ impl GeoPackage {
                 table_name: name.clone(),
             });
         }
-        if table_exists(self.connection(), name)? {
+        if table_exists(tx, name)? {
             return Err(Error::TableAlreadyExists {
                 table_name: name.clone(),
             });
@@ -375,8 +400,7 @@ impl GeoPackage {
         let description = builder.description.clone().unwrap_or_default();
         let contents_srs: Option<i32> = geometry.map(|g| g.srs_id);
 
-        let tx = self.connection().unchecked_transaction()?;
-        if geometry.is_some() && !table_exists(&tx, "gpkg_geometry_columns")? {
+        if geometry.is_some() && !table_exists(tx, "gpkg_geometry_columns")? {
             tx.execute_batch(ddl::CREATE_GPKG_GEOMETRY_COLUMNS)?;
         }
         tx.execute_batch(&create_sql)?;
@@ -401,7 +425,6 @@ impl GeoPackage {
                 ],
             )?;
         }
-        tx.commit()?;
         Ok(())
     }
 }

@@ -154,12 +154,7 @@ impl Layer<'_> {
 
         if bulk::table_row_count(conn, table)? < options.bulk_threshold {
             let tx = conn.unchecked_transaction()?;
-            tx.execute_batch(&triggers::create_rtree_table_sql(table, column)?)?;
-            for sql in triggers::create_triggers_sql(table, column, pk)? {
-                tx.execute_batch(&sql)?;
-            }
-            tx.execute_batch(&triggers::populate_rtree_sql(table, column, pk)?)?;
-            register_extension_row(&tx, table, column)?;
+            create_index_in_transaction(&tx, table, column, pk)?;
             tx.commit()?;
             return Ok(BuildPath::Triggered);
         }
@@ -324,6 +319,31 @@ impl Layer<'_> {
 /// `gpkg_extensions` on first use. The `extension_name`, `definition`, and
 /// `scope` values are the spec-prescribed constants from
 /// [`geopackage_core::triggers`] (Annex F.3, requirements 75/76).
+/// Create the RTree virtual table, install the GeoPackage 1.4 trigger set,
+/// populate it from the table's existing rows, and register the extension.
+///
+/// Every statement runs on `conn`, which the caller must already have inside a
+/// transaction, and nothing is committed here. Two callers want that: the
+/// triggered branch of [`Layer::create_spatial_index`], which opens its own, and
+/// [`crate::GeoPackage::create_layer`], which builds the layer and its index in
+/// one transaction so a failure cannot leave a table behind without one.
+///
+/// The population statement is a no-op on the fresh, empty table `create_layer`
+/// hands it.
+pub(crate) fn create_index_in_transaction(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    pk: &str,
+) -> Result<()> {
+    conn.execute_batch(&triggers::create_rtree_table_sql(table, column)?)?;
+    for sql in triggers::create_triggers_sql(table, column, pk)? {
+        conn.execute_batch(&sql)?;
+    }
+    conn.execute_batch(&triggers::populate_rtree_sql(table, column, pk)?)?;
+    register_extension_row(conn, table, column)
+}
+
 fn register_extension_row(conn: &Connection, table: &str, column: &str) -> Result<()> {
     if !table_exists(conn, "gpkg_extensions")? {
         conn.execute_batch(ddl::CREATE_GPKG_EXTENSIONS)?;

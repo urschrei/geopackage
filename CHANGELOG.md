@@ -40,6 +40,10 @@ While the version is below 1.0 the API may change in any release.
 
   Attribute tables are unaffected, having no geometry column.
 
+  The table and its index are created in one transaction, so a failure building
+  the index leaves nothing behind rather than a registered feature table with no
+  index for the caller to notice and clean up.
+
 - **`ConversionOptions::strict()` is now strict on both axes**, so it is no
   longer the same value as `ConversionOptions::default()`. `default()` is
   unchanged in behaviour: strict `DATETIME` parsing with lenient value reading.
