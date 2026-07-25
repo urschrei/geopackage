@@ -1,10 +1,10 @@
 //! Bulk-load a large point layer and build its spatial index the fast way.
 //!
 //! The order matters. Creating the (empty) spatial index *before* writing lets
-//! `write_all` take the bulk build: it drops the RTree triggers, inserts
-//! every row without per-row index maintenance, then constructs the index in
-//! one pass. Writing first and indexing afterwards also works and
-//! is bulk-built, but pays for the triggers to be installed and dropped.
+//! `write_all` take the bulk build: it drops the RTree triggers, inserts every
+//! row without per-row index maintenance, then constructs the index in one
+//! pass. Writing first and indexing afterwards also works and is bulk-built,
+//! but pays for the triggers to be installed and dropped.
 //!
 //! ```sh
 //! cargo run --release --example bulk_load -- 200000 out.gpkg

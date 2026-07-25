@@ -607,8 +607,8 @@ fn rtree_tracks_full_scan_through_write_ops(tc: hegel::TestCase) {
     }
 }
 
-/// The bulk and triggered build paths produce byte-identical index
-/// contents, and both equal the full-scan rebuild, for an arbitrary feature set.
+/// The bulk and triggered build paths produce byte-identical index contents,
+/// and both equal the full-scan rebuild, for an arbitrary feature set.
 #[hegel::test]
 fn bulk_and_triggered_builds_agree(tc: hegel::TestCase) {
     // Above the 51-entry node capacity, so the generated trees span the

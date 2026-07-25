@@ -318,8 +318,8 @@ impl GeoPackage {
     /// This **opts out** of the interchange-first close guarantee: the returned
     /// connection keeps whatever journal mode it is in, so a handle that was in
     /// [`JournalMode::Wal`] hands back a WAL connection with its `-wal`/`-shm`
-    /// sidecars intact. Use
-    /// [`Self::close`] instead when the resulting file is to be handed over.
+    /// sidecars intact. Use [`Self::close`] instead when the resulting file is
+    /// to be handed over.
     pub fn into_connection(mut self) -> Connection {
         // Taking the connection leaves `self.conn == None`, so the `Drop` below
         // runs its finalise on nothing.

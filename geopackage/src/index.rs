@@ -16,10 +16,10 @@
 //! Population takes one of two paths. Below the [`BulkIndexOptions`] threshold
 //! it is a single `INSERT INTO rtree SELECT` over the existing rows, using the
 //! registered `ST_*` functions and skipping empty/NULL geometries exactly as
-//! the triggers do. At or above the threshold
-//! it is the bulk shadow-table build in [`crate::bulk`]: accumulate the
-//! envelopes, build the tree in memory, and write the shadow tables directly,
-//! gated with automatic fallback to the triggered path.
+//! the triggers do. At or above the threshold it is the bulk shadow-table build
+//! in [`crate::bulk`]: accumulate the envelopes, build the tree in memory, and
+//! write the shadow tables directly, gated with automatic fallback to the
+//! triggered path.
 
 use geopackage_core::ddl;
 use geopackage_core::ident::quote;
@@ -65,8 +65,8 @@ impl Layer<'_> {
     /// Classify this layer's RTree spatial index (see [`SpatialIndexStatus`]).
     ///
     /// A layer with no geometry column is [`SpatialIndexStatus::Absent`]. This
-    /// is the detector for the interrupted-bulk-build case:
-    /// a [`SpatialIndexStatus::Stale`] result directs the caller to
+    /// is the detector for the interrupted-bulk-build case: a
+    /// [`SpatialIndexStatus::Stale`] result directs the caller to
     /// [`Self::repair_spatial_index`].
     pub fn spatial_index_status(&self) -> Result<SpatialIndexStatus> {
         let Some(geom) = self.geometry_column() else {

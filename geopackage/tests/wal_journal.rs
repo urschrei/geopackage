@@ -1,7 +1,6 @@
-//! Journal-mode options and the interchange-first close: a WAL handle leaves
-//! no `-wal`/`-shm` sidecars after `close()` or drop, and
-//! the file reads back as `DELETE`; `into_connection()` opts out; the
-//! `synchronous` option is applied.
+//! Journal-mode options and the interchange-first close: a WAL handle leaves no
+//! `-wal`/`-shm` sidecars after `close()` or drop, and the file reads back as
+//! `DELETE`; `into_connection()` opts out; the `synchronous` option is applied.
 
 #![expect(
     clippy::unwrap_used,
