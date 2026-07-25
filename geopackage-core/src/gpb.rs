@@ -114,6 +114,51 @@ pub enum GpbError {
 const MAGIC: [u8; 2] = [0x47, 0x50]; // "GP"
 const HEADER_BASE_LEN: usize = 8;
 
+/// The byte offset of the WKB body within a GPB blob, without decoding the
+/// envelope.
+///
+/// [`parse_header`] reads the envelope's doubles, which a caller that only wants
+/// the body does not need: the offset follows from the envelope indicator in the
+/// flags byte alone. Reading a whole geometry column as WKB is exactly that
+/// case, and the decode would otherwise happen once per row. The magic,
+/// version and indicator are still validated, so a malformed blob is an error
+/// here as it is there.
+///
+/// # Errors
+///
+/// [`GpbError`] for a blob too short to hold the header it declares, a bad magic
+/// or version, or an envelope indicator outside 0-4.
+pub fn body_offset(blob: &[u8]) -> Result<usize, GpbError> {
+    let &[m0, m1, version, flags, ..] = blob else {
+        return Err(GpbError::Truncated {
+            expected: HEADER_BASE_LEN,
+            actual: blob.len(),
+        });
+    };
+    if [m0, m1] != MAGIC {
+        return Err(GpbError::BadMagic(m0, m1));
+    }
+    if version != 0 {
+        return Err(GpbError::UnsupportedVersion(version));
+    }
+    // The count of doubles each indicator implies, matching `Envelope::values`.
+    let doubles = match (flags >> 1) & 0b111 {
+        0 => 0,
+        1 => 4,
+        2 | 3 => 6,
+        4 => 8,
+        other => return Err(GpbError::InvalidEnvelopeIndicator(other)),
+    };
+    let offset = HEADER_BASE_LEN + doubles * 8;
+    if blob.len() < offset {
+        return Err(GpbError::Truncated {
+            expected: offset,
+            actual: blob.len(),
+        });
+    }
+    Ok(offset)
+}
+
 /// Parse a GPB header from `blob`.
 ///
 /// Returns the header and the byte offset at which the ISO WKB body starts.
@@ -315,5 +360,48 @@ mod tests {
         let mut buf = encode_header(4326, &Envelope::None, false, false);
         buf[3] |= 0b1100_0000;
         parse_header(&buf).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod body_offset_tests {
+    use super::*;
+
+    /// A minimal GPB blob with the given envelope indicator and enough bytes
+    /// for it, plus one body byte.
+    fn blob(indicator: u8, doubles: usize) -> Vec<u8> {
+        let mut out = vec![b'G', b'P', 0, 0b1 | (indicator << 1), 0, 0, 0, 0];
+        out.extend(std::iter::repeat_n(0u8, doubles * 8));
+        out.push(0x01);
+        out
+    }
+
+    /// The cheap offset must agree with the full parse for every indicator,
+    /// which is the only thing that makes it safe to substitute.
+    #[test]
+    fn agrees_with_parse_header_for_every_indicator() {
+        for (indicator, doubles) in [(0u8, 0usize), (1, 4), (2, 6), (3, 6), (4, 8)] {
+            let blob = blob(indicator, doubles);
+            let (_, expected) = parse_header(&blob).expect("a valid blob parses");
+            assert_eq!(
+                body_offset(&blob),
+                Ok(expected),
+                "indicator {indicator} disagrees"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_what_parse_header_rejects() {
+        // Bad magic.
+        body_offset(&[b'X', b'P', 0, 0b1, 0, 0, 0, 0, 1]).unwrap_err();
+        // Unsupported version.
+        body_offset(&[b'G', b'P', 9, 0b1, 0, 0, 0, 0, 1]).unwrap_err();
+        // Envelope indicator outside 0-4.
+        body_offset(&[b'G', b'P', 0, 0b1 | (5 << 1), 0, 0, 0, 0, 1]).unwrap_err();
+        // Too short for the base header.
+        body_offset(&[b'G', b'P', 0]).unwrap_err();
+        // Declares an XY envelope but does not carry one.
+        body_offset(&[b'G', b'P', 0, 0b1 | (1 << 1), 0, 0, 0, 0]).unwrap_err();
     }
 }

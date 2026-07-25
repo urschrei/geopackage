@@ -543,9 +543,8 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
             acc.last_key = Some(key);
         }
         for (index, builder) in acc.builders.iter_mut().enumerate() {
-            let name = self.names.get(index).map_or("", String::as_str);
             let value = ctx.get_raw(index + self.field_offset);
-            if let Err(error) = builder.append(name, value, self.datetime) {
+            if let Err(error) = builder.append(&self.names, index, value, self.datetime) {
                 if let Ok(mut slot) = self.failure.lock() {
                     *slot = Some(error);
                 }
@@ -718,8 +717,12 @@ impl ArrowBatches<'_> {
             while let Some(row) = rows.next()? {
                 last_key = Some(row.get::<_, i64>(self.key_field.unwrap_or(0))?);
                 for (index, builder) in builders.iter_mut().enumerate() {
-                    let name = self.names.get(index).map_or("", String::as_str);
-                    builder.append(name, row.get_ref(index + offset)?, self.datetime)?;
+                    builder.append(
+                        &self.names,
+                        index,
+                        row.get_ref(index + offset)?,
+                        self.datetime,
+                    )?;
                 }
                 rows_read += 1;
             }
@@ -824,10 +827,16 @@ impl ColumnBuilder {
         })
     }
 
-    /// Append one stored value. `column` names the field, for diagnostics.
+    /// Append one stored value.
+    ///
+    /// `names` and `index` locate the column for diagnostics, rather than a
+    /// resolved `&str`, so the lookup happens only on the failure paths. It is
+    /// otherwise a bounds-checked index and a deref per value, and there are
+    /// tens of millions of values in a large read.
     fn append(
         &mut self,
-        column: &str,
+        names: &[String],
+        index: usize,
         value: ValueRef<'_>,
         datetime: DateTimeParsing,
     ) -> Result<()> {
@@ -850,7 +859,7 @@ impl ColumnBuilder {
             (Self::Date32(builder), ValueRef::Text(bytes)) => {
                 let text = text(bytes)?;
                 let date = Date::parse(text).map_err(|source| Error::InvalidDateTimeValue {
-                    column: column.to_owned(),
+                    column: column_name(names, index),
                     text: text.to_owned(),
                     source,
                 })?;
@@ -863,7 +872,7 @@ impl ColumnBuilder {
                     DateTimeParsing::Lenient => DateTime::parse_lenient(text),
                 };
                 let stamp = parsed.map_err(|source| Error::InvalidDateTimeValue {
-                    column: column.to_owned(),
+                    column: column_name(names, index),
                     text: text.to_owned(),
                     source,
                 })?;
@@ -872,12 +881,16 @@ impl ColumnBuilder {
             // The GPB body is already ISO WKB, so the geometry costs a header
             // read and a copy, with no parsing of the geometry itself.
             (Self::Geometry(builder), ValueRef::Blob(blob)) => {
-                let (_, offset) = gpb::parse_header(blob).map_err(geopackage_core::Error::from)?;
+                // `body_offset` rather than `parse_header`: the offset follows
+                // from the envelope indicator, and parsing the header would
+                // decode the envelope's doubles once per row only to discard
+                // them.
+                let offset = gpb::body_offset(blob).map_err(geopackage_core::Error::from)?;
                 builder.append_value(blob.get(offset..).unwrap_or_default());
             }
             (builder, other) => {
                 return Err(Error::ArrowValueMismatch {
-                    column: column.to_owned(),
+                    column: column_name(names, index),
                     expected: builder.type_name(),
                     found: storage_class(other),
                 });
@@ -929,6 +942,11 @@ impl ColumnBuilder {
             ))),
         }
     }
+}
+
+/// The name of column `index`, for an error message.
+fn column_name(names: &[String], index: usize) -> String {
+    names.get(index).cloned().unwrap_or_default()
 }
 
 /// Decode SQLite TEXT bytes as UTF-8.

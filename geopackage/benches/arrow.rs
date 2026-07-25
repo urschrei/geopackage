@@ -363,6 +363,106 @@ fn bench_shape(c: &mut Criterion, shape: &str, gpkg: &GeoPackage, names: &[&str]
     group.finish();
 }
 
+/// Build a layer of `n` rows whose attributes are all the same type, so
+/// `read_arrow` over it measures that type's share of array building against a
+/// common floor.
+fn build_uniform(
+    n: usize,
+    file: &str,
+    column_type: ColumnType,
+    mut value: impl FnMut(usize) -> Value,
+) -> (tempfile::TempDir, GeoPackage) {
+    /// Enough columns that the per-type cost dominates the fixed per-row cost.
+    const COLUMNS: usize = 12;
+    let columns: Vec<(&str, ColumnType)> = COLUMN_NAMES
+        .iter()
+        .take(COLUMNS)
+        .map(|name| (*name, column_type.clone()))
+        .collect();
+    build(n, file, &columns, GeometryType::Point, move |i| {
+        let (x, y) = coord(i);
+        (
+            Geometry::Point(Point::new(x, y)),
+            (0..COLUMNS).map(|_| value(i)).collect(),
+        )
+    })
+}
+
+/// Fixed names, so `build_uniform` needs no owned strings.
+const COLUMN_NAMES: [&str; 12] = [
+    "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10", "a11",
+];
+
+/// Where array building goes, by column type.
+///
+/// Each layer has twelve attributes of one type plus a point geometry, so the
+/// difference between two rows of the table below is the difference between
+/// those two types, twelve times over. The profiler was no use here: with or
+/// without LTO, `sample` attributes the whole read to `main`, because the path
+/// inlines away. This measures the same thing without one, and anyone can rerun
+/// it.
+fn bench_building_by_type(c: &mut Criterion) {
+    let n = rows();
+    let stamp = DateTime::parse_strict("2026-07-24T12:34:56.789Z").expect("datetime");
+    let shapes: Vec<(&str, (tempfile::TempDir, GeoPackage))> = vec![
+        (
+            "integer",
+            build_uniform(n, "u_int.gpkg", ColumnType::Integer, |i| {
+                Value::Integer(i as i64)
+            }),
+        ),
+        (
+            "double",
+            build_uniform(n, "u_dbl.gpkg", ColumnType::Double, |i| {
+                Value::Float(i as f64 * 1.5)
+            }),
+        ),
+        (
+            "text",
+            build_uniform(n, "u_txt.gpkg", ColumnType::Text(None), |i| {
+                Value::Text(format!("building {i}"))
+            }),
+        ),
+        (
+            "datetime",
+            build_uniform(n, "u_dt.gpkg", ColumnType::DateTime, move |_| {
+                Value::DateTime(stamp)
+            }),
+        ),
+        (
+            "blob",
+            build_uniform(n, "u_blob.gpkg", ColumnType::Blob(None), |_| {
+                Value::Blob(vec![0xde, 0xad, 0xbe, 0xef])
+            }),
+        ),
+    ];
+
+    let mut group = c.benchmark_group("building_by_type");
+    group.sample_size(10);
+    group.sampling_mode(SamplingMode::Flat);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(8));
+    group.throughput(Throughput::Elements(
+        u64::try_from(n).expect("row count fits u64"),
+    ));
+    for (name, (_dir, gpkg)) in &shapes {
+        group.bench_function(*name, |b| {
+            let layer = gpkg.layer("features").expect("layer");
+            b.iter(|| {
+                let batches = layer
+                    .read_arrow(ArrowReadOptions::default())
+                    .expect("read_arrow");
+                let mut total = 0usize;
+                for batch in batches {
+                    total += batch.expect("batch").num_rows();
+                }
+                black_box(total)
+            });
+        });
+    }
+    group.finish();
+}
+
 fn bench_columnar_vs_row(c: &mut Criterion) {
     let n = rows();
 
@@ -374,5 +474,5 @@ fn bench_columnar_vs_row(c: &mut Criterion) {
     bench_shape(c, "polygons_13attr", &polygons, &polygon_names, n);
 }
 
-criterion_group!(benches, bench_columnar_vs_row);
+criterion_group!(benches, bench_columnar_vs_row, bench_building_by_type);
 criterion_main!(benches);

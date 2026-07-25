@@ -107,3 +107,54 @@ figures put the remaining 3.1x.
 `read_arrow` selected the pagination key twice whenever it is also a table
 column, which a comment called free. With per-value fetching at over half the
 total, a twelfth column was not free: removing it gained 1.0% (p = 0.02).
+
+## Array building, by column type (added after the aggregate landed)
+
+With fetching cheap, building became the gap, so `bench_building_by_type`
+measures it directly: twelve attributes of one type plus a point geometry,
+200,000 rows, `read_arrow` over each.
+
+| attribute type | time | per value above `integer` |
+|---|---|---|
+| `integer` | 58.9 ms | |
+| `double` | 71.3 ms | +5.2 ns |
+| `blob` (4 bytes) | 100.9 ms | +17.5 ns |
+| `text` (~14 bytes) | 130.5 ms | +29.8 ns |
+| `datetime` | 148.4 ms | +37.3 ns |
+
+On the realistic `polygons_13attr` fixture that puts the four text columns at
+roughly 22% of the read and the single datetime column at roughly 7%.
+
+**A limit of this decomposition, stated because it changes what the numbers
+mean.** The fixtures do not hold bytes-per-row constant: twelve 14-byte strings
+is a much larger row than twelve small integers, so SQLite reads more pages and
+decodes more bytes. Part of what is charged to "text building" above is really
+the cost of a bigger row. The ranking is therefore sound as a guide to where to
+look, but the per-value figures are upper bounds on building cost, not building
+cost. Separating the two needs fixtures with equal row bytes across types, which
+is the next step if this is pursued.
+
+The profiler was no help. Both with and without LTO, and with debug symbols,
+macOS `sample` attributes essentially the whole read to `main`, because the path
+inlines away entirely. That is why this is a benchmark decomposition rather than
+a profile.
+
+## Two building changes, and what they were worth
+
+**The geometry column no longer parses a header it does not need.**
+`gpb::parse_header` decodes the envelope's doubles to return them alongside the
+body offset, but the offset follows from the envelope indicator in the flags
+byte alone. Since our writer always emits an envelope (D6), that was four
+discarded `f64` decodes per row. `gpb::body_offset` computes the offset without
+them: **-4.3%** on the read (111.2 ms to 106.5 ms).
+
+**Moving the column-name lookup off the happy path was worth nothing.** Each
+value resolved its column name only to pass it to an error that was almost never
+constructed. Removing that from the hot path measured +1.3% (p = 0.06), which is
+noise. Kept, because paying for error formatting only on errors is the better
+shape, but it is not a speed-up and is not claimed as one.
+
+End to end against GDAL the ratio is unmoved: 1.39x before these changes, 1.41x
+after, which is run-to-run variance on both sides. Closing to the 1.25x
+criterion 3 asks for needs roughly 11% more, and text is the only line item big
+enough to supply it.

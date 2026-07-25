@@ -81,10 +81,19 @@ assumed about GPB bodies being usable as WKB without a parse.
       loop is the fallback when a table has more columns than SQLite's
       function-argument limit, and is tested by lowering that limit on the
       connection.)*
-- [ ] Revisit array building, which is now the gap. With fetching cheap it is
-      somewhere between a third and a half of the read, where GDAL fits its whole
-      non-SQLite cost into less than our building alone. Subtracting benchmark
-      floors is too coarse to say more, so this one wants a profiler.
+- [ ] Revisit array building, which is now the gap. *(Partly done, and the gap
+      persists at about 1.41x. `gpb::body_offset` stopped the geometry column
+      decoding an envelope it discards, worth 4.3%; moving the column-name lookup
+      off the hot path was worth nothing and is kept only because it is the
+      better shape. A per-type decomposition ranks the cost datetime > text >
+      blob > double > integer, putting the four text columns at roughly 22% of a
+      realistic read and the datetime column at 7%. The profiler was no help:
+      `sample` attributes the whole read to `main` with or without LTO, because
+      the path inlines away. Remaining, in order: fixtures that hold row bytes
+      constant, so building cost can be separated from the cost of reading a
+      bigger row, which the current decomposition conflates; then the text path,
+      the only line item large enough to supply the ~11% that criterion 3 still
+      needs.)*
 - [ ] Parallel `read_arrow`: one connection per thread over disjoint primary-key
       ranges, since SQLite permits concurrent readers and `rusqlite::Connection`
       is `Send`, so handle-per-thread needs no `unsafe`. The shape is settled by

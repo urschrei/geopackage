@@ -12,7 +12,9 @@
 //!   the shape GDAL's published benchmark uses.
 //! - `noop <file>`: open and close. The startup floor to subtract, the
 //!   counterpart of the C program's `noop`.
-//! - `read <file>`: consume the whole Arrow stream, the timed operation.
+//! - `read <file> [reps]`: consume the whole Arrow stream, the timed operation.
+//!   `reps` repeats it, so the process runs long enough to attach a profiler to;
+//!   the reported time is still for one pass.
 //!
 //! Every subcommand prints `<key>=<value>` lines, including `elapsed_ms`
 //! measured inside the process.
@@ -119,11 +121,17 @@ fn noop(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn read(path: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn read(path: &str, reps: usize) -> Result<(), Box<dyn std::error::Error>> {
     let gpkg = GeoPackage::open(path)?;
     let layer = gpkg.layer("features")?;
 
     let start = Instant::now();
+    for _ in 1..reps {
+        let batches = layer.read_arrow(ArrowReadOptions::default())?;
+        for batch in batches {
+            std::hint::black_box(batch?.num_rows());
+        }
+    }
     let batches = layer.read_arrow(ArrowReadOptions::default())?;
     let mut rows = 0usize;
     let mut count = 0usize;
@@ -138,7 +146,10 @@ fn read(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
     let elapsed = start.elapsed();
 
-    println!("elapsed_ms={:.3}", elapsed.as_secs_f64() * 1000.0);
+    println!(
+        "elapsed_ms={:.3}",
+        elapsed.as_secs_f64() * 1000.0 / reps as f64
+    );
     println!("rows={rows}");
     println!("batches={count}");
     println!("columns={columns}");
@@ -156,7 +167,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fixture(path, rows)
         }
         "noop" => noop(path),
-        "read" => read(path),
+        "read" => {
+            let reps: usize = args.get(3).map_or(Ok(1), |r| r.parse())?;
+            read(path, reps.max(1))
+        }
         _ => Err(usage.into()),
     }
 }
