@@ -60,12 +60,21 @@ assumed about GPB bodies being usable as WKB without a parse.
       row. Reusing the row path is the obvious way to write this and is the
       shape that measured 0.61x above. This is a correctness-of-approach item,
       so it is pinned by the criteria rather than by a unit test.
-      Write the direct statement loop first and measure it. GDAL goes further,
-      filling each batch from a SQLite *aggregate function* so that the whole
-      batch is produced inside one `sqlite3_exec` (see the study note); that is
-      expressible in safe Rust via rusqlite, but it removes an overhead that is
-      larger in C++ than it is here, and it is a substantial complication. Hold
-      it in reserve for the case where the direct loop misses criterion 1.
+      Write the direct statement loop first and measure it. *(Done, and it
+      misses criterion 3 at 2.34x GDAL's time, so the next item is now
+      scheduled.)*
+- [ ] Fill each batch from a SQLite **aggregate function**, as GDAL's driver
+      does, so the whole batch is produced inside one `sqlite3_exec` and the
+      per-value accessor dispatch disappears (see the study note). Expressible in
+      safe Rust through rusqlite's `create_aggregate_function`. This was held in
+      reserve pending a measurement; the measurement came back showing that
+      dispatch is over half our read time and that GDAL's entire read costs less
+      than our fetching alone, with a projected ratio of about 1.08x if it is
+      removed. Slide 13's warning about complexity still applies, so the direct
+      loop stays as the fallback for anything the aggregate cannot express.
+- [ ] Revisit array building afterwards. It is 43 ms of our 189 ms at 200k rows,
+      where GDAL's entire non-SQLite cost is about 36 ms, so `arrow-rs` builders
+      may not be the cheapest way to fill these arrays.
 - [ ] Parallel `read_arrow`: one connection per thread over disjoint primary-key
       ranges, since SQLite permits concurrent readers and `rusqlite::Connection`
       is `Send`, so handle-per-thread needs no `unsafe`. The shape is settled by
@@ -175,10 +184,15 @@ from the recorded methodology does not count, which is the M2 lesson.
 
    With criterion 1 restated, this is where the performance weight sits: it is
    the figure an outside reader can check, and the one that decides whether
-   GDAL's aggregate-function technique needs to come out of reserve. Indicative
-   per-row rates suggest their columnar path is faster than ours in absolute
-   terms, so this criterion may not be met by the direct loop even though
-   criterion 1 is.
+   GDAL's aggregate-function technique needs to come out of reserve.
+
+   *Measured, read side, 2026-07-25: **2.34x**, so not met. Same file, same
+   rows, same columns, same batch size, same SQLite version, GDAL driven through
+   the OGR C API so nothing else sits in the loop. See
+   [benchmarks/2026-07-25-gdal-arrow-comparison.md](benchmarks/2026-07-25-gdal-arrow-comparison.md).
+   GDAL's whole read costs less than our per-value fetching alone, which is what
+   the aggregate function buys them; removing that cost would put us at about
+   1.08x, so the technique is now scheduled rather than held in reserve.*
 4. **No regression to the row path.** The scalar `features`/`cursor` reads stay
    within measurement noise of their 0.1.2 numbers. The Arrow work must not be
    paid for by the API most callers use.
