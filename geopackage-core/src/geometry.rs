@@ -259,8 +259,10 @@ pub fn wkb_geometry_type(wkb_body: &[u8]) -> Result<GeometryType, GeometryError>
     Ok(ty)
 }
 
-/// The GPB envelope to write for a geometry under the always-envelope policy
-/// (design decision D6), and whether the geometry is empty.
+/// The GPB envelope to write for a geometry, and whether the geometry is empty.
+///
+/// This crate's writer always emits an envelope, so readers and the `ST_*`
+/// functions get the bounds without traversing the WKB body.
 ///
 /// The envelope is [`Envelope::Xyz`] when the geometry carries a Z dimension
 /// (including for a single point), otherwise [`Envelope::Xy`]. An M dimension
@@ -297,10 +299,11 @@ pub fn write_envelope<G: GeometryTrait<T = f64>>(geom: &G) -> (gpb::Envelope, bo
 /// of reading a geometry column as WKB by skipping the header.
 ///
 /// The bytes are still parsed, for two reasons that are not optional. The
-/// envelope has to be computed for the header (design decision D6) and for the
-/// spatial index, which needs a coordinate traversal either way. And parsing is
-/// what rejects a body that is not ISO WKB, such as PostGIS EWKB, which would
-/// otherwise be copied verbatim into a file claiming to be conformant.
+/// envelope has to be computed for the header, which always carries one, and
+/// for the spatial index, which needs a coordinate traversal either way. And
+/// parsing is what rejects a body that is not ISO WKB, such as PostGIS EWKB,
+/// which would otherwise be copied verbatim into a file claiming to be
+/// conformant.
 ///
 /// Only the geometry's own extent is copied, not any trailing bytes the input
 /// slice may carry beyond it.
@@ -343,9 +346,8 @@ pub struct EncodedGpb {
 
 /// Encode a geometry as a complete GeoPackage Binary (GPB) blob: an
 /// always-little-endian header ([`gpb::encode_header`]) with an envelope per
-/// [`write_envelope`] (design decision D6), followed by the little-endian ISO
-/// WKB body written
-/// by the georust `wkb` crate.
+/// [`write_envelope`], followed by the little-endian ISO WKB body written by
+/// the georust `wkb` crate.
 ///
 /// `srs_id` is written into the header (the geometry column's spatial reference
 /// system). Returns the blob and its XY envelope `[min_x, max_x, min_y, max_y]`
@@ -932,7 +934,8 @@ mod tests {
     #[test]
     fn encode_gpb_z_point_writes_xyz_envelope() {
         // A Z geometry (built as a GpbGeometry) re-encodes with an XYZ envelope
-        // and an XYZ WKB body, per the always-envelope policy (D6).
+        // and an XYZ WKB body: the writer always emits an envelope, widened to
+        // Z when the geometry has one.
         let src_blob = gpb(&wkb_point_z(1.0, 2.0, 9.0));
         let src = GpbGeometry::parse(&src_blob).unwrap();
         assert_eq!(src.dim(), Dimensions::Xyz);

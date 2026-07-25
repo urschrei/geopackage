@@ -18,10 +18,9 @@
 //! is written back.
 //!
 //! jiff is used with no timezone database at all (`default-features = false`,
-//! `std` only). A GeoPackage `DATETIME` is UTC by definition, and design
-//! decision D3 keeps this crate out of coordinate and time transformation
-//! generally, so none of `tz-system`, `tz-fat` or the `tzdb-*` bundles are
-//! wanted. jiff stays an implementation detail: no jiff type appears in this
+//! `std` only). A GeoPackage `DATETIME` is UTC by definition, and this crate
+//! transforms neither coordinates nor times, so none of `tz-system`, `tz-fat`
+//! or the `tzdb-*` bundles are wanted. jiff stays an implementation detail: no jiff type appears in this
 //! crate's API, so a jiff major version is not a breaking change here.
 
 use jiff::civil::Date as JiffDate;

@@ -19,17 +19,6 @@
 //! SQL text is reproduced verbatim from the spec's normative annexes
 //! (Annex C "Table Definition SQL", Annex F.3 "R-tree Spatial Indexes").
 //!
-//! # Design decisions
-//!
-//! Some documentation here cites a numbered decision, such as "design decision
-//! D8". These are entries in the crate's decision record, which states what was
-//! chosen, what was rejected and why:
-//!
-//! <https://github.com/urschrei/geopackage/blob/main/roadmap/01-design-decisions.md>
-//!
-//! The citations are there so a claim about behaviour can be traced to the
-//! reasoning behind it. Nothing in the API requires reading them.
-//!
 //! # Reading untrusted geometries
 //!
 //! [`GpbGeometry`] parses WKB bodies with the `wkb` crate, whose 0.9.2 reader
@@ -40,8 +29,9 @@
 //! bumps its dependency, do not parse geometries from untrusted sources.
 
 // `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
-// workspace lints table (root Cargo.toml); see roadmap decision D12 for the
-// unsafe policy and its single planned exception (`geopackage-ffi`, M3).
+// workspace lints table (root Cargo.toml). This crate never uses `unsafe`; the
+// planned `geopackage-ffi` crate (M3) is the sole intended exception, and will
+// opt out of the workspace lints rather than relax them here.
 
 pub mod datetime;
 pub mod ddl;

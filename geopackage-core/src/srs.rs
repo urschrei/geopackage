@@ -1,7 +1,6 @@
 //! Spatial reference system definitions: a vendored EPSG subset.
 //!
-//! Policy (design decision D3): no PROJ dependency and no coordinate
-//! transformation, ever. This module ships WKT1 definitions for a small set
+//! Policy: no PROJ dependency and no coordinate transformation, ever. This module ships WKT1 definitions for a small set
 //! of EPSG codes that cover the bulk of real-world GeoPackage traffic, plus
 //! synthesised definitions for all WGS 84 UTM zones (EPSG:32601-32660 north,
 //! 32701-32760 south), which differ only in name, central meridian, false
