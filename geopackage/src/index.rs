@@ -25,7 +25,7 @@ use geopackage_core::ident::quote;
 use geopackage_core::triggers::{self, TriggerGeneration};
 use rusqlite::Connection;
 
-use crate::bulk::{self, BuildPath, BulkIndexOptions, ScratchTamper};
+use crate::bulk::{self, BuildPath, BulkIndexOptions, TestFault};
 use crate::{Error, GeometryColumn, Layer, Result, table_exists};
 
 /// The health of a layer's RTree spatial index, from
@@ -128,16 +128,16 @@ impl Layer<'_> {
     ///
     /// As [`Self::create_spatial_index`].
     pub fn create_spatial_index_with(&self, options: BulkIndexOptions) -> Result<()> {
-        self.create_spatial_index_impl(options, bulk::no_tamper)
+        self.create_spatial_index_impl(options, bulk::no_fault)
             .map(|_| ())
     }
 
     /// The `create_spatial_index` core, returning which path built the index and
-    /// taking a scratch-tamper seam so tests can force the bulk gate to fail.
+    /// taking a [`TestFault`] so that a test can force the bulk gate to fail.
     fn create_spatial_index_impl(
         &self,
         options: BulkIndexOptions,
-        tamper: ScratchTamper,
+        fault: TestFault,
     ) -> Result<BuildPath> {
         let geom = self.require_geometry_column()?;
         let pk = self.require_primary_key()?;
@@ -177,7 +177,7 @@ impl Layer<'_> {
             &rtree,
             options,
             None,
-            tamper,
+            fault,
             |conn| {
                 for sql in triggers::create_triggers_sql(table, column, pk)? {
                     conn.execute_batch(&sql)?;
@@ -409,7 +409,7 @@ mod tests {
             )
     }
 
-    /// A test tamper that deletes a row from the written index, so it no longer
+    /// A [`TestFault`] that deletes a row from the written index, so it no longer
     /// matches the accumulated set and the gate must reject it.
     fn corrupt_written_index(conn: &Connection, rtree: &str) -> Result<()> {
         conn.execute_batch(&format!(
@@ -425,7 +425,7 @@ mod tests {
         let (_dir, gpkg) = populated(&[(1, 10.0, 20.0), (2, -5.0, 7.0), (3, 100.0, 100.0)]);
         let layer = gpkg.layer("pts").unwrap();
         let path = layer
-            .create_spatial_index_impl(BulkIndexOptions::always_bulk(), bulk::no_tamper)
+            .create_spatial_index_impl(BulkIndexOptions::always_bulk(), bulk::no_fault)
             .unwrap();
         assert_eq!(path, BuildPath::Bulk);
         assert!(layer.has_spatial_index().unwrap());
@@ -437,7 +437,7 @@ mod tests {
         let (_dir, gpkg) = populated(&[(1, 1.0, 1.0)]);
         let layer = gpkg.layer("pts").unwrap();
         let path = layer
-            .create_spatial_index_impl(BulkIndexOptions::never_bulk(), bulk::no_tamper)
+            .create_spatial_index_impl(BulkIndexOptions::never_bulk(), bulk::no_fault)
             .unwrap();
         assert_eq!(path, BuildPath::Triggered);
         assert!(rtree_matches_scan(&gpkg));
@@ -450,7 +450,8 @@ mod tests {
         let path = layer
             .create_spatial_index_impl(BulkIndexOptions::always_bulk(), corrupt_written_index)
             .unwrap();
-        // The gate rejected the tampered bulk copy and rebuilt through triggers.
+        // The gate rejected the corrupted index and rebuilt it through the
+        // triggers.
         assert_eq!(path, BuildPath::TriggeredFallback);
         assert!(layer.has_spatial_index().unwrap());
         // The fallback still produced a correct index.

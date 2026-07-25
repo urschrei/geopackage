@@ -208,15 +208,21 @@ pub(crate) enum BuildPath {
     TriggeredFallback,
 }
 
-/// A test seam run against the freshly written shadow tables, before the gate
-/// inspects them. Production always passes [`no_tamper`]; a test can pass a
-/// function that corrupts the written index, to prove the gate rejects it and
-/// the triggered fallback still yields a correct one, or that returns an error,
-/// to prove the whole build rolls back.
-pub(crate) type ScratchTamper = fn(&Connection, &str) -> Result<()>;
+/// A way for a test to make something go wrong during a bulk index build.
+///
+/// It is called on the index rows just after they are written and just before
+/// [`gate`] checks them, which is the only moment at which either kind of
+/// failure this exists to test can be introduced.
+///
+/// Outside tests this is always [`no_fault`], which does nothing at all. A test
+/// passes either a function that corrupts the index that was just written, to
+/// show that the gate rejects it and the triggered rebuild still produces a
+/// correct one, or a function that returns an error, to show that the whole
+/// build is rolled back.
+pub(crate) type TestFault = fn(&Connection, &str) -> Result<()>;
 
-/// The no-op [`ScratchTamper`] used in production.
-pub(crate) fn no_tamper(_: &Connection, _: &str) -> Result<()> {
+/// The [`TestFault`] used outside tests: it does nothing.
+pub(crate) fn no_fault(_: &Connection, _: &str) -> Result<()> {
     Ok(())
 }
 
@@ -480,7 +486,7 @@ fn gate(
 /// index missing rows, which the gate cannot detect because it checks the index
 /// against this very set. `None` scans, which is always sound.
 ///
-/// `tamper` is [`no_tamper`] outside tests.
+/// `fault` is [`no_fault`] outside tests.
 ///
 /// This opens and commits its own transaction. A caller that already holds one,
 /// and wants the build to be part of it, calls [`fill_index_in_transaction`]
@@ -497,7 +503,7 @@ pub(crate) fn fill_index<F>(
     rtree: &str,
     options: BulkIndexOptions,
     precomputed: Option<Vec<(i64, [f64; 4])>>,
-    tamper: ScratchTamper,
+    fault: TestFault,
     after: F,
 ) -> Result<BuildPath>
 where
@@ -515,7 +521,7 @@ where
         rtree,
         options,
         precomputed,
-        tamper,
+        fault,
         after,
     )?;
     tx.commit()?;
@@ -541,7 +547,7 @@ pub(crate) fn fill_index_in_transaction<F>(
     rtree: &str,
     options: BulkIndexOptions,
     precomputed: Option<Vec<(i64, [f64; 4])>>,
-    tamper: ScratchTamper,
+    fault: TestFault,
     after: F,
 ) -> Result<BuildPath>
 where
@@ -560,7 +566,7 @@ where
 
     let node_size = node_size(conn, rtree)?;
     write_packed(conn, rtree, &accumulated, node_size, options.fill_factor)?;
-    tamper(conn, rtree)?;
+    fault(conn, rtree)?;
 
     let expected: HashMap<i64, [f64; 4]> = accumulated.into_iter().collect();
     let path = if gate(conn, rtree, expected, options.structural_check)? {

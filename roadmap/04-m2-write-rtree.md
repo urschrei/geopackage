@@ -63,11 +63,13 @@ write performance competitive with GDAL's GPKG driver.
       anomaly discards the result and rebuilds through `populate_rtree_sql`.
       Bulk-vs-triggered is chosen by `BulkIndexOptions` (default 10k rows;
       `create_spatial_index_with` / `write_all_with` override;
-      `always_bulk`/`never_bulk` force it). `write_all` bulk engages only when
-      the target index is empty (a fresh bulk load), so appends keep the per-row
-      triggered path. A tamper test seam drives the fallback in a unit test.
-      Dropping the scratch database removed the `ATTACH`, so the whole build,
-      and for `write_all` the row inserts too, is now one transaction.)*
+      `always_bulk`/`never_bulk` force it). One unit test drives the fallback by
+      corrupting the index the bulk build has just written, before the gate
+      inspects it. Dropping the scratch database removed the `ATTACH`, so the
+      whole build, and for `write_all` the row inserts too, is now one
+      transaction. `write_all` bulk originally engaged only for an empty target
+      index, so appends kept the per-row triggered path; issue #17 below changed
+      that.)*
 - [x] `repair_spatial_index()`: drop legacy `update1`/`update3`, install 1.4
       set, rebuild if `TriggerGeneration::Mixed` (D7). Never automatic.
       *(Replaces every rtree trigger of a `PreV1_4`/`Mixed` generation with the

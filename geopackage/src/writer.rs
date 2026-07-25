@@ -316,17 +316,17 @@ impl<'a> Layer<'a> {
         G: GeometryTrait<T = f64>,
         I: IntoIterator<Item = NewFeature<G>>,
     {
-        self.write_all_impl(features, batch_size, options, bulk::no_tamper)
+        self.write_all_impl(features, batch_size, options, bulk::no_fault)
     }
 
-    /// The `write_all_with` core, taking the bulk build's test seam so a test can
-    /// force the index build to fail after the rows have been staged.
+    /// The `write_all_with` core, taking a [`bulk::TestFault`] so that a test
+    /// can force the index build to fail after the rows have been staged.
     pub(crate) fn write_all_impl<G, I>(
         &self,
         features: I,
         batch_size: usize,
         options: BulkIndexOptions,
-        tamper: bulk::ScratchTamper,
+        fault: bulk::TestFault,
     ) -> Result<Vec<i64>>
     where
         G: GeometryTrait<T = f64>,
@@ -338,7 +338,7 @@ impl<'a> Layer<'a> {
         // so either path sees the same sequence it would have seen.
         let features = buffered.into_iter().chain(iter);
         if bulk {
-            self.write_all_bulk(features, options, tamper)
+            self.write_all_bulk(features, options, fault)
         } else {
             self.write_all_batched(features, batch_size)
         }
@@ -457,7 +457,7 @@ impl<'a> Layer<'a> {
         &self,
         features: I,
         options: BulkIndexOptions,
-        tamper: bulk::ScratchTamper,
+        fault: bulk::TestFault,
     ) -> Result<Vec<i64>>
     where
         G: GeometryTrait<T = f64>,
@@ -544,14 +544,15 @@ impl<'a> Layer<'a> {
                     &rtree,
                     options,
                     precomputed,
-                    tamper,
+                    fault,
                     reinstall,
                 )?;
             } else {
                 append_entries(&tx, &rtree, &entries)?;
-                // The same test seam the rebuild branch passes to `fill_index`,
-                // so a test can fail this branch after its index work too.
-                tamper(&tx, &rtree)?;
+                // The rebuild branch hands this to `fill_index`, which calls it
+                // at the equivalent point. Calling it here as well is what lets
+                // a test fail this branch too, once its index work is done.
+                fault(&tx, &rtree)?;
                 reinstall(&tx)?;
             }
             tx.commit()?;
@@ -969,8 +970,9 @@ mod tests {
     use geo_types::Point;
     use geopackage_core::types::GeometryType;
 
-    /// A tamper that fails the index build outright, standing in for a crash or
-    /// an I/O error between staging the rows and rebuilding the index.
+    /// A [`bulk::TestFault`] that fails the index build outright, standing in
+    /// for a crash or an I/O error between staging the rows and rebuilding the
+    /// index.
     fn fail_the_build(_: &Connection, _: &str) -> Result<()> {
         Err(Error::NoSpatialIndex {
             table_name: "pts".to_owned(),
@@ -1015,7 +1017,7 @@ mod tests {
 
         let result =
             layer.write_all_impl(features, 0, BulkIndexOptions::always_bulk(), fail_the_build);
-        assert!(result.is_err(), "the tampered build should have failed");
+        assert!(result.is_err(), "the build should have failed here");
 
         // No rows: the inserts rolled back with the failed build.
         let rows: i64 = gpkg
@@ -1081,7 +1083,7 @@ mod tests {
             BulkIndexOptions::with_threshold(1),
             fail_the_build,
         );
-        assert!(result.is_err(), "the tampered append should have failed");
+        assert!(result.is_err(), "the append should have failed here");
 
         let conn = gpkg.connection();
         let rows: i64 = conn
