@@ -23,12 +23,8 @@ use std::hint::black_box;
 
 use geo_types::{Geometry, Point};
 use geopackage::core::types::GeometryType;
-use geopackage::{
-    BulkIndexOptions, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder,
-};
-use gungraun::{
-    Dhat, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main,
-};
+use geopackage::{BulkIndexOptions, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder};
+use gungraun::{Dhat, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main};
 
 /// Deterministic, well-spread coordinate for row `i` (matches the other benches
 /// so the tree built here is the same shape).
