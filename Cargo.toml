@@ -29,6 +29,12 @@ tempfile = "3"
 wkb = "0.9"
 geo-traits = "0.3"
 geo-types = "0.7"
+# M3 Arrow data plane. `arrow-array`/`arrow-schema` only: the GeoArrow WKB
+# encoding is a Binary field carrying extension metadata, so `geoarrow-array`
+# would add a dependency without adding capability. Revisit if native GeoArrow
+# coordinate encodings land (roadmap 05-m3).
+arrow-array = "59"
+arrow-schema = "59"
 
 # Inherited by every member via `[lints] workspace = true`. The planned
 # `geopackage-ffi` crate (M3) is the sole intended exception: it will not

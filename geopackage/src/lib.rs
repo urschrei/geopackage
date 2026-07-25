@@ -111,6 +111,8 @@
 // workspace lints table (root Cargo.toml); see roadmap decision D12 for the
 // unsafe policy and its single planned exception (`geopackage-ffi`, M3).
 
+#[cfg(feature = "arrow")]
+pub mod arrow;
 mod bulk;
 mod create;
 mod error;

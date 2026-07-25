@@ -19,6 +19,8 @@ geopackage-core.workspace = true
 geo-traits.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
+arrow-array = { workspace = true, optional = true }
+arrow-schema = { workspace = true, optional = true }
 
 [features]
 default = ["geo-types"]
@@ -26,6 +28,11 @@ default = ["geo-types"]
 ## `GpbGeometry::to_geo` conversions. On by default; opt out with
 ## `default-features = false`.
 geo-types = ["geopackage-core/geo-types"]
+## Columnar read and write through Apache Arrow, with geometry as a
+## GeoArrow WKB column. Off by default: it pulls the `arrow-array` and
+## `arrow-schema` crates, which a caller using only the scalar API does not
+## need.
+arrow = ["dep:arrow-array", "dep:arrow-schema"]
 
 [dev-dependencies]
 tempfile.workspace = true
