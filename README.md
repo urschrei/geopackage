@@ -77,7 +77,7 @@ schema.
 
 ### More examples
 
-Runnable programs in [`geopackage/examples`](geopackage/examples):
+Runnable programs in [`geopackage/examples`](https://github.com/urschrei/geopackage/tree/main/geopackage/examples):
 
 | Example | What it shows |
 |---|---|
@@ -165,5 +165,5 @@ the test corpus includes GDAL-written, QGIS-written and raw-SQLite files.
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
-[MIT license](LICENSE-MIT) at your option.
+Licensed under either of [Apache License, Version 2.0](https://github.com/urschrei/geopackage/blob/main/LICENSE-APACHE) or
+[MIT license](https://github.com/urschrei/geopackage/blob/main/LICENSE-MIT) at your option.

@@ -75,6 +75,8 @@ While the version is below 1.0 the API may change in any release.
 
 ### Changed
 
+- The repository is public, so the `repository` link on crates.io and docs.rs
+  now resolves. The 0.1.1 note that it 404s no longer applies.
 - **GeoArrow CRS metadata is PROJJSON**, which is the form that specification
   prefers; it says an authority code "should only be used as a last resort",
   because it leaves the reader to resolve the code against a registry it may not
