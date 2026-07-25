@@ -97,6 +97,13 @@ pub const DEFAULT_FILL_FACTOR: f64 = 1.0;
 pub struct BulkIndexOptions {
     /// Candidate-row count at or above which the bulk build is used. `0` always
     /// uses the bulk path; [`usize::MAX`] always uses the triggered path.
+    ///
+    /// For [`crate::Layer::write_all`] this also bounds a buffer: a source that
+    /// does not advertise its length has rows held back, up to this many, to
+    /// find out whether it reaches the threshold. Raising the threshold raises
+    /// that bound, so a very large value paired with a lazy iterator can hold a
+    /// correspondingly large number of rows in memory. `usize::MAX` buffers
+    /// nothing, because it disables the path outright.
     pub bulk_threshold: usize,
     /// How thoroughly the gate checks database structure after the copy.
     /// Defaults to [`StructuralCheck::RtreeOnly`].
@@ -154,6 +161,11 @@ impl BulkIndexOptions {
     }
 
     /// Always take the bulk path (threshold `0`).
+    ///
+    /// For [`crate::Layer::write_all`] this forces the path, not a rebuild: a
+    /// write small relative to an already populated index still has its entries
+    /// added to that index rather than the index rebuilt around them. Use
+    /// [`crate::Layer::create_spatial_index_with`] to rebuild outright.
     pub fn always_bulk() -> Self {
         Self::with_threshold(0)
     }

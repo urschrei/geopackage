@@ -283,8 +283,8 @@ impl<'a> Layer<'a> {
     ///
     /// When the layer carries a spatial index and the write is at least
     /// [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD) rows, it takes
-    /// the bulk-build path instead, rebuilding the index in one pass rather than
-    /// letting the triggers maintain it row by row;
+    /// the bulk path instead, maintaining the index in one operation at the end
+    /// rather than row by row through the triggers;
     /// [`Self::write_all_with`] tunes or forces that choice.
     pub fn write_all<G, I>(&self, features: I, batch_size: usize) -> Result<Vec<i64>>
     where
@@ -476,18 +476,6 @@ impl<'a> Layer<'a> {
         let table = self.table_name();
         let column = &geom.column_name;
         let rtree = triggers::rtree_table_name(table, column);
-        let conn = self.gpkg().connection();
-
-        // Envelopes computed while encoding can be reused as the RTree entry set
-        // only if this write accounts for every indexable row in the table. An
-        // empty table before the write is the cheap, sufficient proof; otherwise
-        // `fill_index` re-derives the set with its own `ST_*` scan.
-        let table_was_empty = bulk::table_row_count(conn, table)? == 0;
-        // Only the triggers maintain this index, and this path drops them, so
-        // its size cannot change while the rows are being written. Reading it
-        // once here is enough to choose between rebuilding and appending
-        // afterwards.
-        let indexed = rtree_entry_count(conn, &rtree)?;
 
         (|| -> Result<Vec<i64>> {
             let mut fids = Vec::new();
@@ -496,6 +484,25 @@ impl<'a> Layer<'a> {
             // Inside the writer's transaction, so a failure or a crash rolls the
             // trigger drop back along with everything else.
             drop_all_rtree_triggers(writer.connection(), table, column)?;
+
+            // Both counts describe the table as it was before this write, and
+            // both are read here rather than earlier because dropping the
+            // triggers is this transaction's first write statement and so the
+            // point at which SQLite hands it the write lock. Read before that,
+            // there is a window in which another connection commits a row
+            // between the count and the lock, and `table_was_empty` in
+            // particular cannot survive that: the entry set would then be
+            // missing that row, and the gate cannot notice, because it checks
+            // the built index against that same set.
+            let conn = writer.connection();
+            // Envelopes computed while encoding can be reused as the RTree entry
+            // set only if this write accounts for every indexable row in the
+            // table. An empty table before the write is the cheap, sufficient
+            // proof; otherwise `fill_index` re-derives the set with its own
+            // `ST_*` scan.
+            let table_was_empty = bulk::table_row_count(conn, table)? == 0;
+            let indexed = rtree_entry_count(conn, &rtree)?;
+
             for feature in features {
                 let fid = match &feature.geometry {
                     Some(geometry) => {
@@ -542,6 +549,9 @@ impl<'a> Layer<'a> {
                 )?;
             } else {
                 append_entries(&tx, &rtree, &entries)?;
+                // The same test seam the rebuild branch passes to `fill_index`,
+                // so a test can fail this branch after its index work too.
+                tamper(&tx, &rtree)?;
                 reinstall(&tx)?;
             }
             tx.commit()?;
@@ -1031,5 +1041,61 @@ mod tests {
             .query_row("SELECT count(*) FROM rtree_pts_geom", [], |r| r.get(0))
             .unwrap();
         assert_eq!(indexed, 1, "triggers did not survive the rollback");
+    }
+
+    /// The same atomicity on the other branch: a bulk `write_all` that adds its
+    /// entries to a populated index, and then fails, must also leave nothing
+    /// behind.
+    ///
+    /// `failed_bulk_write_rolls_back_rows_and_index` cannot cover this. It writes
+    /// into an empty index, which always rebuilds, so the branch that appends
+    /// had no failure test of its own.
+    #[test]
+    fn failed_append_write_rolls_back_rows_and_index() {
+        let (_dir, gpkg) = indexed_empty_layer();
+        let layer = gpkg.layer("pts").unwrap();
+
+        // Populate the index, so that a small write into it appends rather than
+        // rebuilding.
+        {
+            let mut writer = layer.writer().unwrap();
+            for i in 1..=100 {
+                let f = f64::from(i);
+                writer
+                    .insert(Some(i64::from(i)), &Point::new(f, -f), &[])
+                    .unwrap();
+            }
+            writer.commit().unwrap();
+        }
+
+        // 5 new entries against 100 indexed is under the rebuild ratio.
+        let features: Vec<NewFeature<Point<f64>>> = (101..=105)
+            .map(|i| {
+                let f = f64::from(i);
+                NewFeature::new(Point::new(f, -f), Vec::new()).with_fid(i64::from(i))
+            })
+            .collect();
+        let result = layer.write_all_impl(
+            features,
+            0,
+            BulkIndexOptions::with_threshold(1),
+            fail_the_build,
+        );
+        assert!(result.is_err(), "the tampered append should have failed");
+
+        let conn = gpkg.connection();
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM pts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 100, "rows survived a failed append");
+        let indexed: i64 = conn
+            .query_row("SELECT count(*) FROM rtree_pts_geom", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(indexed, 100, "index entries survived a failed append");
+        assert_eq!(
+            layer.spatial_index_status().unwrap(),
+            crate::SpatialIndexStatus::Current,
+            "index left desynchronised by a failed append"
+        );
     }
 }

@@ -35,6 +35,14 @@ While the version is below 1.0 the API may change in any release.
   up to `bulk_threshold` to settle it, which is bounded by the threshold and
   never by the length of the input. Sized sources are unaffected ([#17]).
 
+- **A bulk `write_all` normalises the trigger set it reinstalls**, which it has
+  always done but now does in more cases. The path drops whatever RTree triggers
+  a file carries and reinstalls the GeoPackage 1.4 set, so a file written against
+  a pre-1.4 trigger generation comes out with 1.4 triggers. That was previously
+  reachable only for a fresh bulk load into an empty index; it now also follows a
+  large write into a populated index, or one from a source that does not
+  advertise its length ([#17]).
+
 - **The index is rebuilt or appended to, decided after the write.** A bulk
   `write_all` used to choose between rebuilding the index and leaving it to the
   triggers before writing a row, from that same lower bound. It now writes the

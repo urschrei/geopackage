@@ -148,6 +148,16 @@ it produces the tree the triggers would have, and is not gated (nothing is
 hand-written into the shadow tables). Buffering is bounded by `bulk_threshold`
 and never by the length of the input or the size of the table.
 
+Both counts the deferred decision rests on, the index size and whether the table
+was empty, are read after the trigger drop rather than before the transaction.
+The drop is the transaction's first write statement and so the point at which
+SQLite grants it the write lock; reading earlier left a window in which another
+connection could commit a row in between. That matters most for the
+table-was-empty test, which is what licenses reusing the encode-time envelopes as
+the whole entry set: a row committed inside that window would be missing from the
+rebuilt index, and the gate cannot catch it, because it checks the index against
+that same set.
+
 ## D9. SQL is the query engine
 
 **Decision.** We provide typed CRUD, bbox queries, and WHERE-clause

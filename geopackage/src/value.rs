@@ -267,12 +267,13 @@ pub(crate) fn value_from_ref(
             // A whole number stored with integer affinity in a real column is
             // widened losslessly rather than rejected.
             //
-            // Reading a table column does not normally reach this arm: `FLOAT`,
-            // `DOUBLE` and `REAL` all give the column REAL affinity, and REAL
-            // affinity converts an inserted integer to floating point on the way
-            // in, so the value comes back out as REAL. It is kept as a defensive
-            // arm rather than removed, and it answers to the same option as the
-            // BOOLEAN case above so that strict conversion means one thing.
+            // Reading a table or view column does not reach this arm: `FLOAT`,
+            // `DOUBLE` and `REAL` all give the column REAL affinity, which
+            // converts an integer to floating point on the way in, and converts
+            // again on the way out for a file whose stored bytes say otherwise.
+            // It is kept as a defensive arm rather than removed, and it answers
+            // to the same option as the BOOLEAN case above so that strict
+            // conversion means one thing.
             ValueRef::Integer(i) => match options.storage {
                 StorageStrictness::Lenient => Ok(Value::Float(i as f64)),
                 StorageStrictness::Strict => Err(mismatch(column_name, declared, value)),
