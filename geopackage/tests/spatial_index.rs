@@ -953,6 +953,83 @@ fn small_append_into_a_populated_index_keeps_the_triggers() {
     assert_eq!(rtree_rows(conn), envelope_scan(conn));
 }
 
+/// Build an iterator of `count` point features that does not know its own
+/// length: `size_hint` is `(0, None)`, as it is for most iterators that are not
+/// backed by a collection.
+fn unsized_points(count: i64) -> impl Iterator<Item = NewFeature<Point<f64>>> {
+    let mut next = 0i64;
+    std::iter::from_fn(move || {
+        next += 1;
+        (next <= count).then(|| {
+            NewFeature::new(Point::new(next as f64, -(next as f64)), vec![Value::Null])
+                .with_fid(next)
+        })
+    })
+}
+
+/// An iterator that does not advertise its length still reaches the bulk path.
+///
+/// `size_hint` reports a lower bound of 0 for such an iterator, so the size
+/// condition could never be met from the hint alone and a write of any size fell
+/// to the triggered path unless the caller passed `always_bulk`. The rows are
+/// now buffered up to the threshold, which settles the question for an iterator
+/// that cannot answer it.
+#[test]
+fn unsized_iterator_reaches_the_bulk_path() {
+    let gpkg = in_memory_with_points(&[]);
+    let layer = gpkg.layer("pts").unwrap();
+    layer.create_spatial_index().unwrap();
+
+    let features = unsized_points(300);
+    assert_eq!(
+        features.size_hint(),
+        (0, None),
+        "the point of the test is an iterator with no usable hint"
+    );
+    layer
+        .write_all_with(features, 0, BulkIndexOptions::with_threshold(100))
+        .unwrap();
+
+    let conn = gpkg.connection();
+    assert_eq!(rtree_rows(conn).len(), 300, "every row indexed");
+    assert_eq!(rtree_rows(conn), envelope_scan(conn));
+
+    // Contents look the same whichever path ran, so check the shape. A packed
+    // build fills leaves to the 51-entry capacity, giving 6 leaves plus a root
+    // for 300 entries; the triggers leave SQLite's half-filled split nodes,
+    // measured at 12 for the same rows.
+    let nodes: i64 = conn
+        .query_row("SELECT count(*) FROM rtree_pts_geom_node", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(nodes, 7, "expected the bulk path, not a triggered write");
+}
+
+/// An unsized iterator that ends before the threshold is written in full.
+///
+/// Deciding the path pulls rows out of the iterator, so this is the case where
+/// buffered rows could be dropped or written twice: the exact count is known
+/// only because the iterator ended, and every buffered row still has to reach
+/// the triggered path in its original order.
+#[test]
+fn unsized_iterator_below_the_threshold_writes_every_row() {
+    let gpkg = in_memory_with_points(&[]);
+    let layer = gpkg.layer("pts").unwrap();
+    layer.create_spatial_index().unwrap();
+
+    let fids = layer
+        .write_all_with(unsized_points(50), 0, BulkIndexOptions::with_threshold(100))
+        .unwrap();
+
+    assert_eq!(fids, (1..=50).collect::<Vec<i64>>(), "ids in input order");
+    let conn = gpkg.connection();
+    let rows: i64 = conn
+        .query_row("SELECT count(*) FROM pts", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, 50, "every buffered row written exactly once");
+    assert_eq!(rtree_rows(conn).len(), 50);
+    assert_eq!(rtree_rows(conn), envelope_scan(conn));
+}
+
 /// The bulk build must skip NULL and empty geometries exactly as the triggered
 /// build does.
 ///

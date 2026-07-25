@@ -277,10 +277,10 @@ impl<'a> Layer<'a> {
     /// Rows with `geometry: Some(_)` go through [`FeatureWriter::insert`]; rows
     /// with `None` through [`FeatureWriter::insert_row`].
     ///
-    /// When the layer carries a spatial index whose contents are currently
-    /// empty and `features` advertises at least
-    /// [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD) rows (via its
-    /// [`Iterator::size_hint`]), the write takes the bulk-build path instead;
+    /// When the layer carries a spatial index and the write is at least
+    /// [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD) rows, it takes
+    /// the bulk-build path instead, rebuilding the index in one pass rather than
+    /// letting the triggers maintain it row by row;
     /// [`Self::write_all_with`] tunes or forces that choice.
     pub fn write_all<G, I>(&self, features: I, batch_size: usize) -> Result<Vec<i64>>
     where
@@ -293,12 +293,15 @@ impl<'a> Layer<'a> {
     /// [`Self::write_all`] with an explicit [`BulkIndexOptions`] controlling the
     /// bulk-vs-triggered index-build choice (design decision D8).
     ///
-    /// The bulk path is taken only when the layer has a spatial index, that
-    /// index is currently empty (bulk building a fresh index; appends to a
-    /// populated index always use the triggered path), and the incoming
-    /// iterator's `size_hint` lower bound reaches `options.bulk_threshold`.
-    /// [`BulkIndexOptions::always_bulk`] drops the size condition (still
-    /// requiring an empty index); [`BulkIndexOptions::never_bulk`] disables it.
+    /// The bulk path is taken when the layer has a spatial index, the write
+    /// reaches `options.bulk_threshold` rows, and it is large enough relative to
+    /// the rows already indexed to be worth rebuilding the index rather than
+    /// appending to it. The size condition is settled from the iterator's
+    /// `size_hint` where that is possible, and by buffering up to
+    /// `bulk_threshold` rows where it is not, so an iterator that does not know
+    /// its own length still reaches the path.
+    /// [`BulkIndexOptions::always_bulk`] drops the size condition;
+    /// [`BulkIndexOptions::never_bulk`] disables the path.
     pub fn write_all_with<G, I>(
         &self,
         features: I,
@@ -325,12 +328,75 @@ impl<'a> Layer<'a> {
         G: GeometryTrait<T = f64>,
         I: IntoIterator<Item = NewFeature<G>>,
     {
-        let iter = features.into_iter();
-        if self.bulk_write_applicable(iter.size_hint().0, options)? {
-            self.write_all_bulk(iter, options, tamper)
+        let mut iter = features.into_iter();
+        let (bulk, buffered) = self.bulk_write_engages(&mut iter, options)?;
+        // Rows pulled to reach the decision are put back in front of the rest,
+        // so either path sees the same sequence it would have seen.
+        let features = buffered.into_iter().chain(iter);
+        if bulk {
+            self.write_all_bulk(features, options, tamper)
         } else {
-            self.write_all_batched(iter, batch_size)
+            self.write_all_batched(features, batch_size)
         }
+    }
+
+    /// Whether this write takes the bulk path, along with any rows that had to
+    /// be pulled from `features` to decide.
+    ///
+    /// The size condition is answered from [`Iterator::size_hint`] whenever the
+    /// hint settles it, which covers every `Vec`-like source at no cost. An
+    /// iterator that does not know its own length, which is most iterators that
+    /// are not backed by a collection, reports a lower bound of `0` and would
+    /// otherwise never reach the threshold however many rows it went on to
+    /// yield. For those the rows themselves are the only evidence available, so
+    /// they are buffered until either the threshold is reached, which is all the
+    /// proof the decision needs, or the iterator ends first, which gives an exact
+    /// count that is known to be below it.
+    ///
+    /// Buffering is therefore bounded by `options.bulk_threshold` rows and never
+    /// by the length of the input. Raising the threshold raises that bound for
+    /// unsized iterators.
+    fn bulk_write_engages<G, I>(
+        &self,
+        features: &mut I,
+        options: BulkIndexOptions,
+    ) -> Result<(bool, Vec<NewFeature<G>>)>
+    where
+        G: GeometryTrait<T = f64>,
+        I: Iterator<Item = NewFeature<G>>,
+    {
+        let threshold = options.bulk_threshold;
+        // `never_bulk`: the caller has ruled the bulk path out, so there is
+        // nothing to decide and nothing to buffer deciding it.
+        if threshold == usize::MAX {
+            return Ok((false, Vec::new()));
+        }
+        let (lower, upper) = features.size_hint();
+        // An upper bound below the threshold settles it without touching the
+        // database, which is the common case for a small write from a `Vec`.
+        if upper.is_some_and(|upper| upper < threshold) {
+            return Ok((false, Vec::new()));
+        }
+        // A lower bound that already clears the threshold settles it the other
+        // way, again without pulling a row.
+        if lower >= threshold {
+            return Ok((self.bulk_write_applicable(lower)?, Vec::new()));
+        }
+        // Neither bound settles it, so buffer up to the threshold. Checking the
+        // layer first means an unindexed layer, which can never take the bulk
+        // path, does not buffer rows only to discard the decision.
+        if self.indexed_entry_count()?.is_none() {
+            return Ok((false, Vec::new()));
+        }
+        let mut buffered = Vec::new();
+        while buffered.len() < threshold {
+            let Some(feature) = features.next() else {
+                return Ok((false, buffered));
+            };
+            buffered.push(feature);
+        }
+        let engages = self.bulk_write_applicable(buffered.len())?;
+        Ok((engages, buffered))
     }
 
     /// The per-batch triggered write path: one committed transaction per
@@ -369,10 +435,10 @@ impl<'a> Layer<'a> {
         Ok(fids)
     }
 
-    /// Whether a `write_all` should take the bulk-build path: the layer has a
-    /// geometry column and a single-column primary key, a recognised spatial
-    /// index, `size_hint_lower` reaches the threshold, and the write is large
-    /// enough relative to the existing index to be worth rebuilding it.
+    /// Whether a `write_all` of `new_rows` rows should take the bulk-build path,
+    /// given that it has already cleared `options.bulk_threshold`: the layer can
+    /// take the path at all, and the write is large enough relative to the
+    /// existing index to be worth rebuilding it.
     ///
     /// An empty index is the clear case: there is nothing to preserve, so the
     /// bulk build is a straight win. A populated index is a trade, because the
@@ -385,19 +451,28 @@ impl<'a> Layer<'a> {
     /// 100k existing rows a 10k-row append measured 187 ms triggered against
     /// 149 ms rebuilt, and at 1M existing a 100k-row append measured 2938 ms
     /// against 1783 ms.
-    fn bulk_write_applicable(
-        &self,
-        size_hint_lower: usize,
-        options: BulkIndexOptions,
-    ) -> Result<bool> {
-        if size_hint_lower < options.bulk_threshold {
-            return Ok(false);
-        }
-        let Some(geom) = self.geometry_column() else {
+    fn bulk_write_applicable(&self, new_rows: usize) -> Result<bool> {
+        let Some(indexed) = self.indexed_entry_count()? else {
             return Ok(false);
         };
+        if indexed == 0 {
+            return Ok(true);
+        }
+        // Rebuilding a populated index has to pay for the rows already in it,
+        // so it is only worth it for a large enough write.
+        Ok(new_rows >= indexed / MERGE_REBUILD_RATIO)
+    }
+
+    /// The number of entries already in this layer's spatial index, or `None`
+    /// when the layer cannot take the bulk path at all: no geometry column, no
+    /// single-column primary key to index by, or no recognised spatial index to
+    /// rebuild.
+    fn indexed_entry_count(&self) -> Result<Option<usize>> {
+        let Some(geom) = self.geometry_column() else {
+            return Ok(None);
+        };
         if self.primary_key_column().is_none() || !self.has_spatial_index()? {
-            return Ok(false);
+            return Ok(None);
         }
         let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
         let indexed: i64 = self.gpkg().connection().query_row(
@@ -405,13 +480,7 @@ impl<'a> Layer<'a> {
             [],
             |r| r.get(0),
         )?;
-        let indexed = usize::try_from(indexed).unwrap_or(usize::MAX);
-        if indexed == 0 {
-            return Ok(true);
-        }
-        // Rebuilding a populated index has to pay for the rows already in it,
-        // so it is only worth it for a large enough write.
-        Ok(size_hint_lower >= indexed / MERGE_REBUILD_RATIO)
+        Ok(Some(usize::try_from(indexed).unwrap_or(usize::MAX)))
     }
 
     /// The bulk write path: drop the rtree triggers, insert every row in one
