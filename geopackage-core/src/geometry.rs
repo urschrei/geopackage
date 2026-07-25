@@ -10,8 +10,8 @@
 //! Placement: this wrapper and the envelope traversal below live in
 //! `geopackage-core` rather than the container crate, which keeps the fuzz
 //! workspace free of the SQLite dependency. The intended long-term home is an
-//! upstreamed `gpb` feature in georust `wkb` itself (tracked in the ecosystem
-//! roadmap); until that lands, this module is ours.
+//! upstreamed `gpb` feature in georust `wkb` itself; until that lands, this
+//! module is ours.
 //!
 //! Parsing arbitrary bytes never panics: a malformed header, a truncated body,
 //! or a geometry type the `wkb` crate cannot read all yield a

@@ -1,9 +1,9 @@
 //! Arrow schema derivation: GeoPackage column types to Arrow field types.
 //!
 //! This is the type mapping the columnar read and write paths share. It is the
-//! "impedance mismatch" the GDAL developers report in their write-up of the same
-//! exercise (roadmap 05-m3), so each choice below is stated with its reason
-//! rather than left to be inferred from the code.
+//! "impedance mismatch" the GDAL developers report in their write-up of the
+//! same exercise, so each choice below is stated with its reason rather than
+//! left to be inferred from the code.
 //!
 //! # Attribute types
 //!
@@ -369,7 +369,7 @@ impl Layer<'_> {
     /// arrays are built straight from the statement's column values, which is
     /// the whole point of the path: GDAL measured its generic implementation,
     /// which does route through a per-row feature object, as *slower* than the
-    /// row API it wraps (roadmap 05-m3).
+    /// row API it wraps.
     ///
     /// # Threading
     ///

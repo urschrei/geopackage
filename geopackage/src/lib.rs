@@ -47,8 +47,8 @@
 //!   [`Synchronous`] level; see the interchange-first close policy on
 //!   [`GeoPackage`].
 //!
-//! The GeoArrow bulk plane arrives in a later milestone; see the repository
-//! roadmap.
+//! - Columnar read and write live in [`arrow`], behind the `arrow` feature,
+//!   with geometry carried as a GeoArrow WKB column.
 //!
 //! # Reading untrusted files
 //!

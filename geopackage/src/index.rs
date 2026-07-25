@@ -49,10 +49,12 @@ pub enum SpatialIndexStatus {
     /// `UPSERT`; [`Layer::repair_spatial_index`] upgrades it to the 1.4 set.
     Legacy,
     /// A desynchronised index: the virtual table exists but its triggers are
-    /// missing (or triggers exist with no table). The state an interrupted bulk
-    /// build leaves: for example a crash during [`Layer::write_all`] after the
-    /// rows commit but before the index is rebuilt, since the `ATTACH` the bulk
-    /// build needs cannot join that final transaction.
+    /// missing (or triggers exist with no table). This crate's own writes
+    /// cannot produce it. A bulk [`Layer::write_all`] drops the triggers,
+    /// inserts the rows, rebuilds the index and reinstalls the triggers in one
+    /// transaction, so an interrupted call rolls back to the state before it.
+    /// The state is reachable from a file another tool wrote, or from SQL run
+    /// directly against the connection.
     ///
     /// The index is **not** silently trusted: [`Layer::has_spatial_index`]
     /// reports `false` for it, so [`Layer::features_in`] falls back to a correct
