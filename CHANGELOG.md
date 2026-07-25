@@ -8,8 +8,18 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-25
+
 ### Added
 
+- **A ceiling on the geometry bytes one Arrow batch may hold**
+  (`ArrowReadOptions::max_batch_bytes`, with `DEFAULT_MAX_BATCH_BYTES` and
+  `default_max_batch_bytes`). The geometry column is Arrow `Binary`, whose
+  offsets are `i32`, so one batch cannot address more than 2 GB of WKB. At the
+  default 65,536 rows that needs only 32 KB of geometry per feature, which large
+  polygons exceed. A batch that would cross the ceiling is emitted short and the
+  rows that did not fit begin the next one, on both the single-threaded and
+  threaded paths. The default follows GDAL in taking `min(INT32_MAX, RAM / 4)`.
 - **Columnar read and write through Apache Arrow, behind a new `arrow`
   feature.** `Layer::read_arrow` returns an `ArrowBatches`, which implements
   `RecordBatchReader`; `Layer::write_arrow` writes record batches back through
@@ -354,7 +364,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/urschrei/geopackage/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/urschrei/geopackage/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/urschrei/geopackage/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/urschrei/geopackage/releases/tag/v0.1.0
