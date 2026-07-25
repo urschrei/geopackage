@@ -239,6 +239,14 @@ pub struct FeatureWriter<'conn> {
     value_columns: Vec<String>,
     geometry: Option<GeomTarget>,
     bbox: BboxFold,
+    /// The four possible `INSERT` statements, by whether the row carries an
+    /// explicit feature id and whether it carries a geometry.
+    ///
+    /// Built once per writer rather than per row. Composing one costs a `Vec` of
+    /// column names, a `String` per placeholder and two joins, which is around
+    /// seventeen allocations for a fifteen-column table, and it was happening on
+    /// every insert to produce one of four fixed strings.
+    insert_sql: [String; 4],
     /// Any insert, or any update/delete that changed a row (drives
     /// `last_change`).
     dirty: bool,
@@ -284,7 +292,7 @@ impl<'a> Layer<'a> {
         let mut bbox = BboxFold::new();
         bbox.seed(existing);
 
-        let writer = FeatureWriter {
+        let mut writer = FeatureWriter {
             tx,
             table_name: self.table_name().to_owned(),
             quoted_table: quote(self.table_name())?,
@@ -292,9 +300,16 @@ impl<'a> Layer<'a> {
             value_columns,
             geometry,
             bbox,
+            insert_sql: [const { String::new() }; 4],
             dirty: false,
             bbox_dirty: false,
         };
+        writer.insert_sql = [
+            writer.build_insert_sql(false, false),
+            writer.build_insert_sql(true, false),
+            writer.build_insert_sql(false, true),
+            writer.build_insert_sql(true, true),
+        ];
         Ok(writer)
     }
 
@@ -684,7 +699,7 @@ impl<'conn> FeatureWriter<'conn> {
         }
         binds.extend(values.iter().map(value_to_sql));
         binds.push(SqlValue::Blob(blob));
-        let assigned = self.exec_insert(&sql, &binds, fid)?;
+        let assigned = self.exec_insert(sql, &binds, fid)?;
         if let Some(envelope) = xy {
             self.bbox.add(envelope);
             self.bbox_dirty = true;
@@ -741,7 +756,7 @@ impl<'conn> FeatureWriter<'conn> {
         // The blob was just built, so it moves into the binding rather than
         // being borrowed from something that has to outlive the statement.
         binds.push(ToSqlOutput::Owned(SqlV::Blob(encoded.blob)));
-        let assigned = self.exec_insert_bound(&sql, &binds, fid)?;
+        let assigned = self.exec_insert_bound(sql, &binds, fid)?;
         if let Some(envelope) = encoded.xy_envelope {
             self.bbox.add(envelope);
             self.bbox_dirty = true;
@@ -766,7 +781,7 @@ impl<'conn> FeatureWriter<'conn> {
             binds.push(ToSqlOutput::Borrowed(ValueRef::Integer(id)));
         }
         binds.extend(values.iter().cloned());
-        let assigned = self.exec_insert_bound(&sql, &binds, fid)?;
+        let assigned = self.exec_insert_bound(sql, &binds, fid)?;
         self.dirty = true;
         Ok(assigned)
     }
@@ -785,7 +800,7 @@ impl<'conn> FeatureWriter<'conn> {
             binds.push(SqlValue::Integer(id));
         }
         binds.extend(values.iter().map(value_to_sql));
-        let assigned = self.exec_insert(&sql, &binds, fid)?;
+        let assigned = self.exec_insert(sql, &binds, fid)?;
         self.dirty = true;
         Ok(assigned)
     }
@@ -973,7 +988,14 @@ impl<'conn> FeatureWriter<'conn> {
     }
 
     /// Build the `INSERT` statement for the given fid/geometry presence.
-    fn insert_sql(&self, with_fid: bool, with_geometry: bool) -> String {
+    /// The cached `INSERT` for this combination of explicit id and geometry.
+    fn insert_sql(&self, with_fid: bool, with_geometry: bool) -> &str {
+        let index = usize::from(with_fid) | (usize::from(with_geometry) << 1);
+        self.insert_sql.get(index).map_or("", String::as_str)
+    }
+
+    /// Compose one of the four `INSERT` statements. Called once per writer.
+    fn build_insert_sql(&self, with_fid: bool, with_geometry: bool) -> String {
         let mut columns: Vec<&str> = Vec::with_capacity(self.value_columns.len() + 2);
         if with_fid {
             columns.push(&self.pk_expr);

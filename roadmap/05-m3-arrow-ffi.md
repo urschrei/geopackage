@@ -148,7 +148,10 @@ assumed about GPB bodies being usable as WKB without a parse.
       cell. *(Done, 1.55x to 1.30x. Two changes: move values into the bindings
       instead of cloning them (3%), and hold a row as a view over its batch,
       binding strings and blobs as slices into the Arrow buffers (a further
-      13%). Criterion 3's write side is still unmet. See
+      13%), then stop composing the `INSERT` statement per row (a further 30%,
+      and the scalar path gained 22.6% unindexed and 16.0% on the bulk path from
+      the same change). Criterion 3's write side is met without a spatial index
+      at 0.93x and missed by 4% with one. See
       [benchmarks/2026-07-25-gdal-arrow-write.md](benchmarks/2026-07-25-gdal-arrow-write.md).)*
 - [ ] Parallel `write_arrow`, within what SQLite allows: **one writer, always.**
       SQLite takes a single write lock per database, so this means moving CPU

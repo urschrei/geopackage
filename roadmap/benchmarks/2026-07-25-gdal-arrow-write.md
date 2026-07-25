@@ -102,10 +102,46 @@ checker without two passes.
 
 **1.51x to 1.32x** without an index, **1.50x to 1.30x** with.
 
+## Third change: stop rebuilding the INSERT statement for every row
+
+`insert_sql` composed the statement on each call: a `Vec` of column names, a
+`String` per placeholder, and two joins. For a fifteen-column table that is
+roughly seventeen allocations per row, to produce one of four fixed strings. The
+four are now built once per writer and indexed by whether the row carries an
+explicit id and whether it carries a geometry.
+
+**1.30x to 1.04x** with an index and **1.32x to 0.93x** without, so the columnar
+write is now ahead of GDAL in the unindexed case.
+
+This was the largest of the three by some way, and it was not an Arrow problem
+at
+all. The scalar write path was paying it too, measured against a baseline at the
+same row count:
+
+| | before | after | change |
+|---|---|---|---|
+| `write/point/unindexed` | 168.1 ms | 130.1 ms | **-22.6%** |
+| `write/point/bulk` | 347.6 ms | 291.9 ms | **-16.0%** |
+
+Worth noting how it was found. It was invisible to the columnar-versus-row
+comparison, because both sides paid it. It turned up only from asking what was
+left after the two Arrow-specific changes, which is an argument for continuing
+to
+look after the obvious candidates are gone.
+
 ## Where this leaves criterion 3
 
-Still unmet at 1.30x, down from 1.55x. The two changes above took out the copies
-that were visible in the code; what is left is not yet attributed.
+| | ours | GDAL | ratio |
+|---|---|---|---|
+| no spatial index | 454.0 ms | 487.0 ms | **0.93x** |
+| with spatial index | 603.4 ms | 579.1 ms | **1.04x** |
+
+Met without an index, missed by 4% with one. The difference between the two is
+the index build: about 149 ms for us against 92 ms for GDAL at this size. Our M2
+work measured index-build parity at 1M rows, and at 200k the bulk build's fixed
+costs, the verification gate in particular, are a larger share of a smaller
+total. Whether that closes at 1M is worth measuring before treating it as a gap
+to fix.
 
 ## Next
 
