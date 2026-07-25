@@ -36,6 +36,14 @@ geo-types = "0.7"
 # this crate out of the transformation business, so `tz-*` and `tzdb-*` are all
 # off. `std` alone is the whole of what is needed.
 jiff = { version = "0.2", default-features = false, features = ["std"] }
+# EPSG definitions beyond the vendored WKT1 subset (issue #23): WKT2 for the
+# gpkg_crs_wkt_1_1 extension column, and PROJJSON for GeoArrow's CRS metadata,
+# which is the form that spec recommends. Its data is flate2-compressed, so it
+# costs about 1.1 MB against crs-definitions' 4.3 MB for WKT1 alone, and it
+# covers the geographic 3D codes WKT1 cannot express. MIT, and by the
+# rusqlite-gpkg author, which is the coordination 02-ecosystem asks for.
+epsg-utils = "0.0.3"
+serde_json = "1"
 # M3 Arrow data plane. `arrow-array`/`arrow-schema` only: the GeoArrow WKB
 # encoding is a Binary field carrying extension metadata, so `geoarrow-array`
 # would add a dependency without adding capability. Revisit if native GeoArrow

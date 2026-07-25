@@ -15,12 +15,14 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
+epsg-utils.workspace = true
 geopackage-core.workspace = true
 geo-traits.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
 arrow-array = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [features]
 default = ["geo-types"]
@@ -32,7 +34,7 @@ geo-types = ["geopackage-core/geo-types"]
 ## GeoArrow WKB column. Off by default: it pulls the `arrow-array` and
 ## `arrow-schema` crates, which a caller using only the scalar API does not
 ## need.
-arrow = ["dep:arrow-array", "dep:arrow-schema"]
+arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:serde_json"]
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -44,7 +46,9 @@ arrow-array.workspace = true
 rusqlite.workspace = true
 wkb.workspace = true
 geo-types.workspace = true
-serde_json = "1"
+# Also used by the Arrow schema test, to inspect the PROJJSON in the geometry
+# field's metadata.
+serde_json.workspace = true
 hegeltest = "0.28.2"
 criterion = "0.8"
 
@@ -59,4 +63,11 @@ harness = false
 [[bench]]
 name = "arrow"
 harness = false
+required-features = ["arrow"]
+
+# Uses the Arrow data plane, so it cannot build without it. The bench above
+# already declares this; without it here, `cargo nextest r -p geopackage`
+# fails to build the example.
+[[example]]
+name = "arrow_bench"
 required-features = ["arrow"]

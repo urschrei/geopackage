@@ -5,9 +5,11 @@
 //! of EPSG codes that cover the bulk of real-world GeoPackage traffic, plus
 //! synthesised definitions for all WGS 84 UTM zones (EPSG:32601-32660 north,
 //! 32701-32760 south), which differ only in name, central meridian, false
-//! northing, and authority code. Every other SRS is caller-supplied: a failed
-//! lookup is a typed "supply the definition yourself" error at the container
-//! layer, never a silent `undefined`.
+//! northing, and authority code. A failed lookup is not the end of the road:
+//! the container crate falls back to the EPSG registry in `epsg-utils` and
+//! writes WKT2 through the `gpkg_crs_wkt_1_1` extension, and only a code in
+//! neither place is a typed "supply the definition yourself" error. Nothing
+//! here ever writes a silent `undefined` in place of a definition it has.
 //!
 //! Literal definitions live in the generated `epsg_wkt` table (private
 //! submodule); regenerate with `scripts/generate_epsg_wkt.py`.
@@ -20,8 +22,10 @@ use std::borrow::Cow;
 /// `gpkg_spatial_ref_sys`.
 ///
 /// `definition` is WKT1 as used by the `gpkg_spatial_ref_sys.definition`
-/// column. WKT2 (the `gpkg_crs_wkt` extension) is not vendored; codes that
-/// require it (e.g. geographic 3D CRSs such as EPSG:4979) are absent here.
+/// column. Codes with no WKT1 form, such as the geographic 3D CRS EPSG:4979,
+/// are absent from this table by nature rather than by omission. The
+/// container crate registers those through the `gpkg_crs_wkt_1_1` extension
+/// column instead; see `GeoPackage::add_epsg_srs`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SrsDefinition {
     /// Human-readable SRS name.
