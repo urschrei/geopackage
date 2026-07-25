@@ -307,3 +307,134 @@ fn a_layer_the_aggregate_cannot_serve_falls_back() {
     assert!(!geom.is_null(0));
     assert!(matches!(geom.value(0)[0], 0 | 1), "WKB byte-order marker");
 }
+
+/// Read every fid, in order, through whichever path `read` chooses.
+fn fids_via(gpkg: &GeoPackage, parallel: bool, options: ArrowReadOptions) -> Vec<i64> {
+    let layer = gpkg.layer("pts").unwrap();
+    let reader = if parallel {
+        layer.read_arrow_parallel(options).unwrap()
+    } else {
+        layer.read_arrow(options).unwrap()
+    };
+    reader
+        .map(|batch| batch.unwrap())
+        .flat_map(|batch| {
+            batch
+                .column_by_name("fid")
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .values()
+                .to_vec()
+        })
+        .collect()
+}
+
+/// The threaded read returns exactly what the single-threaded one does, in the
+/// same order.
+///
+/// Order is the property worth pinning: workers are assigned batches in
+/// rotation and the consumer takes from them in the same rotation, so key order
+/// falls out without a reordering buffer. If that assignment and that
+/// consumption ever disagree, this is what notices.
+#[test]
+fn a_threaded_read_matches_a_single_threaded_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("p.gpkg")).unwrap();
+    // A file, not `:memory:`, since workers open their own connections.
+    let builder = TableSchemaBuilder::new("pts")
+        .column(ColumnSpec::new("name", ColumnType::Text(None)))
+        .geometry(GeometrySpec::new(GeometryType::Point, 4326));
+    let layer = gpkg.create_layer(&builder).unwrap();
+    let features: Vec<NewFeature<Point<f64>>> = (1..=1000)
+        .map(|i| {
+            NewFeature::new(
+                Point::new(i as f64, -(i as f64)),
+                vec![Value::Text(format!("row {i}"))],
+            )
+            .with_fid(i)
+        })
+        .collect();
+    layer.write_all(features, 0).unwrap();
+
+    // A batch size that leaves a partial final batch, and does not divide
+    // evenly by the thread count, so the rotation has to be right.
+    let options = ArrowReadOptions::with_batch_size(70).with_threads(3);
+    let threaded = fids_via(&gpkg, true, options);
+    let sequential = fids_via(&gpkg, false, options);
+
+    assert_eq!(threaded, (1..=1000).collect::<Vec<i64>>(), "key order");
+    assert_eq!(threaded, sequential, "the two paths disagree");
+}
+
+/// A layer whose keys have gaps reads correctly, because the threaded path
+/// declines to engage rather than assuming a row count from a key range.
+#[test]
+fn gaps_in_the_key_fall_back_to_a_single_thread() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("g.gpkg")).unwrap();
+    let builder =
+        TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326));
+    let layer = gpkg.create_layer(&builder).unwrap();
+    let features: Vec<NewFeature<Point<f64>>> = (1..=300)
+        .map(|i| NewFeature::new(Point::new(i as f64, -(i as f64)), Vec::new()).with_fid(i))
+        .collect();
+    layer.write_all(features, 0).unwrap();
+    gpkg.connection()
+        .execute_batch("DELETE FROM pts WHERE fid BETWEEN 100 AND 200")
+        .unwrap();
+
+    let options = ArrowReadOptions::with_batch_size(32).with_threads(4);
+    let expected: Vec<i64> = (1..=99).chain(201..=300).collect();
+    assert_eq!(fids_via(&gpkg, true, options), expected);
+}
+
+/// An in-memory database cannot be opened by a second connection, so the
+/// threaded entry point reads it on the calling thread instead of failing.
+#[test]
+fn an_in_memory_database_falls_back_to_a_single_thread() {
+    let gpkg = GeoPackage::create(std::path::Path::new(":memory:")).unwrap();
+    let builder =
+        TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326));
+    let layer = gpkg.create_layer(&builder).unwrap();
+    let features: Vec<NewFeature<Point<f64>>> = (1..=50)
+        .map(|i| NewFeature::new(Point::new(i as f64, -(i as f64)), Vec::new()).with_fid(i))
+        .collect();
+    layer.write_all(features, 0).unwrap();
+
+    let options = ArrowReadOptions::with_batch_size(8).with_threads(4);
+    assert_eq!(
+        fids_via(&gpkg, true, options),
+        (1..=50).collect::<Vec<i64>>()
+    );
+}
+
+/// Dropping the reader before it is drained stops the workers rather than
+/// leaving them blocked on a channel nobody will read.
+#[test]
+fn abandoning_a_threaded_read_stops_its_workers() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("a.gpkg")).unwrap();
+    let builder =
+        TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326));
+    let layer = gpkg.create_layer(&builder).unwrap();
+    let features: Vec<NewFeature<Point<f64>>> = (1..=5000)
+        .map(|i| NewFeature::new(Point::new(i as f64, -(i as f64)), Vec::new()).with_fid(i))
+        .collect();
+    layer.write_all(features, 0).unwrap();
+
+    {
+        let layer = gpkg.layer("pts").unwrap();
+        let mut reader = layer
+            .read_arrow_parallel(ArrowReadOptions::with_batch_size(16).with_threads(4))
+            .unwrap();
+        // One batch of many, then walk away. `Drop` joins the workers, so this
+        // test hanging is the failure mode it guards against.
+        assert!(reader.next().is_some());
+    }
+
+    // The layer is still readable afterwards, so nothing was left holding it.
+    assert_eq!(
+        fids_via(&gpkg, false, ArrowReadOptions::default()).len(),
+        5000
+    );
+}

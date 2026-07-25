@@ -94,7 +94,7 @@ assumed about GPB bodies being usable as WKB without a parse.
       bigger row, which the current decomposition conflates; then the text path,
       the only line item large enough to supply the ~11% that criterion 3 still
       needs.)*
-- [ ] Parallel `read_arrow`: one connection per thread over disjoint primary-key
+- [x] Parallel `read_arrow`: one connection per thread over disjoint primary-key
       ranges, since SQLite permits concurrent readers and `rusqlite::Connection`
       is `Send`, so handle-per-thread needs no `unsafe`. The shape is settled by
       reading GDAL's driver (see the study note): read-only connections only,
@@ -110,6 +110,14 @@ assumed about GPB bodies being usable as WKB without a parse.
       02-ecosystem policy. A `:memory:` database cannot be shared between
       connections, so the parallel path requires a file and the property tests
       that use `:memory:` exercise the single-threaded path only.
+      *(Done as `Layer::read_arrow_parallel`, 2.02x on four threads and 2.25x on
+      eight, short of the 3.1x GDAL's slides report. Diminishing past four is
+      what a read bound by pulling pages rather than by cores looks like, which
+      is why the automatic count stops there. The density rule is
+      `max - min + 1 == count`, slightly wider than GDAL's, and each of the three
+      conditions declines to the single-threaded path rather than failing. The
+      bbox-splitting question is still open; it does not arise until
+      `features_in` has an Arrow counterpart.)*
 - [ ] Decide the WKB column's Arrow type. `BinaryArray` carries int32 offsets, so
       one batch cannot hold more than 2 GB of WKB, which large polygons reach.
       GDAL cuts the batch short against a byte budget of `min(INT32_MAX,

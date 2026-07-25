@@ -94,6 +94,13 @@ const DATETIME_UNIT: TimeUnit = TimeUnit::Microsecond;
 /// the aggregate can name it as an argument.
 const KEY_ALIAS: &str = "__gpkg_key";
 
+/// Ceiling on the automatically chosen thread count.
+///
+/// GDAL's driver uses the same `min(4, cpus)` for the same path. Beyond a few
+/// readers the work is bounded by how fast SQLite can pull pages rather than by
+/// cores.
+const DEFAULT_MAX_THREADS: usize = 4;
+
 impl Layer<'_> {
     /// The Arrow schema this layer's rows are read into.
     ///
@@ -283,12 +290,21 @@ mod tests {
 pub struct ArrowReadOptions {
     /// Rows per [`RecordBatch`]. Defaults to [`DEFAULT_BATCH_SIZE`].
     pub batch_size: usize,
+    /// How many threads may read at once. `0` chooses
+    /// `min(4, available parallelism)`, matching GDAL's default for the same
+    /// path; `1` reads on the calling thread.
+    ///
+    /// More than one thread is only possible under the conditions in
+    /// [`Layer::read_arrow`]; when they do not hold, the read is single-threaded
+    /// whatever this says.
+    pub threads: usize,
 }
 
 impl Default for ArrowReadOptions {
     fn default() -> Self {
         Self {
             batch_size: DEFAULT_BATCH_SIZE,
+            threads: 0,
         }
     }
 }
@@ -298,7 +314,27 @@ impl ArrowReadOptions {
     pub fn with_batch_size(batch_size: usize) -> Self {
         Self {
             batch_size: batch_size.max(1),
+            ..Self::default()
         }
+    }
+
+    /// Set the thread count. `0` chooses a default, `1` reads on the calling
+    /// thread.
+    #[must_use]
+    pub fn with_threads(mut self, threads: usize) -> Self {
+        self.threads = threads;
+        self
+    }
+
+    /// The thread count to actually use, resolving `0` to the default.
+    fn resolved_threads(self) -> usize {
+        if self.threads > 0 {
+            return self.threads;
+        }
+        std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1)
+            .min(DEFAULT_MAX_THREADS)
     }
 }
 
@@ -427,19 +463,273 @@ impl Layer<'_> {
             .unwrap_or_default();
 
         Ok(ArrowBatches {
-            conn,
-            schema,
-            sql,
-            aggregate_sql,
-            key_field,
-            geometry_index,
-            names,
-            datetime,
-            batch_size: options.batch_size.max(1),
-            next_key: i64::MIN,
-            exhausted: false,
-            aggregate,
+            schema: Arc::clone(&schema),
+            source: BatchSource::Sequential(SequentialBatches {
+                conn,
+                schema,
+                sql,
+                aggregate_sql,
+                key_field,
+                geometry_index,
+                names,
+                datetime,
+                batch_size: options.batch_size.max(1),
+                next_key: i64::MIN,
+                exhausted: false,
+                aggregate,
+            }),
         })
+    }
+
+    /// Read this layer as Arrow batches, using several threads where that is
+    /// possible.
+    ///
+    /// Falls back to [`Self::read_arrow`] on the calling thread unless all of
+    /// the following hold, each for a reason:
+    ///
+    /// - **`options.threads` resolves above one.**
+    /// - **The database is a file.** Workers read through their own
+    ///   connections, and a `:memory:` database is private to the connection
+    ///   that made it.
+    /// - **The primary key is dense**, with no gaps between its smallest and
+    ///   largest value. Workers are given key ranges before any row is read, so
+    ///   a range has to imply a known row count. GDAL requires the same, in the
+    ///   stricter form of a key starting at 1.
+    ///
+    /// Workers open their connections **read-only**, which is what makes it safe
+    /// to read a table from several connections without agreeing on a snapshot:
+    /// there is no writer to race. A concurrent writer in another process can
+    /// still change the file, exactly as it can between the batches of a
+    /// single-threaded read.
+    ///
+    /// Batches arrive in primary-key order regardless of thread count.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read_arrow`], plus any error opening a worker connection.
+    pub fn read_arrow_parallel(&self, options: ArrowReadOptions) -> Result<ArrowBatches<'_>> {
+        let threads = options.resolved_threads();
+        let sequential = self.read_arrow(options)?;
+        if threads < 2 {
+            return Ok(sequential);
+        }
+        let Some(path) = database_path(self.gpkg().connection())? else {
+            return Ok(sequential);
+        };
+        let Some(key) = self.primary_key_column() else {
+            return Ok(sequential);
+        };
+        let Some(span) = dense_key_span(self.gpkg().connection(), self.table_name(), key)? else {
+            return Ok(sequential);
+        };
+
+        let schema = Arc::clone(&sequential.schema);
+        let batch_size = options.batch_size.max(1);
+        let parallel = ParallelBatches::spawn(
+            path,
+            self.table_name().to_owned(),
+            self.conversion_options(),
+            span,
+            batch_size,
+            threads,
+        );
+        Ok(ArrowBatches {
+            schema,
+            source: BatchSource::Parallel(parallel),
+        })
+    }
+}
+
+/// The file backing a connection's `main` database, or `None` for one with no
+/// file: a `:memory:` or temporary database, which no other connection can open.
+fn database_path(conn: &Connection) -> Result<Option<std::path::PathBuf>> {
+    let file: String = conn.query_row(
+        "SELECT file FROM pragma_database_list WHERE name = 'main'",
+        [],
+        |row| row.get(0),
+    )?;
+    if file.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(std::path::PathBuf::from(file)))
+}
+
+/// The `(first, last)` primary key of `table` when the key has no gaps, or
+/// `None` when it has gaps or the table is empty.
+///
+/// Density is what lets a worker be handed a key range before any row is read
+/// and know how many rows it covers. Testing `max - min + 1 == count` is a
+/// slightly wider rule than GDAL's `min == 1 && max == count`, and costs the
+/// same single scan.
+fn dense_key_span(conn: &Connection, table: &str, key: &str) -> Result<Option<(i64, i64)>> {
+    let sql = format!(
+        "SELECT min({key}), max({key}), count(*) FROM {table}",
+        key = quote(key)?,
+        table = quote(table)?
+    );
+    let (min, max, count): (Option<i64>, Option<i64>, i64) =
+        conn.query_row(&sql, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+    let (Some(min), Some(max)) = (min, max) else {
+        return Ok(None);
+    };
+    let span = max.checked_sub(min).and_then(|d| d.checked_add(1));
+    if span != Some(count) {
+        return Ok(None);
+    }
+    Ok(Some((min, max)))
+}
+
+/// One layer's batches read by a pool of worker threads.
+///
+/// Worker `w` of `n` reads batches `w`, `w + n`, `w + 2n`, and so on, and the
+/// consumer takes from the workers in the same rotation. Batches therefore
+/// arrive in key order without any reordering buffer, and each worker's channel
+/// holds one batch, so the memory in flight is bounded by the thread count.
+struct ParallelBatches {
+    /// One receiver per worker, drained in rotation.
+    receivers: Vec<std::sync::mpsc::Receiver<std::result::Result<RecordBatch, ArrowError>>>,
+    workers: Vec<std::thread::JoinHandle<()>>,
+    /// Which worker to take from next.
+    turn: usize,
+    done: bool,
+}
+
+impl ParallelBatches {
+    fn spawn(
+        path: std::path::PathBuf,
+        table: String,
+        conversion: crate::ConversionOptions,
+        (first, last): (i64, i64),
+        batch_size: usize,
+        threads: usize,
+    ) -> Self {
+        let mut receivers = Vec::with_capacity(threads);
+        let mut workers = Vec::with_capacity(threads);
+        for worker in 0..threads {
+            // A capacity of one keeps a worker at most one batch ahead of the
+            // consumer, which is what bounds the memory in flight.
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            let path = path.clone();
+            let table = table.clone();
+            let handle = std::thread::spawn(move || {
+                run_worker(
+                    &path, &table, conversion, first, last, batch_size, threads, worker, &tx,
+                );
+            });
+            receivers.push(rx);
+            workers.push(handle);
+        }
+        Self {
+            receivers,
+            workers,
+            turn: 0,
+            done: false,
+        }
+    }
+}
+
+impl Iterator for ParallelBatches {
+    type Item = std::result::Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let received = self.receivers.get(self.turn)?.recv();
+        self.turn = (self.turn + 1) % self.receivers.len().max(1);
+        match received {
+            Ok(batch) => {
+                if batch.is_err() {
+                    self.done = true;
+                }
+                Some(batch)
+            }
+            // The worker whose turn it is has finished, and workers are assigned
+            // batches in rotation, so every later worker has finished too.
+            Err(_) => {
+                self.done = true;
+                None
+            }
+        }
+    }
+}
+
+impl Drop for ParallelBatches {
+    fn drop(&mut self) {
+        // Dropping the receivers makes each worker's next send fail, which is
+        // how a consumer that stops early tells the pool to stop.
+        self.receivers.clear();
+        for worker in self.workers.drain(..) {
+            drop(worker.join());
+        }
+    }
+}
+
+/// One worker: open a read-only connection of its own and read the batches
+/// assigned to it, in order, until the layer runs out or the consumer goes away.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a worker's whole context, passed once at spawn; a struct would be used by this call site alone"
+)]
+fn run_worker(
+    path: &std::path::Path,
+    table: &str,
+    conversion: crate::ConversionOptions,
+    first: i64,
+    last: i64,
+    batch_size: usize,
+    threads: usize,
+    worker: usize,
+    tx: &std::sync::mpsc::SyncSender<std::result::Result<RecordBatch, ArrowError>>,
+) {
+    let send_error = |error: Error| {
+        drop(tx.send(Err(ArrowError::ExternalError(Box::new(error)))));
+    };
+    let gpkg = match crate::GeoPackage::open_read_only(path) {
+        Ok(gpkg) => gpkg,
+        Err(error) => return send_error(error),
+    };
+    let layer = match gpkg.layer(table) {
+        Ok(layer) => layer.with_conversion_options(conversion),
+        Err(error) => return send_error(error),
+    };
+    // Threads of its own would recurse; this reader is the thread.
+    let options = ArrowReadOptions::with_batch_size(batch_size).with_threads(1);
+    let mut batches = match layer.read_arrow(options) {
+        Ok(batches) => batches,
+        Err(error) => return send_error(error),
+    };
+    let BatchSource::Sequential(source) = &mut batches.source else {
+        return;
+    };
+
+    let stride = match i64::try_from(batch_size.saturating_mul(threads)) {
+        Ok(stride) if stride > 0 => stride,
+        _ => return,
+    };
+    let start = match i64::try_from(batch_size.saturating_mul(worker)) {
+        Ok(offset) => match first.checked_add(offset) {
+            Some(start) => start,
+            None => return,
+        },
+        Err(_) => return,
+    };
+
+    let mut key = start;
+    while key <= last {
+        match source.read_batch_at(key) {
+            Ok(Some(batch)) => {
+                if tx.send(Ok(batch)).is_err() {
+                    return; // the consumer stopped
+                }
+            }
+            Ok(None) => return,
+            Err(error) => return send_error(error),
+        }
+        match key.checked_add(stride) {
+            Some(next) => key = next,
+            None => return,
+        }
     }
 }
 
@@ -570,12 +860,8 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
     }
 }
 
-/// A stream of Arrow [`RecordBatch`]es over one layer, from
-/// [`Layer::read_arrow`].
-///
-/// Implements [`RecordBatchReader`], so it can be handed to anything in the
-/// Arrow ecosystem that consumes one.
-pub struct ArrowBatches<'a> {
+/// One layer's batches read on the calling thread.
+struct SequentialBatches<'a> {
     conn: &'a Connection,
     schema: SchemaRef,
     /// The direct-loop query, selecting the columns as ordinary result columns.
@@ -599,7 +885,7 @@ pub struct ArrowBatches<'a> {
     aggregate: Option<AggregateState>,
 }
 
-impl Drop for ArrowBatches<'_> {
+impl Drop for SequentialBatches<'_> {
     fn drop(&mut self) {
         if let Some(state) = &self.aggregate {
             // Best effort: the reader is going away either way, and a failure
@@ -613,7 +899,17 @@ impl Drop for ArrowBatches<'_> {
     }
 }
 
-impl ArrowBatches<'_> {
+impl SequentialBatches<'_> {
+    /// Read the batch starting at `key`, ignoring where the reader had got to.
+    ///
+    /// Used by the parallel path, whose workers each read whole batches at
+    /// offsets assigned to them rather than walking the layer in sequence.
+    fn read_batch_at(&mut self, key: i64) -> Result<Option<RecordBatch>> {
+        self.next_key = key;
+        self.exhausted = false;
+        self.next_batch()
+    }
+
     /// Read one batch, or `None` once the layer is exhausted.
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         if self.aggregate.is_some() {
@@ -742,7 +1038,7 @@ impl ArrowBatches<'_> {
     }
 }
 
-impl Iterator for ArrowBatches<'_> {
+impl Iterator for SequentialBatches<'_> {
     type Item = std::result::Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -758,6 +1054,33 @@ impl Iterator for ArrowBatches<'_> {
                 self.exhausted = true;
                 Some(Err(ArrowError::ExternalError(Box::new(error))))
             }
+        }
+    }
+}
+
+/// A stream of Arrow [`RecordBatch`]es over one layer, from
+/// [`Layer::read_arrow`].
+///
+/// Implements [`RecordBatchReader`], so it can be handed to anything in the
+/// Arrow ecosystem that consumes one. Batches arrive in primary-key order
+/// whether the read is threaded or not.
+pub struct ArrowBatches<'a> {
+    schema: SchemaRef,
+    source: BatchSource<'a>,
+}
+
+enum BatchSource<'a> {
+    Sequential(SequentialBatches<'a>),
+    Parallel(ParallelBatches),
+}
+
+impl Iterator for ArrowBatches<'_> {
+    type Item = std::result::Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.source {
+            BatchSource::Sequential(batches) => batches.next(),
+            BatchSource::Parallel(batches) => batches.next(),
         }
     }
 }

@@ -92,13 +92,20 @@ FLOOR_GDAL=$(median <"$WORK/floor_gdal.txt")
 : >"$WORK/ours_internal.txt"; : >"$WORK/ours_wall.txt"
 : >"$WORK/gdal1_internal.txt"; : >"$WORK/gdal1_wall.txt"
 : >"$WORK/gdal4_internal.txt"; : >"$WORK/gdal4_wall.txt"
+: >"$WORK/ours4_internal.txt"
 
 run_ours() {
-  wall_ms "$OURS" read "$FIXTURE" >>"$WORK/ours_wall.txt"
+  wall_ms "$OURS" read "$FIXTURE" 1 1 >>"$WORK/ours_wall.txt"
   value elapsed_ms <"$WORK/out.txt" >>"$WORK/ours_internal.txt"
   OURS_ROWS=$(value rows <"$WORK/out.txt")
   OURS_COLS=$(value columns <"$WORK/out.txt")
   OURS_BATCHES=$(value batches <"$WORK/out.txt")
+}
+
+run_ours_parallel() {
+  wall_ms "$OURS" read "$FIXTURE" 1 4 >/dev/null
+  value elapsed_ms <"$WORK/out.txt" >>"$WORK/ours4_internal.txt"
+  OURS4_ROWS=$(value rows <"$WORK/out.txt")
 }
 
 run_gdal() {
@@ -121,11 +128,13 @@ for rep in $(seq "$REPS"); do
     run_ours
   fi
   run_gdal 4 gdal4
+  run_ours_parallel
 done
 
 OURS_MS=$(median <"$WORK/ours_internal.txt")
 GDAL1_MS=$(median <"$WORK/gdal1_internal.txt")
 GDAL4_MS=$(median <"$WORK/gdal4_internal.txt")
+OURS4_MS=$(median <"$WORK/ours4_internal.txt")
 OURS_WALL=$(median <"$WORK/ours_wall.txt")
 GDAL1_WALL=$(median <"$WORK/gdal1_wall.txt")
 
@@ -146,5 +155,9 @@ printf 'wall minus floor:    ours %8s ms   gdal %8s ms   ratio %s\n' \
   "$OURS_ADJ" "$GDAL1_ADJ" "$(echo "scale=2; $OURS_ADJ / $GDAL1_ADJ" | bc)"
 printf 'gdal, 4 threads:     %s ms (%sx its own single-threaded figure)\n' \
   "$GDAL4_MS" "$(echo "scale=2; $GDAL1_MS / $GDAL4_MS" | bc)"
+printf 'ours, 4 threads:     %s ms (%sx our own single-threaded figure, rows=%s)\n' \
+  "$OURS4_MS" "$(echo "scale=2; $OURS_MS / $OURS4_MS" | bc)" "$OURS4_ROWS"
 echo
 echo "criterion 3 asks for a single-threaded ratio no worse than 1.25"
+printf 'ours at 4 threads against gdal single-threaded: %s\n' \
+  "$(echo "scale=2; $OURS4_MS / $GDAL1_MS" | bc)"

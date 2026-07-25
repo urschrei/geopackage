@@ -151,6 +151,55 @@ the implementation actually uses, and a falling total with a rising share is the
 opposite of the failure it was written to catch. It needs rethinking rather than
 a pass or a fail; flagged rather than quietly adjusted.
 
+## Parallel reads
+
+Same harness, same file, same cross-checks (1,000,000 rows, 15 columns, 16
+batches on both sides). `scripts/compare_gdal_arrow.sh 1000000 5`.
+
+| | time | against our own 1 thread |
+|---|---|---|
+| ours, 1 thread | 514.9 ms | |
+| ours, 2 threads | 386.4 ms | 1.33x |
+| ours, 4 threads | **254.2 ms** | **2.02x** |
+| ours, 8 threads | 228.9 ms | 2.25x |
+| GDAL, 1 thread | 367.3 ms | |
+| GDAL, 4 threads | 363.0 ms | its threading does not engage |
+
+Scaling is 2.02x on four threads, short of the 3.1x GDAL's slides report from
+one to four. Diminishing past four (2.25x on eight) is what a read bound by
+pulling pages rather than by cores looks like, and is why the automatic thread
+count stops at four.
+
+**Criterion 3 at equal thread count is still not met**, at 1.40x
+single-threaded. Read the other way, four of our threads finish the same work in
+254 ms where GDAL takes 367 ms and cannot be made to use more, a ratio of 0.69.
+That is worth having but it is not what criterion 3 asks, and the two should not
+be confused: one is a comparison of read paths and the other is a comparison of
+one path against four.
+
+### How it works, and what it declines to do
+
+Worker `w` of `n` reads batches `w`, `w + n`, `w + 2n`, and the consumer takes
+from the workers in the same rotation, so batches arrive in key order with no
+reordering buffer. Each worker's channel holds one batch, bounding the memory in
+flight by the thread count. Dropping the reader drops the receivers, which makes
+the next send fail and stops the workers; `Drop` then joins them.
+
+Three conditions, each declining rather than failing:
+
+- **A file.** Workers read through their own connections, and a `:memory:`
+  database is private to the connection that created it.
+- **A dense primary key**, no gaps between smallest and largest. Workers are
+  handed key ranges before a row is read, so a range must imply a row count.
+  `max - min + 1 == count` is slightly wider than GDAL's `min == 1 && max ==
+  count` and costs the same scan.
+- **More than one thread requested**, resolved from `min(4, available
+  parallelism)` by default.
+
+Workers open **read-only**, which is what makes several connections over one
+table safe without agreeing on a snapshot: there is no writer to race. GDAL
+restricts its path the same way.
+
 ## Consequences
 
 1. **Criterion 3 is not met**: 2.34x by the direct loop, 1.39x with the
