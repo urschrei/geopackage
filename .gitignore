@@ -8,5 +8,8 @@ geopackage-core/fuzz/coverage
 # Externally fetched corpus (scripts/fetch_corpus.sh); never committed.
 /corpus
 
+# Default output path of the bulk_load example when run without an argument.
+/bulk_load.gpkg
+
 # Hegel property-test server cache + failure database.
 .hegel/

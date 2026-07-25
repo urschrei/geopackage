@@ -5,9 +5,12 @@ bindings where demand exists, and an API freeze.
 
 ## Extensions (each: read support first, write behind explicit registration)
 
-- [ ] **`gpkg_crs_wkt_1_1`**: `definition_12_063` (WKT2:2015) + `epoch`
-      columns on `gpkg_spatial_ref_sys`; written automatically when a caller
-      supplies WKT2 (D3).
+- [x] **`gpkg_crs_wkt_1_1`**: `definition_12_063` + `epoch` columns on
+      `gpkg_spatial_ref_sys`, added and registered on demand. Brought forward
+      from M5 by issue #23: `add_epsg_srs` needs it for any code with no WKT1
+      form. Write support only so far, and the definitions come from
+      `epsg-utils` rather than from a caller supplying WKT2 (D3), so the read
+      side and the caller-supplied path remain M5 work.
 - [ ] **`gpkg_metadata`**: `gpkg_metadata` + `gpkg_metadata_reference` models,
       typed scopes/reference targets; no XML/profile interpretation; payloads
       are strings.
