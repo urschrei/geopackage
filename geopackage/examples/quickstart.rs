@@ -1,5 +1,5 @@
 //! The README quickstart, kept compilable: create a file, declare a point
-//! layer, write features, index it, and query by bounding box.
+//! layer, write features, and query by bounding box.
 
 use geo_types::Point;
 use geopackage::core::types::{ColumnType, GeometryType};

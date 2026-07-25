@@ -20,13 +20,21 @@ geopackage = "0.1"
 geo-types = "0.7"  # any geo-traits implementation works; this is the common one
 ```
 
+Columnar read and write through Apache Arrow is behind an off-by-default
+feature, since it pulls in the `arrow-array` and `arrow-schema` crates:
+
+```toml
+geopackage = { version = "0.1", features = ["arrow"] }
+```
+
 SQLite is bundled and built from source, so a C compiler is required; there is
 no system SQLite dependency. The minimum supported Rust version is 1.95.
 
 ## Example
 
-Create a file, declare a point layer, write features, index it, and query by
-bounding box:
+Create a file, declare a point layer, write features, and query by bounding
+box. The layer is indexed: `create_layer` builds a spatial index unless the
+builder declines it.
 
 ```rust
 use geo_types::Point;
@@ -61,6 +69,19 @@ for feature in layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))? {
 }
 ```
 
+### Columnar read and write
+
+With the `arrow` feature,
+[`read_arrow`](https://docs.rs/geopackage/latest/geopackage/struct.Layer.html#method.read_arrow)
+reads a layer as Arrow record batches, on `min(4, available parallelism)`
+threads by default, and
+[`write_arrow`](https://docs.rs/geopackage/latest/geopackage/struct.Layer.html#method.write_arrow)
+writes them back through the same path as `write_all`. Geometry is a GeoArrow
+WKB column carrying its CRS as PROJJSON, and
+[`arrow_schema`](https://docs.rs/geopackage/latest/geopackage/struct.Layer.html#method.arrow_schema)
+with `TableSchemaBuilder::from_arrow_schema` give the two directions of the
+type mapping, so a layer can be copied without its schema being restated.
+
 ### More examples
 
 Runnable programs in [`geopackage/examples`](https://github.com/urschrei/geopackage/tree/main/geopackage/examples):
@@ -69,7 +90,7 @@ Runnable programs in [`geopackage/examples`](https://github.com/urschrei/geopack
 |---|---|
 | `quickstart` | The snippet above, kept compiling. |
 | `inspect` | Layers, schemas, SRS, feature counts and spatial-index health for a file, in the manner of `ogrinfo -al -so`. Uses `open_lenient`, so it reports problems rather than refusing to open. |
-| `bulk_load` | Loading a large point layer with `write_all`, creating the index first so the bulk shadow-table build is used. |
+| `bulk_load` | Loading a large point layer with `write_all` into the empty index `create_layer` leaves behind, which is what engages the bulk shadow-table build. |
 | `bbox_query` | `features_in` bounding-box queries (RTree-accelerated or full-scan) and the `select` WHERE passthrough, with lazy geometry parsing. |
 | `repair_index` | Detecting `Legacy` and `Stale` spatial indexes and repairing them. |
 
@@ -79,12 +100,34 @@ cargo run --example inspect -- out.gpkg
 cargo run --example bbox_query -- out.gpkg points -10 -5 10 5
 ```
 
+## Configuration
+
+The defaults suit the common case: a single-file GeoPackage, an indexed feature
+layer, and values read the way other implementations read them. What people
+usually change:
+
+| Setting | Where | Default |
+|---|---|---|
+| Journal mode (WAL is opt-in) and `synchronous` level | `OpenOptions` | leave the file's own mode; a new file is `DELETE`, with SQLite's own `synchronous` |
+| Whether a new layer is indexed | `TableSchemaBuilder::spatial_index` | `true` |
+| Primary-key and geometry column names | `TableSchemaBuilder`, `GeometrySpec` | `fid`, `geom` |
+| Rows sharing a write transaction | the `batch_size` argument of `write_all` / `write_arrow` | caller's; `0` writes all of them in one |
+| The row count at which an index is built in bulk, how thoroughly that build then checks itself, and how full each RTree node is packed | `BulkIndexOptions` | 10,000 rows, `RtreeOnly`, `1.0` |
+| `DATETIME` strictness, and whether a value its declared type does not strictly permit is read or rejected | `ConversionOptions` | strict, lenient |
+| Rows per Arrow batch, and threads the columnar read uses | `ArrowReadOptions` | 65,536 rows, `min(4, available parallelism)` |
+
+The crate documentation's
+[Configuration](https://docs.rs/geopackage/latest/geopackage/#configuration)
+section links each of these to the type that documents it in full, with the
+reasoning behind each default. Anything not covered is reachable as SQL through
+`GeoPackage::connection()`.
+
 ## Workspace
 
 | Crate | Purpose |
 |---|---|
 | [`geopackage-core`](https://github.com/urschrei/geopackage/tree/main/geopackage-core) | No-IO spec layer: GeoPackage Binary (GPB) header codec, normative table DDL, version-aware RTree trigger SQL, identifier quoting, `application_id`/`user_version` handling. Dependency-light by design so other implementations can share it. |
-| [`geopackage`](https://github.com/urschrei/geopackage/tree/main/geopackage) | The library: container create/open over [rusqlite](https://github.com/rusqlite/rusqlite) (`bundled` + `functions`), the feature/attribute read and write paths, the RTree spatial-index lifecycle, and registration of the `ST_IsEmpty`/`ST_MinX`/… SQL functions required by the spatial index triggers. |
+| [`geopackage`](https://github.com/urschrei/geopackage/tree/main/geopackage) | The library: container create/open over [rusqlite](https://github.com/rusqlite/rusqlite) (`bundled` + `functions`), the feature/attribute read and write paths, columnar read and write through Apache Arrow (feature `arrow`), the RTree spatial-index lifecycle, and registration of the `ST_IsEmpty`/`ST_MinX`/… SQL functions required by the spatial index triggers. |
 | `geopackage-core/fuzz` | cargo-fuzz targets (GPB parser). |
 
 ## Design notes
@@ -104,6 +147,12 @@ cargo run --example bbox_query -- out.gpkg points -10 -5 10 5
 - **Interchange-first close.** WAL is opt-in, and a handle that opted into it
   checkpoints and resets the file to `DELETE` on close, so a handed-over
   `.gpkg` is a single file with no sidecars.
+- **CRS stored faithfully, never transformed.** There is no PROJ dependency and
+  no coordinate transformation. `add_epsg_srs` writes a WKT1 definition from a
+  vendored subset where the code has one and from the EPSG registry otherwise;
+  a code with no WKT1 form at all, such as the geographic 3D EPSG:4979, is
+  written as WKT2 through the `gpkg_crs_wkt_1_1` extension column, which is
+  what GDAL does with the same codes.
 
 ## Conformance
 
@@ -114,9 +163,7 @@ correct 1.4 one; no 1.3/1.4 ETS exists), the
 [PDOK validator](https://github.com/PDOK/geopackage-validator) (clean but for
 two advisory findings on deliberate choices), `ogrinfo`, and a GDAL round-trip
 that byte-compares geometry WKB and attribute values. The test corpus includes
-GDAL-written, QGIS-written and raw-SQLite files. See
-[roadmap/04-m2-write-rtree.md](https://github.com/urschrei/geopackage/blob/main/roadmap/04-m2-write-rtree.md)
-for the detailed results.
+GDAL-written, QGIS-written and raw-SQLite files.
 
 ## Known limitations
 
@@ -126,24 +173,28 @@ for the detailed results.
   0xFFFFFFFF-member collection drives a multi-gigabyte allocation. Found by the
   `gpb_geometry` fuzz target. The fix belongs upstream in
   [georust/wkb](https://github.com/georust/wkb); do not parse untrusted
-  GeoPackage files with 0.1.0. Tracked in
+  GeoPackage files with 0.1.x. Tracked in
   [#3](https://github.com/urschrei/geopackage/issues/3).
 - **Non-linear curve types** (`CIRCULARSTRING`, `COMPOUNDCURVE`, …) cannot have
   their envelopes computed and so cannot be inserted into an indexed table.
   Tracked in [#5](https://github.com/urschrei/geopackage/issues/5).
-- **Feature iteration materialises the result set** rather than streaming.
-  Tracked in [#4](https://github.com/urschrei/geopackage/issues/4).
+- **Tile pyramids are not implemented.** This is a vector-feature and
+  attribute-table library so far; a file's tile tables are visible through
+  `contents()` but there is no read or write path for them.
 
-## Roadmap
+## Status
 
-M1 (feature and attribute read: scan, bbox via rtree, WHERE passthrough, full
-WKB envelopes) and M2 (write path, layer creation, bulk rtree build, trigger
-repair) are complete and released as v0.1. Next: M3 GeoArrow `RecordBatch`
-I/O, C ABI (`geopackage-ffi`), CLI, for v0.2. M4: tiles. M5: extensions (CRS
-WKT2, metadata, schema, related tables).
+The read path (scan, bounding-box query through the RTree, `WHERE`
+passthrough, full WKB envelopes) and the write path (layer creation,
+`FeatureWriter`, bulk RTree build, trigger repair) are released as 0.1.x.
+Landed since 0.1.2 and not yet released: columnar read and write through
+Apache Arrow behind the `arrow` feature, a spatial index on every new feature
+layer by default, and EPSG coverage beyond the vendored WKT1 subset. See the
+[changelog](CHANGELOG.md).
 
-The full roadmap, including the decision record, lives in
-[roadmap/](https://github.com/urschrei/geopackage/tree/main/roadmap).
+Next, for 0.2: a C ABI (`geopackage-ffi`) exposing the Arrow C Data Interface,
+and a CLI. After that, tile pyramids, then the remaining extensions and an API
+freeze for 1.0.
 
 ## License
 
