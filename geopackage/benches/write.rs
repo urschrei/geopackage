@@ -151,7 +151,9 @@ fn prepare(geom: GeomKind, mode: Mode, master: &[NewFeature<Geometry<f64>>]) -> 
     let gpkg = GeoPackage::create(dir.path().join("bench.gpkg")).expect("create gpkg");
     let table = geom.label().to_owned();
     let builder = TableSchemaBuilder::new(table.clone())
-        .geometry(GeometrySpec::new(geom.geometry_type(), 4326));
+        .geometry(GeometrySpec::new(geom.geometry_type(), 4326))
+        // Each arm decides for itself, so the unindexed one stays unindexed.
+        .spatial_index(false);
     {
         let layer = gpkg.create_layer(&builder).expect("create layer");
         if matches!(mode, Mode::Triggered | Mode::Bulk) {

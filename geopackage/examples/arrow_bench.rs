@@ -86,7 +86,9 @@ fn fixture(path: &str, rows: usize) -> Result<(), Box<dyn std::error::Error>> {
         .column(ColumnSpec::new("active", ColumnType::Boolean))
         .column(ColumnSpec::new("surveyed", ColumnType::DateTime))
         .column(ColumnSpec::new("payload", ColumnType::Blob(None)))
-        .geometry(GeometrySpec::new(GeometryType::Polygon, 4326));
+        .geometry(GeometrySpec::new(GeometryType::Polygon, 4326))
+        // The comparison decides, so both arms can be run either way.
+        .spatial_index(false);
     let layer = gpkg.create_layer(&builder)?;
 
     let stamp = DateTime::parse_strict("2026-07-24T12:34:56.789Z")?;
@@ -178,8 +180,12 @@ fn write(source: &str, target: &str, index: bool) -> Result<(), Box<dyn std::err
     let count = batches.len();
 
     let dst = GeoPackage::create(target)?;
-    let layer =
-        dst.create_layer(&TableSchemaBuilder::new("features").from_arrow_schema(&schema)?)?;
+    let layer = dst.create_layer(
+        &TableSchemaBuilder::new("features")
+            .from_arrow_schema(&schema)?
+            // The `index` argument decides, so the comparison can run both ways.
+            .spatial_index(false),
+    )?;
     if index {
         // Created empty and before the write, which is what lets the bulk path
         // build it in one pass rather than through the triggers.

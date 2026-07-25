@@ -1122,7 +1122,9 @@ mod tests {
         let layer = gpkg
             .create_layer(
                 &TableSchemaBuilder::new("pts")
-                    .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+                    .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+                    // Created here, so the test controls when it exists.
+                    .spatial_index(false),
             )
             .unwrap();
         layer.create_spatial_index().unwrap();

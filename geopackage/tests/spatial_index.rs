@@ -52,7 +52,10 @@ fn gpb_point(srs_id: i32, x: f64, y: f64) -> Vec<u8> {
 fn add_points_layer(gpkg: &GeoPackage, points: &[(i64, f64, f64)]) {
     let builder = TableSchemaBuilder::new("pts")
         .column(ColumnSpec::new("name", ColumnType::Text(None)))
-        .geometry(GeometrySpec::new(GeometryType::Point, 4326));
+        .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+        // This file tests the index lifecycle, so it builds the index itself
+        // rather than taking the one `create_layer` now makes by default.
+        .spatial_index(false);
     let layer = gpkg.create_layer(&builder).unwrap();
     let mut writer = layer.writer().unwrap();
     for &(fid, x, y) in points {
@@ -704,7 +707,8 @@ fn write_all_bulk_with_preexisting_rows_indexes_every_row() {
     let gpkg = GeoPackage::create(dir.path().join("m.gpkg")).unwrap();
     let builder = TableSchemaBuilder::new("pts")
         .column(ColumnSpec::new("name", ColumnType::Text(None)))
-        .geometry(GeometrySpec::new(GeometryType::Point, 4326));
+        .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+        .spatial_index(false);
     let layer = gpkg.create_layer(&builder).unwrap();
 
     // Two NULL-geometry rows: indexable-row count stays zero.
@@ -1150,4 +1154,76 @@ fn bulk_build_indexes_envelope_less_geometries() {
         .find(|r| r.0 == 2)
         .expect("envelope-less geometry should be indexed");
     assert!((row.1 - 12.5).abs() < 1e-6 && (row.3 - (-3.25)).abs() < 1e-6);
+}
+
+/// A feature layer gets a spatial index without being asked (issue #26).
+///
+/// The default every other implementation has: GDAL's driver creates one unless
+/// told otherwise. Without it `features_in` still answers correctly by falling
+/// back to a full scan, so the absence is invisible until someone profiles.
+#[test]
+fn create_layer_builds_a_spatial_index_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("d.gpkg")).unwrap();
+    let layer = gpkg
+        .create_layer(
+            &TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+        )
+        .unwrap();
+
+    assert!(layer.has_spatial_index().unwrap());
+    assert_eq!(
+        layer.spatial_index_status().unwrap(),
+        geopackage::SpatialIndexStatus::Current,
+        "the 1.4 trigger set is installed, not just the virtual table"
+    );
+
+    // Empty, which is what lets a later large write build it in one bulk pass.
+    assert!(rtree_rows(gpkg.connection()).is_empty());
+
+    // And it is maintained: a write through the triggers reaches the index.
+    {
+        let mut writer = layer.writer().unwrap();
+        writer.insert(Some(1), &Point::new(1.0, 2.0), &[]).unwrap();
+        writer.commit().unwrap();
+    }
+    assert_eq!(rtree_rows(gpkg.connection()).len(), 1);
+}
+
+/// The opt-out leaves the layer unindexed, and `create_spatial_index` still
+/// works afterwards.
+#[test]
+fn the_spatial_index_can_be_declined() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("o.gpkg")).unwrap();
+    let layer = gpkg
+        .create_layer(
+            &TableSchemaBuilder::new("pts")
+                .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+                .spatial_index(false),
+        )
+        .unwrap();
+
+    assert!(!layer.has_spatial_index().unwrap());
+    assert_eq!(
+        layer.spatial_index_status().unwrap(),
+        geopackage::SpatialIndexStatus::Absent
+    );
+    layer.create_spatial_index().unwrap();
+    assert!(layer.has_spatial_index().unwrap());
+}
+
+/// An attributes table has no geometry to index, so the default is simply not
+/// applicable rather than an error.
+#[test]
+fn an_attributes_table_is_unaffected_by_the_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("a.gpkg")).unwrap();
+    let layer = gpkg
+        .create_attributes_table(
+            &TableSchemaBuilder::new("notes")
+                .column(ColumnSpec::new("body", ColumnType::Text(None))),
+        )
+        .unwrap();
+    assert!(!layer.has_spatial_index().unwrap());
 }

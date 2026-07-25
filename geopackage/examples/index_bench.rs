@@ -80,7 +80,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let gpkg = GeoPackage::create(&path)?;
             let layer = gpkg.create_layer(
                 &TableSchemaBuilder::new("pts")
-                    .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+                    .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+                    // `fixture` writes an unindexed file: `build` is the timed
+                    // operation, so the index must not exist beforehand.
+                    .spatial_index(false),
             )?;
             let features: Vec<NewFeature<Geometry<f64>>> = (0..rows)
                 .map(|i| {

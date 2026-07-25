@@ -379,8 +379,10 @@ mod tests {
     fn populated(points: &[(i64, f64, f64)]) -> (tempfile::TempDir, GeoPackage) {
         let dir = tempfile::tempdir().unwrap();
         let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
-        let builder =
-            TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326));
+        let builder = TableSchemaBuilder::new("pts")
+            .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+            // These tests drive the index lifecycle themselves.
+            .spatial_index(false);
         let layer = gpkg.create_layer(&builder).unwrap();
         let mut writer = layer.writer().unwrap();
         for &(fid, x, y) in points {

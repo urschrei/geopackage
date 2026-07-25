@@ -55,8 +55,10 @@ fn build(n: usize, indexed: bool) -> (tempfile::TempDir, GeoPackage) {
     let path = dir.path().join("read.gpkg");
     {
         let gpkg = GeoPackage::create(&path).expect("create gpkg");
-        let builder =
-            TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326));
+        let builder = TableSchemaBuilder::new("pts")
+            .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+            // The `indexed` argument decides, not the default.
+            .spatial_index(false);
         let layer = gpkg.create_layer(&builder).expect("create layer");
         let features: Vec<NewFeature<Geometry<f64>>> = (0..n)
             .map(|i| {

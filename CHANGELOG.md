@@ -21,6 +21,25 @@ While the version is below 1.0 the API may change in any release.
 
 ### Changed
 
+- **`create_layer` now builds a spatial index by default** ([#26]). Previously a
+  feature layer came back unindexed and the caller asked for an index
+  separately. Decline it with `TableSchemaBuilder::spatial_index(false)`.
+
+  This changes the bytes a file gets: an indexed layer carries the
+  `rtree_<table>_<column>` virtual table, its shadow tables, the GeoPackage 1.4
+  trigger set and a `gpkg_extensions` row. All of that is spec-legal and is what
+  `ogr2ogr` produces, but it is a change rather than an improvement in disguise.
+
+  The reasoning: every other implementation indexes by default, and without an
+  index `Layer::features_in` still answers correctly by falling back to a full
+  scan, so the absence is invisible until someone profiles it. Building it at
+  layer-creation time also makes it empty, which is the state that lets a
+  subsequent large `write_all` or `write_arrow` fill it in one bulk pass instead
+  of row by row through the triggers, so the default arrangement is also the fast
+  one.
+
+  Attribute tables are unaffected, having no geometry column.
+
 - **`ConversionOptions::strict()` is now strict on both axes**, so it is no
   longer the same value as `ConversionOptions::default()`. `default()` is
   unchanged in behaviour: strict `DATETIME` parsing with lenient value reading.
@@ -248,6 +267,7 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
 [0.1.1]: https://github.com/urschrei/geopackage/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/urschrei/geopackage/releases/tag/v0.1.0
 [#1]: https://github.com/urschrei/geopackage/issues/1
+[#26]: https://github.com/urschrei/geopackage/issues/26
 [#3]: https://github.com/urschrei/geopackage/issues/3
 [#4]: https://github.com/urschrei/geopackage/issues/4
 [#4]: https://github.com/urschrei/geopackage/issues/4

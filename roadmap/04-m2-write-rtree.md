@@ -42,9 +42,11 @@ write performance competitive with GDAL's GPKG driver.
       (`SpatialIndexExists`), an attribute layer (`NoGeometryColumn`), or a
       table with no single-column primary key (`NoPrimaryKey`); `drop` is
       idempotent and removes any trigger generation, leaving the
-      `gpkg_extensions` table. The extension row uses the spec Annex F.3
-      requirement 75/76 strings, reusing the existing `triggers::EXTENSION_*`
-      constants.)*
+      `gpkg_extensions` table. Since issue #26, `create_layer` calls
+      `create_spatial_index` itself unless the builder declines it, so `create`
+      is the opt-out path rather than the opt-in one. The extension row uses the
+      spec Annex F.3 requirement 75/76 strings, reusing the existing
+      `triggers::EXTENSION_*` constants.)*
 - [x] **Bulk build (D8)**: during `write_all` on an indexed layer (or
       `create_spatial_index` on a populated table): drop/defer triggers,
       accumulate `(fid, envelope)`, build rtree in scratch in-memory DB, copy

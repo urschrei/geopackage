@@ -165,6 +165,7 @@ pub struct TableSchemaBuilder {
     primary_key: String,
     columns: Vec<ColumnSpec>,
     geometry: Option<GeometrySpec>,
+    spatial_index: bool,
 }
 
 impl TableSchemaBuilder {
@@ -180,6 +181,7 @@ impl TableSchemaBuilder {
             primary_key: DEFAULT_PRIMARY_KEY.to_owned(),
             columns: Vec::new(),
             geometry: None,
+            spatial_index: true,
         }
     }
 
@@ -193,6 +195,29 @@ impl TableSchemaBuilder {
     /// The primary-key column name this builder will use.
     pub fn primary_key_name(&self) -> &str {
         &self.primary_key
+    }
+
+    /// Whether [`GeoPackage::create_layer`] should build a spatial index for
+    /// this layer. Defaults to `true`.
+    ///
+    /// An indexed feature layer is what every other implementation produces:
+    /// GDAL's driver creates one unless told otherwise, so a file from
+    /// `ogr2ogr` has one. Without an index [`crate::Layer::features_in`] still
+    /// answers correctly, by falling back to a full scan, so the absence is
+    /// invisible until someone profiles it. A spatial format whose spatial
+    /// queries are quietly linear is a poor default.
+    ///
+    /// Creating it here also costs less than adding it later: the index is
+    /// empty, which is the state that lets a subsequent large
+    /// [`crate::Layer::write_all`] or [`crate::Layer::write_arrow`] build the
+    /// whole tree in one bulk pass rather than through the per-row triggers.
+    ///
+    /// Ignored for a builder with no geometry column, which has nothing to
+    /// index.
+    #[must_use]
+    pub fn spatial_index(mut self, spatial_index: bool) -> Self {
+        self.spatial_index = spatial_index;
+        self
     }
 
     /// Set `gpkg_contents.identifier` (a human-readable name). Defaults to the
@@ -280,6 +305,10 @@ impl GeoPackage {
                 table_name: builder.table_name.clone(),
             })?;
         self.create_table(builder, Some(geometry))?;
+        let layer = self.layer(&builder.table_name)?;
+        if builder.spatial_index {
+            layer.create_spatial_index()?;
+        }
         self.layer(&builder.table_name)
     }
 

@@ -42,10 +42,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .column(ColumnSpec::new("weight", ColumnType::Double))
             .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
     )?;
+    // `create_layer` builds the index, and builds it empty, which is what lets
+    // the write_all below fill it in one bulk pass instead of row by row
+    // through the triggers.
     let layer = gpkg.layer("points")?;
-
-    // Index first, so write_all bulk-builds it.
-    layer.create_spatial_index()?;
 
     let features: Vec<_> = (0..rows)
         .map(|i| {

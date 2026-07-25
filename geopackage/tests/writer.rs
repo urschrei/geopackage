@@ -34,7 +34,11 @@ fn gpkg() -> (tempfile::TempDir, GeoPackage) {
 /// A point layer with no attribute columns (only `fid` + `geom`).
 fn point_layer(gpkg: &GeoPackage, table: &str, geom_type: GeometryType, z: ZmFlag) {
     gpkg.create_layer(
-        &TableSchemaBuilder::new(table).geometry(GeometrySpec::new(geom_type, 4326).z(z)),
+        &TableSchemaBuilder::new(table)
+            .geometry(GeometrySpec::new(geom_type, 4326).z(z))
+            // The index tests in this file install it themselves, sometimes
+            // with raw trigger SQL, so they start from an unindexed layer.
+            .spatial_index(false),
     )
     .unwrap();
 }
