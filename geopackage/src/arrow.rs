@@ -176,6 +176,10 @@ fn geometry_field(name: &str, not_null: bool, srs_id: i32) -> Field {
 /// authority code, which GeoArrow permits, for the EPSG codes that a `srs_id`
 /// conventionally is. `srs_id` 0 and -1 are the spec's undefined values and
 /// carry no CRS at all.
+///
+/// Whether to carry PROJJSON is part of the CRS-definitions question in issue
+/// #23: the vendored subset behind [`geopackage_core::srs`] could not supply it
+/// for an arbitrary code even if this emitted it.
 fn crs_metadata(srs_id: i32) -> String {
     if srs_id <= 0 {
         return "{}".to_owned();

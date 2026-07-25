@@ -51,6 +51,14 @@ codes, accept caller-provided WKT for everything else, and let
 `proj`/`geodesy` remain composition points. A `srs_id → WKT` lookup failure is
 a typed error telling the user to supply the definition.
 
+**Under revision (issue #23).** The size argument for the vendored subset was an
+estimate rather than a measurement, and the subset looks too small for real-world
+files: a writer working outside it has to produce WKT itself, which is the burden
+this decision was meant to avoid. M3 adds a second reason, since GeoArrow wants
+PROJJSON for the geometry field's CRS and the subset cannot supply it for an
+arbitrary code. The "transform never" half of this decision is not in question;
+only how many definitions we carry, and in what formats.
+
 ## D4. Journal policy: interchange first
 
 **Decision.** Default journal mode DELETE. WAL opt-in; on close (and on
