@@ -3,9 +3,9 @@
 Study of GDAL 3.12.3, `ogr/ogrsf_frmts/gpkg/ogrgeopackagetablelayer.cpp` and
 `ogr/ogrsf_frmts/generic/ograrrowarrayhelper.cpp`, read at tag `v3.12.3` to
 match the locally installed GDAL. Written because the slides behind
-[05-m3-arrow-ffi.md](../05-m3-arrow-ffi.md) say the driver performs "not very far
-away from Parquet using some tricks and multithreading" without saying what the
-tricks are.
+[05-m3-arrow-ffi.md](../05-m3-arrow-ffi.md) say the driver performs "not very
+far away from Parquet using some tricks and multithreading" without saying what
+the tricks are.
 
 Techniques only, per the adaptation policy in
 [02-ecosystem.md](../02-ecosystem.md): nothing here is transliterated, and the
@@ -32,9 +32,9 @@ of it.
 Two wrinkles worth knowing before copying it. The first argument is a field
 start index, because a table with more columns than `SQLITE_LIMIT_FUNCTION_ARG`
 cannot be passed in one call: the SELECT then contains several calls of the same
-aggregate, each covering a slice of the columns, and each is told where its slice
-begins. And an over-large batch is cut short from inside the callback by calling
-`sqlite3_interrupt` on the connection.
+aggregate, each covering a slice of the columns, and each is told where its
+slice begins. And an over-large batch is cut short from inside the callback by
+calling `sqlite3_interrupt` on the connection.
 
 **For us.** rusqlite exposes `create_aggregate_function` and the whole thing is
 expressible in safe Rust, so `unsafe_code = "forbid"` is not in the way. The
@@ -72,8 +72,8 @@ scan it is for GDAL. Deletions are what break density in practice.
 When the dense-key test passes, the driver opens N *additional dataset handles*
 on the same file, each with its own SQLite connection and its own layer object,
 and each prefetches one batch at a fixed start offset (line 8810 onwards).
-Consumption is FIFO, and the consumer asserts that the task it pops starts at the
-row it expects. A consumed task is then recycled: its start advances by
+Consumption is FIFO, and the consumer asserts that the task it pops starts at
+the row it expects. A consumed task is then recycled: its start advances by
 `n_tasks * batch_size` and it is pushed back, giving a rolling pipeline with N
 batches in flight.
 
@@ -112,18 +112,18 @@ column cannot exceed 2 GB within a single batch. When the running batch would
 cross the limit the step callback submits early, logging "premature notification
 of N features to consumer due to too big array".
 
-**For us.** This is a real constraint we would otherwise have met at runtime with
-large polygons. arrow-rs has the same split: `BinaryArray` is int32-offset,
+**For us.** This is a real constraint we would otherwise have met at runtime
+with large polygons. arrow-rs has the same split: `BinaryArray` is int32-offset,
 `LargeBinaryArray` is int64. So M3 needs a decision, either cut batches short on
-a byte budget as GDAL does, or emit large_binary, and the GeoArrow `geoarrow.wkb`
-encoding needs checking for which it permits. 65536 is a reasonable default batch
-size to start from.
+a byte budget as GDAL does, or emit large_binary, and the GeoArrow
+`geoarrow.wkb` encoding needs checking for which it permits. 65536 is a
+reasonable default batch size to start from.
 
 ## 5. The geometry column is a pointer slice, not a parse
 
 In the ordinary case the driver reads the GPB header only for its length, then
-takes the WKB body as a pointer into the SQLite blob and copies it into the Arrow
-buffer (line 8003):
+takes the WKB body as a pointer into the SQLite blob and copies it into the
+Arrow buffer (line 8003):
 
 ```c
 pabyWkb = pabyBlob + oHeader.nHeaderLen;
@@ -133,8 +133,8 @@ nWKBSize = nBlobSize - oHeader.nHeaderLen;
 No geometry object is constructed. This confirms the "free: GPB bodies are WKB"
 assumption in the M3 doc from the other implementation's source rather than from
 our reading of the spec. The exceptions are coordinate-precision rounding
-(`m_bUndoDiscardCoordLSBOnReading`) and SpatiaLite-format blobs, both of which do
-parse; neither applies to us.
+(`m_bUndoDiscardCoordLSBOnReading`) and SpatiaLite-format blobs, both of which
+do parse; neither applies to us.
 
 A spatial filter, when present, is applied inside the same callback and uses the
 GPB header envelope when the header carries one, so the common case still does
