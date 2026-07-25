@@ -11,11 +11,20 @@
 //! zone database, no arithmetic. Convert to your preferred datetime crate at
 //! the boundary.
 //!
-//! Under revision (issue #24): the intention is to defer as much of this as
-//! possible to [jiff](https://docs.rs/jiff), keeping only the parsing and
-//! formatting policy the spec dictates. The Arrow path already needs calendar
-//! arithmetic these types deliberately do not provide.
+//! Calendar arithmetic is [jiff](https://docs.rs/jiff)'s (issue #24): validating
+//! a date, and converting one to and from the epoch counts a columnar reader
+//! needs. What stays here is the part that is a GeoPackage concern rather than a
+//! datetime one, namely which text forms are accepted on read and exactly which
+//! is written back.
+//!
+//! jiff is used with no timezone database at all (`default-features = false`,
+//! `std` only). A GeoPackage `DATETIME` is UTC by definition, and design
+//! decision D3 keeps this crate out of coordinate and time transformation
+//! generally, so none of `tz-system`, `tz-fat` or the `tzdb-*` bundles are
+//! wanted. jiff stays an implementation detail: no jiff type appears in this
+//! crate's API, so a jiff major version is not a breaking change here.
 
+use jiff::civil::Date as JiffDate;
 use std::fmt;
 
 /// A `DATE` value: `YYYY-MM-DD`, proleptic Gregorian, calendar-validated.
@@ -29,17 +38,83 @@ pub struct Date {
 impl Date {
     /// Construct a calendar-validated date. Years are limited to 0–9999 by
     /// the four-digit text form.
+    ///
+    /// The calendar itself is jiff's business: leap years, month lengths and the
+    /// century rules are not things this crate should be maintaining its own
+    /// version of. The year bound is ours, because it comes from the spec's text
+    /// form rather than from the calendar.
     pub fn new(year: u16, month: u8, day: u8) -> Result<Self, DateTimeError> {
         if year > 9999 {
             return Err(DateTimeError::OutOfRange("year"));
         }
+        Self::to_jiff_checked(year, month, day)?;
+        Ok(Self { year, month, day })
+    }
+
+    /// This date as a jiff date, validating it on the way.
+    fn to_jiff_checked(year: u16, month: u8, day: u8) -> Result<JiffDate, DateTimeError> {
         if !(1..=12).contains(&month) {
             return Err(DateTimeError::OutOfRange("month"));
         }
-        if day < 1 || day > days_in_month(year, month) {
-            return Err(DateTimeError::OutOfRange("day"));
-        }
-        Ok(Self { year, month, day })
+        let year = i16::try_from(year)
+            .ok()
+            .ok_or(DateTimeError::OutOfRange("year"))?;
+        let month = i8::try_from(month)
+            .ok()
+            .ok_or(DateTimeError::OutOfRange("month"))?;
+        let day = i8::try_from(day)
+            .ok()
+            .ok_or(DateTimeError::OutOfRange("day"))?;
+        JiffDate::new(year, month, day)
+            .ok()
+            .ok_or(DateTimeError::OutOfRange("day"))
+    }
+
+    /// This date as a jiff date. Infallible: a [`Date`] is validated on
+    /// construction.
+    fn to_jiff(self) -> JiffDate {
+        Self::to_jiff_checked(self.year, self.month, self.day).unwrap_or(JiffDate::ZERO)
+    }
+
+    /// Days from the Unix epoch to this date, negative before it.
+    ///
+    /// The count an Arrow `Date32` column holds, and the natural currency for
+    /// converting to any other datetime crate without this one having an opinion
+    /// about which.
+    pub fn days_since_epoch(self) -> i32 {
+        let epoch = JiffDate::new(1970, 1, 1).unwrap_or(JiffDate::ZERO);
+        // Whole days, so the hour count divides exactly and truncation is not a
+        // rounding decision, before or after the epoch.
+        let hours = self.to_jiff().duration_since(epoch).as_hours();
+        i32::try_from(hours / 24).unwrap_or(i32::MAX)
+    }
+
+    /// The date `days` from the Unix epoch, the inverse of
+    /// [`Self::days_since_epoch`].
+    ///
+    /// # Errors
+    ///
+    /// [`DateTimeError::OutOfRange`] for a count outside the years this type
+    /// can hold.
+    pub fn from_days_since_epoch(days: i32) -> Result<Self, DateTimeError> {
+        let epoch = JiffDate::new(1970, 1, 1)
+            .ok()
+            .ok_or(DateTimeError::OutOfRange("year"))?;
+        let date = epoch
+            .checked_add(jiff::Span::new().days(days))
+            .ok()
+            .ok_or(DateTimeError::OutOfRange("day"))?;
+        Self::new(
+            u16::try_from(date.year())
+                .ok()
+                .ok_or(DateTimeError::OutOfRange("year"))?,
+            u8::try_from(date.month())
+                .ok()
+                .ok_or(DateTimeError::OutOfRange("month"))?,
+            u8::try_from(date.day())
+                .ok()
+                .ok_or(DateTimeError::OutOfRange("day"))?,
+        )
     }
 
     /// Parse `YYYY-MM-DD`.
@@ -101,6 +176,98 @@ pub struct DateTime {
 }
 
 impl DateTime {
+    /// Microseconds from the Unix epoch to this instant, negative before it.
+    ///
+    /// The count an Arrow `Timestamp(Microsecond, "UTC")` column holds. A value
+    /// carrying a UTC offset is normalised to UTC; text with no zone designator
+    /// at all, which only lenient parsing produces, is read as UTC, which is
+    /// what the spec says a `DATETIME` column holds.
+    ///
+    /// Sub-microsecond precision is truncated, since the target unit cannot
+    /// carry it. The strict spec form is millisecond precision, so this only
+    /// bites on lenient input with more than six fractional digits.
+    ///
+    /// # Errors
+    ///
+    /// [`DateTimeError::OutOfRange`] for an instant outside what a microsecond
+    /// count can address.
+    pub fn micros_since_epoch(self) -> Result<i64, DateTimeError> {
+        let time = jiff::civil::Time::new(
+            i8::try_from(self.hour)
+                .ok()
+                .ok_or(DateTimeError::OutOfRange("hour"))?,
+            i8::try_from(self.minute)
+                .ok()
+                .ok_or(DateTimeError::OutOfRange("minute"))?,
+            i8::try_from(self.second)
+                .ok()
+                .ok_or(DateTimeError::OutOfRange("second"))?,
+            i32::try_from(self.nanosecond)
+                .ok()
+                .ok_or(DateTimeError::OutOfRange("nanosecond"))?,
+        )
+        .ok()
+        .ok_or(DateTimeError::OutOfRange("time"))?;
+        let stamp = self
+            .date
+            .to_jiff()
+            .to_datetime(time)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .ok()
+            .ok_or(DateTimeError::OutOfRange("datetime"))?
+            .timestamp()
+            .as_microsecond();
+        // The offset says how far ahead of UTC the written time is, so removing
+        // it is what normalises the instant.
+        let offset = i64::from(self.offset_minutes.unwrap_or(0)) * 60 * 1_000_000;
+        stamp
+            .checked_sub(offset)
+            .ok_or(DateTimeError::OutOfRange("datetime"))
+    }
+
+    /// The UTC instant `micros` from the Unix epoch, the inverse of
+    /// [`Self::micros_since_epoch`].
+    ///
+    /// # Errors
+    ///
+    /// [`DateTimeError::OutOfRange`] for a count outside the years this type
+    /// can hold.
+    pub fn from_micros_since_epoch(micros: i64) -> Result<Self, DateTimeError> {
+        let civil = jiff::Timestamp::from_microsecond(micros)
+            .ok()
+            .ok_or(DateTimeError::OutOfRange("datetime"))?
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .datetime();
+        Ok(Self {
+            date: Date::new(
+                u16::try_from(civil.year())
+                    .ok()
+                    .ok_or(DateTimeError::OutOfRange("year"))?,
+                u8::try_from(civil.month())
+                    .ok()
+                    .ok_or(DateTimeError::OutOfRange("month"))?,
+                u8::try_from(civil.day())
+                    .ok()
+                    .ok_or(DateTimeError::OutOfRange("day"))?,
+            )?,
+            hour: u8::try_from(civil.hour())
+                .ok()
+                .ok_or(DateTimeError::OutOfRange("hour"))?,
+            minute: u8::try_from(civil.minute())
+                .ok()
+                .ok_or(DateTimeError::OutOfRange("minute"))?,
+            second: u8::try_from(civil.second())
+                .ok()
+                .ok_or(DateTimeError::OutOfRange("second"))?,
+            nanosecond: u32::try_from(civil.subsec_nanosecond())
+                .ok()
+                .ok_or(DateTimeError::OutOfRange("nanosecond"))?,
+            // Always UTC: that is what the column means, and what
+            // `micros_since_epoch` normalised to.
+            offset_minutes: Some(0),
+        })
+    }
+
     /// Parse the strict 1.4 form `YYYY-MM-DDTHH:MM:SS.SSSZ` and nothing else.
     pub fn parse_strict(s: &str) -> Result<Self, DateTimeError> {
         // Exactly 24 bytes with `T` at 10, `.` at 19, `Z` at 23; the digit
@@ -285,20 +452,6 @@ fn parse_digits(b: &[u8]) -> Result<u32, DateTimeError> {
     Ok(v)
 }
 
-fn days_in_month(year: u16, month: u8) -> u8 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap_year(year) => 29,
-        2 => 28,
-        _ => 0,
-    }
-}
-
-fn is_leap_year(year: u16) -> bool {
-    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,5 +531,95 @@ mod tests {
         ] {
             assert!(DateTime::parse_lenient(s).is_err(), "{s}");
         }
+    }
+}
+
+#[cfg(test)]
+mod epoch_tests {
+    use super::*;
+
+    /// Reference values from Python's `datetime`, an independent implementation
+    /// of the same calendar. These were written against a hand-rolled
+    /// `days_from_civil` and are kept unchanged now that jiff does the
+    /// arithmetic, so they check the delegation rather than restate it.
+    #[test]
+    fn days_since_epoch_matches_the_calendar() {
+        let days = |y, m, d| Date::new(y, m, d).unwrap().days_since_epoch();
+        assert_eq!(days(1970, 1, 1), 0);
+        assert_eq!(days(1969, 12, 31), -1, "dates before the epoch go negative");
+        assert_eq!(days(2026, 7, 25), 20659);
+        assert_eq!(days(1900, 1, 1), -25567);
+        // 1900 is not a leap year and 2000 is: the century rules have to be
+        // right on both sides, which is where a hand-rolled conversion fails.
+        assert_eq!(days(2000, 2, 29), 11016);
+        assert_eq!(days(2000, 3, 1), 11017);
+    }
+
+    #[test]
+    fn micros_since_epoch_matches_the_calendar() {
+        let micros = |text: &str| {
+            DateTime::parse_strict(text)
+                .unwrap()
+                .micros_since_epoch()
+                .unwrap()
+        };
+        assert_eq!(micros("1970-01-01T00:00:00.000Z"), 0);
+        assert_eq!(micros("2026-07-24T12:34:56.789Z"), 1_784_896_496_789_000);
+        assert_eq!(micros("1969-12-31T23:59:59.000Z"), -1_000_000);
+    }
+
+    #[test]
+    fn a_utc_offset_is_normalised_away() {
+        // Lenient parsing accepts a numeric offset. The same instant written
+        // two ways must give the same number of microseconds.
+        let utc = DateTime::parse_strict("2026-07-24T12:34:56.000Z")
+            .unwrap()
+            .micros_since_epoch()
+            .unwrap();
+        let offset = DateTime::parse_lenient("2026-07-24T14:34:56+02:00")
+            .unwrap()
+            .micros_since_epoch()
+            .unwrap();
+        assert_eq!(utc, offset);
+    }
+
+    /// Both conversions round-trip, which is what the columnar read and write
+    /// paths rely on when a layer is copied through Arrow.
+    #[test]
+    fn the_conversions_round_trip() {
+        for (y, m, d) in [(1970, 1, 1), (1969, 12, 31), (2026, 7, 25), (1900, 1, 1)] {
+            let date = Date::new(y, m, d).unwrap();
+            assert_eq!(
+                Date::from_days_since_epoch(date.days_since_epoch()).unwrap(),
+                date
+            );
+        }
+        for text in [
+            "1970-01-01T00:00:00.000Z",
+            "2026-07-24T12:34:56.789Z",
+            "1969-12-31T23:59:59.000Z",
+        ] {
+            let stamp = DateTime::parse_strict(text).unwrap();
+            let micros = stamp.micros_since_epoch().unwrap();
+            assert_eq!(
+                DateTime::from_micros_since_epoch(micros)
+                    .unwrap()
+                    .to_string(),
+                text
+            );
+        }
+    }
+
+    /// The calendar rules now come from jiff, so the cases a hand-rolled
+    /// implementation gets wrong are worth keeping pointed at it.
+    #[test]
+    fn the_calendar_is_still_validated() {
+        Date::new(2026, 2, 30).unwrap_err();
+        Date::new(1900, 2, 29).unwrap_err();
+        Date::new(2000, 2, 29).unwrap();
+        Date::new(2026, 13, 1).unwrap_err();
+        Date::new(2026, 0, 1).unwrap_err();
+        Date::new(2026, 1, 0).unwrap_err();
+        Date::new(10_000, 1, 1).unwrap_err();
     }
 }

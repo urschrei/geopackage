@@ -31,6 +31,11 @@ tempfile = "3"
 wkb = "0.9"
 geo-traits = "0.3"
 geo-types = "0.7"
+# Calendar arithmetic and validation for the DATE/DATETIME types (issue #24).
+# No timezone database: a GeoPackage DATETIME is UTC by definition, and D3 keeps
+# this crate out of the transformation business, so `tz-*` and `tzdb-*` are all
+# off. `std` alone is the whole of what is needed.
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 # M3 Arrow data plane. `arrow-array`/`arrow-schema` only: the GeoArrow WKB
 # encoding is a Binary field carrying extension metadata, so `geoarrow-array`
 # would add a dependency without adding capability. Revisit if native GeoArrow

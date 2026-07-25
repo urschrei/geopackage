@@ -250,39 +250,6 @@ mod tests {
     fn char_family_wins_over_blob() {
         assert_eq!(affinity_type("TEXTBLOB"), DataType::Utf8);
     }
-
-    /// Reference values from Python's `datetime`, which is an independent
-    /// implementation of the same calendar.
-    #[test]
-    fn days_since_epoch_matches_the_calendar() {
-        let days = |y, m, d| days_since_epoch(Date::new(y, m, d).unwrap());
-        assert_eq!(days(1970, 1, 1), 0);
-        assert_eq!(days(1969, 12, 31), -1, "dates before the epoch go negative");
-        assert_eq!(days(2026, 7, 25), 20659);
-        assert_eq!(days(1900, 1, 1), -25567);
-        // 1900 is not a leap year and 2000 is: the century rules have to be
-        // right on both sides, which is where a hand-rolled conversion fails.
-        assert_eq!(days(2000, 2, 29), 11016);
-        assert_eq!(days(2000, 3, 1), 11017);
-    }
-
-    #[test]
-    fn micros_since_epoch_matches_the_calendar() {
-        let micros = |text: &str| micros_since_epoch(DateTime::parse_strict(text).unwrap());
-        assert_eq!(micros("1970-01-01T00:00:00.000Z"), 0);
-        assert_eq!(micros("2026-07-24T12:34:56.789Z"), 1_784_896_496_789_000);
-        assert_eq!(micros("1969-12-31T23:59:59.000Z"), -1_000_000);
-    }
-
-    #[test]
-    fn a_utc_offset_is_normalised_away() {
-        // Lenient parsing accepts a numeric offset. The same instant written
-        // two ways must give the same number of microseconds.
-        let utc = micros_since_epoch(DateTime::parse_strict("2026-07-24T12:34:56.000Z").unwrap());
-        let offset =
-            micros_since_epoch(DateTime::parse_lenient("2026-07-24T14:34:56+02:00").unwrap());
-        assert_eq!(utc, offset);
-    }
 }
 
 /// Options for the columnar read path.
@@ -1207,7 +1174,7 @@ impl ColumnBuilder {
                     text: text.to_owned(),
                     source,
                 })?;
-                builder.append_value(days_since_epoch(date));
+                builder.append_value(date.days_since_epoch());
             }
             (Self::Timestamp(builder), ValueRef::Text(bytes)) => {
                 let text = text(bytes)?;
@@ -1220,7 +1187,15 @@ impl ColumnBuilder {
                     text: text.to_owned(),
                     source,
                 })?;
-                builder.append_value(micros_since_epoch(stamp));
+                let micros =
+                    stamp
+                        .micros_since_epoch()
+                        .map_err(|source| Error::InvalidDateTimeValue {
+                            column: column_name(names, index),
+                            text: text.to_owned(),
+                            source,
+                        })?;
+                builder.append_value(micros);
             }
             // The GPB body is already ISO WKB, so the geometry costs a header
             // read and a copy, with no parsing of the geometry itself.
@@ -1307,51 +1282,6 @@ fn storage_class(value: ValueRef<'_>) -> &'static str {
         ValueRef::Text(_) => "TEXT",
         ValueRef::Blob(_) => "BLOB",
     }
-}
-
-/// Days from the Unix epoch to a civil date, which is what `Date32` holds.
-///
-/// Howard Hinnant's `days_from_civil`, which is exact over the proleptic
-/// Gregorian calendar and needs no lookup tables. Dates before 1970 give a
-/// negative count, which `Date32` represents.
-///
-/// This and [`micros_since_epoch`] are an interim arrangement: calendar
-/// arithmetic is not something this crate should be maintaining, and issue #24
-/// tracks deferring it to `jiff` along with the rest of the datetime handling.
-fn days_since_epoch(date: Date) -> i32 {
-    let year = i64::from(date.year());
-    let month = i64::from(date.month());
-    let day = i64::from(date.day());
-
-    // January and February are counted as months 13 and 14 of the previous
-    // year, which puts the leap day at the end of the year and removes the
-    // special case from the arithmetic below.
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let shifted_month = if month > 2 { month - 3 } else { month + 9 };
-    let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    // 146097 days per 400-year era; 719468 shifts the epoch from 0000-03-01 to
-    // 1970-01-01.
-    let days = era * 146_097 + day_of_era - 719_468;
-    i32::try_from(days).unwrap_or(i32::MAX)
-}
-
-/// Microseconds from the Unix epoch to an instant, which is what the
-/// `Timestamp(Microsecond, "UTC")` columns hold.
-///
-/// A datetime carrying a UTC offset is normalised to UTC. Text with no zone
-/// designator at all reaches here only under lenient parsing, and is read as
-/// UTC, which is what the spec says a `DATETIME` column holds.
-fn micros_since_epoch(stamp: DateTime) -> i64 {
-    const MICROS_PER_SECOND: i64 = 1_000_000;
-    let days = i64::from(days_since_epoch(stamp.date));
-    let seconds_of_day =
-        i64::from(stamp.hour) * 3600 + i64::from(stamp.minute) * 60 + i64::from(stamp.second);
-    let offset_seconds = i64::from(stamp.offset_minutes.unwrap_or(0)) * 60;
-    let seconds = days * 86_400 + seconds_of_day - offset_seconds;
-    seconds * MICROS_PER_SECOND + i64::from(stamp.nanosecond / 1_000)
 }
 
 /// Where each of a layer's columns sits in a batch, shared by all its rows.
@@ -1623,6 +1553,11 @@ fn bind_value<'a>(
         expected,
         found: "an array of another type",
     };
+    let out_of_range = |source| Error::InvalidDateTimeValue {
+        column: name(),
+        text: "an Arrow date or timestamp outside the representable range".to_owned(),
+        source,
+    };
 
     match column.data_type() {
         DataType::Boolean => owned(SqlV::Integer(i64::from(
@@ -1694,106 +1629,40 @@ fn bind_value<'a>(
                 .value(row),
         )),
         DataType::Date32 => owned(SqlV::Text(
-            date_from_days(
+            Date::from_days_since_epoch(
                 column
                     .as_primitive_opt::<Date32Type>()
                     .ok_or_else(|| mismatch("Date32"))?
                     .value(row),
-            )?
+            )
+            .map_err(out_of_range)?
             .to_string(),
         )),
         DataType::Timestamp(TimeUnit::Microsecond, _) => owned(SqlV::Text(
-            datetime_from_micros(
+            DateTime::from_micros_since_epoch(
                 column
                     .as_primitive_opt::<TimestampMicrosecondType>()
                     .ok_or_else(|| mismatch("Timestamp"))?
                     .value(row),
-            )?
+            )
+            .map_err(out_of_range)?
             .to_string(),
         )),
         DataType::Timestamp(TimeUnit::Millisecond, _) => owned(SqlV::Text(
-            datetime_from_micros(
+            DateTime::from_micros_since_epoch(
                 column
                     .as_primitive_opt::<TimestampMillisecondType>()
                     .ok_or_else(|| mismatch("Timestamp"))?
                     .value(row)
                     .saturating_mul(1_000),
-            )?
+            )
+            .map_err(out_of_range)?
             .to_string(),
         )),
         other => Err(Error::UnsupportedArrowType {
             data_type: other.to_string(),
         }),
     }
-}
-
-/// The civil date `days` after the Unix epoch: the inverse of
-/// [`days_since_epoch`].
-///
-/// Howard Hinnant's `civil_from_days`, the counterpart of the `days_from_civil`
-/// used on the read side. Like it, this is an interim arrangement pending issue
-/// #24.
-fn date_from_days(days: i32) -> Result<Date> {
-    let days = i64::from(days) + 719_468;
-    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
-    let day_of_era = days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted_month = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
-    let month = if shifted_month < 10 {
-        shifted_month + 3
-    } else {
-        shifted_month - 9
-    };
-    let year = if month <= 2 { year + 1 } else { year };
-
-    let out_of_range = || Error::UnsupportedArrowType {
-        data_type: format!("Date32 value {days} outside the representable range"),
-    };
-    Date::new(
-        u16::try_from(year).ok().ok_or_else(out_of_range)?,
-        u8::try_from(month).ok().ok_or_else(out_of_range)?,
-        u8::try_from(day).ok().ok_or_else(out_of_range)?,
-    )
-    .map_err(|source| Error::InvalidDateTimeValue {
-        column: String::new(),
-        text: format!("Date32 {days}"),
-        source,
-    })
-}
-
-/// The UTC instant `micros` after the Unix epoch: the inverse of
-/// [`micros_since_epoch`].
-fn datetime_from_micros(micros: i64) -> Result<DateTime> {
-    const MICROS_PER_SECOND: i64 = 1_000_000;
-    const SECONDS_PER_DAY: i64 = 86_400;
-
-    // Floor division, so instants before the epoch land on the right day rather
-    // than rounding toward zero into the next one.
-    let seconds = micros.div_euclid(MICROS_PER_SECOND);
-    let sub_second = micros.rem_euclid(MICROS_PER_SECOND);
-    let days = seconds.div_euclid(SECONDS_PER_DAY);
-    let seconds_of_day = seconds.rem_euclid(SECONDS_PER_DAY);
-
-    let days = i32::try_from(days)
-        .ok()
-        .ok_or_else(|| Error::UnsupportedArrowType {
-            data_type: format!("timestamp {micros} outside the representable range"),
-        })?;
-    let date = date_from_days(days)?;
-    Ok(DateTime {
-        date,
-        hour: u8::try_from(seconds_of_day / 3600).unwrap_or(0),
-        minute: u8::try_from((seconds_of_day % 3600) / 60).unwrap_or(0),
-        second: u8::try_from(seconds_of_day % 60).unwrap_or(0),
-        nanosecond: u32::try_from(sub_second.saturating_mul(1_000)).unwrap_or(0),
-        // Always UTC: that is what the column means, and what the read side
-        // normalised to when it produced the timestamp.
-        offset_minutes: Some(0),
-    })
 }
 
 impl crate::TableSchemaBuilder {
