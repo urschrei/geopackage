@@ -165,3 +165,60 @@ End to end against GDAL the ratio is unmoved: 1.39x before these changes, 1.41x
 after, which is run-to-run variance on both sides. Closing to the 1.25x
 criterion 3 asks for needs roughly 11% more, and text is the only line item big
 enough to supply it.
+
+## Correction: text is not expensive, big rows are (issue #25)
+
+The by-type table above states that its fixtures do not hold bytes per row
+constant, and that its per-value figures are therefore upper bounds. Measuring
+with that controlled shows how loose those bounds were.
+
+`bench_text_and_bytes` varies one thing at a time. 200,000 rows, twelve columns
+of one type, 2.4M values.
+
+| | time |
+|---|---|
+| `text/4` | 105.8 ms |
+| `text/16` | 109.3 ms |
+| `blob/16` | 107.4 ms |
+| `text/64` | 172.3 ms |
+| `blob/64` | 163.0 ms |
+
+**Text against blob at the same payload size**, which holds row size constant
+and
+leaves only UTF-8 validation and the difference between the two array types:
+
+| | difference | per value |
+|---|---|---|
+| `text/16` over `blob/16` | 1.9 ms | **0.8 ns** |
+| `text/64` over `blob/64` | 9.3 ms | 3.9 ns |
+
+Under a nanosecond per value at 16 bytes, scaling at roughly 0.06 ns per byte,
+which is UTF-8 validation running at about 16 GB/s. Text is not intrinsically
+expensive to build.
+
+So the +29.8 ns per value charged to text in the by-type table was almost all
+row
+size: twelve 14-byte strings is a far larger table than twelve small integers,
+and the extra time was SQLite reading it. The same shows up within the text
+series itself, where going from 4 to 16 bytes costs 0.12 ns per byte and 16 to
+64
+costs 0.55, because by 64 bytes a row is 768 bytes and the file is ten times
+larger.
+
+**This retires the plan that followed from the earlier table.** Issue #25 was
+opened to separate the two costs and then attack the text path. The separation
+is
+done and says there is no text path worth attacking: what looked like 22% of a
+realistic read recoverable from text handling is mostly the unavoidable cost of
+reading those bytes.
+
+What remains is per-value overhead that does not depend on type. `text/4`, with
+the smallest payload of the group, still costs 105.8 ms for 2.4M values, which
+is
+close to what the fifteen-column polygon fixture costs for a similar number.
+That
+points at the fixed work of appending a value, the two-level match in
+`ColumnBuilder::append`, the null bitmap and the offset push, rather than at
+anything type-specific. Whether that is worth attacking is a separate question
+from the one this measurement answered, and it should not inherit the earlier
+plan's assumption that it is.

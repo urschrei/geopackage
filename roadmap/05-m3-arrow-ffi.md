@@ -94,7 +94,13 @@ assumed about GPB bodies being usable as WKB without a parse.
       bigger row, which the current decomposition conflates; then the text path,
       the only line item large enough to supply the ~11% that criterion 3 still
       needs. Tracked as issue #25; nothing is blocked on it now that threaded
-      reading is the default and the single-threaded gap is accepted.)*
+      reading is the default and the single-threaded gap is accepted.*
+      *Update: the separation is done and retires the second half. Holding row
+      size constant, text costs 0.8 ns per value more than a blob of the same
+      length, so the 29.8 ns previously charged to text was almost entirely the
+      cost of reading a bigger row. There is no text path worth attacking. What
+      is left is per-value overhead that does not depend on type, and whether
+      that is worth pursuing is an open question rather than an inherited plan.)*
 - [x] Parallel `read_arrow`: one connection per thread over disjoint primary-key
       ranges, since SQLite permits concurrent readers and `rusqlite::Connection`
       is `Send`, so handle-per-thread needs no `unsafe`. The shape is settled by

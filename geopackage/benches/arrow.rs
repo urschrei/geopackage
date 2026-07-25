@@ -463,6 +463,85 @@ fn bench_building_by_type(c: &mut Criterion) {
     group.finish();
 }
 
+/// Separate per-value cost from per-byte cost, and text from raw bytes.
+///
+/// `bench_building_by_type` ranks the column types but cannot say how much of
+/// each figure is building and how much is simply reading a bigger row: its
+/// fixtures do not hold bytes per row constant, so twelve 14-byte strings is a
+/// much larger table than twelve small integers. This group fixes that by
+/// varying one thing at a time.
+///
+/// - `text/4`, `text/16`, `text/64`: the same column type at three payload
+///   sizes. The slope across them is per-byte cost; extrapolating back to zero
+///   length gives the per-value overhead, which is the part an implementation
+///   can hope to remove.
+/// - `blob/16` against `text/16`: identical payload sizes through
+///   `BinaryBuilder` and `StringBuilder`. The difference is UTF-8 validation
+///   plus whatever else differs between the two, with row size held constant.
+///
+/// Twelve columns each, so the per-type cost dominates the fixed per-row cost.
+fn bench_text_and_bytes(c: &mut Criterion) {
+    let n = rows();
+    let filler = |len: usize| -> String { "x".repeat(len) };
+    let shapes: Vec<(&str, (tempfile::TempDir, GeoPackage))> = vec![
+        (
+            "text/4",
+            build_uniform(n, "t4.gpkg", ColumnType::Text(None), move |_| {
+                Value::Text(filler(4))
+            }),
+        ),
+        (
+            "text/16",
+            build_uniform(n, "t16.gpkg", ColumnType::Text(None), move |_| {
+                Value::Text(filler(16))
+            }),
+        ),
+        (
+            "text/64",
+            build_uniform(n, "t64.gpkg", ColumnType::Text(None), move |_| {
+                Value::Text(filler(64))
+            }),
+        ),
+        (
+            "blob/16",
+            build_uniform(n, "b16.gpkg", ColumnType::Blob(None), |_| {
+                Value::Blob(vec![0x5a; 16])
+            }),
+        ),
+        (
+            "blob/64",
+            build_uniform(n, "b64.gpkg", ColumnType::Blob(None), |_| {
+                Value::Blob(vec![0x5a; 64])
+            }),
+        ),
+    ];
+
+    let mut group = c.benchmark_group("text_and_bytes");
+    group.sample_size(10);
+    group.sampling_mode(SamplingMode::Flat);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(8));
+    group.throughput(Throughput::Elements(
+        u64::try_from(n).expect("row count fits u64"),
+    ));
+    for (name, (_dir, gpkg)) in &shapes {
+        group.bench_function(*name, |b| {
+            let layer = gpkg.layer("features").expect("layer");
+            b.iter(|| {
+                let batches = layer
+                    .read_arrow(ArrowReadOptions::default().with_threads(1))
+                    .expect("read_arrow");
+                let mut total = 0usize;
+                for batch in batches {
+                    total += batch.expect("batch").num_rows();
+                }
+                black_box(total)
+            });
+        });
+    }
+    group.finish();
+}
+
 fn bench_columnar_vs_row(c: &mut Criterion) {
     let n = rows();
 
@@ -474,5 +553,10 @@ fn bench_columnar_vs_row(c: &mut Criterion) {
     bench_shape(c, "polygons_13attr", &polygons, &polygon_names, n);
 }
 
-criterion_group!(benches, bench_columnar_vs_row, bench_building_by_type);
+criterion_group!(
+    benches,
+    bench_columnar_vs_row,
+    bench_building_by_type,
+    bench_text_and_bytes
+);
 criterion_main!(benches);
