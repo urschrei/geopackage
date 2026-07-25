@@ -20,8 +20,8 @@
 //! - [`Layer::features_in`] runs a bounding-box query, using the RTree spatial
 //!   index when one is present and a full scan otherwise, with provably
 //!   identical results.
-//! - [`Layer::select`] appends a caller-supplied `WHERE` clause (raw SQL, per
-//!   design decision D9: SQL is the query engine).
+//! - [`Layer::select`] appends a caller-supplied `WHERE` clause (raw SQL: this
+//!   crate provides no query DSL of its own).
 //! - [`GeoPackage::open_lenient`] tolerates legacy and lightly malformed files,
 //!   collecting [`OpenWarning`]s instead of failing.
 //!
@@ -37,28 +37,18 @@
 //! - A feature layer is indexed by default;
 //!   [`TableSchemaBuilder::spatial_index`] declines it.
 //!   [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`], and
-//!   [`Layer::repair_spatial_index`] manage the RTree index afterwards (the
-//!   GeoPackage 1.4 trigger set, design decision D7). Building a large index,
-//!   [`Layer::create_spatial_index_with`], or [`Layer::write_all`] into a fresh
-//!   indexed layer, uses the bulk build ([`BulkIndexOptions`], design
-//!   decision D8).
+//!   [`Layer::repair_spatial_index`] manage the RTree index afterwards (always
+//!   the GeoPackage 1.4 trigger set, never a mixture of generations). Building
+//!   a large index, [`Layer::create_spatial_index_with`], or
+//!   [`Layer::write_all`] into a fresh indexed layer, uses the bulk build,
+//!   which constructs the tree in memory instead of inserting row by row
+//!   ([`BulkIndexOptions`]).
 //! - [`OpenOptions`] selects the journal mode ([`JournalMode`], WAL opt-in) and
 //!   [`Synchronous`] level; see the interchange-first close policy on
 //!   [`GeoPackage`].
 //!
 //! The GeoArrow bulk plane arrives in a later milestone; see the repository
 //! roadmap.
-//!
-//! # Design decisions
-//!
-//! Some documentation here cites a numbered decision, such as "design decision
-//! D8". These are entries in the crate's decision record, which states what was
-//! chosen, what was rejected and why:
-//!
-//! <https://github.com/urschrei/geopackage/blob/main/roadmap/01-design-decisions.md>
-//!
-//! The citations are there so a claim about behaviour can be traced to the
-//! reasoning behind it. Nothing in the API requires reading them.
 //!
 //! # Reading untrusted files
 //!
@@ -110,8 +100,9 @@
 //! ```
 
 // `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
-// workspace lints table (root Cargo.toml); see roadmap decision D12 for the
-// unsafe policy and its single planned exception (`geopackage-ffi`, M3).
+// workspace lints table (root Cargo.toml). This crate never uses `unsafe`; the
+// planned `geopackage-ffi` crate (M3) is the sole intended exception, and will
+// opt out of the workspace lints rather than relax them here.
 
 #[cfg(feature = "arrow")]
 pub mod arrow;
@@ -151,7 +142,7 @@ use std::path::Path;
 
 /// An open GeoPackage.
 ///
-/// # Interchange-first close (design decision D4)
+/// # Interchange-first close
 ///
 /// A handle opened or created in [`JournalMode::Wal`] holds `-wal`/`-shm`
 /// sidecar files while it is live. On [`GeoPackage::close`] and on drop such a
@@ -324,10 +315,10 @@ impl GeoPackage {
 
     /// Consume, returning the underlying connection.
     ///
-    /// This **opts out** of the interchange-first close guarantee (design
-    /// decision D4): the returned connection keeps whatever journal mode it is
-    /// in, so a handle that was in [`JournalMode::Wal`] hands back a WAL
-    /// connection with its `-wal`/`-shm` sidecars intact. Use
+    /// This **opts out** of the interchange-first close guarantee: the returned
+    /// connection keeps whatever journal mode it is in, so a handle that was in
+    /// [`JournalMode::Wal`] hands back a WAL connection with its `-wal`/`-shm`
+    /// sidecars intact. Use
     /// [`Self::close`] instead when the resulting file is to be handed over.
     pub fn into_connection(mut self) -> Connection {
         // Taking the connection leaves `self.conn == None`, so the `Drop` below
@@ -338,7 +329,7 @@ impl GeoPackage {
     }
 
     /// Close the GeoPackage, finalising a [`JournalMode::Wal`] file back to a
-    /// single [`JournalMode::Delete`] file (design decision D4).
+    /// single [`JournalMode::Delete`] file.
     ///
     /// For a WAL handle this checkpoints the WAL (`TRUNCATE`) and resets the
     /// journal mode to `DELETE`, removing the `-wal`/`-shm` sidecars, then
@@ -360,8 +351,8 @@ impl GeoPackage {
 impl Drop for GeoPackage {
     fn drop(&mut self) {
         // Interchange-first: a WAL handle resets the file to a single DELETE
-        // file. Best-effort and must never panic (design decision D4): an
-        // un-checkpointed WAL file is still valid and recovers on next open.
+        // file. Best-effort and must never panic: an un-checkpointed WAL file
+        // is still valid and recovers on next open.
         if self.journal_mode == JournalMode::Wal
             && let Some(conn) = self.conn.as_ref()
             && finalize_wal_to_delete(conn).is_err()

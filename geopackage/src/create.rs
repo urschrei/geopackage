@@ -8,9 +8,10 @@
 //! rows in one transaction. `gpkg_geometry_columns` is created lazily on first
 //! use from the normative [`ddl::CREATE_GPKG_GEOMETRY_COLUMNS`].
 //!
-//! Design decision D10: schema is declared through an explicit builder, not a
-//! derive macro. Column defaults are raw SQL text, trusted from the caller
-//! (design decision D9); every identifier is quoted via [`ident::quote`].
+//! Schema is declared through an explicit builder, not a derive macro, so a
+//! table's shape can be chosen at run time rather than fixed at compile time.
+//! Column defaults are raw SQL text, trusted from the caller; every identifier
+//! is quoted via [`ident::quote`].
 
 use geopackage_core::ddl;
 use geopackage_core::ident::quote;
@@ -68,7 +69,7 @@ impl ColumnSpec {
 
     /// Set a `DEFAULT` expression, as raw SQL text (e.g. `"0"`, `"'n/a'"`,
     /// `"CURRENT_TIMESTAMP"`). Emitted verbatim, so it is the caller's
-    /// responsibility to supply a valid, safe expression (design decision D9).
+    /// responsibility to supply a valid, safe expression.
     #[must_use]
     pub fn default_value(mut self, sql: impl Into<String>) -> Self {
         self.default = Some(sql.into());

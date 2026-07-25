@@ -16,8 +16,7 @@
 //! the escape-hatch `rusqlite::Transaction` out of the public surface and lets
 //! the writer maintain the running bounding-box fold and `last_change` at one
 //! commit point. The raw connection ([`crate::GeoPackage::connection`]) remains
-//! available for callers who want to drive their own transaction (design
-//! decision D9).
+//! available for callers who want to drive their own transaction.
 //!
 //! # Bounding box and `last_change`
 //!
@@ -31,7 +30,8 @@
 //! # Envelopes and Z/M
 //!
 //! Every written geometry gets a GPB envelope (XY, or XYZ when it carries Z),
-//! per design decision D6; encoding is delegated to
+//! so a reader, and the rtree triggers that ask for four bounds a row, never
+//! have to decode the WKB body to get them; encoding is delegated to
 //! [`geopackage_core::geometry::encode_gpb`]. A geometry's `z`/`m` presence is
 //! validated against the column's [`ZmFlag`] before encoding, so a violation
 //! is a typed [`Error::ZmViolation`] rather than a malformed row.
@@ -338,7 +338,7 @@ impl<'a> Layer<'a> {
     }
 
     /// [`Self::write_all`] with an explicit [`BulkIndexOptions`] controlling the
-    /// bulk-vs-triggered index-build choice (design decision D8).
+    /// bulk-vs-triggered index-build choice.
     ///
     /// The bulk path is taken when the layer has a spatial index, the write
     /// reaches `options.bulk_threshold` rows, and it is large enough relative to

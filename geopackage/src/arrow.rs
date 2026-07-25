@@ -404,9 +404,8 @@ impl Layer<'_> {
     /// Each batch is a separate query, paginated on the primary key, so a
     /// concurrent writer can change the table between batches. Wrap the read in
     /// your own transaction on [`crate::GeoPackage::connection`] if you need a
-    /// stable snapshot across the whole layer (design decision D9). This shape
-    /// is what lets batches be fetched by key range, which the threaded path
-    /// needs.
+    /// stable snapshot across the whole layer. This shape is what lets batches
+    /// be fetched by key range, which the threaded path needs.
     ///
     /// # Errors
     ///
