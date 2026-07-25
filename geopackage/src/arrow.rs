@@ -217,12 +217,61 @@ fn crs_metadata(srs_id: i32) -> String {
     if srs_id <= 0 {
         return "{}".to_owned();
     }
-    format!(r#"{{"crs":"EPSG:{srs_id}","crs_type":"authority_code"}}"#)
+    // GeoArrow recommends PROJJSON and says an authority code "should only be
+    // used as a last resort", because it leaves the reader to resolve the code
+    // against a registry it may not have. Emit the full definition when we can
+    // and keep the code as the fallback for anything outside the EPSG registry
+    // (a user-defined srs_id, say).
+    epsg_utils::epsg_to_projjson(srs_id).map_or_else(
+        |_| format!(r#"{{"crs":"EPSG:{srs_id}","crs_type":"authority_code"}}"#),
+        |projjson| format!(r#"{{"crs":{projjson},"crs_type":"projjson"}}"#),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn epsg_code_reads_the_crs_id_not_a_nested_one() {
+        // EPSG:4326's PROJJSON nests the ellipsoidal coordinate system's own
+        // identifier, 6422, ahead of the CRS's. A scan for the first code
+        // would return that.
+        let metadata = crs_metadata(4326);
+        assert!(
+            metadata.contains(r#""code":6422"#),
+            "the trap this guards against has moved, update the test: {metadata}"
+        );
+        assert_eq!(epsg_code(&metadata), Some(4326));
+    }
+
+    #[test]
+    fn epsg_code_reads_the_authority_code_form() {
+        // What we emit for a code the registry does not know, and a form other
+        // producers use.
+        assert_eq!(
+            epsg_code(r#"{"crs":"EPSG:27700","crs_type":"authority_code"}"#),
+            Some(27700)
+        );
+    }
+
+    #[test]
+    fn epsg_code_declines_what_it_cannot_identify() {
+        assert_eq!(epsg_code("{}"), None);
+        assert_eq!(epsg_code("not json"), None);
+        // A CRS defined by some other authority is not an EPSG code.
+        assert_eq!(
+            epsg_code(r#"{"crs":{"id":{"authority":"ESRI","code":104305}}}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn a_layer_srs_round_trips_through_the_metadata() {
+        for code in [4326, 27700, 32630, 4979] {
+            assert_eq!(epsg_code(&crs_metadata(code)), Some(code), "code {code}");
+        }
+    }
 
     #[test]
     fn affinity_follows_sqlite_rules() {
@@ -1751,14 +1800,26 @@ fn column_type_for(data_type: &DataType) -> Result<ColumnType> {
 /// The numeric part of an `EPSG:<code>` authority code in GeoArrow CRS
 /// metadata, if that is the form it takes.
 ///
-/// Deliberately not a JSON parse. The only form this crate emits is the one
-/// [`crs_metadata`] writes, and a full parse would mean a JSON dependency in
-/// order to read back a string we produced. A CRS in any other form, PROJJSON
-/// included, yields `None` and the caller sets the SRS themselves. Widening this
-/// is part of issue #23.
+/// Handles both forms [`crs_metadata`] emits, and the same two forms from any
+/// other producer: a PROJJSON object, or an `EPSG:<code>` authority string.
+///
+/// PROJJSON needs a real parse rather than a scan for the first `"code"`. A
+/// CRS object nests identifiers for its coordinate system, datum and
+/// ellipsoid, all of which have EPSG codes of their own: in EPSG:4326 the
+/// first one to appear is 6422, the ellipsoidal coordinate system. Only the
+/// top-level `id` identifies the CRS itself. Anything else yields `None` and
+/// the caller sets the SRS themselves.
 fn epsg_code(metadata: &str) -> Option<i32> {
-    let start = metadata.find("EPSG:")? + "EPSG:".len();
-    let rest = metadata.get(start..)?;
-    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    digits.parse().ok()
+    let value: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    let crs = value.get("crs")?;
+    if let Some(id) = crs.get("id")
+        && id
+            .get("authority")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|a| a.eq_ignore_ascii_case("EPSG"))
+    {
+        return id.get("code")?.as_i64()?.try_into().ok();
+    }
+    let code = crs.as_str()?.strip_prefix("EPSG:")?;
+    code.parse().ok()
 }

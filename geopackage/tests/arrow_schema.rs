@@ -91,10 +91,16 @@ fn geometry_column_carries_the_geoarrow_extension() {
         Some("geoarrow.wkb")
     );
     let crs = geom.metadata().get("ARROW:extension:metadata").unwrap();
-    assert!(
-        crs.contains("EPSG:4326"),
-        "the layer's srs_id should reach the field metadata, got {crs}"
-    );
+    let parsed: serde_json::Value = serde_json::from_str(crs).unwrap();
+    // GeoArrow prefers a full definition over a bare authority code, so the
+    // layer's srs_id reaches the metadata as PROJJSON.
+    assert_eq!(parsed["crs_type"], "projjson");
+    // The top-level id is the CRS itself. Asserting on it rather than on the
+    // string containing "4326" matters: the nested coordinate system, datum
+    // and ellipsoid carry EPSG codes of their own.
+    assert_eq!(parsed["crs"]["id"]["authority"], "EPSG");
+    assert_eq!(parsed["crs"]["id"]["code"], 4326);
+    assert_eq!(parsed["crs"]["type"], "GeographicCRS");
 }
 
 #[test]
