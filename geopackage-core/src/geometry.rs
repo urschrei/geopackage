@@ -287,6 +287,45 @@ pub fn write_envelope<G: GeometryTrait<T = f64>>(geom: &G) -> (gpb::Envelope, bo
     }
 }
 
+/// Encode a GPB blob from a body that is already ISO WKB, without
+/// re-serialising it.
+///
+/// [`encode_gpb`] writes the body out through the `wkb` writer, which is what a
+/// caller holding a geometry object needs. A caller holding WKB bytes already,
+/// which is what a GeoArrow column is, does not: the GPB body *is* ISO WKB, so
+/// the bytes can be copied after the header. This is the write-side counterpart
+/// of reading a geometry column as WKB by skipping the header.
+///
+/// The bytes are still parsed, for two reasons that are not optional. The
+/// envelope has to be computed for the header (design decision D6) and for the
+/// spatial index, which needs a coordinate traversal either way. And parsing is
+/// what rejects a body that is not ISO WKB, such as PostGIS EWKB, which would
+/// otherwise be copied verbatim into a file claiming to be conformant.
+///
+/// Only the geometry's own extent is copied, not any trailing bytes the input
+/// slice may carry beyond it.
+///
+/// Returns the blob and its XY envelope, as [`encode_gpb`] does.
+///
+/// # Errors
+///
+/// [`GeometryError`] if `wkb_body` is not a geometry the `wkb` reader accepts.
+pub fn encode_gpb_from_wkb(
+    wkb_body: &[u8],
+    srs_id: i32,
+) -> Result<(Vec<u8>, Option<[f64; 4]>), GeometryError> {
+    let geometry = Wkb::try_new(wkb_body)?;
+    let (envelope, empty) = write_envelope(&geometry);
+    let xy = envelope
+        .xy_bounds()
+        .map(|(min_x, max_x, min_y, max_y)| [min_x, max_x, min_y, max_y]);
+    let body = geometry.buf();
+    let mut blob = gpb::encode_header(srs_id, &envelope, empty, false);
+    blob.reserve(body.len());
+    blob.extend_from_slice(body);
+    Ok((blob, xy))
+}
+
 /// Encode a geometry as a complete GeoPackage Binary (GPB) blob: an
 /// always-little-endian header ([`gpb::encode_header`]) with an envelope per
 /// [`write_envelope`] (design decision D6), followed by the little-endian ISO
@@ -906,5 +945,50 @@ mod tests {
         let re = GpbGeometry::parse(&reblob).unwrap();
         assert_eq!(re.header().envelope, Envelope::None);
         assert!(re.header().empty);
+    }
+}
+
+#[cfg(test)]
+mod encode_from_wkb_tests {
+    use super::*;
+    use geo_types::{Geometry, LineString, Point};
+
+    /// The pass-through encoder must produce what the re-serialising one does,
+    /// for a body the re-serialising one wrote. That equivalence is the whole
+    /// claim: the GPB body is ISO WKB, so copying it is not a shortcut with
+    /// different semantics.
+    #[test]
+    fn agrees_with_encode_gpb() {
+        let cases: Vec<Geometry<f64>> = vec![
+            Geometry::Point(Point::new(1.5, -2.5)),
+            Geometry::LineString(LineString::from(vec![(0.0, 0.0), (10.0, 5.0), (-3.0, 7.5)])),
+        ];
+        for geometry in cases {
+            let (expected, expected_xy) = encode_gpb(&geometry, 4326).unwrap();
+            // Take the body the round-trip encoder wrote, and feed it back.
+            let (_, offset) = gpb::parse_header(&expected).unwrap();
+            let (actual, actual_xy) = encode_gpb_from_wkb(&expected[offset..], 4326).unwrap();
+            assert_eq!(actual, expected, "blob differs");
+            assert_eq!(actual_xy, expected_xy, "envelope differs");
+        }
+    }
+
+    #[test]
+    fn trailing_bytes_are_not_copied() {
+        let (blob, _) = encode_gpb(&Point::new(3.0, 4.0), 4326).unwrap();
+        let (_, offset) = gpb::parse_header(&blob).unwrap();
+        let mut body = blob[offset..].to_vec();
+        let clean = encode_gpb_from_wkb(&body, 4326).unwrap().0;
+        body.extend_from_slice(b"trailing rubbish");
+        let padded = encode_gpb_from_wkb(&body, 4326).unwrap().0;
+        assert_eq!(clean, padded, "trailing bytes reached the blob");
+    }
+
+    #[test]
+    fn a_body_that_is_not_wkb_is_rejected() {
+        encode_gpb_from_wkb(&[], 4326).unwrap_err();
+        encode_gpb_from_wkb(b"not wkb at all", 4326).unwrap_err();
+        // A valid byte-order marker followed by an unknown geometry type.
+        encode_gpb_from_wkb(&[1, 0xff, 0xff, 0, 0], 4326).unwrap_err();
     }
 }
