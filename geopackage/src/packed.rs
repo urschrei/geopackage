@@ -163,10 +163,11 @@ fn hilbert(x: f64, y: f64, extent: &[f64; 4]) -> u32 {
     d
 }
 
-/// Serialise one node: the header followed by its cells, zero-padded to
-/// `node_size`.
-fn encode_node(depth: u16, cells: &[Cell], node_size: usize) -> Vec<u8> {
-    let mut blob = Vec::with_capacity(node_size);
+/// Serialise one node into `blob`: the header followed by its cells,
+/// zero-padded to `node_size`. `blob` is cleared first, so one buffer can be
+/// reused across every node of a build instead of allocating one per node.
+fn encode_node_into(blob: &mut Vec<u8>, depth: u16, cells: &[Cell], node_size: usize) {
+    blob.clear();
     blob.extend_from_slice(&depth.to_be_bytes());
     // The cell count fits u16: callers cap cells at (node_size - 4) / 24.
     let count = u16::try_from(cells.len()).unwrap_or(u16::MAX);
@@ -178,7 +179,6 @@ fn encode_node(depth: u16, cells: &[Cell], node_size: usize) -> Vec<u8> {
         }
     }
     blob.resize(node_size, 0);
-    blob
 }
 
 /// The number of nodes at each level, leaves first, for `entries` entries at
@@ -263,8 +263,14 @@ pub(crate) fn pack_into<S: NodeSink>(
         })
         .collect();
 
+    // One scratch buffer, reused for every node's serialised blob (see
+    // [`encode_node_into`]), so the packer allocates it once rather than once
+    // per node.
+    let mut blob = Vec::with_capacity(node_size);
+
     if leaves.is_empty() {
-        return sink.node(1, &encode_node(0, &[], node_size));
+        encode_node_into(&mut blob, 0, &[], node_size);
+        return sink.node(1, &blob);
     }
 
     // Group the entries into leaf-sized, spatially compact sets by sorting on
@@ -298,12 +304,19 @@ pub(crate) fn pack_into<S: NodeSink>(
         .collect();
     keyed.sort_unstable_by_key(|(key, _)| *key);
 
+    // Reuse the drained `leaves` allocation to hold the cells in sorted (Hilbert)
+    // order. The leaf loop then borrows `&[Cell]` chunks of this straight from
+    // `chunks(per_node)`, instead of collecting a fresh `Vec<Cell>` per node.
+    let mut sorted = leaves;
+    sorted.extend(keyed.iter().map(|(_, cell)| *cell));
+    drop(keyed);
+
     // Node numbers are fixed before anything is written. The root must be node
     // 1; everything else is numbered from 2 upward, leaves first, then each
     // level above. Knowing them up front is what allows streaming: a node can
     // be written as soon as it is built, because its parent's number is already
     // known.
-    let levels = level_sizes(keyed.len(), per_node);
+    let levels = level_sizes(sorted.len(), per_node);
     let depth = u16::try_from(levels.len().saturating_sub(1)).unwrap_or(u16::MAX);
     // First node number used by each level.
     let mut level_base = Vec::with_capacity(levels.len());
@@ -321,15 +334,15 @@ pub(crate) fn pack_into<S: NodeSink>(
     // Level 0: the leaves, from the sorted entries.
     let base = level_base.first().copied().unwrap_or(1);
     let mut level: Vec<Cell> = Vec::with_capacity(levels.first().copied().unwrap_or(1));
-    for (index, chunk) in keyed.chunks(per_node).enumerate() {
+    for (index, chunk) in sorted.chunks(per_node).enumerate() {
         let nodeno = base + i64::try_from(index).unwrap_or(0);
-        let cells: Vec<Cell> = chunk.iter().map(|(_, cell)| *cell).collect();
-        let mut bounds = cells.first().map_or([0.0; 4], |first| first.bounds);
-        for cell in &cells {
+        let mut bounds = chunk.first().map_or([0.0; 4], |first| first.bounds);
+        for cell in chunk {
             bounds = Cell::union(&bounds, &cell.bounds);
             sink.rowid(cell.id, nodeno)?;
         }
-        sink.node(nodeno, &encode_node(depth, &cells, node_size))?;
+        encode_node_into(&mut blob, depth, chunk, node_size);
+        sink.node(nodeno, &blob)?;
         level.push(Cell { id: nodeno, bounds });
     }
 
@@ -346,7 +359,8 @@ pub(crate) fn pack_into<S: NodeSink>(
                 sink.parent(cell.id, nodeno)?;
             }
             let node_depth = u16::try_from(height).unwrap_or(0);
-            sink.node(nodeno, &encode_node(node_depth, chunk, node_size))?;
+            encode_node_into(&mut blob, node_depth, chunk, node_size);
+            sink.node(nodeno, &blob)?;
             parents.push(Cell { id: nodeno, bounds });
         }
         level = parents;

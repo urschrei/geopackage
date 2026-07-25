@@ -59,6 +59,7 @@ geo-types.workspace = true
 serde_json.workspace = true
 hegeltest = "0.28.2"
 criterion = "0.8"
+gungraun = "=0.19.2"
 
 [[bench]]
 name = "write"
@@ -72,6 +73,10 @@ harness = false
 name = "arrow"
 harness = false
 required-features = ["arrow"]
+
+[[bench]]
+name = "alloc"
+harness = false
 
 # Uses the Arrow data plane, so it cannot build without it. The bench above
 # already declares this; without it here, `cargo nextest r -p geopackage`
