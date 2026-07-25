@@ -43,8 +43,9 @@ gpkg.create_layer(
         .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
 )?;
 
+// `create_layer` builds a spatial index; decline it with
+// `.spatial_index(false)` on the builder.
 let layer = gpkg.layer("cities")?;
-layer.create_spatial_index()?;
 
 layer.write_all(
     vec![

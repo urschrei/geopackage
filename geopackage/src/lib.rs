@@ -34,8 +34,10 @@
 //! - [`Layer::writer`] returns a [`FeatureWriter`] owning a transaction, with
 //!   `insert`/`update`/`delete` over any `impl GeometryTrait<T = f64>`;
 //!   [`Layer::write_all`] is the batched bulk-load path.
-//! - [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`], and
-//!   [`Layer::repair_spatial_index`] manage the RTree spatial index (the
+//! - A feature layer is indexed by default;
+//!   [`TableSchemaBuilder::spatial_index`] declines it.
+//!   [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`], and
+//!   [`Layer::repair_spatial_index`] manage the RTree index afterwards (the
 //!   GeoPackage 1.4 trigger set, design decision D7). Building a large index,
 //!   [`Layer::create_spatial_index_with`], or [`Layer::write_all`] into a fresh
 //!   indexed layer, uses the bulk build ([`BulkIndexOptions`], design
@@ -69,8 +71,9 @@
 //!
 //! # Example
 //!
-//! Create a file, declare a point layer, write features, index it, and query by
-//! bounding box:
+//! Create a file, declare a point layer, write features, and query by bounding
+//! box. The layer is indexed: `create_layer` builds a spatial index unless the
+//! builder declines it with `.spatial_index(false)`.
 //!
 //! ```
 //! use geo_types::Point;
@@ -91,7 +94,6 @@
 //! )?;
 //!
 //! let layer = gpkg.layer("cities")?;
-//! layer.create_spatial_index()?;
 //!
 //! layer.write_all(
 //!     vec![
