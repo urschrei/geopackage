@@ -11,6 +11,13 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# The `arrow` module is behind an off-by-default feature. Without this, docs.rs
+# would build the default feature set only, so the columnar API would be absent
+# from the published documentation and the crate root's links into it would
+# render as plain text.
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
