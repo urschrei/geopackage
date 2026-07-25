@@ -1365,6 +1365,26 @@ struct ArrowRow {
     values: Vec<Value>,
 }
 
+/// A row, or the failure that stopped one being made.
+///
+/// Batches are taken apart lazily, so an error has to travel with the rows
+/// rather than out of the side of the iterator. Writing one of these fails the
+/// write, which rolls the transaction back exactly as any other write error
+/// does.
+enum ArrowRowResult {
+    Row(ArrowRow),
+    Failed(Error),
+}
+
+impl crate::writer::WritableRow for ArrowRowResult {
+    fn write(self, writer: &mut crate::FeatureWriter<'_>) -> Result<(i64, Option<[f64; 4]>)> {
+        match self {
+            Self::Row(row) => row.write(writer),
+            Self::Failed(error) => Err(error),
+        }
+    }
+}
+
 impl crate::writer::WritableRow for ArrowRow {
     fn write(self, writer: &mut crate::FeatureWriter<'_>) -> Result<(i64, Option<[f64; 4]>)> {
         match &self.wkb {
@@ -1431,31 +1451,27 @@ impl Layer<'_> {
             .collect();
         let primary_key = self.primary_key_column().map(str::to_owned);
 
-        // Rows are produced lazily, so the bulk path sees an unsized iterator
-        // and buffers to decide, exactly as it does for any other lazy source.
-        let mut failure = None;
-        let rows = batches
-            .into_iter()
-            .flat_map(|batch| match batch {
-                Ok(batch) => rows_of(
+        // One batch is taken apart at a time and the rows are handed on lazily,
+        // so peak memory is a batch rather than the whole input, and the write
+        // path sees the unsized source it buffers to size up (issue #17).
+        // Collecting here would undo both.
+        let rows = batches.into_iter().flat_map(move |batch| {
+            let taken = batch.map_err(Error::Arrow).and_then(|batch| {
+                rows_of(
                     &batch,
                     primary_key.as_deref(),
                     geometry_column.as_deref(),
                     &value_columns,
                 )
-                .unwrap_or_else(|error| {
-                    failure.get_or_insert(error);
-                    Vec::new()
-                }),
-                Err(error) => {
-                    failure.get_or_insert(Error::Arrow(error));
-                    Vec::new()
-                }
-            })
-            .collect::<Vec<ArrowRow>>();
-        if let Some(error) = failure {
-            return Err(error);
-        }
+            });
+            match taken {
+                Ok(rows) => rows.into_iter().map(ArrowRowResult::Row).collect(),
+                // A failure travels as a row of its own, so it reaches the write
+                // path and rolls the transaction back rather than needing a
+                // second channel out of the iterator.
+                Err(error) => vec![ArrowRowResult::Failed(error)],
+            }
+        });
         self.write_all_impl(rows, batch_size, options, crate::bulk::no_fault)
     }
 }

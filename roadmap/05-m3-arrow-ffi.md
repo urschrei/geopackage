@@ -143,7 +143,16 @@ assumed about GPB bodies being usable as WKB without a parse.
       encode_gpb_from_wkb`, which puts a header in front of the bytes; it still
       parses them once, because the envelope is needed for the header and the
       index anyway and because parsing is what rejects EWKB. Layer creation from
-      an Arrow schema is not done: this writes into a layer that exists.)*
+      an Arrow schema is done too, as `TableSchemaBuilder::from_arrow_schema`.)*
+- [ ] Bind the columnar write directly from Arrow arrays, without a `Value` per
+      cell. The write is **1.55x slower than GDAL** where criterion 3 asks for at
+      or ahead, and against their *generic* `CreateFeature` path at that. The
+      reason is visible in the code rather than inferred: each row becomes an
+      owned `Vec<Value>` and an owned copy of its WKB, and `value_to_sql` then
+      clones every string and blob a second time. That is the columnar path built
+      on the row path, which is the shape criterion 1 forbids on the read side
+      for exactly this reason. See
+      [benchmarks/2026-07-25-gdal-arrow-write.md](benchmarks/2026-07-25-gdal-arrow-write.md).
 - [ ] Parallel `write_arrow`, within what SQLite allows: **one writer, always.**
       SQLite takes a single write lock per database, so this means moving CPU
       work off the writing thread, not concurrent inserts. Candidates are

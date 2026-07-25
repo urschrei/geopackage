@@ -12,6 +12,12 @@
 //!   the shape GDAL's published benchmark uses.
 //! - `noop <file>`: open and close. The startup floor to subtract, the
 //!   counterpart of the C program's `noop`.
+//! - `write <source> <target> [index:yes|no]`: read the source's batches into
+//!   memory
+//!   (untimed), then time writing them into a fresh file. The read is outside
+//!   the measurement deliberately: timing both would produce a figure that says
+//!   nothing about either, which is the mistake the M2 GDAL comparison had to
+//!   withdraw.
 //! - `read <file> [reps] [threads]`: consume the whole Arrow stream, the timed
 //!   operation. `threads` is passed to the reader as given, so `0` means its
 //!   automatic choice and `1` pins it to this thread; the default here is `0`.
@@ -158,9 +164,47 @@ fn read(path: &str, reps: usize, threads: usize) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+fn write(source: &str, target: &str, index: bool) -> Result<(), Box<dyn std::error::Error>> {
+    use geopackage::TableSchemaBuilder;
+
+    // Untimed: pull the whole source into memory as batches.
+    let src = GeoPackage::open(source)?;
+    let layer = src.layer("features")?;
+    let schema = layer.arrow_schema()?;
+    let batches: Vec<_> = layer
+        .read_arrow(ArrowReadOptions::default().with_threads(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
+    let count = batches.len();
+
+    let dst = GeoPackage::create(target)?;
+    let layer =
+        dst.create_layer(&TableSchemaBuilder::new("features").from_arrow_schema(&schema)?)?;
+    if index {
+        // Created empty and before the write, which is what lets the bulk path
+        // build it in one pass rather than through the triggers.
+        layer.create_spatial_index()?;
+    }
+    drop(layer);
+
+    let start = Instant::now();
+    let written = dst
+        .layer("features")?
+        .write_arrow(batches.into_iter().map(Ok), 0)?;
+    dst.close()?;
+    let elapsed = start.elapsed();
+
+    println!("elapsed_ms={:.3}", elapsed.as_secs_f64() * 1000.0);
+    println!("rows={}", written.len());
+    println!("batches={count}");
+    println!("source_rows={rows}");
+    println!("index={}", if index { "yes" } else { "no" });
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    let usage = "usage: arrow_bench <fixture <file> <rows>|noop <file>|read <file>>";
+    let usage = "usage: arrow_bench <fixture <file> <rows>|noop <file>|read <file> [reps] [threads]|write <src> <dst>>";
     let command = args.get(1).map(String::as_str).unwrap_or("");
     let path = args.get(2).map(String::as_str).unwrap_or("");
     match command {
@@ -169,6 +213,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fixture(path, rows)
         }
         "noop" => noop(path),
+        "write" => {
+            let target = args.get(3).ok_or(usage)?;
+            let index = args.get(4).map(String::as_str) == Some("yes");
+            write(path, target, index)
+        }
         "read" => {
             let reps: usize = args.get(3).map_or(Ok(1), |r| r.parse())?;
             // Passed through unclamped: 0 is the reader's automatic choice.

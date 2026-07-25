@@ -36,6 +36,9 @@ arrow = ["dep:arrow-array", "dep:arrow-schema"]
 
 [dev-dependencies]
 tempfile.workspace = true
+# The `arrow_bench` example counts rows in a batch, which needs the array crate
+# directly. Already an optional dependency, so this adds no build cost.
+arrow-array.workspace = true
 # Used by the `arrow` bench only, to measure a SQLite aggregate function against
 # the ordinary row loop. Already a normal dependency, so this adds no build cost.
 rusqlite.workspace = true
