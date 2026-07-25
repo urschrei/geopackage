@@ -13,7 +13,8 @@
 //! - `noop <file>`: open and close. The startup floor to subtract, the
 //!   counterpart of the C program's `noop`.
 //! - `read <file> [reps] [threads]`: consume the whole Arrow stream, the timed
-//!   operation. `threads` above one uses the parallel reader.
+//!   operation. `threads` is passed to the reader as given, so `0` means its
+//!   automatic choice and `1` pins it to this thread; the default here is `0`.
 //!   `reps` repeats it, so the process runs long enough to attach a profiler to;
 //!   the reported time is still for one pass.
 //!
@@ -126,24 +127,14 @@ fn read(path: &str, reps: usize, threads: usize) -> Result<(), Box<dyn std::erro
     let gpkg = GeoPackage::open(path)?;
     let layer = gpkg.layer("features")?;
     let options = ArrowReadOptions::default().with_threads(threads);
-    // Written out rather than behind a closure: the reader borrows the layer,
-    // which a closure's return type cannot express.
     let start = Instant::now();
     for _ in 1..reps {
-        let batches = if threads > 1 {
-            layer.read_arrow_parallel(options)?
-        } else {
-            layer.read_arrow(options)?
-        };
+        let batches = layer.read_arrow(options)?;
         for batch in batches {
             std::hint::black_box(batch?.num_rows());
         }
     }
-    let batches = if threads > 1 {
-        layer.read_arrow_parallel(options)?
-    } else {
-        layer.read_arrow(options)?
-    };
+    let batches = layer.read_arrow(options)?;
     let mut rows = 0usize;
     let mut count = 0usize;
     // Taken from a batch rather than from the reader's schema, so this example
@@ -180,8 +171,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "noop" => noop(path),
         "read" => {
             let reps: usize = args.get(3).map_or(Ok(1), |r| r.parse())?;
-            let threads: usize = args.get(4).map_or(Ok(1), |t| t.parse())?;
-            read(path, reps.max(1), threads.max(1))
+            // Passed through unclamped: 0 is the reader's automatic choice.
+            let threads: usize = args.get(4).map_or(Ok(0), |t| t.parse())?;
+            read(path, reps.max(1), threads)
         }
         _ => Err(usage.into()),
     }

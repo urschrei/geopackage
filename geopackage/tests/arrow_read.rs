@@ -277,7 +277,10 @@ fn a_layer_the_aggregate_cannot_serve_falls_back() {
         .set_limit(Limit::SQLITE_LIMIT_FUNCTION_ARG, 4)
         .unwrap();
 
-    let batches = read_all(&gpkg, ArrowReadOptions::with_batch_size(2));
+    // Pinned to one thread deliberately. A worker opens its own connection,
+    // which does not carry the limit lowered above, so a threaded read here
+    // would quietly use the aggregate and stop testing the fallback at all.
+    let batches = read_all(&gpkg, ArrowReadOptions::with_batch_size(2).with_threads(1));
     assert_eq!(batches.len(), 3, "5 rows at 2 per batch, via the fallback");
 
     let fids: Vec<i64> = batches
@@ -308,15 +311,12 @@ fn a_layer_the_aggregate_cannot_serve_falls_back() {
     assert!(matches!(geom.value(0)[0], 0 | 1), "WKB byte-order marker");
 }
 
-/// Read every fid, in order, through whichever path `read` chooses.
-fn fids_via(gpkg: &GeoPackage, parallel: bool, options: ArrowReadOptions) -> Vec<i64> {
+/// Read every fid, in order, at the thread count `options` asks for.
+fn fids_via(gpkg: &GeoPackage, options: ArrowReadOptions) -> Vec<i64> {
     let layer = gpkg.layer("pts").unwrap();
-    let reader = if parallel {
-        layer.read_arrow_parallel(options).unwrap()
-    } else {
-        layer.read_arrow(options).unwrap()
-    };
-    reader
+    layer
+        .read_arrow(options)
+        .unwrap()
         .map(|batch| batch.unwrap())
         .flat_map(|batch| {
             batch
@@ -359,8 +359,8 @@ fn a_threaded_read_matches_a_single_threaded_one() {
     // A batch size that leaves a partial final batch, and does not divide
     // evenly by the thread count, so the rotation has to be right.
     let options = ArrowReadOptions::with_batch_size(70).with_threads(3);
-    let threaded = fids_via(&gpkg, true, options);
-    let sequential = fids_via(&gpkg, false, options);
+    let threaded = fids_via(&gpkg, options);
+    let sequential = fids_via(&gpkg, options.with_threads(1));
 
     assert_eq!(threaded, (1..=1000).collect::<Vec<i64>>(), "key order");
     assert_eq!(threaded, sequential, "the two paths disagree");
@@ -385,7 +385,7 @@ fn gaps_in_the_key_fall_back_to_a_single_thread() {
 
     let options = ArrowReadOptions::with_batch_size(32).with_threads(4);
     let expected: Vec<i64> = (1..=99).chain(201..=300).collect();
-    assert_eq!(fids_via(&gpkg, true, options), expected);
+    assert_eq!(fids_via(&gpkg, options), expected);
 }
 
 /// An in-memory database cannot be opened by a second connection, so the
@@ -402,10 +402,7 @@ fn an_in_memory_database_falls_back_to_a_single_thread() {
     layer.write_all(features, 0).unwrap();
 
     let options = ArrowReadOptions::with_batch_size(8).with_threads(4);
-    assert_eq!(
-        fids_via(&gpkg, true, options),
-        (1..=50).collect::<Vec<i64>>()
-    );
+    assert_eq!(fids_via(&gpkg, options), (1..=50).collect::<Vec<i64>>());
 }
 
 /// Dropping the reader before it is drained stops the workers rather than
@@ -425,7 +422,7 @@ fn abandoning_a_threaded_read_stops_its_workers() {
     {
         let layer = gpkg.layer("pts").unwrap();
         let mut reader = layer
-            .read_arrow_parallel(ArrowReadOptions::with_batch_size(16).with_threads(4))
+            .read_arrow(ArrowReadOptions::with_batch_size(16).with_threads(4))
             .unwrap();
         // One batch of many, then walk away. `Drop` joins the workers, so this
         // test hanging is the failure mode it guards against.
@@ -434,7 +431,7 @@ fn abandoning_a_threaded_read_stops_its_workers() {
 
     // The layer is still readable afterwards, so nothing was left holding it.
     assert_eq!(
-        fids_via(&gpkg, false, ArrowReadOptions::default()).len(),
+        fids_via(&gpkg, ArrowReadOptions::default().with_threads(1)).len(),
         5000
     );
 }

@@ -110,7 +110,9 @@ assumed about GPB bodies being usable as WKB without a parse.
       02-ecosystem policy. A `:memory:` database cannot be shared between
       connections, so the parallel path requires a file and the property tests
       that use `:memory:` exercise the single-threaded path only.
-      *(Done as `Layer::read_arrow_parallel`, 2.02x on four threads and 2.25x on
+      *(Done, and it is the default: `read_arrow` threads unless asked not to,
+      since a single-threaded figure nobody runs is not worth optimising for.
+      2.02x on four threads and 2.25x on
       eight, short of the 3.1x GDAL's slides report. Diminishing past four is
       what a read bound by pulling pages rather than by cores looks like, which
       is why the automatic count stops there. The density rule is
@@ -219,7 +221,12 @@ from the recorded methodology does not count, which is the M2 lesson.
    the OGR C API so nothing else sits in the loop. See
    [benchmarks/2026-07-25-gdal-arrow-comparison.md](benchmarks/2026-07-25-gdal-arrow-comparison.md).
    The aggregate function has since been built, which is what took it from 2.34x
-   to 1.39x; array building is now the remaining gap.*
+   to 1.39x; array building is now the remaining gap. **Knowingly accepted as
+   unmet**, on the ground that single-threaded is no longer the default
+   configuration: at its default this crate reads the same file in 259 ms where
+   GDAL takes 367 ms at any thread setting. The criterion is left as written
+   rather than restated around the new default, so what it asks and what was
+   achieved both stay legible.*
 4. **No regression to the row path.** The scalar `features`/`cursor` reads stay
    within measurement noise of their 0.1.2 numbers. The Arrow work must not be
    paid for by the API most callers use.

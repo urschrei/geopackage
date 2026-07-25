@@ -341,6 +341,10 @@ impl ArrowReadOptions {
 impl Layer<'_> {
     /// Read this layer as a stream of Arrow [`RecordBatch`]es.
     ///
+    /// Reads on several threads where it can, which is the common case and the
+    /// default; see [Threading](#threading) below for the conditions and for how
+    /// to ask for a single thread instead.
+    ///
     /// Attribute columns follow the mapping in the [module documentation](self);
     /// the geometry column is WKB carrying the `geoarrow.wkb` extension name.
     ///
@@ -350,20 +354,65 @@ impl Layer<'_> {
     /// which does route through a per-row feature object, as *slower* than the
     /// row API it wraps (roadmap 05-m3).
     ///
+    /// # Threading
+    ///
+    /// `options.threads` defaults to `min(4, available parallelism)`. Set it to
+    /// `1` for a read that touches no thread but the caller's.
+    ///
+    /// Threads are used only when all of the following hold, and the read is
+    /// otherwise single-threaded rather than failing:
+    ///
+    /// - **The database is a file.** Workers read through their own
+    ///   connections, and a `:memory:` database is private to the connection
+    ///   that created it.
+    /// - **The primary key is dense**, with no gaps between its smallest and
+    ///   largest value. Workers are handed key ranges before any row is read, so
+    ///   a range has to imply a known row count. GDAL's driver requires the
+    ///   same, in the stricter form of a key starting at 1.
+    /// - **There is more than one batch of rows.** Below that, opening
+    ///   connections and starting threads costs more than it saves.
+    ///
+    /// Workers open their connections **read-only**, which is what makes it safe
+    /// for several connections to read one table without agreeing on a snapshot:
+    /// there is no writer to race.
+    ///
+    /// Batches arrive in primary-key order regardless of thread count.
+    ///
+    /// Dropping the reader before it is drained stops the workers, but waits for
+    /// each to finish the batch it is on, so the drop can block for as long as
+    /// one batch takes to read.
+    ///
     /// # Consistency
     ///
     /// Each batch is a separate query, paginated on the primary key, so a
     /// concurrent writer can change the table between batches. Wrap the read in
     /// your own transaction on [`crate::GeoPackage::connection`] if you need a
     /// stable snapshot across the whole layer (design decision D9). This shape
-    /// is what lets batches be fetched by key range, which the parallel read
-    /// path needs.
+    /// is what lets batches be fetched by key range, which the threaded path
+    /// needs.
     ///
     /// # Errors
     ///
     /// [`Error`] if the schema cannot be introspected or the query cannot be
-    /// prepared. Per-batch failures surface through the iterator.
+    /// prepared, or if a worker connection cannot be opened. Per-batch failures
+    /// surface through the iterator.
     pub fn read_arrow(&self, options: ArrowReadOptions) -> Result<ArrowBatches<'_>> {
+        let sequential = self.read_arrow_sequential(options)?;
+        if options.resolved_threads() < 2 {
+            return Ok(sequential);
+        }
+        let Some(parallel) = self.parallel_source(options)? else {
+            return Ok(sequential);
+        };
+        Ok(ArrowBatches {
+            schema: sequential.schema,
+            source: BatchSource::Parallel(parallel),
+        })
+    }
+
+    /// The single-threaded reader, which the threaded one falls back to and its
+    /// workers are built from.
+    fn read_arrow_sequential(&self, options: ArrowReadOptions) -> Result<ArrowBatches<'_>> {
         let schema = self.arrow_schema()?;
         // The pagination key: the declared primary key, or SQLite's rowid for a
         // table that has none. This is the same fallback the write path uses.
@@ -481,62 +530,33 @@ impl Layer<'_> {
         })
     }
 
-    /// Read this layer as Arrow batches, using several threads where that is
-    /// possible.
-    ///
-    /// Falls back to [`Self::read_arrow`] on the calling thread unless all of
-    /// the following hold, each for a reason:
-    ///
-    /// - **`options.threads` resolves above one.**
-    /// - **The database is a file.** Workers read through their own
-    ///   connections, and a `:memory:` database is private to the connection
-    ///   that made it.
-    /// - **The primary key is dense**, with no gaps between its smallest and
-    ///   largest value. Workers are given key ranges before any row is read, so
-    ///   a range has to imply a known row count. GDAL requires the same, in the
-    ///   stricter form of a key starting at 1.
-    ///
-    /// Workers open their connections **read-only**, which is what makes it safe
-    /// to read a table from several connections without agreeing on a snapshot:
-    /// there is no writer to race. A concurrent writer in another process can
-    /// still change the file, exactly as it can between the batches of a
-    /// single-threaded read.
-    ///
-    /// Batches arrive in primary-key order regardless of thread count.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::read_arrow`], plus any error opening a worker connection.
-    pub fn read_arrow_parallel(&self, options: ArrowReadOptions) -> Result<ArrowBatches<'_>> {
-        let threads = options.resolved_threads();
-        let sequential = self.read_arrow(options)?;
-        if threads < 2 {
-            return Ok(sequential);
-        }
+    /// The worker pool for this read, or `None` when the conditions in
+    /// [`Self::read_arrow`] do not hold.
+    fn parallel_source(&self, options: ArrowReadOptions) -> Result<Option<ParallelBatches>> {
         let Some(path) = database_path(self.gpkg().connection())? else {
-            return Ok(sequential);
+            return Ok(None);
         };
         let Some(key) = self.primary_key_column() else {
-            return Ok(sequential);
+            return Ok(None);
         };
         let Some(span) = dense_key_span(self.gpkg().connection(), self.table_name(), key)? else {
-            return Ok(sequential);
+            return Ok(None);
         };
-
-        let schema = Arc::clone(&sequential.schema);
         let batch_size = options.batch_size.max(1);
-        let parallel = ParallelBatches::spawn(
+        // Below two batches there is nothing to overlap, and opening connections
+        // and starting threads would cost more than it saves.
+        let rows = span.1.saturating_sub(span.0).saturating_add(1);
+        if rows < i64::try_from(batch_size.saturating_mul(2)).unwrap_or(i64::MAX) {
+            return Ok(None);
+        }
+        Ok(Some(ParallelBatches::spawn(
             path,
             self.table_name().to_owned(),
             self.conversion_options(),
             span,
             batch_size,
-            threads,
-        );
-        Ok(ArrowBatches {
-            schema,
-            source: BatchSource::Parallel(parallel),
-        })
+            options.resolved_threads(),
+        )))
     }
 }
 

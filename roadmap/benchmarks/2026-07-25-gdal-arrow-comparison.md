@@ -177,6 +177,25 @@ That is worth having but it is not what criterion 3 asks, and the two should not
 be confused: one is a comparison of read paths and the other is a comparison of
 one path against four.
 
+### Threaded is the default
+
+`read_arrow` now reads on `min(4, available parallelism)` threads unless asked
+otherwise, rather than offering a separate threaded entry point. Measured on the
+same file: 529.6 ms pinned to one thread, 259.5 ms at the default.
+
+The reasoning is that the single-threaded figure had become the only one anybody
+would quote and nobody would run. It also removed an incoherence: the options
+struct documented a thread count that the ordinary entry point ignored.
+
+`with_threads(1)` still gives a read that touches no thread but the caller's,
+for a caller who needs that. Below two batches of rows the threaded path declines
+anyway, so a small read starts no threads and opens no connections.
+
+**Criterion 3 remains unmet and is knowingly accepted at 1.40x**, on the ground
+that a gap in a configuration that is no longer the default is worth less than
+the 11% suggests. Recorded rather than restated, so the criterion still says
+what it said.
+
 ### How it works, and what it declines to do
 
 Worker `w` of `n` reads batches `w`, `w + n`, `w + 2n`, and the consumer takes
