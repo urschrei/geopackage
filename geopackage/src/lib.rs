@@ -1,6 +1,6 @@
 //! Read and write [OGC GeoPackage](https://www.geopackage.org/spec140/) files.
 //!
-//! **Status: pre-alpha (0.1.0).** The read and write paths are complete and
+//! **Status: pre-alpha (0.1.x).** The read and write paths are complete and
 //! validated against external tooling, but the API will change without notice
 //! before 1.0.
 //!
@@ -16,7 +16,8 @@
 //! - [`GeoPackage::layers`] enumerates feature layers; [`GeoPackage::layer`]
 //!   and [`GeoPackage::attributes`] return typed [`Layer`] handles.
 //! - [`Layer::features`] iterates a layer as owned [`Feature`]s, with by-name
-//!   and by-index value access and lazy geometry parsing.
+//!   and by-index value access and lazy geometry parsing. [`Layer::cursor`]
+//!   reads the same rows one at a time, holding no result set.
 //! - [`Layer::features_in`] runs a bounding-box query, using the RTree spatial
 //!   index when one is present and a full scan otherwise, with provably
 //!   identical results.
@@ -46,9 +47,116 @@
 //! - [`OpenOptions`] selects the journal mode ([`JournalMode`], WAL opt-in) and
 //!   [`Synchronous`] level; see the interchange-first close policy on
 //!   [`GeoPackage`].
+//! - [`GeoPackage::add_epsg_srs`] registers an EPSG code in
+//!   `gpkg_spatial_ref_sys`: from the WKT1 definitions vendored in
+//!   [`geopackage_core::srs`] where the code has one, and from the EPSG
+//!   registry otherwise. A code with no WKT1 form at all, such as the
+//!   geographic 3D EPSG:4979, is written as WKT2 through the
+//!   `gpkg_crs_wkt_1_1` extension column, which is what GDAL writes for the
+//!   same codes.
 //!
-//! - Columnar read and write live in [`arrow`], behind the `arrow` feature,
-//!   with geometry carried as a GeoArrow WKB column.
+//! **Columnar** (feature `arrow`)
+//!
+//! - [`Layer::read_arrow`] reads a layer as Arrow record batches, on several
+//!   threads by default, and [`Layer::write_arrow`] writes them back through
+//!   the same path as [`Layer::write_all`]. Geometry is a GeoArrow WKB column
+//!   carrying its CRS as PROJJSON.
+//! - [`Layer::arrow_schema`] is the schema a layer reads into;
+//!   [`TableSchemaBuilder::from_arrow_schema`] is the layer definition an Arrow
+//!   schema implies, so a layer can be copied without its schema being
+//!   restated. The type mapping both directions share is documented on the
+//!   [`arrow`] module.
+//!
+//! # Cargo features
+//!
+//! - **`geo-types`** (on by default): forwards `geopackage-core`'s feature of
+//!   the same name, which adds
+//!   [`GpbGeometry::to_geo`](geopackage_core::geometry::GpbGeometry::to_geo).
+//!   Decline it with `default-features = false`.
+//! - **`arrow`** (off by default): the columnar paths above. It pulls in
+//!   `arrow-array` and `arrow-schema`, which a caller using only the scalar API
+//!   does not need.
+//!
+//! # Configuration
+//!
+//! The defaults suit the common case: a single-file GeoPackage, an indexed
+//! feature layer, and values read the way other implementations read them. Four
+//! types carry nearly everything that can be changed, and each documents the
+//! trade-off behind its default.
+//!
+//! - [`OpenOptions`] settles how the file is opened: the journal mode
+//!   ([`JournalMode`], where [`JournalMode::Wal`] is opt-in) and the
+//!   `synchronous` durability level ([`Synchronous`]). Leaving either unset
+//!   changes nothing about the file: a new one gets SQLite's own
+//!   [`JournalMode::Delete`] and SQLite's own `synchronous` level. A handle
+//!   that did opt into WAL resets the file to a single `DELETE` file on close,
+//!   so the `.gpkg` handed on carries no sidecars; see [`GeoPackage`].
+//! - [`TableSchemaBuilder`] settles what a new layer looks like: its columns
+//!   ([`ColumnSpec`]), its primary key (default [`DEFAULT_PRIMARY_KEY`],
+//!   `fid`), its geometry column ([`GeometrySpec`], named
+//!   [`DEFAULT_GEOMETRY_COLUMN`], `geom`, unless told otherwise), and whether
+//!   it is indexed ([`TableSchemaBuilder::spatial_index`], default `true`).
+//! - [`BulkIndexOptions`] settles how an RTree index is built, for
+//!   [`Layer::create_spatial_index_with`] and [`Layer::write_all_with`]: the
+//!   row count at which the bulk build takes over from the per-row triggers
+//!   ([`BulkIndexOptions::bulk_threshold`], default [`DEFAULT_BULK_THRESHOLD`],
+//!   10,000 rows), how thoroughly that build then checks itself
+//!   ([`StructuralCheck`], default [`StructuralCheck::RtreeOnly`]), and how
+//!   full each node of the tree is packed
+//!   ([`BulkIndexOptions::fill_factor`], default [`DEFAULT_FILL_FACTOR`],
+//!   `1.0`).
+//! - [`ConversionOptions`] settles how stored values are read back, through
+//!   [`Layer::with_conversion_options`]: which `DATETIME` text forms are
+//!   accepted ([`DateTimeParsing`], default [`DateTimeParsing::Strict`]) and
+//!   whether a value its declared type does not strictly permit is read or
+//!   rejected ([`StorageStrictness`], default [`StorageStrictness::Lenient`]).
+//!
+//! Two more settings are not carried by an options type. [`Layer::write_all`]
+//! and [`Layer::write_arrow`] take a `batch_size`, the number of rows sharing a
+//! transaction, where `0` writes all of them in one.
+//! [`Layer::with_geometry_type_validation`] checks each geometry against its
+//! column's declared type while reading, and is **off** by default.
+//!
+//! Under the `arrow` feature, [`ArrowReadOptions`](arrow::ArrowReadOptions)
+//! settles the columnar read: rows per batch
+//! ([`batch_size`](arrow::ArrowReadOptions::batch_size), default
+//! [`DEFAULT_BATCH_SIZE`](arrow::DEFAULT_BATCH_SIZE), 65,536) and how many
+//! threads may read at once ([`threads`](arrow::ArrowReadOptions::threads),
+//! default `0`, meaning `min(4, available parallelism)`; `1` reads on the
+//! calling thread). The columnar write has no options type of its own:
+//! [`Layer::write_arrow_with`] takes the same [`BulkIndexOptions`] as
+//! [`Layer::write_all_with`].
+//!
+//! ```
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # let dir = tempfile::tempdir()?;
+//! # let path = dir.path().join("service.gpkg");
+//! use geopackage::core::types::{ColumnType, GeometryType};
+//! use geopackage::{
+//!     ColumnSpec, GeometrySpec, JournalMode, OpenOptions, Synchronous, TableSchemaBuilder,
+//! };
+//!
+//! let gpkg = OpenOptions::new()
+//!     .journal_mode(JournalMode::Wal)
+//!     .synchronous(Synchronous::Normal)
+//!     .create(&path)?;
+//!
+//! gpkg.create_layer(
+//!     &TableSchemaBuilder::new("staging")
+//!         .primary_key("id")
+//!         .column(ColumnSpec::new("name", ColumnType::Text(None)))
+//!         .geometry(GeometrySpec::new(GeometryType::Point, 4326).column_name("shape"))
+//!         // Declined here because this layer is loaded first and indexed after.
+//!         .spatial_index(false),
+//! )?;
+//!
+//! // Closing resets the WAL file to a single `.gpkg` with no sidecars.
+//! gpkg.close()?;
+//! # Ok(()) }
+//! ```
+//!
+//! Anything not covered here is reachable as SQL: [`GeoPackage::connection`]
+//! hands back the underlying rusqlite connection.
 //!
 //! # Reading untrusted files
 //!
