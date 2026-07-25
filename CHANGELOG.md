@@ -75,8 +75,6 @@ While the version is below 1.0 the API may change in any release.
 
 ### Changed
 
-- The repository is public, so the `repository` link on crates.io and docs.rs
-  now resolves. The 0.1.1 note that it 404s no longer applies.
 - **GeoArrow CRS metadata is PROJJSON**, which is the form that specification
   prefers; it says an authority code "should only be used as a last resort",
   because it leaves the reader to resolve the code against a registry it may not
@@ -278,10 +276,7 @@ README, neither of which can be corrected in place.
 
 - Both crates now render their README on crates.io. 0.1.0 showed none.
 - The `repository` URL now points at the real repository rather than at
-  `github.com/georust/geopackage`, which does not exist. Note that it still does
-  not resolve for anyone else: the repository is private until the move to the
-  georust org, so the link on crates.io and docs.rs remains a 404 for readers.
-  An earlier wording of this entry claimed the link was fixed, which was wrong.
+  `github.com/georust/geopackage`, which does not exist.
 - The crate documentation now states the untrusted-input limitation ([#3]) that
   0.1.0 shipped with but did not mention: the `wkb` 0.9.2 reader pre-allocates
   from unbounded element counts, so a malformed geometry can drive a very large
