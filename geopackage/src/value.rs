@@ -8,6 +8,14 @@
 //! so on. A storage class that is incompatible with the declared type is
 //! reported as [`Error::ValueTypeMismatch`] rather than silently coerced.
 //!
+//! Two cases sit between those: a `BOOLEAN` column holding an integer other than
+//! `0` or `1`, and an integer reaching a `FLOAT`/`DOUBLE` column. Both are
+//! readable as the declared type and both are non-conformant, so which of those
+//! two facts wins is the caller's to choose, through
+//! [`ConversionOptions::storage`] ([`StorageStrictness`]). The default reads
+//! them, since files containing them are read by other implementations without
+//! complaint.
+//!
 //! Geometry columns are not represented here; they are read through the
 //! feature API.
 
@@ -60,28 +68,78 @@ pub enum DateTimeParsing {
     Lenient,
 }
 
+/// How [`Value`] conversion treats a stored value that its declared type does
+/// not strictly permit but that can still be read as that type.
+///
+/// These cases come from SQLite's storage model rather than from the GeoPackage
+/// types. SQLite stores what it is given under a column's type affinity, and
+/// `BOOLEAN` carries no affinity at all, so a `BOOLEAN` column can hold any
+/// integer whatever the spec says about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum StorageStrictness {
+    /// Read the value as its declared type where that is possible: any non-zero
+    /// INTEGER in a `BOOLEAN` column is `true`, and an INTEGER in a
+    /// `FLOAT`/`DOUBLE` column widens losslessly to [`Value::Float`].
+    ///
+    /// The default. Non-conformant values of this kind occur in files that
+    /// other implementations read without complaint, so rejecting them by
+    /// default would make this crate the odd one out on files it can perfectly
+    /// well read.
+    #[default]
+    Lenient,
+    /// Reject both: a `BOOLEAN` column may hold only `0` or `1`
+    /// ([`Error::NonBooleanInteger`]), and a `FLOAT`/`DOUBLE` column may hold
+    /// only REAL ([`Error::ValueTypeMismatch`]).
+    Strict,
+}
+
 /// Options controlling [`Value`] conversion from stored SQLite values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct ConversionOptions {
     /// How `DATETIME` text is parsed.
     pub datetime: DateTimeParsing,
+    /// How a value its declared type does not strictly permit is treated.
+    pub storage: StorageStrictness,
 }
 
 impl ConversionOptions {
-    /// Strict conversion: `DATETIME` must be the exact 1.4 form. The default.
+    /// Strict throughout: `DATETIME` must be the exact 1.4 form, and a value its
+    /// declared type does not permit is an error rather than an interpretation.
+    ///
+    /// This is stricter than [`Self::default`], which pairs strict `DATETIME`
+    /// parsing with [`StorageStrictness::Lenient`] because that combination is
+    /// what reads the files real writers produce. Mix them with
+    /// [`Self::with_datetime`] and [`Self::with_storage`].
     pub fn strict() -> Self {
         Self {
             datetime: DateTimeParsing::Strict,
+            storage: StorageStrictness::Strict,
         }
     }
 
-    /// Lenient conversion: accept the common `DATETIME` variants found in real
-    /// files.
+    /// Lenient throughout: accept the common `DATETIME` variants found in real
+    /// files, and read values their declared type does not strictly permit.
     pub fn lenient() -> Self {
         Self {
             datetime: DateTimeParsing::Lenient,
+            storage: StorageStrictness::Lenient,
         }
+    }
+
+    /// Set how `DATETIME` text is parsed.
+    #[must_use]
+    pub fn with_datetime(mut self, datetime: DateTimeParsing) -> Self {
+        self.datetime = datetime;
+        self
+    }
+
+    /// Set how a value its declared type does not strictly permit is treated.
+    #[must_use]
+    pub fn with_storage(mut self, storage: StorageStrictness) -> Self {
+        self.storage = storage;
+        self
     }
 }
 
@@ -182,7 +240,19 @@ pub(crate) fn value_from_ref(
     };
     match declared {
         ColumnType::Boolean => match value {
-            ValueRef::Integer(i) => Ok(Value::Boolean(i != 0)),
+            ValueRef::Integer(0) => Ok(Value::Boolean(false)),
+            ValueRef::Integer(1) => Ok(Value::Boolean(true)),
+            // The spec says a BOOLEAN column holds 0 or 1, but SQLite gives the
+            // declared type no affinity of its own, so the column holds whatever
+            // was inserted. Anything non-zero reads as `true`, which is the C
+            // convention the writers that produce such files are following.
+            ValueRef::Integer(value) => match options.storage {
+                StorageStrictness::Lenient => Ok(Value::Boolean(true)),
+                StorageStrictness::Strict => Err(Error::NonBooleanInteger {
+                    column: column_name.to_owned(),
+                    value,
+                }),
+            },
             other => Err(mismatch(column_name, declared, other)),
         },
         ColumnType::TinyInt
@@ -196,7 +266,17 @@ pub(crate) fn value_from_ref(
             ValueRef::Real(f) => Ok(Value::Float(f)),
             // A whole number stored with integer affinity in a real column is
             // widened losslessly rather than rejected.
-            ValueRef::Integer(i) => Ok(Value::Float(i as f64)),
+            //
+            // Reading a table column does not normally reach this arm: `FLOAT`,
+            // `DOUBLE` and `REAL` all give the column REAL affinity, and REAL
+            // affinity converts an inserted integer to floating point on the way
+            // in, so the value comes back out as REAL. It is kept as a defensive
+            // arm rather than removed, and it answers to the same option as the
+            // BOOLEAN case above so that strict conversion means one thing.
+            ValueRef::Integer(i) => match options.storage {
+                StorageStrictness::Lenient => Ok(Value::Float(i as f64)),
+                StorageStrictness::Strict => Err(mismatch(column_name, declared, value)),
+            },
             other => Err(mismatch(column_name, declared, other)),
         },
         ColumnType::Text(_) => match value {

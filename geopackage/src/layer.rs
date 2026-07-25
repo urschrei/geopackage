@@ -228,7 +228,11 @@ impl GeoPackage {
             pk_column,
             value_columns,
             value_column_names,
-            options: ConversionOptions::strict(),
+            // `default`, not `strict`: strict `DATETIME` parsing, but a value a
+            // declared type does not strictly permit is still read rather than
+            // rejected. A layer read should not fail on a file every other
+            // implementation opens (see `StorageStrictness`).
+            options: ConversionOptions::default(),
             validate_geometry_type: false,
         })
     }
@@ -279,8 +283,9 @@ impl<'a> Layer<'a> {
     }
 
     /// Set the [`ConversionOptions`] for value conversion (e.g. lenient
-    /// `DATETIME` parsing). Applies to [`Self::features`], [`Self::features_in`]
-    /// and [`Self::select`].
+    /// `DATETIME` parsing, or rejecting values their declared type does not
+    /// permit). Applies to [`Self::features`], [`Self::features_in`] and
+    /// [`Self::select`]. Defaults to [`ConversionOptions::default`].
     #[must_use]
     pub fn with_conversion_options(mut self, options: ConversionOptions) -> Self {
         self.options = options;

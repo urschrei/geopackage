@@ -8,7 +8,24 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- **`StorageStrictness`, controlling the two `Value` conversion leniencies.** A
+  `BOOLEAN` column holding an integer other than 0 or 1, and an integer reaching
+  a `FLOAT`/`DOUBLE` column, are both readable as their declared type and both
+  non-conformant. `ConversionOptions::storage` now decides which of those facts
+  wins. `StorageStrictness::Lenient` is the default and behaves as before;
+  `Strict` reports `Error::NonBooleanInteger` (a new variant) for the first and
+  `Error::ValueTypeMismatch` for the second. `ConversionOptions::with_datetime`
+  and `with_storage` set the two axes independently ([#1]).
+
 ### Changed
+
+- **`ConversionOptions::strict()` is now strict on both axes**, so it is no
+  longer the same value as `ConversionOptions::default()`. `default()` is
+  unchanged in behaviour: strict `DATETIME` parsing with lenient value reading.
+  A caller who wants only strict `DATETIME` parsing wants `default()`. `Layer`
+  seeds itself from `default()`, so feature reads are unaffected ([#1]).
 
 - **`write_all` reaches the bulk index path for streaming sources.** The size of
   a write was taken from `Iterator::size_hint`, whose lower bound is 0 for most
@@ -222,6 +239,7 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
 [0.1.2]: https://github.com/urschrei/geopackage/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/urschrei/geopackage/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/urschrei/geopackage/releases/tag/v0.1.0
+[#1]: https://github.com/urschrei/geopackage/issues/1
 [#3]: https://github.com/urschrei/geopackage/issues/3
 [#4]: https://github.com/urschrei/geopackage/issues/4
 [#4]: https://github.com/urschrei/geopackage/issues/4

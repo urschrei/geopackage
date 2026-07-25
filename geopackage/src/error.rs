@@ -80,6 +80,20 @@ pub enum Error {
         /// `REAL`, `TEXT`, or `BLOB`.
         found: &'static str,
     },
+    /// A `BOOLEAN` column holds an INTEGER other than `0` or `1`, read under
+    /// [`StorageStrictness::Strict`](crate::StorageStrictness::Strict).
+    ///
+    /// The storage class is the right one, so this is not a
+    /// [`Self::ValueTypeMismatch`]: the value itself is outside what the
+    /// declared type permits. Lenient conversion, the default, reads any
+    /// non-zero integer as `true` instead.
+    #[error("column {column:?} declared BOOLEAN holds {value}, which is neither 0 nor 1")]
+    NonBooleanInteger {
+        /// The column that was read.
+        column: String,
+        /// The integer the column actually holds.
+        value: i64,
+    },
     /// A `DATE` or `DATETIME` column holds text that does not parse.
     #[error("column {column:?} holds invalid date/datetime text {text:?}")]
     InvalidDateTimeValue {

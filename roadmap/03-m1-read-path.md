@@ -24,10 +24,30 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       strict form) with a lenient read option (`ConversionOptions` /
       `DateTimeParsing`). Non-geometry only; storage/type mismatch is a typed
       error. Reachable via the `column_values()` building block.
-- [ ] Revisit `Value` conversion leniencies once a validation option exists:
-      `BOOLEAN` currently maps any non-zero INTEGER to `true`, and a whole
-      number stored with integer affinity in a `FLOAT`/`DOUBLE` column is
+- [x] (issue #1) Revisit `Value` conversion leniencies once a validation option
+      exists: `BOOLEAN` mapping any non-zero INTEGER to `true`, and a whole
+      number stored with integer affinity in a `FLOAT`/`DOUBLE` column being
       widened to `Value::Float` rather than rejected.
+      *(Both now answer to `ConversionOptions::storage`
+      (`StorageStrictness::Lenient`, the default, or `Strict`), alongside the
+      `DATETIME` axis that was already there. Lenient stays the default: files
+      carrying these values are read by other implementations without complaint,
+      and a reader that alone refuses them is the one in the wrong. Strict
+      reports `Error::NonBooleanInteger` for the first and `ValueTypeMismatch`
+      for the second, since only the second is a storage-class problem.*
+      *Two findings. Only the `BOOLEAN` leniency is reachable from a table read:
+      SQLite gives a `BOOLEAN`-declared column no type affinity, so it stores
+      whatever integer it is handed, whereas `FLOAT`/`DOUBLE`/`REAL` all carry
+      REAL affinity, which converts an inserted integer to floating point before
+      it is ever stored. The widening arm is kept as defensive code and is
+      documented as unreachable through this path; `integer_widens_to_float` was
+      testing the affinity rather than the arm it named, and is now written to
+      say so. Second, `ConversionOptions::strict()` and `::default()` used to be
+      the same value, and `Layer` seeded itself from `strict()`. Making
+      `strict()` mean strict throughout would therefore have made every layer
+      read reject these files, so `Layer` now seeds from `default()`, which is
+      strict `DATETIME` parsing with lenient value reading. Pinned by
+      `layer_reads_are_lenient_by_default`.)*
 - [x] Fold the `column_values()` building block into the streaming feature/
       attribute read path. `Layer::features`/`features_in`/`select` drive
       `value::value_from_ref` from the layer schema's declared types with a

@@ -138,7 +138,7 @@ pub use open::OpenWarning;
 pub use options::{JournalMode, OpenOptions, Synchronous};
 pub use schema::{Column, GeometryColumn, TableSchema};
 pub use srs::Srs;
-pub use value::{ConversionOptions, DateTimeParsing, Value};
+pub use value::{ConversionOptions, DateTimeParsing, StorageStrictness, Value};
 pub use writer::{FeatureWriter, NewFeature};
 
 use geopackage_core::{ddl, version};
