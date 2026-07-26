@@ -1670,36 +1670,53 @@ impl Layer<'_> {
         // Collecting here would undo both.
         let rows = batches.into_iter().flat_map(move |batch| {
             let taken = batch.map_err(Error::Arrow).and_then(|batch| {
-                rows_of(
+                let layout = layout_of(
                     &batch,
                     primary_key.as_deref(),
                     geometry_column.as_deref(),
                     &value_columns,
-                )
+                )?;
+                Ok((Arc::new(batch), Arc::new(layout)))
             });
-            match taken {
-                Ok(rows) => rows.into_iter().map(ArrowRowResult::Row).collect(),
-                // A failure travels as a row of its own, so it reaches the write
-                // path and rolls the transaction back rather than needing a
-                // second channel out of the iterator.
-                Err(error) => vec![ArrowRowResult::Failed(error)],
-            }
+            // Split into the two arms rather than collecting either, so a
+            // batch's rows are still built one at a time. The arms are chained
+            // instead of matched so both are the same iterator type: exactly one
+            // of them ever yields.
+            //
+            // A failure travels as a row of its own, so it reaches the write
+            // path and rolls the transaction back rather than needing a second
+            // channel out of the iterator.
+            let (batch, error) = match taken {
+                Ok(batch) => (Some(batch), None),
+                Err(error) => (None, Some(error)),
+            };
+            batch
+                .into_iter()
+                .flat_map(|(batch, layout)| {
+                    (0..batch.num_rows()).map(move |row| {
+                        ArrowRowResult::Row(ArrowRow {
+                            batch: Arc::clone(&batch),
+                            layout: Arc::clone(&layout),
+                            row,
+                        })
+                    })
+                })
+                .chain(error.into_iter().map(ArrowRowResult::Failed))
         });
         self.write_all_impl(rows, batch_size, options, crate::bulk::no_fault)
     }
 }
 
-/// Work out where each of the layer's columns sits in this batch, and hand back
-/// one view per row.
+/// Work out where each of the layer's columns sits in this batch.
 ///
 /// The layout is computed once per batch and shared, so a row carries two `Arc`
 /// handles rather than a copy of anything.
-fn rows_of(
+fn layout_of(
     batch: &RecordBatch,
     primary_key: Option<&str>,
     geometry: Option<&str>,
     value_columns: &[String],
-) -> Result<Vec<ArrowRow>> {
+) -> Result<RowLayout> {
     let schema = batch.schema();
     for field in schema.fields() {
         let known = Some(field.name().as_str()) == primary_key
@@ -1714,19 +1731,11 @@ fn rows_of(
     }
 
     let index_of = |name: &str| schema.fields().iter().position(|f| f.name() == name);
-    let layout = Arc::new(RowLayout {
+    Ok(RowLayout {
         fid: primary_key.and_then(index_of),
         geometry: geometry.and_then(index_of),
         values: value_columns.iter().map(|name| index_of(name)).collect(),
-    });
-    let batch = Arc::new(batch.clone());
-    Ok((0..batch.num_rows())
-        .map(|row| ArrowRow {
-            batch: Arc::clone(&batch),
-            layout: Arc::clone(&layout),
-            row,
-        })
-        .collect())
+    })
 }
 
 /// The bytes of a binary cell, borrowed from the array.
