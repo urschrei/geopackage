@@ -650,6 +650,7 @@ impl<'a> Layer<'a> {
             options: self.options,
             validate_geometry_type: self.validate_geometry_type,
             geometry_column: self.geometry_column.clone(),
+            value_bytes_hint: std::cell::Cell::new(0),
         }
     }
 }
@@ -770,6 +771,10 @@ struct RowContext {
     options: ConversionOptions,
     validate_geometry_type: bool,
     geometry_column: Option<GeometryColumn>,
+    /// The non-geometry byte count of the last row built, used to size the next
+    /// row's buffer. A `Cell` because rows are built through a shared
+    /// reference, and the value is a hint: wrong only costs a growth.
+    value_bytes_hint: std::cell::Cell<usize>,
 }
 
 impl RowContext {
@@ -799,20 +804,16 @@ impl RowContext {
             self.check_declared_type(blob, declared)?;
         }
 
-        // Size the buffer before filling it, from the raw cell lengths: reading
-        // a value reference copies nothing, so this pass is a walk over the
-        // row's own memory. It over-counts a `DATE` or `DATETIME` column, whose
-        // text is parsed into a slot and not kept, so the buffer is not shrunk
-        // to fit afterwards: that would trade the slack for a reallocation.
-        let mut bytes_needed = geometry.map_or(0, <[u8]>::len);
-        for i in 0..self.value_columns.len() {
-            bytes_needed += match row.get_ref(i + 1)? {
-                SqlValueRef::Text(bytes) | SqlValueRef::Blob(bytes) => bytes.len(),
-                _ => 0,
-            };
-        }
-
-        let mut buf: Vec<u8> = Vec::with_capacity(bytes_needed);
+        // Sized from the previous row rather than by measuring this one. A
+        // sizing pass would have to fetch every cell a second time, and fetching
+        // values is around half a scalar read's total cost, so paying it twice
+        // to save a reallocation is a bad trade: measured over three real
+        // datasets it cost 3% of the read on a four-column layer and over 30% on
+        // sixteen- and fifty-four-column ones. Rows in a layer are usually
+        // close in size, so the estimate is normally right, and being wrong
+        // costs a growth rather than a wrong answer.
+        let mut buf: Vec<u8> =
+            Vec::with_capacity(geometry.map_or(0, <[u8]>::len) + self.value_bytes_hint.get());
         let mut slots = Vec::with_capacity(self.value_columns.len());
         let geometry_end = geometry.map(|blob| {
             buf.extend_from_slice(blob);
@@ -846,6 +847,9 @@ impl RowContext {
             });
         }
 
+        // Carry this row's value bytes forward as the next row's estimate.
+        self.value_bytes_hint
+            .set(buf.len().saturating_sub(geometry_end.unwrap_or(0) as usize));
         Ok(Feature {
             fid,
             buf,
