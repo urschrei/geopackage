@@ -99,7 +99,7 @@ impl Layer<'_> {
         }
         match self.stored_extent()? {
             Some(stored) => Ok(Some(stored)),
-            None => self.measure_extent(),
+            None => self.measure_extent(self.gpkg().connection()),
         }
     }
 
@@ -114,12 +114,20 @@ impl Layer<'_> {
     /// an extent that is merely suspect is the file's business, not this
     /// crate's.
     ///
+    /// The measurement and the write share one transaction. Two statements in
+    /// autocommit would leave a window for another connection to commit a row
+    /// between them, and the box recorded would then exclude it: a value the
+    /// crate cannot vouch for, which is the one thing this module forbids.
+    /// Holding the read open closes the window under a rollback journal, and
+    /// under WAL turns it into a `SQLITE_BUSY_SNAPSHOT` error rather than a
+    /// silent write of a stale measurement.
+    ///
     /// # Errors
     ///
     /// [`Error::NoGeometryColumn`] if the layer has no geometry column.
     pub fn recompute_extent(&self) -> Result<Option<BoundingBox>> {
-        let measured = self.measure_extent()?;
-        let conn = self.gpkg().connection();
+        let conn = self.gpkg().connection().unchecked_transaction()?;
+        let measured = self.measure_extent(&conn)?;
         match measured {
             Some(bbox) => conn.execute(
                 "UPDATE gpkg_contents SET min_x = ?1, min_y = ?2, max_x = ?3, max_y = ?4 \
@@ -139,6 +147,7 @@ impl Layer<'_> {
                 [self.table_name()],
             )?,
         };
+        conn.commit()?;
         Ok(measured)
     }
 
@@ -178,7 +187,11 @@ impl Layer<'_> {
     /// return NULL for them, and the aggregates skip NULLs, exactly as the RTree
     /// triggers skip the same rows. A layer whose geometries are all NULL or
     /// empty therefore measures as `None` rather than as a degenerate box.
-    fn measure_extent(&self) -> Result<Option<BoundingBox>> {
+    ///
+    /// Reads through the connection it is given rather than the layer's, so a
+    /// caller that is going to record the result can measure inside the same
+    /// transaction it writes in.
+    fn measure_extent(&self, conn: &rusqlite::Connection) -> Result<Option<BoundingBox>> {
         let geometry = self
             .geometry_column()
             .ok_or_else(|| Error::NoGeometryColumn {
@@ -190,7 +203,7 @@ impl Layer<'_> {
              max(ST_MaxX({column})), max(ST_MaxY({column})) FROM {}",
             quote(self.table_name())?
         );
-        let bounds: [Option<f64>; 4] = self.gpkg().connection().query_row(&sql, [], |row| {
+        let bounds: [Option<f64>; 4] = conn.query_row(&sql, [], |row| {
             Ok([row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?])
         })?;
         let [Some(min_x), Some(min_y), Some(max_x), Some(max_y)] = bounds else {
