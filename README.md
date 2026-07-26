@@ -139,9 +139,7 @@ reachable as SQL through `GeoPackage::connection()`.
 
 ## Performance
 
-Measured over three published datasets rather than generated fixtures, since
-what these paths cost depends on how many vertices a geometry carries and how
-unevenly the features are spread. Apple M2 Pro, 12 cores, 16 GB, release build,
+Measured over three public datasets. Apple M2 Pro, 12 cores, 16 GB, release build,
 warm page cache, medians over repeated runs.
 
 | | `buildings` | `rivers` | `admin` |
@@ -163,11 +161,11 @@ warm page cache, medians over repeated runs.
 | the same query with no index | 1.7 s | 2.2 s | 1.3 s |
 | features that query returned | 70,130 | 180,544 | 36,556 |
 
-Reading is bound by bytes, not rows: the columnar path holds 0.95 to 1.13 GB/s
+Reading is bound by bytes, not rows: the columnar path varies between 0.95 to 1.13 GB/s
 across three layers whose rows differ by a factor of 37 in size. The index is
 the other way round, tracking row count at 42,000 to 581,000 rows/s built and
 about 40 bytes per row stored, whatever the geometry. Building it during the
-write rather than afterwards saves 20% to 47%, because the bulk path reuses the
+write rather than afterwards between 20% and 47%, because the bulk path reuses the
 envelopes it computed while encoding; that is why `create_layer` leaves an empty
 index in place for `write_all` to fill.
 
