@@ -8,6 +8,109 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-26
+
+### Changed
+
+- **Every connection this crate opens gets a five second busy timeout.** None
+  was set before, so SQLite's default of zero applied and any lock another
+  connection held turned an ordinary write into an immediate `SQLITE_BUSY`. For
+  a format whose concurrency story is one writer and many readers, that made
+  every write path fail on the first attempt against a cooperating process.
+  Set through the new `OpenOptions::busy_timeout`, defaulting to
+  `DEFAULT_BUSY_TIMEOUT`, and applied to read-only connections too, since a
+  reader can meet a writer's lock under a rollback journal. A caller-supplied
+  connection keeps whatever it has unless it asks, on the same principle that
+  leaves its journal mode alone. This is the whole of the crate's retry policy,
+  deliberately: SQLite bypasses the wait entirely for a read-to-write upgrade
+  deadlock and for a stale WAL snapshot, so a retry loop above it would only
+  spin before failing anyway.
+- **`FeatureWriter` no longer records a bounding box it cannot vouch for.** A
+  GeoPackage may carry a NULL `gpkg_contents` extent, which is spec-legal and
+  which GDAL itself writes in some paths. Opening such a layer and inserting one
+  feature used to record a box covering only that feature, excluding every row
+  already there: an honest "unknown" replaced by a confidently wrong value, and
+  a wrong extent is the worst of the three states, because GDAL and QGIS both
+  return a well-ordered box verbatim and never recompute it. The test is not
+  whether the recorded box is absent but whether the table already holds rows:
+  absent over an empty table means the fold is the whole content and is exact,
+  absent over a populated one means it is only a lower bound. An inverted box
+  now reads as absent, as GDAL reads it, rather than being grown from.
+- **`Layer::extent` records what it had to measure**, so reading the extent of a
+  file whose recorded bounds are unusable changes that file's contents and
+  modification time. This mirrors GDAL, whose `GetExtent` persists through
+  `SaveExtent` on any dataset open for update, and it means a file improves by
+  being read rather than staying wrong for every later reader. Nothing is
+  written when the recorded box is usable, nor on a read-only connection, nor
+  when there is nothing to measure and the bounds are already NULL. Open
+  read-only, or read `GeoPackage::contents`, for the recorded values without
+  measuring or writing anything.
+
+### Added
+
+- **`Layer::extent` and `Layer::recompute_extent`.** The first returns the
+  recorded `gpkg_contents` bounds when they are usable and otherwise measures
+  the geometries; the second measures unconditionally and records the result,
+  the equivalent of GDAL's `RECOMPUTE EXTENT ON`. A layer with nothing to
+  measure has its bounds set to NULL rather than to anything invented, which is
+  what makes a reader compute the extent for itself. Both measure the
+  geometries exactly rather than taking the RTree's outward-rounded word for
+  what the layer contains.
+- **`FeatureWriter::update_columns` and `update_column`**, which update named
+  value columns and leave the rest of the row, and the geometry, untouched.
+  `update_row` sets every value column, so a caller recomputing one had to
+  restate the others. Modelled on GDAL's `OGRLayer::UpdateFeature` (RFC 93);
+  the statement is held and keyed on the column names, so a loop recomputing
+  the same column prepares once. Naming a column twice is
+  `Error::DuplicateUpdateColumn` rather than SQLite's silent last-wins.
+- **`Layer::audit_spatial_index`, `SpatialIndexAudit` and
+  `Layer::rebuild_spatial_index`.** `spatial_index_status` derives everything
+  from structure, whether the virtual table and the right triggers exist, and
+  `repair_spatial_index` inherited that blind spot: it returned without reading
+  a row whenever the structure was current. An index populated partially, not at
+  all, or holding entries for since-deleted rows could therefore be neither
+  detected nor fixed. The audit reads the geometries and reports how many rows
+  should be indexed against how many entries are missing, extra, or present but
+  not covering their geometry; the rebuild does unconditionally what the repair
+  does only when the structure is wrong.
+- **`OpenOptions::busy_timeout` and `DEFAULT_BUSY_TIMEOUT`**; see above.
+- **`Error::ExtentPersist`**, when a measured extent could not be recorded for a
+  reason other than another connection holding a lock. It carries the
+  measurement, so the answer is not lost with the failure. Lock contention does
+  not produce it: a concurrent writer means the measurement describes a layer
+  changing underneath it, so the file keeps what it had and the measurement is
+  returned.
+- **A "What writes, and when" table in the crate documentation**, tabulating
+  every call by whether it writes to the file and what it does on a read-only
+  connection, with the failure causes beneath it. Three calls do not divide
+  cleanly into reads and writes and the names do not say so: `Layer::extent`
+  records what it had to measure, `repair_spatial_index` writes only when there
+  is something to repair, and `Layer::writer` opens without writing at all,
+  because `BEGIN DEFERRED` takes no lock, so its first failure lands on the
+  first row. Pinned by tests.
+- **`scripts/run_gdal_validator.sh`**, running `gdal driver gpkg validate`
+  (GDAL 3.13+) or the `osgeo_utils.samples.validate_gpkg` script it wraps. It
+  is the only one of the three validators this repo uses that checks the
+  `gpkg_contents.last_change` format. Note the false positive documented in its
+  header: the empty-geometry check reads the GPB empty flag from the wrong bit
+  and rejects any layer holding an empty geometry, including files GDAL itself
+  writes.
+
+### Performance
+
+Allocation counts are exact, from a counting global allocator over a 2,000-row
+fixture.
+
+- **Insert, update and delete cost no allocation a row**, at any column count.
+  The writer built its `UPDATE` and `DELETE` statement text on every call, which
+  scaled with the layer's width at 10 allocations a row on three value columns
+  and 30 on twelve, and then looked the statement up in the connection's cache
+  for one more. It now holds every statement it can issue, prepared once at
+  construction from the connection rather than from its transaction, so it stays
+  a plain struct rather than a self-referential one.
+- **A scan that recomputes one column costs 2 allocations a row**, down from 12,
+  the remainder being the owned `Feature` on the read side.
+
 ## [0.3.0] - 2026-07-26
 
 ### Changed
@@ -455,7 +558,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/urschrei/geopackage/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/urschrei/geopackage/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/urschrei/geopackage/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/urschrei/geopackage/compare/v0.1.1...v0.1.2
