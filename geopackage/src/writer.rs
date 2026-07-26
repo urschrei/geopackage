@@ -22,6 +22,39 @@
 //! commit point. The raw connection ([`crate::GeoPackage::connection`]) remains
 //! available for callers who want to drive their own transaction.
 //!
+//! # Updating a layer while a cursor over it is stepping
+//!
+//! A writer and a [`crate::FeatureCursor`] share the connection, so a scan can
+//! drive its own updates: read a row, recompute a column, write it back. That
+//! is what [`FeatureWriter::update_columns`] is for.
+//!
+//! SQLite does not define what such a scan sees. Its isolation documentation is
+//! explicit that a `SELECT` on one connection has no isolation from writes on
+//! that same connection, and that an application "can UPDATE the current row or
+//! any prior row, though doing so might cause that row to reappear in a
+//! subsequent `sqlite3_step()`". The safety it does promise is only that the
+//! file will not be harmed; the result set is not promised to be stable,
+//! complete, or free of repeats.
+//!
+//! The scan is stable in practice when all three of these hold:
+//!
+//! - the cursor is a plain table scan ([`crate::Layer::cursor`]) rather than one
+//!   driven by an index;
+//! - the columns written are not ones the scan's index reads;
+//! - the primary key is not written, since moving a row's id moves it within a
+//!   rowid scan.
+//!
+//! The case to avoid is writing a geometry during a
+//! [`crate::Layer::cursor_in`] scan. That cursor is driven by a join against
+//! the RTree, and writing a geometry moves the row inside that index through
+//! the triggers, which is the shape that makes a scan return rows it has
+//! already returned. Recomputing geometries is better done in two passes:
+//! collect the feature ids, finish the scan, then write.
+//!
+//! None of this is specific to this crate, and none of it is a bug that can be
+//! fixed here: it is SQLite's stated contract for one connection reading and
+//! writing at once.
+//!
 //! # Bounding box and `last_change`
 //!
 //! The writer seeds a bounding-box fold from the existing `gpkg_contents` row
@@ -936,6 +969,10 @@ impl<'conn> FeatureWriter<'conn> {
     /// Update the feature `fid`, setting its geometry and values. Returns
     /// whether a row matched.
     ///
+    /// Writing a geometry while a cursor over the same layer is stepping is the
+    /// one case the module documentation says to avoid: on an indexed layer it
+    /// moves the row within the index the scan may be reading.
+    ///
     /// # Errors
     ///
     /// As [`Self::insert`].
@@ -999,6 +1036,10 @@ impl<'conn> FeatureWriter<'conn> {
     /// cannot.
     ///
     /// An empty `columns` reports whether the row exists and changes nothing.
+    ///
+    /// The example below drives the update from a scan of the same layer, which
+    /// is sound for a plain [`Layer::cursor`] writing non-indexed columns; see
+    /// the module documentation for where that stops holding.
     ///
     /// ```no_run
     /// # fn main() -> geopackage::Result<()> {
