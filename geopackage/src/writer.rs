@@ -79,8 +79,8 @@ use geopackage_core::geometry::encode_gpb_from_wkb;
 use geopackage_core::ident::quote;
 use geopackage_core::triggers;
 use geopackage_core::types::ZmFlag;
-use rusqlite::types::Value as SqlValue;
-use rusqlite::{Connection, OptionalExtension, Transaction, params_from_iter};
+use rusqlite::types::{ToSqlOutput, Value as SqlValue, ValueRef};
+use rusqlite::{Connection, OptionalExtension, Params, Transaction, params_from_iter};
 
 use crate::bulk::{self, BulkIndexOptions};
 
@@ -92,7 +92,7 @@ use crate::bulk::{self, BulkIndexOptions};
 /// rebuild. See [`rebuild_beats_append`] for the measurements behind the value.
 const MERGE_REBUILD_RATIO: usize = 10;
 use crate::index::drop_all_rtree_triggers;
-use crate::value::value_to_sql;
+use crate::value::value_to_bind;
 use crate::{Error, Layer, Result, Value};
 
 /// A new row for [`Layer::write_all`]: an optional explicit feature id, an
@@ -693,13 +693,19 @@ impl<'conn> FeatureWriter<'conn> {
         self.check_values(values)?;
         let (blob, xy) = self.encode_geometry(geometry)?;
         let sql = self.insert_sql(fid.is_some(), true);
-        let mut binds: Vec<SqlValue> = Vec::with_capacity(values.len() + 2);
-        if let Some(id) = fid {
-            binds.push(SqlValue::Integer(id));
-        }
-        binds.extend(values.iter().map(value_to_sql));
-        binds.push(SqlValue::Blob(blob));
-        let assigned = self.exec_insert(sql, &binds, fid)?;
+        // Bound straight from `values` and the freshly encoded blob, in one
+        // chained iterator: no vector of bindings per row, and no copy of the
+        // row's text and blob cells.
+        let assigned = self.exec_insert(
+            sql,
+            params_from_iter(
+                fid.map(|id| ToSqlOutput::Borrowed(ValueRef::Integer(id)))
+                    .into_iter()
+                    .chain(values.iter().map(value_to_bind))
+                    .chain(std::iter::once(ToSqlOutput::Owned(SqlValue::Blob(blob)))),
+            ),
+            fid,
+        )?;
         if let Some(envelope) = xy {
             self.bbox.add(envelope);
             self.bbox_dirty = true;
@@ -732,8 +738,6 @@ impl<'conn> FeatureWriter<'conn> {
         wkb: &[u8],
         values: &[rusqlite::types::ToSqlOutput<'_>],
     ) -> Result<(i64, Option<[f64; 4]>)> {
-        use rusqlite::types::{ToSqlOutput, Value as SqlV, ValueRef};
-
         self.check_value_count(values.len())?;
         let geom = self
             .geometry
@@ -748,15 +752,22 @@ impl<'conn> FeatureWriter<'conn> {
         self.check_zm("m", geom.m, has_m, &geom.name)?;
 
         let sql = self.insert_sql(fid.is_some(), true);
-        let mut binds: Vec<ToSqlOutput<'_>> = Vec::with_capacity(values.len() + 2);
-        if let Some(id) = fid {
-            binds.push(ToSqlOutput::Borrowed(ValueRef::Integer(id)));
-        }
-        binds.extend(values.iter().cloned());
-        // The blob was just built, so it moves into the binding rather than
-        // being borrowed from something that has to outlive the statement.
-        binds.push(ToSqlOutput::Owned(SqlV::Blob(encoded.blob)));
-        let assigned = self.exec_insert_bound(sql, &binds, fid)?;
+        // The caller's bindings are bound by reference; only the fid and the
+        // freshly built blob are owned, and the blob moves into its binding
+        // rather than being borrowed from something that has to outlive the
+        // statement.
+        let assigned = self.exec_insert(
+            sql,
+            params_from_iter(
+                fid.map(|id| ToSqlOutput::Borrowed(ValueRef::Integer(id)))
+                    .into_iter()
+                    .chain(values.iter().map(borrow_bind))
+                    .chain(std::iter::once(ToSqlOutput::Owned(SqlValue::Blob(
+                        encoded.blob,
+                    )))),
+            ),
+            fid,
+        )?;
         if let Some(envelope) = encoded.xy_envelope {
             self.bbox.add(envelope);
             self.bbox_dirty = true;
@@ -772,16 +783,17 @@ impl<'conn> FeatureWriter<'conn> {
         fid: Option<i64>,
         values: &[rusqlite::types::ToSqlOutput<'_>],
     ) -> Result<i64> {
-        use rusqlite::types::{ToSqlOutput, ValueRef};
-
         self.check_value_count(values.len())?;
         let sql = self.insert_sql(fid.is_some(), false);
-        let mut binds: Vec<ToSqlOutput<'_>> = Vec::with_capacity(values.len() + 1);
-        if let Some(id) = fid {
-            binds.push(ToSqlOutput::Borrowed(ValueRef::Integer(id)));
-        }
-        binds.extend(values.iter().cloned());
-        let assigned = self.exec_insert_bound(sql, &binds, fid)?;
+        let assigned = self.exec_insert(
+            sql,
+            params_from_iter(
+                fid.map(|id| ToSqlOutput::Borrowed(ValueRef::Integer(id)))
+                    .into_iter()
+                    .chain(values.iter().map(borrow_bind)),
+            ),
+            fid,
+        )?;
         self.dirty = true;
         Ok(assigned)
     }
@@ -795,12 +807,15 @@ impl<'conn> FeatureWriter<'conn> {
     pub fn insert_row(&mut self, fid: Option<i64>, values: &[Value]) -> Result<i64> {
         self.check_values(values)?;
         let sql = self.insert_sql(fid.is_some(), false);
-        let mut binds: Vec<SqlValue> = Vec::with_capacity(values.len() + 1);
-        if let Some(id) = fid {
-            binds.push(SqlValue::Integer(id));
-        }
-        binds.extend(values.iter().map(value_to_sql));
-        let assigned = self.exec_insert(sql, &binds, fid)?;
+        let assigned = self.exec_insert(
+            sql,
+            params_from_iter(
+                fid.map(|id| ToSqlOutput::Borrowed(ValueRef::Integer(id)))
+                    .into_iter()
+                    .chain(values.iter().map(value_to_bind)),
+            ),
+            fid,
+        )?;
         self.dirty = true;
         Ok(assigned)
     }
@@ -820,11 +835,13 @@ impl<'conn> FeatureWriter<'conn> {
         self.check_values(values)?;
         let (blob, xy) = self.encode_geometry(geometry)?;
         let sql = self.update_sql(true);
-        let mut binds: Vec<SqlValue> = Vec::with_capacity(values.len() + 2);
-        binds.extend(values.iter().map(value_to_sql));
-        binds.push(SqlValue::Blob(blob));
-        binds.push(SqlValue::Integer(fid));
-        let matched = self.exec_update(&sql, &binds)?;
+        let matched = self.exec_update(
+            &sql,
+            params_from_iter(values.iter().map(value_to_bind).chain([
+                ToSqlOutput::Owned(SqlValue::Blob(blob)),
+                ToSqlOutput::Borrowed(ValueRef::Integer(fid)),
+            ])),
+        )?;
         if matched {
             if let Some(envelope) = xy {
                 self.bbox.add(envelope);
@@ -844,10 +861,12 @@ impl<'conn> FeatureWriter<'conn> {
     pub fn update_row(&mut self, fid: i64, values: &[Value]) -> Result<bool> {
         self.check_values(values)?;
         let sql = self.update_sql(false);
-        let mut binds: Vec<SqlValue> = Vec::with_capacity(values.len() + 1);
-        binds.extend(values.iter().map(value_to_sql));
-        binds.push(SqlValue::Integer(fid));
-        let matched = self.exec_update(&sql, &binds)?;
+        let matched = self.exec_update(
+            &sql,
+            params_from_iter(values.iter().map(value_to_bind).chain(std::iter::once(
+                ToSqlOutput::Borrowed(ValueRef::Integer(fid)),
+            ))),
+        )?;
         if matched {
             self.dirty = true;
         }
@@ -1046,28 +1065,38 @@ impl<'conn> FeatureWriter<'conn> {
         )
     }
 
-    /// [`Self::exec_insert`] for bindings that may borrow rather than own.
-    #[cfg(feature = "arrow")]
-    fn exec_insert_bound(
-        &self,
-        sql: &str,
-        binds: &[rusqlite::types::ToSqlOutput<'_>],
-        fid: Option<i64>,
-    ) -> Result<i64> {
+    /// Run one insert.
+    ///
+    /// Takes the bindings as [`Params`] rather than a slice so callers can pass
+    /// a chained iterator of borrowed bindings: a row is then written without
+    /// collecting its bindings into a vector first, and without copying the
+    /// text and blob cells out of the caller's values.
+    fn exec_insert<P: Params>(&self, sql: &str, binds: P, fid: Option<i64>) -> Result<i64> {
         let mut stmt = self.tx.prepare_cached(sql)?;
-        stmt.execute(params_from_iter(binds.iter()))?;
+        stmt.execute(binds)?;
         Ok(fid.unwrap_or_else(|| self.tx.last_insert_rowid()))
     }
 
-    fn exec_insert(&self, sql: &str, binds: &[SqlValue], fid: Option<i64>) -> Result<i64> {
+    fn exec_update<P: Params>(&self, sql: &str, binds: P) -> Result<bool> {
         let mut stmt = self.tx.prepare_cached(sql)?;
-        stmt.execute(params_from_iter(binds.iter()))?;
-        Ok(fid.unwrap_or_else(|| self.tx.last_insert_rowid()))
+        Ok(stmt.execute(binds)? > 0)
     }
+}
 
-    fn exec_update(&self, sql: &str, binds: &[SqlValue]) -> Result<bool> {
-        let mut stmt = self.tx.prepare_cached(sql)?;
-        Ok(stmt.execute(params_from_iter(binds.iter()))? > 0)
+/// Re-borrow a prepared binding so it can be chained with owned ones.
+///
+/// The columnar path hands over a slice of bindings it still owns. Cloning them
+/// to build the statement's parameter list would copy every owned cell, which
+/// is exactly the copy those bindings exist to avoid, so an owned binding is
+/// re-borrowed rather than duplicated.
+#[cfg(feature = "arrow")]
+fn borrow_bind<'a>(bind: &'a ToSqlOutput<'_>) -> ToSqlOutput<'a> {
+    match bind {
+        ToSqlOutput::Borrowed(value) => ToSqlOutput::Borrowed(*value),
+        ToSqlOutput::Owned(value) => ToSqlOutput::Borrowed(ValueRef::from(value)),
+        // `ToSqlOutput` is non-exhaustive; nothing this crate builds reaches
+        // here, and the remaining variants are all cheap to copy.
+        other => other.clone(),
     }
 }
 

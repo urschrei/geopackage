@@ -210,6 +210,27 @@ pub(crate) fn value_to_sql(value: &Value) -> rusqlite::types::Value {
     value_into_sql(value.clone())
 }
 
+/// Bind a borrowed [`Value`] without copying it.
+///
+/// The scalar write path holds the caller's values for the whole insert, so
+/// text and blob cells can be bound straight out of them. Going through
+/// [`value_to_sql`] instead deep-copies every string and blob in the row, once
+/// per row written. Only `DATE` and `DATETIME` are owned here, because they are
+/// formatted rather than copied.
+pub(crate) fn value_to_bind(value: &Value) -> rusqlite::types::ToSqlOutput<'_> {
+    use rusqlite::types::{ToSqlOutput, Value as Sql, ValueRef};
+    match value {
+        Value::Null => ToSqlOutput::Borrowed(ValueRef::Null),
+        Value::Boolean(b) => ToSqlOutput::Borrowed(ValueRef::Integer(i64::from(*b))),
+        Value::Integer(i) => ToSqlOutput::Borrowed(ValueRef::Integer(*i)),
+        Value::Float(f) => ToSqlOutput::Borrowed(ValueRef::Real(*f)),
+        Value::Text(s) => ToSqlOutput::Borrowed(ValueRef::Text(s.as_bytes())),
+        Value::Blob(b) => ToSqlOutput::Borrowed(ValueRef::Blob(b)),
+        Value::Date(d) => ToSqlOutput::Owned(Sql::Text(d.to_string())),
+        Value::DateTime(dt) => ToSqlOutput::Owned(Sql::Text(dt.to_string())),
+    }
+}
+
 /// [`value_to_sql`] for a caller that owns its value, so a string or blob moves
 /// into the binding instead of being copied.
 ///
