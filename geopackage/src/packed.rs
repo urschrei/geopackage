@@ -163,10 +163,15 @@ fn hilbert(x: f64, y: f64, extent: &[f64; 4]) -> u32 {
     d
 }
 
-/// Serialise one node: the header followed by its cells, zero-padded to
-/// `node_size`.
-fn encode_node(depth: u16, cells: &[Cell], node_size: usize) -> Vec<u8> {
-    let mut blob = Vec::with_capacity(node_size);
+/// Serialise one node into `blob`: the header followed by its cells,
+/// zero-padded to `node_size`.
+///
+/// Writes into a caller-owned buffer so a build streams through one allocation
+/// rather than one per node. The buffer is cleared on entry, so any previous
+/// node's bytes are discarded.
+fn encode_node_into(blob: &mut Vec<u8>, depth: u16, cells: &[Cell], node_size: usize) {
+    blob.clear();
+    blob.reserve(node_size);
     blob.extend_from_slice(&depth.to_be_bytes());
     // The cell count fits u16: callers cap cells at (node_size - 4) / 24.
     let count = u16::try_from(cells.len()).unwrap_or(u16::MAX);
@@ -178,7 +183,6 @@ fn encode_node(depth: u16, cells: &[Cell], node_size: usize) -> Vec<u8> {
         }
     }
     blob.resize(node_size, 0);
-    blob
 }
 
 /// The number of nodes at each level, leaves first, for `entries` entries at
@@ -248,11 +252,29 @@ pub(crate) fn pack_into<S: NodeSink>(
         rounded.clamp(2.min(capacity), capacity.max(1))
     };
 
+    let mut blob = Vec::with_capacity(node_size);
+
+    if entries.is_empty() {
+        encode_node_into(&mut blob, 0, &[], node_size);
+        return sink.node(1, &blob);
+    }
+
     // Round each envelope outward to f32, exactly as the RTree module would, so
     // a stored box never excludes a geometry it must contain.
-    let mut leaves: Vec<Cell> = entries
-        .iter()
-        .map(|&(id, [min_x, max_x, min_y, max_y])| Cell {
+    //
+    // The cells go straight into the keyed vector that will be sorted, with the
+    // extent accumulated in the same pass and the Hilbert keys filled in after.
+    // Building a separate cell vector first and draining it into this one costs
+    // a second allocation the size of the whole entry set.
+    let mut keyed: Vec<(u32, Cell)> = Vec::with_capacity(entries.len());
+    let mut extent = [
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    for &(id, [min_x, max_x, min_y, max_y]) in entries {
+        let cell = Cell {
             id,
             bounds: [
                 coord_down(min_x),
@@ -260,11 +282,15 @@ pub(crate) fn pack_into<S: NodeSink>(
                 coord_down(min_y),
                 coord_up(max_y),
             ],
-        })
-        .collect();
-
-    if leaves.is_empty() {
-        return sink.node(1, &encode_node(0, &[], node_size));
+        };
+        let (cx, cy) = cell.centre();
+        extent = [
+            extent[0].min(cx),
+            extent[1].max(cx),
+            extent[2].min(cy),
+            extent[3].max(cy),
+        ];
+        keyed.push((0, cell));
     }
 
     // Group the entries into leaf-sized, spatially compact sets by sorting on
@@ -272,30 +298,10 @@ pub(crate) fn pack_into<S: NodeSink>(
     // measured against this and is not better here: on uniformly spread data it
     // builds ~15% slower (it sorts at every level rather than once) with
     // slightly worse queries, and on clustered data the two are within noise.
-    let extent = leaves.iter().fold(
-        [
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-        ],
-        |acc, cell| {
-            let (cx, cy) = cell.centre();
-            [
-                acc[0].min(cx),
-                acc[1].max(cx),
-                acc[2].min(cy),
-                acc[3].max(cy),
-            ]
-        },
-    );
-    let mut keyed: Vec<(u32, Cell)> = leaves
-        .drain(..)
-        .map(|cell| {
-            let (cx, cy) = cell.centre();
-            (hilbert(cx, cy, &extent), cell)
-        })
-        .collect();
+    for (key, cell) in &mut keyed {
+        let (cx, cy) = cell.centre();
+        *key = hilbert(cx, cy, &extent);
+    }
     keyed.sort_unstable_by_key(|(key, _)| *key);
 
     // Node numbers are fixed before anything is written. The root must be node
@@ -321,15 +327,20 @@ pub(crate) fn pack_into<S: NodeSink>(
     // Level 0: the leaves, from the sorted entries.
     let base = level_base.first().copied().unwrap_or(1);
     let mut level: Vec<Cell> = Vec::with_capacity(levels.first().copied().unwrap_or(1));
+    // Reused across leaves: `encode_node_into` wants the cells without their
+    // sort keys, and one node's worth is at most `per_node` of them.
+    let mut cells: Vec<Cell> = Vec::with_capacity(per_node);
     for (index, chunk) in keyed.chunks(per_node).enumerate() {
         let nodeno = base + i64::try_from(index).unwrap_or(0);
-        let cells: Vec<Cell> = chunk.iter().map(|(_, cell)| *cell).collect();
+        cells.clear();
+        cells.extend(chunk.iter().map(|(_, cell)| *cell));
         let mut bounds = cells.first().map_or([0.0; 4], |first| first.bounds);
         for cell in &cells {
             bounds = Cell::union(&bounds, &cell.bounds);
             sink.rowid(cell.id, nodeno)?;
         }
-        sink.node(nodeno, &encode_node(depth, &cells, node_size))?;
+        encode_node_into(&mut blob, depth, &cells, node_size);
+        sink.node(nodeno, &blob)?;
         level.push(Cell { id: nodeno, bounds });
     }
 
@@ -346,7 +357,8 @@ pub(crate) fn pack_into<S: NodeSink>(
                 sink.parent(cell.id, nodeno)?;
             }
             let node_depth = u16::try_from(height).unwrap_or(0);
-            sink.node(nodeno, &encode_node(node_depth, chunk, node_size))?;
+            encode_node_into(&mut blob, node_depth, chunk, node_size);
+            sink.node(nodeno, &blob)?;
             parents.push(Cell { id: nodeno, bounds });
         }
         level = parents;
