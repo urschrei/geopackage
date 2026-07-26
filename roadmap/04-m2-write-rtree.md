@@ -255,6 +255,25 @@ write performance competitive with GDAL's GPKG driver.
      "single SRS across geometry tables" (our file deliberately mixes 4326+3857,
      spec-legal; PDOK convention, advisory) and RC19 (the intentional Z layer, a
      recommendation). All other RQ/RC checks pass.
+   - **GDAL's own validator** (`scripts/run_gdal_validator.sh`), added
+     2026-07-26: `gdal driver gpkg validate` in GDAL 3.13+, otherwise the
+     `osgeo_utils.samples.validate_gpkg` script that command wraps, which is the
+     route on older GDAL. This is the only one of the three that checks the
+     `gpkg_contents.last_change` format (Requirement 15); neither the ETS nor
+     PDOK looks at it, and none of the three checks that a recorded extent
+     matches the data. A 5,000-feature file from `examples/bulk_load.rs` passes
+     clean in both modes. A file exercising every declared column type, an
+     attributes table, two SRS, and NULL and empty geometries produces exactly
+     one finding, `Req 152: Inconsistent empty_flag vs geometry content`, and
+     that one is the validator's defect rather than ours: the check reads the
+     GPB empty flag from bit 3, where the spec puts it at bit 4 and the envelope
+     indicator at bits 1 to 3, so it tests the envelope field's top bit. It
+     fires on the default run, not only under `--full-check`. Confirmed by
+     running it against a file GDAL itself wrote, where it is likewise the sole
+     finding; the GPKG driver and this crate encode the identical `0x11` flags
+     byte for an empty geometry. Present on GDAL master as of 2026-07-26, so
+     3.13's command inherits it, and the validator is therefore unusable without
+     that caveat against any layer holding an empty geometry.
    - **QGIS**: not re-exercised in this pass (covered in the M1 corpus via
      headless `qgis_process`); stays open here.)*
 2. GDAL round-trip: write here → read with ogr2ogr → byte-compare geometries
