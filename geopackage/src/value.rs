@@ -115,6 +115,64 @@ impl<'a> ValueRef<'a> {
             _ => None,
         }
     }
+
+    /// Whether this is [`ValueRef::Null`].
+    #[must_use]
+    pub fn is_null(&self) -> bool {
+        matches!(*self, ValueRef::Null)
+    }
+
+    /// The boolean, if this is a [`ValueRef::Boolean`].
+    ///
+    /// Only that case: an integer column holding `0` or `1` reads as
+    /// [`ValueRef::Integer`], because what a value converts to is driven by the
+    /// column's declared type rather than by its contents.
+    #[must_use]
+    pub fn as_bool(&self) -> Option<bool> {
+        match *self {
+            ValueRef::Boolean(b) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// The integer, if this is a [`ValueRef::Integer`].
+    #[must_use]
+    pub fn as_i64(&self) -> Option<i64> {
+        match *self {
+            ValueRef::Integer(i) => Some(i),
+            _ => None,
+        }
+    }
+
+    /// The float, if this is a [`ValueRef::Float`].
+    ///
+    /// An `INTEGER`-declared column reads as [`ValueRef::Integer`] even where
+    /// the value would widen losslessly, so this does not convert one.
+    #[must_use]
+    pub fn as_f64(&self) -> Option<f64> {
+        match *self {
+            ValueRef::Float(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// The date, if this is a [`ValueRef::Date`].
+    #[must_use]
+    pub fn as_date(&self) -> Option<Date> {
+        match *self {
+            ValueRef::Date(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    /// The datetime, if this is a [`ValueRef::DateTime`].
+    #[must_use]
+    pub fn as_datetime(&self) -> Option<DateTime> {
+        match *self {
+            ValueRef::DateTime(dt) => Some(dt),
+            _ => None,
+        }
+    }
 }
 
 impl From<ValueRef<'_>> for Value {

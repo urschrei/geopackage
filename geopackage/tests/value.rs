@@ -338,3 +338,32 @@ fn unknown_column_is_typed_error() {
         other => panic!("expected NoSuchColumn, got {other:?}"),
     }
 }
+
+/// The typed accessors return a value only for their own variant: none of them
+/// converts between cases, because what a cell converts to is driven by the
+/// column's declared type rather than by the value's contents.
+#[test]
+fn typed_accessors_match_only_their_own_variant() {
+    use geopackage::ValueRef;
+
+    let day = Date::parse("2026-07-26").unwrap();
+    let seen = DateTime::parse_strict("2026-07-26T12:34:56.789Z").unwrap();
+
+    assert_eq!(ValueRef::Integer(7).as_i64(), Some(7));
+    assert_eq!(ValueRef::Float(1.5).as_f64(), Some(1.5));
+    assert_eq!(ValueRef::Boolean(true).as_bool(), Some(true));
+    assert_eq!(ValueRef::Text("hi").as_str(), Some("hi"));
+    assert_eq!(ValueRef::Blob(&[1, 2]).as_blob(), Some(&[1u8, 2][..]));
+    assert_eq!(ValueRef::Date(day).as_date(), Some(day));
+    assert_eq!(ValueRef::DateTime(seen).as_datetime(), Some(seen));
+    assert!(ValueRef::Null.is_null());
+
+    // An integer is not read as a float, and a 0/1 integer is not a boolean:
+    // both would be conversions the declared type did not ask for.
+    assert_eq!(ValueRef::Integer(7).as_f64(), None);
+    assert_eq!(ValueRef::Integer(1).as_bool(), None);
+    assert_eq!(ValueRef::Float(1.0).as_i64(), None);
+    assert_eq!(ValueRef::Text("hi").as_blob(), None);
+    assert_eq!(ValueRef::Blob(b"hi").as_str(), None);
+    assert!(!ValueRef::Integer(0).is_null());
+}
