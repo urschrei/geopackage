@@ -8,7 +8,7 @@
 )]
 
 use geopackage::core::gpb::{Envelope, encode_header};
-use geopackage::{BoundingBox, ContentsDataType, Error, GeoPackage, LayerKind, Value, ValueRef};
+use geopackage::{BoundingBox, ContentsDataType, Error, GeoPackage, LayerKind, ValueRef};
 use geopackage::{ConversionOptions, core::datetime::DateTime};
 
 /// A GPB point blob with an XY envelope (little-endian WKB).
@@ -206,7 +206,7 @@ fn conversion_options_apply_to_features() {
 
     let strict = gpkg.layer("roads").unwrap();
     let row = strict
-        .select("fid = ?1", &[Value::Integer(5)])
+        .select("fid = ?1", &[ValueRef::Integer(5)])
         .unwrap()
         .next()
         .unwrap();
@@ -217,7 +217,7 @@ fn conversion_options_apply_to_features() {
         .unwrap()
         .with_conversion_options(ConversionOptions::lenient());
     let row = lenient
-        .select("fid = ?1", &[Value::Integer(5)])
+        .select("fid = ?1", &[ValueRef::Integer(5)])
         .unwrap()
         .next()
         .unwrap()
@@ -236,7 +236,7 @@ fn select_passthrough_binds_values() {
     let layer = gpkg.layer("roads").unwrap();
 
     let hits: Vec<_> = layer
-        .select("lanes >= ?1", &[Value::Integer(2)])
+        .select("lanes >= ?1", &[ValueRef::Integer(2)])
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
@@ -252,7 +252,7 @@ fn select_passthrough_binds_values() {
 
     // A text parameter binds too.
     let by_name: Vec<_> = layer
-        .select("name = ?1", &[Value::Text("c".into())])
+        .select("name = ?1", &[ValueRef::Text("c")])
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();

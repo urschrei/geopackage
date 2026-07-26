@@ -140,7 +140,7 @@
 //!         // `geometry` borrows the row's blob; `length` reads coordinates
 //!         // from it, and `insert` encodes WKB from the same view.
 //!         let l = length(&geometry);
-//!         writer.insert(None, &geometry, &[Value::Float(l)])?;
+//!         writer.insert(None, &geometry, &[ValueRef::Float(l)])?;
 //!     }
 //! }
 //! writer.commit()?;

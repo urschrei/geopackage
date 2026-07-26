@@ -92,8 +92,8 @@ use crate::bulk::{self, BulkIndexOptions};
 /// rebuild. See [`rebuild_beats_append`] for the measurements behind the value.
 const MERGE_REBUILD_RATIO: usize = 10;
 use crate::index::drop_all_rtree_triggers;
-use crate::value::value_to_bind;
-use crate::{Error, Layer, Result, Value};
+use crate::value::{value_ref_to_bind, value_to_bind};
+use crate::{Error, Layer, Result, Value, ValueRef as CellRef};
 
 /// A new row for [`Layer::write_all`]: an optional explicit feature id, an
 /// optional geometry, and the value-column values in column order.
@@ -158,7 +158,7 @@ impl<G: GeometryTrait<T = f64>> WritableRow for NewFeature<G> {
         match &self.geometry {
             Some(geometry) => writer.insert_returning_envelope(self.fid, geometry, &self.values),
             None => writer
-                .insert_row(self.fid, &self.values)
+                .insert_row_owned(self.fid, &self.values)
                 .map(|fid| (fid, None)),
         }
     }
@@ -664,6 +664,12 @@ impl<'conn> FeatureWriter<'conn> {
     /// an explicit id. `values` must have one entry per value column, in
     /// the layer's value-column order.
     ///
+    /// Values are borrowed, so a row read from one layer binds straight into
+    /// another without its text and blob cells being copied, and a literal
+    /// needs no allocation: `ValueRef::Text("a")` rather than
+    /// `Value::Text("a".to_owned())`. An owned [`Value`] converts with
+    /// `ValueRef::from`.
+    ///
     /// # Errors
     ///
     /// - [`Error::NoGeometryColumn`] if the layer has no geometry column (use
@@ -675,10 +681,15 @@ impl<'conn> FeatureWriter<'conn> {
         &mut self,
         fid: Option<i64>,
         geometry: &G,
-        values: &[Value],
+        values: &[CellRef<'_>],
     ) -> Result<i64> {
-        self.insert_returning_envelope(fid, geometry, values)
-            .map(|(assigned, _)| assigned)
+        self.insert_geometry_binds(
+            fid,
+            geometry,
+            values.len(),
+            values.iter().copied().map(value_ref_to_bind),
+        )
+        .map(|(assigned, _)| assigned)
     }
 
     /// [`Self::insert`], additionally returning the geometry's XY envelope
@@ -691,18 +702,40 @@ impl<'conn> FeatureWriter<'conn> {
         geometry: &G,
         values: &[Value],
     ) -> Result<(i64, Option<[f64; 4]>)> {
-        self.check_values(values)?;
+        self.insert_geometry_binds(
+            fid,
+            geometry,
+            values.len(),
+            values.iter().map(value_to_bind),
+        )
+    }
+
+    /// The shared body of the geometry inserts, taking its bindings as an
+    /// iterator so an owned `&[Value]` and a borrowed `&[ValueRef]` both reach
+    /// it without either being collected into a vector first.
+    fn insert_geometry_binds<'v, G, I>(
+        &mut self,
+        fid: Option<i64>,
+        geometry: &G,
+        count: usize,
+        binds: I,
+    ) -> Result<(i64, Option<[f64; 4]>)>
+    where
+        G: GeometryTrait<T = f64>,
+        I: Iterator<Item = ToSqlOutput<'v>>,
+    {
+        self.check_value_count(count)?;
         let (blob, xy) = self.encode_geometry(geometry)?;
         let sql = self.insert_sql(fid.is_some(), true);
-        // Bound straight from `values` and the freshly encoded blob, in one
-        // chained iterator: no vector of bindings per row, and no copy of the
-        // row's text and blob cells.
+        // Bound straight from the caller's values and the freshly encoded blob,
+        // in one chained iterator: no vector of bindings per row, and no copy
+        // of the row's text and blob cells.
         let assigned = self.exec_insert(
             sql,
             params_from_iter(
                 fid.map(|id| ToSqlOutput::Borrowed(ValueRef::Integer(id)))
                     .into_iter()
-                    .chain(values.iter().map(value_to_bind))
+                    .chain(binds)
                     .chain(std::iter::once(ToSqlOutput::Owned(SqlValue::Blob(blob)))),
             ),
             fid,
@@ -805,15 +838,34 @@ impl<'conn> FeatureWriter<'conn> {
     /// # Errors
     ///
     /// [`Error::ValueCountMismatch`] if `values` has the wrong length.
-    pub fn insert_row(&mut self, fid: Option<i64>, values: &[Value]) -> Result<i64> {
-        self.check_values(values)?;
+    pub fn insert_row(&mut self, fid: Option<i64>, values: &[CellRef<'_>]) -> Result<i64> {
+        self.insert_row_binds(
+            fid,
+            values.len(),
+            values.iter().copied().map(value_ref_to_bind),
+        )
+    }
+
+    /// [`Self::insert_row`] for a caller holding owned values.
+    pub(crate) fn insert_row_owned(&mut self, fid: Option<i64>, values: &[Value]) -> Result<i64> {
+        self.insert_row_binds(fid, values.len(), values.iter().map(value_to_bind))
+    }
+
+    /// The shared body of the geometryless inserts. As
+    /// [`Self::insert_geometry_binds`], the bindings arrive as an iterator so
+    /// neither caller collects them first.
+    fn insert_row_binds<'v, I>(&mut self, fid: Option<i64>, count: usize, binds: I) -> Result<i64>
+    where
+        I: Iterator<Item = ToSqlOutput<'v>>,
+    {
+        self.check_value_count(count)?;
         let sql = self.insert_sql(fid.is_some(), false);
         let assigned = self.exec_insert(
             sql,
             params_from_iter(
                 fid.map(|id| ToSqlOutput::Borrowed(ValueRef::Integer(id)))
                     .into_iter()
-                    .chain(values.iter().map(value_to_bind)),
+                    .chain(binds),
             ),
             fid,
         )?;
@@ -831,14 +883,14 @@ impl<'conn> FeatureWriter<'conn> {
         &mut self,
         fid: i64,
         geometry: &G,
-        values: &[Value],
+        values: &[CellRef<'_>],
     ) -> Result<bool> {
-        self.check_values(values)?;
+        self.check_value_count(values.len())?;
         let (blob, xy) = self.encode_geometry(geometry)?;
         let sql = self.update_sql(true);
         let matched = self.exec_update(
             &sql,
-            params_from_iter(values.iter().map(value_to_bind).chain([
+            params_from_iter(values.iter().copied().map(value_ref_to_bind).chain([
                 ToSqlOutput::Owned(SqlValue::Blob(blob)),
                 ToSqlOutput::Borrowed(ValueRef::Integer(fid)),
             ])),
@@ -859,15 +911,16 @@ impl<'conn> FeatureWriter<'conn> {
     /// # Errors
     ///
     /// [`Error::ValueCountMismatch`] if `values` has the wrong length.
-    pub fn update_row(&mut self, fid: i64, values: &[Value]) -> Result<bool> {
-        self.check_values(values)?;
+    pub fn update_row(&mut self, fid: i64, values: &[CellRef<'_>]) -> Result<bool> {
+        self.check_value_count(values.len())?;
         let sql = self.update_sql(false);
-        let matched = self.exec_update(
-            &sql,
-            params_from_iter(values.iter().map(value_to_bind).chain(std::iter::once(
-                ToSqlOutput::Borrowed(ValueRef::Integer(fid)),
-            ))),
-        )?;
+        let matched =
+            self.exec_update(
+                &sql,
+                params_from_iter(values.iter().copied().map(value_ref_to_bind).chain(
+                    std::iter::once(ToSqlOutput::Borrowed(ValueRef::Integer(fid))),
+                )),
+            )?;
         if matched {
             self.dirty = true;
         }
@@ -989,12 +1042,8 @@ impl<'conn> FeatureWriter<'conn> {
         })
     }
 
-    fn check_values(&self, values: &[Value]) -> Result<()> {
-        self.check_value_count(values.len())
-    }
-
-    /// [`Self::check_values`] against a count, for a caller whose values are not
-    /// a `Value` slice.
+    /// Reject a value list whose length does not match the layer's value
+    /// columns.
     fn check_value_count(&self, found: usize) -> Result<()> {
         if found == self.value_columns.len() {
             return Ok(());

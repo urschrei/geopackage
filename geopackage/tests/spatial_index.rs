@@ -17,7 +17,7 @@ use geopackage::core::triggers::{self, TriggerGeneration};
 use geopackage::core::types::{ColumnType, GeometryType};
 use geopackage::{
     BoundingBox, BulkIndexOptions, ColumnSpec, GeoPackage, GeometrySpec, NewFeature,
-    StructuralCheck, TableSchemaBuilder, Value,
+    StructuralCheck, TableSchemaBuilder, Value, ValueRef,
 };
 use hegel::generators;
 use rusqlite::{Connection, OptionalExtension};
@@ -60,7 +60,7 @@ fn add_points_layer(gpkg: &GeoPackage, points: &[(i64, f64, f64)]) {
     let mut writer = layer.writer().unwrap();
     for &(fid, x, y) in points {
         writer
-            .insert(Some(fid), &Point::new(x, y), &[Value::Null])
+            .insert(Some(fid), &Point::new(x, y), &[ValueRef::Null])
             .unwrap();
     }
     writer.commit().unwrap();
@@ -589,7 +589,7 @@ fn rtree_tracks_full_scan_through_write_ops(tc: hegel::TestCase) {
                 let (x, y) = (draw_coord(&tc), draw_coord(&tc));
                 let mut writer = layer.writer().unwrap();
                 writer
-                    .update(fid, &Point::new(x, y), &[Value::Null])
+                    .update(fid, &Point::new(x, y), &[ValueRef::Null])
                     .unwrap();
                 writer.commit().unwrap();
             }
@@ -714,8 +714,8 @@ fn write_all_bulk_with_preexisting_rows_indexes_every_row() {
     // Two NULL-geometry rows: indexable-row count stays zero.
     {
         let mut writer = layer.writer().unwrap();
-        writer.insert_row(Some(1), &[Value::Null]).unwrap();
-        writer.insert_row(Some(2), &[Value::Null]).unwrap();
+        writer.insert_row(Some(1), &[ValueRef::Null]).unwrap();
+        writer.insert_row(Some(2), &[ValueRef::Null]).unwrap();
         writer.commit().unwrap();
     }
     layer.create_spatial_index().unwrap();
@@ -762,10 +762,10 @@ fn feature_writer_maintains_new_index() {
     {
         let mut writer = layer.writer().unwrap();
         writer
-            .insert(Some(3), &Point::new(30.0, 40.0), &[Value::Null])
+            .insert(Some(3), &Point::new(30.0, 40.0), &[ValueRef::Null])
             .unwrap();
         writer
-            .update(1, &Point::new(-7.0, -8.0), &[Value::Null])
+            .update(1, &Point::new(-7.0, -8.0), &[ValueRef::Null])
             .unwrap();
         writer.delete(2).unwrap();
         writer.commit().unwrap();
@@ -942,7 +942,7 @@ fn large_append_into_a_populated_index_rebuilds_it() {
     {
         let mut writer = layer.writer().unwrap();
         writer
-            .insert(Some(301), &Point::new(301.0, -301.0), &[Value::Null])
+            .insert(Some(301), &Point::new(301.0, -301.0), &[ValueRef::Null])
             .unwrap();
         writer.commit().unwrap();
     }
@@ -1000,7 +1000,7 @@ fn small_append_into_a_populated_index_appends_to_it() {
     {
         let mut writer = layer.writer().unwrap();
         writer
-            .insert(Some(206), &Point::new(206.0, -206.0), &[Value::Null])
+            .insert(Some(206), &Point::new(206.0, -206.0), &[ValueRef::Null])
             .unwrap();
         writer.commit().unwrap();
     }

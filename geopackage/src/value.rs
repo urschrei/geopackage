@@ -316,12 +316,14 @@ impl GeoPackage {
 /// Convert a typed [`Value`] into an owned rusqlite value for parameter
 /// binding (the [`crate::Layer::select`] passthrough).
 ///
-/// [`Value::Date`] and [`Value::DateTime`] bind as their canonical text form
-/// (the strict spec spelling); [`Value::Boolean`] binds as the integer `0`/`1`.
-/// This keeps rusqlite types out of the public API: callers pass our [`Value`]
-/// enum and conversion happens here.
-pub(crate) fn value_to_sql(value: &Value) -> rusqlite::types::Value {
-    value_into_sql(value.clone())
+/// A borrowed value as an owned SQLite binding.
+///
+/// Query parameters are held by the prepared statement for as long as the
+/// cursor lives, which outlasts the borrow the caller passed in, so this is one
+/// of the few places the read path has to copy. It happens once per query, not
+/// once per row.
+pub(crate) fn value_ref_to_sql(value: &ValueRef<'_>) -> rusqlite::types::Value {
+    value_into_sql(value.to_value())
 }
 
 /// Bind a borrowed [`Value`] without copying it.
@@ -331,6 +333,21 @@ pub(crate) fn value_to_sql(value: &Value) -> rusqlite::types::Value {
 /// [`value_to_sql`] instead deep-copies every string and blob in the row, once
 /// per row written. Only `DATE` and `DATETIME` are owned here, because they are
 /// formatted rather than copied.
+pub(crate) fn value_ref_to_bind(value: ValueRef<'_>) -> rusqlite::types::ToSqlOutput<'_> {
+    use rusqlite::types::{ToSqlOutput, Value as Sql};
+    match value {
+        ValueRef::Null => ToSqlOutput::Borrowed(SqlValueRef::Null),
+        ValueRef::Boolean(b) => ToSqlOutput::Borrowed(SqlValueRef::Integer(i64::from(b))),
+        ValueRef::Integer(i) => ToSqlOutput::Borrowed(SqlValueRef::Integer(i)),
+        ValueRef::Float(f) => ToSqlOutput::Borrowed(SqlValueRef::Real(f)),
+        ValueRef::Text(s) => ToSqlOutput::Borrowed(SqlValueRef::Text(s.as_bytes())),
+        ValueRef::Blob(b) => ToSqlOutput::Borrowed(SqlValueRef::Blob(b)),
+        ValueRef::Date(d) => ToSqlOutput::Owned(Sql::Text(d.to_string())),
+        ValueRef::DateTime(dt) => ToSqlOutput::Owned(Sql::Text(dt.to_string())),
+    }
+}
+
+/// [`value_ref_to_bind`] for a caller holding an owned [`Value`].
 pub(crate) fn value_to_bind(value: &Value) -> rusqlite::types::ToSqlOutput<'_> {
     use rusqlite::types::{ToSqlOutput, Value as Sql};
     match value {

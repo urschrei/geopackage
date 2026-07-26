@@ -22,7 +22,7 @@ use geopackage::core::triggers::{self, TriggerGeneration};
 use geopackage::core::types::{ColumnType, GeometryType, ZmFlag};
 use geopackage::{
     BulkIndexOptions, ColumnSpec, Error, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder,
-    Value, ValueRef,
+    ValueRef,
 };
 
 fn gpkg() -> (tempfile::TempDir, GeoPackage) {
@@ -103,13 +103,13 @@ fn roundtrip_geometries_and_values() {
             None,
             &point,
             &[
-                Value::Text("a".into()),
-                Value::Float(1.5),
-                Value::Integer(10),
-                Value::Boolean(true),
-                Value::DateTime(seen),
-                Value::Date(day),
-                Value::Blob(vec![0x01, 0x02]),
+                ValueRef::Text("a"),
+                ValueRef::Float(1.5),
+                ValueRef::Integer(10),
+                ValueRef::Boolean(true),
+                ValueRef::DateTime(seen),
+                ValueRef::Date(day),
+                ValueRef::Blob(&[0x01, 0x02]),
             ],
         )
         .unwrap();
@@ -118,13 +118,13 @@ fn roundtrip_geometries_and_values() {
             Some(50),
             &line,
             &[
-                Value::Text("b".into()),
-                Value::Null,
-                Value::Integer(-4),
-                Value::Boolean(false),
-                Value::Null,
-                Value::Null,
-                Value::Null,
+                ValueRef::Text("b"),
+                ValueRef::Null,
+                ValueRef::Integer(-4),
+                ValueRef::Boolean(false),
+                ValueRef::Null,
+                ValueRef::Null,
+                ValueRef::Null,
             ],
         )
         .unwrap();
@@ -133,13 +133,13 @@ fn roundtrip_geometries_and_values() {
             None,
             &poly,
             &[
-                Value::Text("c".into()),
-                Value::Float(9.0),
-                Value::Integer(3),
-                Value::Boolean(true),
-                Value::DateTime(seen),
-                Value::Date(day),
-                Value::Null,
+                ValueRef::Text("c"),
+                ValueRef::Float(9.0),
+                ValueRef::Integer(3),
+                ValueRef::Boolean(true),
+                ValueRef::DateTime(seen),
+                ValueRef::Date(day),
+                ValueRef::Null,
             ],
         )
         .unwrap();
@@ -597,7 +597,7 @@ fn ogrinfo_reads_written_features() {
         let layer = gpkg.layer("places").unwrap();
         let mut w = layer.writer().unwrap();
         for (fid, x, y, name) in written {
-            w.insert(Some(fid), &Point::new(x, y), &[Value::Text(name.into())])
+            w.insert(Some(fid), &Point::new(x, y), &[ValueRef::Text(name)])
                 .unwrap();
         }
         w.commit().unwrap();
@@ -669,7 +669,7 @@ fn a_features_values_insert_into_a_layer_of_the_same_schema() {
     w.insert(
         None,
         &Point::new(1.0, 2.0),
-        &[Value::Text("a".to_owned()), Value::Integer(7)],
+        &[ValueRef::Text("a"), ValueRef::Integer(7)],
     )
     .unwrap();
     w.commit().unwrap();
@@ -679,7 +679,9 @@ fn a_features_values_insert_into_a_layer_of_the_same_schema() {
     let mut w = target.writer().unwrap();
     for feature in source.features().unwrap() {
         let feature = feature.unwrap();
-        let values: Vec<Value> = feature.values().map(Value::from).collect();
+        // Straight from the source feature's buffer: no owned Value in sight,
+        // so no text or blob cell is copied on the way through.
+        let values: Vec<ValueRef<'_>> = feature.values().collect();
         let geometry = feature.geometry().unwrap().unwrap();
         w.insert(None, &geometry, &values).unwrap();
     }

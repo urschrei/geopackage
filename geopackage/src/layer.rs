@@ -38,9 +38,9 @@ use geopackage_core::triggers::{self, TriggerGeneration};
 use rusqlite::OptionalExtension;
 use rusqlite::types::ValueRef as SqlValueRef;
 
-use crate::value::{ValueRef, value_ref_from_sql, value_to_sql};
+use crate::value::{ValueRef, value_ref_from_sql, value_ref_to_sql};
 use crate::{
-    Column, ConversionOptions, Error, GeoPackage, GeometryColumn, Result, TableSchema, Value,
+    Column, ConversionOptions, Error, GeoPackage, GeometryColumn, Result, TableSchema,
     resolve_table_name, table_exists,
 };
 
@@ -387,24 +387,26 @@ impl<'a> Layer<'a> {
     /// sanitise it, and provides no query DSL of its own
     /// ([`GeoPackage::connection`] is the full escape hatch). `params` bind its
     /// placeholders; they are this crate's [`Value`] enum, converted internally
-    /// so rusqlite types stay out of the public API. [`Value::Date`] and
-    /// [`Value::DateTime`] bind as their canonical text form.
+    /// so rusqlite types stay out of the public API. [`ValueRef::Date`] and
+    /// [`ValueRef::DateTime`] bind as their canonical text form.
+    ///
+    /// Parameters are borrowed, so a literal needs no allocation to bind.
     ///
     /// ```no_run
     /// # fn main() -> Result<(), geopackage::Error> {
     /// # let gpkg = geopackage::GeoPackage::open("x.gpkg")?;
     /// # let layer = gpkg.layer("roads")?;
-    /// use geopackage::Value;
-    /// for feature in layer.select("name = ?1", &[Value::Text("A1".into())])? {
+    /// use geopackage::ValueRef;
+    /// for feature in layer.select("name = ?1", &[ValueRef::Text("A1")])? {
     ///     let feature = feature?;
     ///     println!("{}", feature.fid());
     /// }
     /// # Ok(()) }
     /// ```
-    pub fn select(&self, where_clause: &str, params: &[Value]) -> Result<Features> {
+    pub fn select(&self, where_clause: &str, params: &[ValueRef<'_>]) -> Result<Features> {
         let (base, geom_idx) = self.base_select()?;
         let sql = format!("{base} WHERE ({where_clause})");
-        let sql_params: Vec<rusqlite::types::Value> = params.iter().map(value_to_sql).collect();
+        let sql_params: Vec<rusqlite::types::Value> = params.iter().map(value_ref_to_sql).collect();
         self.execute(&sql, sql_params, geom_idx, None)
     }
 
@@ -453,10 +455,14 @@ impl<'a> Layer<'a> {
 
     /// A streaming `WHERE` query: the same rows as [`Self::select`], with the
     /// same raw-SQL contract.
-    pub fn cursor_select(&self, where_clause: &str, params: &[Value]) -> Result<FeatureCursor<'_>> {
+    pub fn cursor_select(
+        &self,
+        where_clause: &str,
+        params: &[ValueRef<'_>],
+    ) -> Result<FeatureCursor<'_>> {
         let (base, geom_idx) = self.base_select()?;
         let sql = format!("{base} WHERE ({where_clause})");
-        let sql_params: Vec<rusqlite::types::Value> = params.iter().map(value_to_sql).collect();
+        let sql_params: Vec<rusqlite::types::Value> = params.iter().map(value_ref_to_sql).collect();
         self.prepare_cursor(&sql, sql_params, geom_idx, None)
     }
 
