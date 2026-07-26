@@ -236,6 +236,18 @@ pub enum Error {
         /// The table the builder describes.
         table_name: String,
     },
+    /// A partial update named the same column more than once.
+    ///
+    /// SQLite accepts a repeated assignment and applies the last one, so this
+    /// is rejected rather than resolved: naming a column twice with different
+    /// values is more likely to be a caller's mistake than an intention.
+    #[error("update of table {table_name:?} names column {column_name:?} more than once")]
+    DuplicateUpdateColumn {
+        /// The table being written.
+        table_name: String,
+        /// The column named twice.
+        column_name: String,
+    },
     /// A write supplied a value slice whose length does not match the layer's
     /// non-geometry column count.
     #[error("table {table_name:?} expects {expected} value(s) per row, got {found}")]

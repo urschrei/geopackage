@@ -230,19 +230,23 @@ impl BboxFold {
 /// A prepared-statement writer over one layer, owning a transaction.
 ///
 /// Obtain one with [`Layer::writer`]. Each `insert`/`update`/`delete` stages
-/// into the writer's transaction using rusqlite's per-connection statement
-/// cache (so repeated calls reuse the compiled statement); [`Self::commit`]
-/// flushes catalogue metadata and commits. Dropping a writer without committing
-/// rolls its transaction back. The `gpkg_contents` bounding box is grown by a
-/// running fold over written geometry envelopes and `last_change` is refreshed
-/// on commit.
+/// into the writer's transaction through a statement the writer holds;
+/// [`Self::commit`] flushes catalogue metadata and commits. Dropping a writer
+/// without committing rolls its transaction back. The `gpkg_contents` bounding
+/// box is grown by a running fold over written geometry envelopes and
+/// `last_change` is refreshed on commit.
 pub struct FeatureWriter<'conn> {
     tx: Transaction<'conn>,
+    /// The connection the transaction runs on, for preparing the statement a
+    /// partial update needs, whose shape is not known until it is called.
+    conn: &'conn Connection,
     table_name: String,
-    /// Quoted value-column names, in value order: neither the geometry nor
-    /// the primary key is among them. Kept for the value-count check; the
-    /// statement text they compose is built at construction.
-    value_columns: Vec<String>,
+    quoted_table: String,
+    /// The primary-key expression: the quoted pk column, or `rowid`.
+    pk_expr: String,
+    /// The value columns, in value order: neither the geometry nor the primary
+    /// key is among them.
+    value_columns: Vec<ValueColumn>,
     geometry: Option<GeomTarget>,
     bbox: BboxFold,
     /// The four possible `INSERT` statements, by whether the row carries an
@@ -266,6 +270,18 @@ pub struct FeatureWriter<'conn> {
     update_stmts: [CachedStatement<'conn>; 2],
     /// The `DELETE`, likewise fixed for the writer's lifetime.
     delete_stmt: CachedStatement<'conn>,
+    /// The value columns named by the most recent [`Self::update_columns`]
+    /// call, in the order given, and the statement prepared for them.
+    ///
+    /// A partial update's shape is the caller's to choose, so it cannot be
+    /// prepared up front like the others. Holding the last one makes a loop
+    /// that recomputes the same columns for every row prepare once; a caller
+    /// alternating between two sets of columns re-prepares on each change.
+    /// The starting state names no columns, which is a statement in its own
+    /// right (it assigns the primary key to itself), so the slot is never
+    /// empty.
+    partial_columns: Vec<String>,
+    partial_stmt: CachedStatement<'conn>,
     /// Any insert, or any update/delete that changed a row (drives
     /// `last_change`).
     dirty: bool,
@@ -295,8 +311,13 @@ impl<'a> Layer<'a> {
         let value_columns = self
             .value_columns()
             .iter()
-            .map(|c| quote(&c.name))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .map(|c| {
+                Ok(ValueColumn {
+                    quoted: quote(&c.name)?,
+                    name: c.name.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let geometry = match self.geometry_column() {
             Some(g) => Some(GeomTarget {
                 name: g.column_name.clone(),
@@ -314,6 +335,7 @@ impl<'a> Layer<'a> {
         // Compose every statement the writer can issue, then prepare them all,
         // before anything moves into the writer.
         let shape = Shape {
+            table_name: self.table_name(),
             quoted_table: &quoted_table,
             pk_expr: &pk_expr,
             value_columns: &value_columns,
@@ -331,16 +353,22 @@ impl<'a> Layer<'a> {
         ];
         let delete_stmt =
             conn.prepare_cached(&format!("DELETE FROM {quoted_table} WHERE {pk_expr} = ?1"))?;
+        let partial_stmt = conn.prepare_cached(&build_partial_update_sql(&shape, &[])?)?;
 
         Ok(FeatureWriter {
             tx,
+            conn,
             table_name: self.table_name().to_owned(),
+            quoted_table,
+            pk_expr,
             value_columns,
             geometry,
             bbox,
             insert_stmts,
             update_stmts,
             delete_stmt,
+            partial_columns: Vec::new(),
+            partial_stmt,
             dirty: false,
             bbox_dirty: false,
         })
@@ -957,6 +985,94 @@ impl<'conn> FeatureWriter<'conn> {
         Ok(matched)
     }
 
+    /// Update named value columns of the feature `fid`, leaving every other
+    /// column, and the geometry, untouched. Returns whether a row matched.
+    ///
+    /// [`Self::update_row`] restates the whole row, so a caller recomputing one
+    /// column has to supply the values of every other; this takes only what
+    /// changed. The statement is composed from the names given and held until a
+    /// call names a different set, so a loop recomputing the same columns for
+    /// every row prepares once and then costs no allocation a row.
+    ///
+    /// The geometry and the primary key are not value columns: write a geometry
+    /// through [`Self::update`], which maintains the bounding-box fold that this
+    /// cannot.
+    ///
+    /// An empty `columns` reports whether the row exists and changes nothing.
+    ///
+    /// ```no_run
+    /// # fn main() -> geopackage::Result<()> {
+    /// # let gpkg = geopackage::GeoPackage::open("roads.gpkg")?;
+    /// # let layer = gpkg.layer("roads")?;
+    /// let mut cursor = layer.cursor()?;
+    /// let mut writer = layer.writer()?;
+    /// for feature in cursor.features()? {
+    ///     let feature = feature?;
+    ///     let length = feature.value("length").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    ///     writer.update_column(feature.fid(), "length_km", geopackage::ValueRef::Float(length / 1000.0))?;
+    /// }
+    /// writer.commit()?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NoSuchColumn`] if a name is not one of the layer's value
+    ///   columns.
+    /// - [`Error::DuplicateUpdateColumn`] if a name is given twice. SQLite
+    ///   accepts a repeated assignment and applies the last, which is more
+    ///   likely to be a caller's mistake than an intention.
+    pub fn update_columns(&mut self, fid: i64, columns: &[(&str, CellRef<'_>)]) -> Result<bool> {
+        if !self.partial_matches(columns) {
+            let sql = build_partial_update_sql(&self.shape(), columns)?;
+            self.partial_stmt = self.conn.prepare_cached(&sql)?;
+            self.partial_columns.clear();
+            self.partial_columns
+                .extend(columns.iter().map(|(name, _)| (*name).to_owned()));
+        }
+        let matched = self.partial_stmt.execute(params_from_iter(
+            columns
+                .iter()
+                .map(|(_, value)| value_ref_to_bind(*value))
+                .chain(std::iter::once(ToSqlOutput::Borrowed(ValueRef::Integer(
+                    fid,
+                )))),
+        ))? > 0;
+        if matched {
+            self.dirty = true;
+        }
+        Ok(matched)
+    }
+
+    /// [`Self::update_columns`] for a single column.
+    pub fn update_column(&mut self, fid: i64, column: &str, value: CellRef<'_>) -> Result<bool> {
+        self.update_columns(fid, &[(column, value)])
+    }
+
+    /// Whether `columns` names exactly what the held partial statement was
+    /// prepared for, in the same order. Comparing the names rather than
+    /// rebuilding the statement text is what keeps a repeated shape free.
+    fn partial_matches(&self, columns: &[(&str, CellRef<'_>)]) -> bool {
+        self.partial_columns.len() == columns.len()
+            && self
+                .partial_columns
+                .iter()
+                .zip(columns)
+                .all(|(held, (name, _))| held.as_str() == *name)
+    }
+
+    /// The layer's shape, for composing a statement whose text is not fixed
+    /// when the writer is built.
+    fn shape(&self) -> Shape<'_> {
+        Shape {
+            table_name: &self.table_name,
+            quoted_table: &self.quoted_table,
+            pk_expr: &self.pk_expr,
+            value_columns: &self.value_columns,
+            geometry: self.geometry.as_ref(),
+        }
+    }
+
     /// Delete the feature `fid`. Returns whether a row matched.
     ///
     /// The bounding box is not shrunk (that would need a rescan; an
@@ -1125,10 +1241,18 @@ impl<'conn> FeatureWriter<'conn> {
 /// borrowed while [`Layer::writer`] builds them and before they move into the
 /// writer.
 struct Shape<'s> {
+    table_name: &'s str,
     quoted_table: &'s str,
     pk_expr: &'s str,
-    value_columns: &'s [String],
+    value_columns: &'s [ValueColumn],
     geometry: Option<&'s GeomTarget>,
+}
+
+/// One value column of the layer being written: its name as declared, and the
+/// same name quoted for use in a statement.
+struct ValueColumn {
+    name: String,
+    quoted: String,
 }
 
 /// Compose one of the four `INSERT` statements. Called once per writer.
@@ -1138,7 +1262,7 @@ fn build_insert_sql(shape: &Shape<'_>, with_fid: bool, with_geometry: bool) -> S
         columns.push(shape.pk_expr);
     }
     for column in shape.value_columns {
-        columns.push(column);
+        columns.push(&column.quoted);
     }
     if with_geometry && let Some(geom) = shape.geometry {
         columns.push(&geom.quoted_name);
@@ -1163,7 +1287,7 @@ fn build_update_sql(shape: &Shape<'_>, with_geometry: bool) -> String {
     let mut assignments: Vec<String> = Vec::with_capacity(shape.value_columns.len() + 1);
     let mut index = 1;
     for column in shape.value_columns {
-        assignments.push(format!("{column} = ?{index}"));
+        assignments.push(format!("{} = ?{index}", column.quoted));
         index += 1;
     }
     if with_geometry && let Some(geom) = shape.geometry {
@@ -1182,6 +1306,47 @@ fn build_update_sql(shape: &Shape<'_>, with_geometry: bool) -> String {
         assignments.join(", "),
         shape.pk_expr
     )
+}
+
+/// Compose the `UPDATE` for a named subset of the value columns, assigning them
+/// in the order given. Called only when [`FeatureWriter::update_columns`] is
+/// asked for a set of columns other than the one it last prepared.
+fn build_partial_update_sql(shape: &Shape<'_>, columns: &[(&str, CellRef<'_>)]) -> Result<String> {
+    let mut assignments: Vec<String> = Vec::with_capacity(columns.len());
+    for (position, (name, _)) in columns.iter().enumerate() {
+        if columns
+            .iter()
+            .take(position)
+            .any(|(earlier, _)| earlier == name)
+        {
+            return Err(Error::DuplicateUpdateColumn {
+                table_name: shape.table_name.to_owned(),
+                column_name: (*name).to_owned(),
+            });
+        }
+        let column = shape
+            .value_columns
+            .iter()
+            .find(|candidate| candidate.name == *name)
+            .ok_or_else(|| Error::NoSuchColumn {
+                table_name: shape.table_name.to_owned(),
+                column_name: (*name).to_owned(),
+            })?;
+        assignments.push(format!("{} = ?{}", column.quoted, position + 1));
+    }
+    // Before the self-assignment below, which takes no placeholder of its own.
+    let fid_placeholder = assignments.len() + 1;
+    if assignments.is_empty() {
+        // As the whole-row form: nothing to change, but the statement stays
+        // valid and rows-affected keeps its meaning.
+        assignments.push(format!("{pk} = {pk}", pk = shape.pk_expr));
+    }
+    Ok(format!(
+        "UPDATE {} SET {} WHERE {} = ?{fid_placeholder}",
+        shape.quoted_table,
+        assignments.join(", "),
+        shape.pk_expr
+    ))
 }
 
 /// Re-borrow a prepared binding so it can be chained with owned ones.

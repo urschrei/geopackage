@@ -702,3 +702,189 @@ fn a_features_values_insert_into_a_layer_of_the_same_schema() {
         geo_types::Geometry::Point(Point::new(1.0, 2.0))
     );
 }
+
+/// A point layer with three value columns, for the partial-update tests.
+fn attributed_layer(gpkg: &GeoPackage, table: &str, spatial_index: bool) {
+    gpkg.create_layer(
+        &TableSchemaBuilder::new(table)
+            .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+            .column(ColumnSpec::new("name", ColumnType::Text(None)))
+            .column(ColumnSpec::new("n", ColumnType::Integer))
+            .column(ColumnSpec::new("area", ColumnType::Double))
+            .spatial_index(spatial_index),
+    )
+    .unwrap();
+}
+
+/// The motivating case: recompute one column without restating the rest.
+#[test]
+fn update_columns_touches_only_what_it_names() {
+    let (_dir, gpkg) = gpkg();
+    attributed_layer(&gpkg, "p", false);
+    let layer = gpkg.layer("p").unwrap();
+
+    let mut w = layer.writer().unwrap();
+    let fid = w
+        .insert(
+            None,
+            &Point::new(1.0, 2.0),
+            &[
+                ValueRef::Text("keep me"),
+                ValueRef::Integer(7),
+                ValueRef::Float(0.0),
+            ],
+        )
+        .unwrap();
+    w.commit().unwrap();
+
+    let mut w = layer.writer().unwrap();
+    assert!(w.update_column(fid, "area", ValueRef::Float(10.5)).unwrap());
+    // A non-existent fid matches nothing.
+    assert!(!w.update_column(999, "area", ValueRef::Float(1.0)).unwrap());
+    w.commit().unwrap();
+
+    let features: Vec<_> = layer.features().unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(features.len(), 1);
+    let feature = &features[0];
+    assert_eq!(feature.value("area"), Some(ValueRef::Float(10.5)));
+    // The columns not named, and the geometry, are as they were.
+    assert_eq!(feature.value("name"), Some(ValueRef::Text("keep me")));
+    assert_eq!(feature.value("n"), Some(ValueRef::Integer(7)));
+    assert_eq!(
+        feature.geometry().unwrap().unwrap().to_geo().unwrap(),
+        geo_types::Geometry::Point(Point::new(1.0, 2.0))
+    );
+}
+
+/// The held statement is keyed on the columns named, so a caller that changes
+/// the set mid-loop gets the right statement for each.
+#[test]
+fn update_columns_follows_a_changing_column_set() {
+    let (_dir, gpkg) = gpkg();
+    attributed_layer(&gpkg, "p", false);
+    let layer = gpkg.layer("p").unwrap();
+
+    let mut w = layer.writer().unwrap();
+    let fid = w
+        .insert(
+            None,
+            &Point::new(0.0, 0.0),
+            &[
+                ValueRef::Text("a"),
+                ValueRef::Integer(1),
+                ValueRef::Float(1.0),
+            ],
+        )
+        .unwrap();
+    w.commit().unwrap();
+
+    let mut w = layer.writer().unwrap();
+    // Same shape twice (the second reuses the held statement), then a
+    // different shape, then back to the first.
+    assert!(w.update_column(fid, "n", ValueRef::Integer(2)).unwrap());
+    assert!(w.update_column(fid, "n", ValueRef::Integer(3)).unwrap());
+    assert!(
+        w.update_columns(
+            fid,
+            &[
+                ("name", ValueRef::Text("b")),
+                ("area", ValueRef::Float(9.0))
+            ],
+        )
+        .unwrap()
+    );
+    assert!(w.update_column(fid, "n", ValueRef::Integer(4)).unwrap());
+    // An empty set reports the row's existence and changes nothing.
+    assert!(w.update_columns(fid, &[]).unwrap());
+    assert!(!w.update_columns(999, &[]).unwrap());
+    w.commit().unwrap();
+
+    let features: Vec<_> = layer.features().unwrap().collect::<Result<_, _>>().unwrap();
+    let feature = &features[0];
+    assert_eq!(feature.value("n"), Some(ValueRef::Integer(4)));
+    assert_eq!(feature.value("name"), Some(ValueRef::Text("b")));
+    assert_eq!(feature.value("area"), Some(ValueRef::Float(9.0)));
+}
+
+#[test]
+fn update_columns_rejects_unknown_and_repeated_columns() {
+    let (_dir, gpkg) = gpkg();
+    attributed_layer(&gpkg, "p", false);
+    let layer = gpkg.layer("p").unwrap();
+    let mut w = layer.writer().unwrap();
+    let fid = w
+        .insert(
+            None,
+            &Point::new(0.0, 0.0),
+            &[
+                ValueRef::Text("a"),
+                ValueRef::Integer(1),
+                ValueRef::Float(1.0),
+            ],
+        )
+        .unwrap();
+
+    match w.update_column(fid, "nope", ValueRef::Integer(1)) {
+        Err(Error::NoSuchColumn { column_name, .. }) => assert_eq!(column_name, "nope"),
+        other => panic!("expected NoSuchColumn, got {other:?}"),
+    }
+    // The geometry and the primary key are not value columns.
+    match w.update_column(fid, "geom", ValueRef::Null) {
+        Err(Error::NoSuchColumn { column_name, .. }) => assert_eq!(column_name, "geom"),
+        other => panic!("expected NoSuchColumn, got {other:?}"),
+    }
+    match w.update_columns(
+        fid,
+        &[("n", ValueRef::Integer(1)), ("n", ValueRef::Integer(2))],
+    ) {
+        Err(Error::DuplicateUpdateColumn { column_name, .. }) => assert_eq!(column_name, "n"),
+        other => panic!("expected DuplicateUpdateColumn, got {other:?}"),
+    }
+}
+
+/// An attribute-only update must not disturb the spatial index: the geometry
+/// column is not in the `SET` list, so the `AFTER UPDATE OF <geom>` triggers do
+/// not fire, and the `AFTER UPDATE ON` pair guard on a changed row id.
+#[test]
+fn update_columns_leaves_the_rtree_alone() {
+    let (_dir, gpkg) = gpkg();
+    attributed_layer(&gpkg, "pts", true);
+    let layer = gpkg.layer("pts").unwrap();
+
+    let mut w = layer.writer().unwrap();
+    for i in 1..=5 {
+        let f = f64::from(i);
+        w.insert(
+            None,
+            &Point::new(f, -f),
+            &[
+                ValueRef::Text("x"),
+                ValueRef::Integer(i64::from(i)),
+                ValueRef::Float(0.0),
+            ],
+        )
+        .unwrap();
+    }
+    w.commit().unwrap();
+    let before = rtree_rows(&gpkg);
+    assert_eq!(before.len(), 5);
+
+    let mut w = layer.writer().unwrap();
+    for fid in 1..=5 {
+        assert!(
+            w.update_column(fid, "area", ValueRef::Float(f64::from(fid as i32) * 2.0))
+                .unwrap()
+        );
+    }
+    w.commit().unwrap();
+
+    assert_eq!(
+        rtree_rows(&gpkg),
+        before,
+        "attribute update moved the index"
+    );
+    assert_eq!(
+        layer.spatial_index_status().unwrap(),
+        geopackage::SpatialIndexStatus::Current
+    );
+}
