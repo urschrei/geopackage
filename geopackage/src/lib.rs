@@ -147,7 +147,7 @@
 //!
 //! let mut total = 0.0;
 //! for feature in measured.features()? {
-//!     if let Some(ValueRef::Float(l)) = feature?.value("length") {
+//!     if let Some(l) = feature?.value("length").and_then(|v| v.as_f64()) {
 //!         total += l;
 //!     }
 //! }
