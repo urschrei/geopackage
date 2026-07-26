@@ -63,6 +63,45 @@ pub enum SpatialIndexStatus {
     Stale,
 }
 
+/// What an [`Layer::audit_spatial_index`] found: how the index's contents
+/// compare with the geometries they are supposed to describe.
+///
+/// [`SpatialIndexStatus`] answers a structural question, whether the virtual
+/// table and the right triggers are present, and it is cheap. This answers the
+/// question that structure cannot: whether the entries actually agree with the
+/// data. An index can be [`SpatialIndexStatus::Current`] and still be wrong, in
+/// a file where rows were written while the triggers were absent, or that
+/// another tool populated incompletely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SpatialIndexAudit {
+    /// Rows that ought to be indexed: geometry present and not empty. This is
+    /// the same rule the triggers and the bulk build apply.
+    pub indexable: usize,
+    /// Entries in the RTree.
+    pub entries: usize,
+    /// Indexable rows with no entry. These are lost by a bounding-box query.
+    pub missing: usize,
+    /// Entries whose row is gone, or whose geometry is now NULL or empty.
+    /// These make a query return a feature id it then cannot read.
+    pub extra: usize,
+    /// Entries present but not covering their geometry's true envelope. Also
+    /// lossy, and not explained by the RTree's `f32` storage, which rounds
+    /// outward and so can only ever make an entry too large.
+    pub not_covering: usize,
+}
+
+impl SpatialIndexAudit {
+    /// Whether the index describes exactly the rows it should, covering each.
+    ///
+    /// False means a bounding-box query can return the wrong answer, and that
+    /// [`Layer::rebuild_spatial_index`] is the fix.
+    #[must_use]
+    pub fn is_consistent(&self) -> bool {
+        self.missing == 0 && self.extra == 0 && self.not_covering == 0
+    }
+}
+
 impl Layer<'_> {
     /// Classify this layer's RTree spatial index (see [`SpatialIndexStatus`]).
     ///
@@ -273,6 +312,47 @@ impl Layer<'_> {
         // Everything else is repairable by rebuilding: a legacy/mixed trigger
         // set, a stale index left by an interrupted bulk build (a virtual table
         // with no triggers), or orphaned triggers with no table.
+        self.rebuild_index_impl(geom, pk)
+    }
+
+    /// Rebuild the RTree spatial index from the geometries, whatever state it
+    /// is in: drop every RTree trigger, install the 1.4 set, empty the virtual
+    /// table and repopulate it, in one transaction.
+    ///
+    /// [`Self::repair_spatial_index`] is the cheap operation and answers a
+    /// structural question, so it returns without doing anything when the
+    /// virtual table and the 1.4 triggers are both present. That says nothing
+    /// about the entries. This is the operation for an index whose *contents*
+    /// are in doubt, which [`Self::audit_spatial_index`] is how to find out.
+    ///
+    /// Like the repair, it is never invoked automatically: reading a file does
+    /// not mutate it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::repair_spatial_index`], including [`Error::NoSpatialIndex`]
+    /// when there is no index to rebuild ([`Self::create_spatial_index`] builds
+    /// one).
+    pub fn rebuild_spatial_index(&self) -> Result<()> {
+        let geom = self.require_geometry_column()?;
+        let pk = self.require_primary_key()?;
+        let conn = self.gpkg().connection();
+        let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
+        if !table_exists(conn, &rtree)?
+            && self.classify_rtree_triggers(&geom.column_name)? == TriggerGeneration::None
+        {
+            return Err(Error::NoSpatialIndex {
+                table_name: self.table_name().to_owned(),
+                column_name: geom.column_name.clone(),
+            });
+        }
+        self.rebuild_index_impl(geom, pk)
+    }
+
+    /// The shared rebuild: 1.4 triggers, an empty virtual table, repopulated.
+    fn rebuild_index_impl(&self, geom: &GeometryColumn, pk: &str) -> Result<()> {
+        let conn = self.gpkg().connection();
+        let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
         let tx = conn.unchecked_transaction()?;
         drop_all_rtree_triggers(&tx, self.table_name(), &geom.column_name)?;
         for sql in triggers::create_triggers_sql(self.table_name(), &geom.column_name, pk)? {
@@ -295,6 +375,82 @@ impl Layer<'_> {
         )?)?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Compare the RTree's contents against the geometries they describe.
+    ///
+    /// [`Self::spatial_index_status`] asks whether the index is *there*; this
+    /// asks whether it is *right*, which structure cannot answer. A file may
+    /// arrive with a structurally perfect index whose entries were never
+    /// populated, populated partially, or left behind by rows since deleted.
+    ///
+    /// This reads every geometry in the layer and is priced accordingly: it is
+    /// a deliberate audit, not a check to run before each query. Nothing is
+    /// written, and [`Self::rebuild_spatial_index`] is the fix for a result
+    /// that is not [`SpatialIndexAudit::is_consistent`].
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NoGeometryColumn`] on a layer with no geometry column.
+    /// - [`Error::NoPrimaryKey`] if the table has no single-column primary key,
+    ///   since the index is keyed on it.
+    /// - [`Error::NoSpatialIndex`] if the virtual table is absent.
+    pub fn audit_spatial_index(&self) -> Result<SpatialIndexAudit> {
+        let geom = self.require_geometry_column()?;
+        let pk = self.require_primary_key()?;
+        let conn = self.gpkg().connection();
+        let rtree = quote(&triggers::rtree_table_name(
+            self.table_name(),
+            &geom.column_name,
+        ))?;
+        if !table_exists(
+            conn,
+            &triggers::rtree_table_name(self.table_name(), &geom.column_name),
+        )? {
+            return Err(Error::NoSpatialIndex {
+                table_name: self.table_name().to_owned(),
+                column_name: geom.column_name.clone(),
+            });
+        }
+        let table = quote(self.table_name())?;
+        let column = quote(&geom.column_name)?;
+        let key = quote(pk)?;
+
+        // One pass over the indexable rows: how many there are, how many have
+        // no entry, and how many have one that fails to cover them. The RTree
+        // stores `f32` rounded outward, so a covering entry can be larger than
+        // the geometry but never smaller.
+        let (indexable, missing, not_covering): (i64, i64, i64) = conn.query_row(
+            &format!(
+                "SELECT count(*),                  sum(CASE WHEN r.id IS NULL THEN 1 ELSE 0 END),                  sum(CASE WHEN r.id IS NOT NULL AND (                    r.minx > ST_MinX(f.{column}) OR r.maxx < ST_MaxX(f.{column}) OR                    r.miny > ST_MinY(f.{column}) OR r.maxy < ST_MaxY(f.{column})                  ) THEN 1 ELSE 0 END)                  FROM {table} f LEFT JOIN {rtree} r ON r.id = f.{key}                  WHERE f.{column} IS NOT NULL AND NOT ST_IsEmpty(f.{column})"
+            ),
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    // sum() over no rows is NULL rather than 0.
+                    row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                ))
+            },
+        )?;
+
+        let (entries, extra): (i64, i64) = conn.query_row(
+            &format!(
+                "SELECT count(*),                  sum(CASE WHEN NOT EXISTS (                    SELECT 1 FROM {table} f WHERE f.{key} = r.id                    AND f.{column} IS NOT NULL AND NOT ST_IsEmpty(f.{column})                  ) THEN 1 ELSE 0 END)                  FROM {rtree} r"
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+        )?;
+
+        let count = |n: i64| usize::try_from(n).unwrap_or(0);
+        Ok(SpatialIndexAudit {
+            indexable: count(indexable),
+            entries: count(entries),
+            missing: count(missing),
+            extra: count(extra),
+            not_covering: count(not_covering),
+        })
     }
 
     /// This layer's geometry column, or [`Error::NoGeometryColumn`] when it has

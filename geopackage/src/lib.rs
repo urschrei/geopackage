@@ -313,7 +313,7 @@ pub use create::{
 pub use error::{Error, Result};
 pub use geopackage_core as core;
 pub use geopackage_core::GpkgVersion;
-pub use index::SpatialIndexStatus;
+pub use index::{SpatialIndexAudit, SpatialIndexStatus};
 pub use layer::{BoundingBox, Feature, FeatureCursor, FeatureStream, Features, Layer, LayerKind};
 pub use open::OpenWarning;
 pub use options::{JournalMode, OpenOptions, Synchronous};

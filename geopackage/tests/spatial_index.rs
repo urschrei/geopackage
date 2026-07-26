@@ -16,8 +16,8 @@ use geopackage::core::gpb::{Envelope, encode_header};
 use geopackage::core::triggers::{self, TriggerGeneration};
 use geopackage::core::types::{ColumnType, GeometryType};
 use geopackage::{
-    BoundingBox, BulkIndexOptions, ColumnSpec, GeoPackage, GeometrySpec, NewFeature,
-    StructuralCheck, TableSchemaBuilder, Value, ValueRef,
+    BoundingBox, BulkIndexOptions, ColumnSpec, Error, GeoPackage, GeometrySpec, NewFeature,
+    SpatialIndexStatus, StructuralCheck, TableSchemaBuilder, Value, ValueRef,
 };
 use hegel::generators;
 use rusqlite::{Connection, OptionalExtension};
@@ -1291,4 +1291,100 @@ fn a_layer_whose_index_fails_leaves_no_table() {
             .unwrap();
         assert_eq!(rows, 0, "a gpkg_geometry_columns row survived");
     }
+}
+
+/// An index can be structurally perfect and still be wrong.
+/// [`Layer::spatial_index_status`] asks whether the virtual table and the
+/// triggers are present, which is cheap and says nothing about the entries;
+/// [`Layer::audit_spatial_index`] reads the geometries and compares.
+#[test]
+fn audit_finds_contents_that_structure_cannot() {
+    let (_dir, gpkg) = gpkg_with_points(&[(1, 1.0, 1.0), (2, 2.0, 2.0), (3, 3.0, 3.0)]);
+    let layer = gpkg.layer("pts").unwrap();
+    layer.create_spatial_index().unwrap();
+
+    let audit = layer.audit_spatial_index().unwrap();
+    assert!(audit.is_consistent(), "{audit:?}");
+    assert_eq!(audit.indexable, 3);
+    assert_eq!(audit.entries, 3);
+
+    // What another tool's interrupted write leaves behind: an entry gone, one
+    // that covers nothing near its geometry, and one for a row that does not
+    // exist. The structure is untouched throughout.
+    let conn = gpkg.connection();
+    conn.execute("DELETE FROM rtree_pts_geom WHERE id = 1", [])
+        .unwrap();
+    conn.execute(
+        "UPDATE rtree_pts_geom SET minx = 900, maxx = 901, miny = 900, maxy = 901 WHERE id = 2",
+        [],
+    )
+    .unwrap();
+    conn.execute("INSERT INTO rtree_pts_geom VALUES (99, 0, 1, 0, 1)", [])
+        .unwrap();
+
+    assert_eq!(
+        layer.spatial_index_status().unwrap(),
+        SpatialIndexStatus::Current,
+        "the structure should still look perfect"
+    );
+    let audit = layer.audit_spatial_index().unwrap();
+    assert!(!audit.is_consistent());
+    assert_eq!(audit.missing, 1);
+    assert_eq!(audit.not_covering, 1);
+    assert_eq!(audit.extra, 1);
+
+    // The cheap repair declines, because structurally nothing is wrong.
+    layer.repair_spatial_index().unwrap();
+    assert!(
+        !layer.audit_spatial_index().unwrap().is_consistent(),
+        "repair should not have touched the contents"
+    );
+
+    // The rebuild is the operation that fixes contents.
+    layer.rebuild_spatial_index().unwrap();
+    let audit = layer.audit_spatial_index().unwrap();
+    assert!(audit.is_consistent(), "{audit:?}");
+    assert_eq!(audit.entries, 3);
+    assert_eq!(
+        rtree_rows(gpkg.connection()),
+        envelope_scan(gpkg.connection())
+    );
+}
+
+/// NULL geometries are not indexable, so they are not missing entries, and an
+/// entry that exists for one is an extra.
+#[test]
+fn audit_ignores_rows_the_triggers_would_ignore() {
+    let (_dir, gpkg) = gpkg_with_points(&[(1, 1.0, 1.0)]);
+    let layer = gpkg.layer("pts").unwrap();
+    let mut w = layer.writer().unwrap();
+    w.insert_row(Some(2), &[ValueRef::Null]).unwrap();
+    w.commit().unwrap();
+    layer.create_spatial_index().unwrap();
+
+    let audit = layer.audit_spatial_index().unwrap();
+    assert!(audit.is_consistent(), "{audit:?}");
+    assert_eq!(audit.indexable, 1, "the NULL geometry is not indexable");
+    assert_eq!(audit.entries, 1);
+
+    gpkg.connection()
+        .execute("INSERT INTO rtree_pts_geom VALUES (2, 0, 1, 0, 1)", [])
+        .unwrap();
+    let audit = layer.audit_spatial_index().unwrap();
+    assert_eq!(audit.extra, 1);
+    assert!(!audit.is_consistent());
+}
+
+#[test]
+fn audit_and_rebuild_need_an_index() {
+    let (_dir, gpkg) = gpkg_with_points(&[(1, 1.0, 1.0)]);
+    let layer = gpkg.layer("pts").unwrap();
+    assert!(matches!(
+        layer.audit_spatial_index(),
+        Err(Error::NoSpatialIndex { .. })
+    ));
+    assert!(matches!(
+        layer.rebuild_spatial_index(),
+        Err(Error::NoSpatialIndex { .. })
+    ));
 }
