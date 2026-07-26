@@ -12,7 +12,9 @@ use arrow_array::{Array, RecordBatch, RecordBatchReader};
 use geo_types::Point;
 use geopackage::arrow::ArrowReadOptions;
 use geopackage::core::types::{ColumnType, GeometryType};
-use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value};
+use geopackage::{
+    ColumnSpec, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value, ValueRef,
+};
 use rusqlite::limits::Limit;
 
 /// A points layer with one attribute of each interesting type.
@@ -203,13 +205,13 @@ fn nulls_survive() {
                 Some(1),
                 &Point::new(1.0, 2.0),
                 &[
-                    Value::Text("here".into()),
-                    Value::Date(geopackage::core::datetime::Date::new(2026, 7, 25).unwrap()),
+                    ValueRef::Text("here"),
+                    ValueRef::Date(geopackage::core::datetime::Date::new(2026, 7, 25).unwrap()),
                 ],
             )
             .unwrap();
         writer
-            .insert_row(Some(2), &[Value::Null, Value::Null])
+            .insert_row(Some(2), &[ValueRef::Null, ValueRef::Null])
             .unwrap();
         writer.commit().unwrap();
     }

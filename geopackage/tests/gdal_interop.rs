@@ -117,12 +117,10 @@ fn build_representative(path: &Path) {
         let layer = gpkg.create_layer(&builder).unwrap();
         let mut w = layer.writer().unwrap();
         for i in 0..5i64 {
-            w.insert(
-                None,
-                &Point::new(i as f64 - 2.0, i as f64 + 1.0),
-                &all_type_values(i),
-            )
-            .unwrap();
+            let values = all_type_values(i);
+            let binds: Vec<ValueRef<'_>> = values.iter().map(ValueRef::from).collect();
+            w.insert(None, &Point::new(i as f64 - 2.0, i as f64 + 1.0), &binds)
+                .unwrap();
         }
         w.commit().unwrap();
         layer.create_spatial_index().unwrap();
@@ -138,8 +136,8 @@ fn build_representative(path: &Path) {
         for i in 0..4i64 {
             let blob = z_point_blob(i as f64, i as f64 * 2.0, 100.0 + i as f64);
             let g = geopackage::core::GpbGeometry::parse(&blob).unwrap();
-            w.insert(None, &g, &[Value::Text(format!("beacon-{i}"))])
-                .unwrap();
+            let name = format!("beacon-{i}");
+            w.insert(None, &g, &[ValueRef::Text(&name)]).unwrap();
         }
         w.commit().unwrap();
         layer.create_spatial_index().unwrap();
@@ -155,8 +153,8 @@ fn build_representative(path: &Path) {
         for i in 0..3i64 {
             let f = i as f64 * 1000.0;
             let line = LineString::from(vec![(f, f), (f + 500.0, f + 250.0), (f + 900.0, f)]);
-            w.insert(None, &line, &[Value::Text(format!("R{i}"))])
-                .unwrap();
+            let name = format!("R{i}");
+            w.insert(None, &line, &[ValueRef::Text(&name)]).unwrap();
         }
         w.commit().unwrap();
         layer.create_spatial_index().unwrap();
@@ -181,7 +179,7 @@ fn build_representative(path: &Path) {
             w.insert(
                 None,
                 &Polygon::new(ring, Vec::new()),
-                &[Value::Text(format!("Z{i}"))],
+                &[ValueRef::Text(&format!("Z{i}"))],
             )
             .unwrap();
         }
@@ -197,7 +195,9 @@ fn build_representative(path: &Path) {
         let layer = gpkg.create_attributes_table(&builder).unwrap();
         let mut w = layer.writer().unwrap();
         for i in 0..3i64 {
-            w.insert_row(None, &all_type_values(i)).unwrap();
+            let values = all_type_values(i);
+            let binds: Vec<ValueRef<'_>> = values.iter().map(ValueRef::from).collect();
+            w.insert_row(None, &binds).unwrap();
         }
         w.commit().unwrap();
     }
@@ -328,14 +328,15 @@ fn build_roundtrip_source(path: &Path) {
     ];
     for (i, geom) in geoms.into_iter().enumerate() {
         let seed = i as i64;
+        let name = format!("shape-{seed}");
         w.insert(
             None,
             &geom,
             &[
-                Value::Text(format!("shape-{seed}")),
-                Value::Integer(seed * 10),
-                Value::Float(0.5 + f64::from(u8::try_from(i).unwrap())),
-                Value::Boolean(seed % 2 == 0),
+                ValueRef::Text(&name),
+                ValueRef::Integer(seed * 10),
+                ValueRef::Float(0.5 + f64::from(u8::try_from(i).unwrap())),
+                ValueRef::Boolean(seed % 2 == 0),
             ],
         )
         .unwrap();

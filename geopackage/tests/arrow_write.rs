@@ -13,7 +13,9 @@ use geo_types::Point;
 use geopackage::arrow::ArrowReadOptions;
 use geopackage::core::datetime::{Date, DateTime};
 use geopackage::core::types::{ColumnType, GeometryType};
-use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value};
+use geopackage::{
+    ColumnSpec, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value, ValueRef,
+};
 
 /// A layer with one column of each interesting type, at `path`.
 fn typed_layer(gpkg: &GeoPackage, name: &str) {
@@ -204,13 +206,13 @@ fn nulls_survive_the_write() {
             .insert_row(
                 Some(1),
                 &[
-                    Value::Null,
-                    Value::Null,
-                    Value::Null,
-                    Value::Null,
-                    Value::Null,
-                    Value::Null,
-                    Value::Null,
+                    ValueRef::Null,
+                    ValueRef::Null,
+                    ValueRef::Null,
+                    ValueRef::Null,
+                    ValueRef::Null,
+                    ValueRef::Null,
+                    ValueRef::Null,
                 ],
             )
             .unwrap();
