@@ -236,6 +236,27 @@ pub enum Error {
         /// The table the builder describes.
         table_name: String,
     },
+    /// [`crate::Layer::extent`] measured a layer's extent but could not record
+    /// it, for a reason that is not another connection holding a lock.
+    ///
+    /// The measurement succeeded and is carried here, so nothing is lost by the
+    /// failure: the caller can use `extent` and decide what to make of the
+    /// store being unwritable. Lock contention does not produce this, because a
+    /// concurrent writer means the measurement is not one the crate could vouch
+    /// for anyway; what does are the conditions that mean the store is broken
+    /// or unwritable in a way that will not clear, such as an unwritable
+    /// directory, a full disk, or an I/O error.
+    #[error("measured the extent of table {table_name:?} but could not record it: {source}")]
+    ExtentPersist {
+        /// The table whose extent was measured.
+        table_name: String,
+        /// The measured extent, which is what [`crate::Layer::extent`] would
+        /// have returned. `None` when the layer had nothing to measure.
+        extent: Option<crate::BoundingBox>,
+        /// Why the write failed. Boxed only to keep this variant from setting
+        /// the size of every `Result` in the crate.
+        source: Box<rusqlite::Error>,
+    },
     /// A partial update named the same column more than once.
     ///
     /// SQLite accepts a repeated assignment and applies the last one, so this

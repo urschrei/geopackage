@@ -13,7 +13,10 @@
 
 use geo_types::Point;
 use geopackage::core::types::GeometryType;
-use geopackage::{BoundingBox, ColumnSpec, Error, GeoPackage, GeometrySpec, TableSchemaBuilder};
+use geopackage::{
+    BoundingBox, ColumnSpec, Error, GeoPackage, GeometrySpec, OpenOptions, TableSchemaBuilder,
+};
+use std::time::Duration;
 
 fn layer_with_points(table: &str, points: &[(f64, f64)]) -> (tempfile::TempDir, GeoPackage) {
     let dir = tempfile::tempdir().unwrap();
@@ -119,15 +122,21 @@ fn an_inverted_extent_is_treated_as_absent() {
     set_recorded(&gpkg, "p", Some([10.0, 10.0, 0.0, 0.0]));
 
     let layer = gpkg.layer("p").unwrap();
-    // Not returned as an extent, and not grown from: measured instead.
+    // Not returned as an extent, and not grown from: measured instead, and
+    // recorded, so the inverted box does not survive being read.
     assert_eq!(
         layer.extent().unwrap(),
         Some(BoundingBox::new(0.0, 0.0, 10.0, 10.0))
     );
+    assert_eq!(
+        recorded(&gpkg, "p"),
+        (Some(0.0), Some(0.0), Some(10.0), Some(10.0))
+    );
 
-    // The writer declines to record its fold, and leaves what it found alone
-    // rather than normalising it: an inverted box and a NULL one send every
-    // reader down the same recompute path, so rewriting it would buy nothing.
+    // The writer, meeting the same state, declines to record its fold and
+    // leaves what it found alone: it can only see the rows it wrote, so its
+    // box would exclude every other row.
+    set_recorded(&gpkg, "p", Some([10.0, 10.0, 0.0, 0.0]));
     let mut w = layer.writer().unwrap();
     w.insert(None, &Point::new(5.0, 5.0), &[]).unwrap();
     w.commit().unwrap();
@@ -135,12 +144,6 @@ fn an_inverted_extent_is_treated_as_absent() {
         recorded(&gpkg, "p"),
         (Some(10.0), Some(10.0), Some(0.0), Some(0.0)),
         "an inverted box was grown rather than declined"
-    );
-
-    // And the sanctioned repair still fixes it.
-    assert_eq!(
-        layer.recompute_extent().unwrap(),
-        Some(BoundingBox::new(0.0, 0.0, 10.0, 10.0))
     );
 }
 
@@ -201,10 +204,11 @@ fn recompute_extent_nulls_a_layer_with_nothing_to_measure() {
     assert_eq!(recorded(&gpkg, "p"), (None, None, None, None));
 }
 
-/// Reading an extent must not modify the file, which is the same rule
-/// `repair_spatial_index` follows. GDAL persists here; this crate does not.
+/// Reading an extent records what it had to measure, so the file stops being
+/// wrong for every later reader. This mirrors GDAL, and it means a read changes
+/// the file.
 #[test]
-fn extent_does_not_persist_what_it_measures() {
+fn extent_records_what_it_measures() {
     let (_dir, gpkg) = layer_with_points("p", &[(1.0, 2.0), (3.0, 4.0)]);
     set_recorded(&gpkg, "p", None);
     let layer = gpkg.layer("p").unwrap();
@@ -215,8 +219,126 @@ fn extent_does_not_persist_what_it_measures() {
     );
     assert_eq!(
         recorded(&gpkg, "p"),
+        (Some(1.0), Some(2.0), Some(3.0), Some(4.0)),
+        "reading the extent did not record it"
+    );
+}
+
+/// A usable recorded box is returned as it stands, so the ordinary read writes
+/// nothing at all.
+#[test]
+fn extent_writes_nothing_when_the_recorded_box_is_usable() {
+    let (_dir, gpkg) = layer_with_points("p", &[(1.0, 2.0), (3.0, 4.0)]);
+    set_recorded(&gpkg, "p", Some([-9.0, -9.0, 9.0, 9.0]));
+    let layer = gpkg.layer("p").unwrap();
+
+    let before = gpkg.connection().total_changes();
+    assert_eq!(
+        layer.extent().unwrap(),
+        Some(BoundingBox::new(-9.0, -9.0, 9.0, 9.0))
+    );
+    assert_eq!(gpkg.connection().total_changes(), before);
+}
+
+/// Nothing to measure over bounds that are already NULL is the common shape of
+/// an empty layer, and it must not write: a row rewritten to the values it
+/// already holds still changes the file.
+#[test]
+fn extent_writes_nothing_when_there_is_nothing_to_change() {
+    let (_dir, gpkg) = layer_with_points("p", &[]);
+    set_recorded(&gpkg, "p", None);
+    let layer = gpkg.layer("p").unwrap();
+
+    let before = gpkg.connection().total_changes();
+    assert_eq!(layer.extent().unwrap(), None);
+    assert_eq!(
+        gpkg.connection().total_changes(),
+        before,
+        "an empty layer with NULL bounds was rewritten"
+    );
+}
+
+/// Nothing to measure over an unusable box does write, NULLing it, which is
+/// what makes the next reader compute the answer rather than believe the
+/// garbage. GDAL does the same through UpdateContentsToNullExtent.
+///
+/// Note the box has to be *unusable* to be touched at all. A well-ordered box
+/// that is merely wrong is returned as it stands, here as in GDAL, because
+/// nothing distinguishes it from a correct one without measuring.
+#[test]
+fn extent_nulls_an_unusable_box_it_cannot_measure() {
+    let (_dir, gpkg) = layer_with_points("p", &[]);
+    set_recorded(&gpkg, "p", Some([10.0, 10.0, 0.0, 0.0]));
+    let layer = gpkg.layer("p").unwrap();
+
+    assert_eq!(layer.extent().unwrap(), None);
+    assert_eq!(recorded(&gpkg, "p"), (None, None, None, None));
+
+    // A well-ordered box over the same empty layer is left exactly as it is.
+    set_recorded(&gpkg, "p", Some([1.0, 2.0, 3.0, 4.0]));
+    assert_eq!(
+        layer.extent().unwrap(),
+        Some(BoundingBox::new(1.0, 2.0, 3.0, 4.0))
+    );
+    assert_eq!(
+        recorded(&gpkg, "p"),
+        (Some(1.0), Some(2.0), Some(3.0), Some(4.0))
+    );
+}
+
+/// A read-only connection cannot record, and that is not a failure: GDAL's own
+/// gate is the same, and the measurement is still returned.
+#[test]
+fn extent_on_a_read_only_connection_measures_without_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.gpkg");
+    {
+        let gpkg = GeoPackage::create(&path).unwrap();
+        gpkg.create_layer(
+            &TableSchemaBuilder::new("p")
+                .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+                .spatial_index(false),
+        )
+        .unwrap();
+        let layer = gpkg.layer("p").unwrap();
+        let mut w = layer.writer().unwrap();
+        w.insert(None, &Point::new(1.0, 2.0), &[]).unwrap();
+        w.insert(None, &Point::new(3.0, 4.0), &[]).unwrap();
+        w.commit().unwrap();
+        set_recorded(&gpkg, "p", None);
+        gpkg.close().unwrap();
+    }
+
+    let gpkg = GeoPackage::open_read_only(&path).unwrap();
+    let layer = gpkg.layer("p").unwrap();
+    assert_eq!(
+        layer.extent().unwrap(),
+        Some(BoundingBox::new(1.0, 2.0, 3.0, 4.0))
+    );
+    assert_eq!(
+        recorded(&gpkg, "p"),
         (None, None, None, None),
-        "reading the extent wrote to the file"
+        "a read-only connection recorded an extent"
+    );
+}
+
+/// Inside a caller's transaction, the measurement and the write join it rather
+/// than trying to open a nested one, which SQLite does not allow.
+#[test]
+fn extent_works_inside_a_callers_transaction() {
+    let (_dir, gpkg) = layer_with_points("p", &[(1.0, 2.0), (3.0, 4.0)]);
+    set_recorded(&gpkg, "p", None);
+    let layer = gpkg.layer("p").unwrap();
+
+    let tx = gpkg.connection().unchecked_transaction().unwrap();
+    assert_eq!(
+        layer.extent().unwrap(),
+        Some(BoundingBox::new(1.0, 2.0, 3.0, 4.0))
+    );
+    tx.commit().unwrap();
+    assert_eq!(
+        recorded(&gpkg, "p"),
+        (Some(1.0), Some(2.0), Some(3.0), Some(4.0))
     );
 }
 
@@ -258,4 +380,67 @@ fn an_attributes_layer_has_no_extent() {
         Err(Error::NoGeometryColumn { table_name }) => assert_eq!(table_name, "a"),
         other => panic!("expected NoGeometryColumn, got {other:?}"),
     }
+}
+
+/// The branch that decides not to record. Another connection holding a write
+/// transaction means the measurement describes a layer being changed underneath
+/// it, so `extent` returns what it measured, reports no error, and leaves the
+/// file exactly as it found it.
+///
+/// The short busy timeout is so the test does not sit out the default five
+/// seconds; the outcome is the same either way, since waiting cannot make a
+/// concurrent writer go away.
+#[test]
+fn extent_keeps_its_measurement_when_a_writer_holds_the_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.gpkg");
+    {
+        let gpkg = GeoPackage::create(&path).unwrap();
+        gpkg.create_layer(
+            &TableSchemaBuilder::new("p")
+                .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+                .spatial_index(false),
+        )
+        .unwrap();
+        let layer = gpkg.layer("p").unwrap();
+        let mut w = layer.writer().unwrap();
+        w.insert(None, &Point::new(1.0, 2.0), &[]).unwrap();
+        w.insert(None, &Point::new(3.0, 4.0), &[]).unwrap();
+        w.commit().unwrap();
+        set_recorded(&gpkg, "p", None);
+        gpkg.close().unwrap();
+    }
+
+    // A separate connection holding the write lock for the whole call.
+    let blocker = rusqlite::Connection::open(&path).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    let gpkg = OpenOptions::new()
+        .busy_timeout(Duration::from_millis(50))
+        .open(&path)
+        .unwrap();
+    let layer = gpkg.layer("p").unwrap();
+
+    assert_eq!(
+        layer.extent().unwrap(),
+        Some(BoundingBox::new(1.0, 2.0, 3.0, 4.0)),
+        "the measurement should survive a failed recording"
+    );
+    assert_eq!(
+        recorded(&gpkg, "p"),
+        (None, None, None, None),
+        "the file should keep what it had while another writer holds the lock"
+    );
+
+    // With the lock released, the next read records as usual.
+    blocker.execute_batch("ROLLBACK").unwrap();
+    drop(blocker);
+    assert_eq!(
+        layer.extent().unwrap(),
+        Some(BoundingBox::new(1.0, 2.0, 3.0, 4.0))
+    );
+    assert_eq!(
+        recorded(&gpkg, "p"),
+        (Some(1.0), Some(2.0), Some(3.0), Some(4.0))
+    );
 }
