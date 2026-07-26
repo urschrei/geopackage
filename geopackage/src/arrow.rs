@@ -1656,10 +1656,11 @@ impl Layer<'_> {
         R: IntoIterator<Item = std::result::Result<RecordBatch, ArrowError>>,
     {
         let geometry_column = self.geometry_column().map(|g| g.column_name.clone());
+        // The layer's value columns already exclude both the geometry and the
+        // primary key, which this path binds through its own arguments.
         let value_columns: Vec<String> = self
             .value_columns()
             .iter()
-            .filter(|column| Some(column.name.as_str()) != self.primary_key_column())
             .map(|column| column.name.clone())
             .collect();
         let primary_key = self.primary_key_column().map(str::to_owned);
