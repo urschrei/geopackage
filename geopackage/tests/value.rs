@@ -280,7 +280,7 @@ fn layer_reads_are_lenient_by_default() {
     let features: Vec<_> = layer
         .features()
         .unwrap()
-        .map(|f| f.unwrap().value("flag").map(|v| v.to_owned()))
+        .map(|f| f.unwrap().value("flag").map(|v| v.to_value()))
         .collect();
     assert_eq!(features, vec![Some(Value::Boolean(true))]);
 

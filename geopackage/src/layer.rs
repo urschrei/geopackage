@@ -961,7 +961,7 @@ enum Slot {
 ///
 /// This is why the accessors hand out [`ValueRef`] rather than `&Value`. There
 /// is no `Value` in a feature to lend out; one is built on demand pointing into
-/// the buffer. [`ValueRef::to_owned`] gives a `Value` where one is needed.
+/// the buffer. [`ValueRef::to_value`] gives a `Value` where one is needed.
 #[derive(Clone)]
 pub struct Feature {
     fid: i64,

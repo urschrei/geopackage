@@ -57,7 +57,7 @@ pub enum Value {
 /// This is what the read path hands out. A [`crate::Feature`] keeps its text and
 /// blob cells in one buffer rather than as a `String` or `Vec<u8>` each, so
 /// there is no `Value` to lend out; a `ValueRef` is built pointing into that
-/// buffer instead. Call [`ValueRef::to_owned`] for a `Value` that outlives the
+/// buffer instead. Call [`ValueRef::to_value`] for a `Value` that outlives the
 /// feature.
 ///
 /// The variants without a borrow are carried by value: [`Date`] and [`DateTime`]
@@ -83,11 +83,43 @@ pub enum ValueRef<'a> {
     DateTime(DateTime),
 }
 
-impl ValueRef<'_> {
+impl<'a> ValueRef<'a> {
     /// Copy this into an owned [`Value`].
+    ///
+    /// Not named `to_owned`: `ValueRef` is `Copy`, so it already has a
+    /// `ToOwned::to_owned` returning another `ValueRef`. An inherent method of
+    /// that name would shadow it and return a different type depending on
+    /// whether it was called as a method or through the trait.
     #[must_use]
-    pub fn to_owned(&self) -> Value {
+    pub fn to_value(&self) -> Value {
+        Value::from(*self)
+    }
+
+    /// The text, if this is a [`ValueRef::Text`].
+    ///
+    /// The borrow is of whatever holds the row's bytes, not of this value, so
+    /// the result outlives the `ValueRef` it came from.
+    #[must_use]
+    pub fn as_str(&self) -> Option<&'a str> {
         match *self {
+            ValueRef::Text(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The bytes, if this is a [`ValueRef::Blob`]. Borrowed as [`Self::as_str`].
+    #[must_use]
+    pub fn as_blob(&self) -> Option<&'a [u8]> {
+        match *self {
+            ValueRef::Blob(b) => Some(b),
+            _ => None,
+        }
+    }
+}
+
+impl From<ValueRef<'_>> for Value {
+    fn from(value: ValueRef<'_>) -> Self {
+        match value {
             ValueRef::Null => Value::Null,
             ValueRef::Boolean(b) => Value::Boolean(b),
             ValueRef::Integer(i) => Value::Integer(i),
@@ -96,24 +128,6 @@ impl ValueRef<'_> {
             ValueRef::Blob(b) => Value::Blob(b.to_vec()),
             ValueRef::Date(d) => Value::Date(d),
             ValueRef::DateTime(dt) => Value::DateTime(dt),
-        }
-    }
-
-    /// The text, if this is a [`ValueRef::Text`].
-    #[must_use]
-    pub fn as_str(&self) -> Option<&str> {
-        match *self {
-            ValueRef::Text(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    /// The bytes, if this is a [`ValueRef::Blob`].
-    #[must_use]
-    pub fn as_blob(&self) -> Option<&[u8]> {
-        match *self {
-            ValueRef::Blob(b) => Some(b),
-            _ => None,
         }
     }
 }
@@ -133,8 +147,12 @@ impl<'a> From<&'a Value> for ValueRef<'a> {
     }
 }
 
-/// Compare a borrowed value against an owned one without copying either, so
-/// `feature.value("x") == Some(Value::Integer(1))` reads naturally in a test.
+/// Compare a borrowed value against an owned one without copying either.
+///
+/// This works on bare values only. `Option` has no cross-type `PartialEq` in
+/// the standard library, so `feature.value("x")`, an `Option<ValueRef>`, does
+/// not compare against an `Option<Value>`: write the expected side as a
+/// `ValueRef` there.
 impl PartialEq<Value> for ValueRef<'_> {
     fn eq(&self, other: &Value) -> bool {
         *self == ValueRef::from(other)
@@ -475,7 +493,7 @@ pub(crate) fn value_from_ref(
     column_name: &str,
     options: ConversionOptions,
 ) -> Result<Value> {
-    value_ref_from_sql(value, column_type, column_name, options).map(|v| v.to_owned())
+    value_ref_from_sql(value, column_type, column_name, options).map(Value::from)
 }
 
 /// Borrow SQLite TEXT bytes as UTF-8.
