@@ -595,6 +595,10 @@ impl<'a> Layer<'a> {
         let mut stmt = conn.prepare(sql)?;
         let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
         let mut out: Vec<Result<Feature>> = Vec::new();
+        // Built once for the whole query, not per row: the context owns cloned
+        // column metadata, so rebuilding it inside the loop would copy every
+        // column name and declared type again for every feature returned.
+        let ctx = self.row_context();
         while let Some(row) = rows.next()? {
             // Decide bbox membership from the geometry blob before converting
             // any values: a row outside the box is skipped entirely, so value
@@ -610,26 +614,19 @@ impl<'a> Layer<'a> {
                     }
                 }
             }
-            out.push(self.feature_from_row(row, geom_idx));
+            out.push(ctx.feature_from_row(row, geom_idx));
         }
         Ok(Features {
             inner: out.into_iter(),
         })
     }
 
-    fn feature_from_row(
-        &self,
-        row: &rusqlite::Row<'_>,
-        geom_idx: Option<usize>,
-    ) -> Result<Feature> {
-        self.row_context().feature_from_row(row, geom_idx)
-    }
-
     /// The per-row metadata needed to build owned [`Feature`]s, detached from
     /// this handle so a [`FeatureCursor`] can outlive the borrow that made it.
     ///
-    /// Cloned once per query, not per row: the column list is a handful of
-    /// entries and the column names are already behind an `Arc`.
+    /// Cloning this is not free: it copies the column list, including each
+    /// column's name and declared type. Every caller must build it once per
+    /// query and reuse it across rows.
     fn row_context(&self) -> RowContext {
         RowContext {
             table_name: self.table_name.clone(),
