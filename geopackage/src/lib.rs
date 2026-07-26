@@ -316,7 +316,7 @@ pub use geopackage_core::GpkgVersion;
 pub use index::{SpatialIndexAudit, SpatialIndexStatus};
 pub use layer::{BoundingBox, Feature, FeatureCursor, FeatureStream, Features, Layer, LayerKind};
 pub use open::OpenWarning;
-pub use options::{JournalMode, OpenOptions, Synchronous};
+pub use options::{DEFAULT_BUSY_TIMEOUT, JournalMode, OpenOptions, Synchronous};
 pub use schema::{Column, GeometryColumn, TableSchema};
 pub use srs::Srs;
 pub use value::{ConversionOptions, DateTimeParsing, StorageStrictness, Value, ValueRef};
@@ -388,6 +388,7 @@ impl GeoPackage {
         {
             return Err(Error::AlreadyExists(path.to_owned()));
         }
+        let options = options.with_default_busy_timeout();
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "application_id", version::APPLICATION_ID_GPKG)?;
         conn.pragma_update(
@@ -424,6 +425,7 @@ impl GeoPackage {
         flags: OpenFlags,
         options: OpenOptions,
     ) -> Result<Self> {
+        let options = options.with_default_busy_timeout();
         let conn = Connection::open_with_flags(path, flags)?;
         // A read-only connection cannot change its journal mode.
         let apply_journal = flags.contains(OpenFlags::SQLITE_OPEN_READ_WRITE);
@@ -561,6 +563,14 @@ fn apply_open_options(
     options: OpenOptions,
     apply_journal: bool,
 ) -> Result<JournalMode> {
+    // Set first, so that it covers the pragmas below as well as everything the
+    // caller goes on to do. Applied to read-only connections too: a reader can
+    // meet a writer's lock under a rollback journal. `None` only where the
+    // caller supplied the connection and asked for nothing, so it keeps what it
+    // has.
+    if let Some(timeout) = options.busy_timeout {
+        conn.busy_timeout(timeout)?;
+    }
     if let Some(synchronous) = options.synchronous {
         conn.pragma_update(None, "synchronous", synchronous.code())?;
     }

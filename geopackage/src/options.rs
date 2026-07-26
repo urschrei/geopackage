@@ -12,6 +12,7 @@
 //! crate's own enums, translated to the underlying `PRAGMA` values internally.
 
 use std::path::Path;
+use std::time::Duration;
 
 use rusqlite::OpenFlags;
 
@@ -92,6 +93,15 @@ impl Synchronous {
 /// # Ok(()) }
 /// ```
 ///
+/// How long a statement waits for another connection's lock before failing,
+/// unless [`OpenOptions::busy_timeout`] says otherwise.
+///
+/// SQLite's own default is to fail immediately, which makes any concurrent
+/// writer turn an ordinary write into an error. Five seconds is long enough to
+/// ride out the writes a cooperating process actually makes and short enough
+/// not to look like a hang.
+pub const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Both settings are optional. An unspecified journal mode leaves the file's
 /// existing mode untouched (a freshly created file is
 /// [`JournalMode::Delete`]); an unspecified synchronous level keeps SQLite's
@@ -101,6 +111,7 @@ impl Synchronous {
 pub struct OpenOptions {
     pub(crate) journal_mode: Option<JournalMode>,
     pub(crate) synchronous: Option<Synchronous>,
+    pub(crate) busy_timeout: Option<Duration>,
 }
 
 impl OpenOptions {
@@ -121,6 +132,40 @@ impl OpenOptions {
     #[must_use]
     pub fn synchronous(mut self, synchronous: Synchronous) -> Self {
         self.synchronous = Some(synchronous);
+        self
+    }
+
+    /// How long a statement waits for a lock another connection holds before
+    /// giving up with `SQLITE_BUSY`. [`DEFAULT_BUSY_TIMEOUT`] when unset.
+    ///
+    /// `Duration::ZERO` restores SQLite's own default, which is to fail
+    /// immediately. That is rarely what a caller wants: a GeoPackage is a
+    /// single-writer database that readers and writers are expected to share,
+    /// so a write that meets a concurrent writer should wait rather than fail
+    /// on the first attempt.
+    ///
+    /// This is the whole of the crate's retry policy. Waiting is what SQLite
+    /// does on a caller's behalf here, and it is worth knowing that the wait is
+    /// skipped in the two cases where it could not help: a read-to-write
+    /// upgrade that would deadlock under a rollback journal, and a stale
+    /// snapshot under WAL, both of which return `SQLITE_BUSY` at once however
+    /// long the timeout is.
+    #[must_use]
+    pub fn busy_timeout(mut self, timeout: Duration) -> Self {
+        self.busy_timeout = Some(timeout);
+        self
+    }
+
+    /// Fill in [`DEFAULT_BUSY_TIMEOUT`] where the caller set none.
+    ///
+    /// Applied by the entry points that open the connection themselves. A
+    /// caller-supplied connection keeps whatever timeout it already has unless
+    /// the caller asks for one, on the same principle that leaves its journal
+    /// mode alone.
+    pub(crate) fn with_default_busy_timeout(mut self) -> Self {
+        if self.busy_timeout.is_none() {
+            self.busy_timeout = Some(DEFAULT_BUSY_TIMEOUT);
+        }
         self
     }
 

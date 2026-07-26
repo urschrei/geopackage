@@ -1,6 +1,6 @@
 //! Container lifecycle: create, open, pragma validation, `gpkg_contents`.
 
-use geopackage::{ContentsDataType, GeoPackage, GpkgVersion};
+use geopackage::{ContentsDataType, DEFAULT_BUSY_TIMEOUT, GeoPackage, GpkgVersion, OpenOptions};
 
 #[test]
 fn create_reopen_validate() {
@@ -76,4 +76,60 @@ fn contents_data_types() {
     assert_eq!(contents.len(), 1);
     assert_eq!(contents[0].data_type, ContentsDataType::Attributes);
     assert_eq!(contents[0].identifier.as_deref(), Some("T1"));
+}
+
+/// Every connection this crate opens gets a busy timeout, so a write that meets
+/// another connection's lock waits rather than failing on the first attempt.
+/// SQLite's own default is to fail immediately.
+#[test]
+fn opened_connections_get_a_busy_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.gpkg");
+
+    let expect_ms = |gpkg: &GeoPackage, ms: i64, what: &str| {
+        let got: i64 = gpkg
+            .connection()
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(got, ms, "{what}");
+    };
+
+    let created = GeoPackage::create(&path).unwrap();
+    expect_ms(
+        &created,
+        DEFAULT_BUSY_TIMEOUT.as_millis() as i64,
+        "create should apply the default",
+    );
+    drop(created);
+
+    let opened = GeoPackage::open(&path).unwrap();
+    expect_ms(
+        &opened,
+        DEFAULT_BUSY_TIMEOUT.as_millis() as i64,
+        "open should apply the default",
+    );
+    drop(opened);
+
+    // Read-only too: a reader can meet a writer's lock under a rollback journal.
+    let ro = GeoPackage::open_read_only(&path).unwrap();
+    expect_ms(
+        &ro,
+        DEFAULT_BUSY_TIMEOUT.as_millis() as i64,
+        "read-only should apply the default",
+    );
+    drop(ro);
+
+    let tuned = OpenOptions::new()
+        .busy_timeout(std::time::Duration::from_millis(250))
+        .open(&path)
+        .unwrap();
+    expect_ms(&tuned, 250, "an explicit timeout should win");
+    drop(tuned);
+
+    // A caller-supplied connection keeps what it has, as with journal mode.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.busy_timeout(std::time::Duration::from_millis(1234))
+        .unwrap();
+    let adopted = GeoPackage::from_connection(conn).unwrap();
+    expect_ms(&adopted, 1234, "a caller's connection should be left alone");
 }
