@@ -30,14 +30,15 @@
 
 use std::sync::Arc;
 
+use geopackage_core::datetime::{Date, DateTime};
 use geopackage_core::geometry::{self, GpbGeometry};
 use geopackage_core::gpb;
 use geopackage_core::ident::quote;
 use geopackage_core::triggers::{self, TriggerGeneration};
 use rusqlite::OptionalExtension;
-use rusqlite::types::ValueRef;
+use rusqlite::types::ValueRef as SqlValueRef;
 
-use crate::value::{value_from_ref, value_to_sql};
+use crate::value::{ValueRef, value_ref_from_sql, value_to_sql};
 use crate::{
     Column, ConversionOptions, Error, GeoPackage, GeometryColumn, Result, TableSchema, Value,
     resolve_table_name, table_exists,
@@ -766,18 +767,12 @@ impl RowContext {
         geom_idx: Option<usize>,
     ) -> Result<Feature> {
         let fid: i64 = row.get(0)?;
-        let mut values = Vec::with_capacity(self.value_columns.len());
-        for (i, column) in self.value_columns.iter().enumerate() {
-            values.push(value_from_ref(
-                row.get_ref(i + 1)?,
-                column.column_type.as_ref(),
-                &column.name,
-                self.options,
-            )?);
-        }
+
+        // The geometry blob goes in first, so its range starts at zero and only
+        // its end has to be recorded.
         let geometry = match geom_idx {
             Some(gi) => match row.get_ref(gi)? {
-                ValueRef::Blob(bytes) => Some(bytes.to_vec()),
+                SqlValueRef::Blob(bytes) => Some(bytes),
                 // NULL, or a non-blob value in the geometry column, reads as no
                 // geometry rather than an error.
                 _ => None,
@@ -785,14 +780,63 @@ impl RowContext {
             None => None,
         };
         if self.validate_geometry_type
-            && let (Some(blob), Some(declared)) = (&geometry, &self.geometry_column)
+            && let (Some(blob), Some(declared)) = (geometry, &self.geometry_column)
         {
             self.check_declared_type(blob, declared)?;
         }
+
+        // Size the buffer before filling it, from the raw cell lengths: reading
+        // a value reference copies nothing, so this pass is a walk over the
+        // row's own memory. It over-counts a `DATE` or `DATETIME` column, whose
+        // text is parsed into a slot and not kept, so the buffer is not shrunk
+        // to fit afterwards: that would trade the slack for a reallocation.
+        let mut bytes_needed = geometry.map_or(0, <[u8]>::len);
+        for i in 0..self.value_columns.len() {
+            bytes_needed += match row.get_ref(i + 1)? {
+                SqlValueRef::Text(bytes) | SqlValueRef::Blob(bytes) => bytes.len(),
+                _ => 0,
+            };
+        }
+
+        let mut buf: Vec<u8> = Vec::with_capacity(bytes_needed);
+        let mut slots = Vec::with_capacity(self.value_columns.len());
+        let geometry_end = geometry.map(|blob| {
+            buf.extend_from_slice(blob);
+            // SQLite's own value length is an i32, so a row's bytes cannot
+            // reach the u32 ceiling.
+            u32::try_from(buf.len()).unwrap_or(u32::MAX)
+        });
+
+        for (i, column) in self.value_columns.iter().enumerate() {
+            let value = value_ref_from_sql(
+                row.get_ref(i + 1)?,
+                column.column_type.as_ref(),
+                &column.name,
+                self.options,
+            )?;
+            slots.push(match value {
+                ValueRef::Null => Slot::Null,
+                ValueRef::Boolean(b) => Slot::Boolean(b),
+                ValueRef::Integer(i) => Slot::Integer(i),
+                ValueRef::Float(f) => Slot::Float(f),
+                ValueRef::Text(s) => {
+                    let (start, end) = push_bytes(&mut buf, s.as_bytes());
+                    Slot::Text { start, end }
+                }
+                ValueRef::Blob(b) => {
+                    let (start, end) = push_bytes(&mut buf, b);
+                    Slot::Blob { start, end }
+                }
+                ValueRef::Date(d) => Slot::Date(d),
+                ValueRef::DateTime(dt) => Slot::DateTime(dt),
+            });
+        }
+
         Ok(Feature {
             fid,
-            geometry,
-            values,
+            buf,
+            geometry_end,
+            slots: slots.into_boxed_slice(),
             columns: Arc::clone(&self.value_column_names),
         })
     }
@@ -831,7 +875,7 @@ fn row_in_box(
     let Some(gi) = geom_idx else {
         return Ok(false);
     };
-    let ValueRef::Blob(blob) = row.get_ref(gi)? else {
+    let SqlValueRef::Blob(blob) = row.get_ref(gi)? else {
         return Ok(false);
     };
     match blob_xy_envelope(blob)? {
@@ -873,18 +917,75 @@ fn qualified(name: &str, prefix: Option<&str>) -> Result<String> {
     })
 }
 
+/// Append `bytes` to `buf`, returning the range they occupy.
+fn push_bytes(buf: &mut Vec<u8>, bytes: &[u8]) -> (u32, u32) {
+    let start = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+    buf.extend_from_slice(bytes);
+    (start, u32::try_from(buf.len()).unwrap_or(u32::MAX))
+}
+
+/// One value of a [`Feature`], with the variable-length cases held as a range
+/// into the feature's byte buffer rather than as their own allocation.
+#[derive(Debug, Clone, Copy)]
+enum Slot {
+    Null,
+    Boolean(bool),
+    Integer(i64),
+    Float(f64),
+    /// UTF-8, checked when the row was read.
+    Text {
+        start: u32,
+        end: u32,
+    },
+    Blob {
+        start: u32,
+        end: u32,
+    },
+    Date(Date),
+    DateTime(DateTime),
+}
+
 /// A single row of a layer, owned so it outlives the SQLite cursor.
 ///
 /// The geometry is kept as the raw GPB blob and parsed lazily by
-/// [`Feature::geometry`]. Non-geometry column values are converted eagerly to
-/// [`Value`]s; access them by name ([`Feature::value`]) or by index
-/// ([`Feature::get`]).
-#[derive(Debug, Clone)]
+/// [`Feature::geometry`]. Non-geometry column values are converted eagerly;
+/// access them by name ([`Feature::value`]) or by index ([`Feature::get`]).
+///
+/// # Storage
+///
+/// The geometry blob and every text and binary cell live end to end in one
+/// buffer, with each value recorded as a range into it. A row is therefore two
+/// allocations whatever its width, where a `Vec<Value>` holding a `String` or
+/// `Vec<u8>` per cell was one plus one per variable-length cell: on a thirteen
+/// column layer with four text columns and a blob, seven.
+///
+/// This is why the accessors hand out [`ValueRef`] rather than `&Value`. There
+/// is no `Value` in a feature to lend out; one is built on demand pointing into
+/// the buffer. [`ValueRef::to_owned`] gives a `Value` where one is needed.
+#[derive(Clone)]
 pub struct Feature {
     fid: i64,
-    geometry: Option<Vec<u8>>,
-    values: Vec<Value>,
+    /// Geometry bytes first when present, then each text or blob cell in column
+    /// order. Ranges in `slots` index this.
+    buf: Vec<u8>,
+    /// Where the geometry ends, and so `None` when the row has no geometry.
+    geometry_end: Option<u32>,
+    slots: Box<[Slot]>,
     columns: Arc<[String]>,
+}
+
+impl std::fmt::Debug for Feature {
+    /// Prints the values, not the storage: the byte buffer and its ranges are
+    /// an implementation detail, and dumping them instead of the row's
+    /// `(column, value)` pairs would make a feature unreadable in a test
+    /// failure or a `dbg!`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Feature")
+            .field("fid", &self.fid)
+            .field("geometry_bytes", &self.geometry_bytes().map(<[u8]>::len))
+            .field("values", &self.iter().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 impl Feature {
@@ -897,7 +998,8 @@ impl Feature {
     /// The raw GeoPackage Binary (GPB) geometry blob, if the geometry cell is
     /// non-NULL.
     pub fn geometry_bytes(&self) -> Option<&[u8]> {
-        self.geometry.as_deref()
+        let end = self.geometry_end?;
+        self.buf.get(..end as usize)
     }
 
     /// Parse the geometry lazily as a [`GpbGeometry`].
@@ -905,7 +1007,7 @@ impl Feature {
     /// `Ok(None)` when the geometry cell is NULL (or the layer has none);
     /// `Err` when the blob is not a readable GPB geometry.
     pub fn geometry(&self) -> Result<Option<GpbGeometry<'_>>> {
-        match &self.geometry {
+        match self.geometry_bytes() {
             None => Ok(None),
             Some(blob) => Ok(Some(
                 GpbGeometry::parse(blob).map_err(|e| Error::Core(e.into()))?,
@@ -913,23 +1015,43 @@ impl Feature {
         }
     }
 
+    /// Rebuild one slot as a borrowed value.
+    fn slot_value(&self, slot: Slot) -> ValueRef<'_> {
+        // Every range was recorded from this buffer's own length as it was
+        // filled, so a miss is impossible; `unwrap_or` keeps the indexing
+        // panic-free rather than guarding against a real case.
+        let bytes = |start: u32, end: u32| self.buf.get(start as usize..end as usize);
+        match slot {
+            Slot::Null => ValueRef::Null,
+            Slot::Boolean(b) => ValueRef::Boolean(b),
+            Slot::Integer(i) => ValueRef::Integer(i),
+            Slot::Float(f) => ValueRef::Float(f),
+            Slot::Text { start, end } => ValueRef::Text(
+                bytes(start, end)
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .unwrap_or_default(),
+            ),
+            Slot::Blob { start, end } => ValueRef::Blob(bytes(start, end).unwrap_or_default()),
+            Slot::Date(d) => ValueRef::Date(d),
+            Slot::DateTime(dt) => ValueRef::DateTime(dt),
+        }
+    }
+
     /// A value by column name, or `None` if the layer has no such value column.
-    pub fn value(&self, name: &str) -> Option<&Value> {
-        self.columns
-            .iter()
-            .position(|c| c == name)
-            .and_then(|i| self.values.get(i))
+    pub fn value(&self, name: &str) -> Option<ValueRef<'_>> {
+        let index = self.columns.iter().position(|c| c == name)?;
+        self.get(index)
     }
 
     /// A value by position within the value columns (in schema order), or
     /// `None` if the index is out of range.
-    pub fn get(&self, index: usize) -> Option<&Value> {
-        self.values.get(index)
+    pub fn get(&self, index: usize) -> Option<ValueRef<'_>> {
+        self.slots.get(index).map(|slot| self.slot_value(*slot))
     }
 
     /// All value-column values, in schema order.
-    pub fn values(&self) -> &[Value] {
-        &self.values
+    pub fn values(&self) -> impl ExactSizeIterator<Item = ValueRef<'_>> {
+        self.slots.iter().map(|slot| self.slot_value(*slot))
     }
 
     /// The value-column names, parallel to [`Feature::values`].
@@ -939,20 +1061,17 @@ impl Feature {
 
     /// The number of value columns.
     pub fn len(&self) -> usize {
-        self.values.len()
+        self.slots.len()
     }
 
     /// Whether the feature has no value columns.
     pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.slots.is_empty()
     }
 
     /// Iterate `(column name, value)` pairs in schema order.
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &Value)> {
-        self.columns
-            .iter()
-            .map(String::as_str)
-            .zip(self.values.iter())
+    pub fn iter(&self) -> impl Iterator<Item = (&str, ValueRef<'_>)> {
+        self.columns.iter().map(String::as_str).zip(self.values())
     }
 }
 

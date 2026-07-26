@@ -16,6 +16,7 @@
 //! use geopackage::core::types::{ColumnType, GeometryType};
 //! use geopackage::{
 //!     BoundingBox, ColumnSpec, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value,
+//!     ValueRef,
 //! };
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -42,7 +43,7 @@
 //! // `TableSchemaBuilder::spatial_index(false)` declines it.
 //! for feature in layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))? {
 //!     let feature = feature?;
-//!     assert_eq!(feature.value("name"), Some(&Value::Text("Dublin".into())));
+//!     assert_eq!(feature.value("name"), Some(ValueRef::Text("Dublin")));
 //! }
 //! # Ok(()) }
 //! ```
@@ -78,7 +79,7 @@
 //! ```
 //! use geo_traits::{CoordTrait, GeometryTrait, GeometryType as Kind, LineStringTrait};
 //! use geopackage::core::types::{ColumnType, GeometryType};
-//! use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, TableSchemaBuilder, Value};
+//! use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, TableSchemaBuilder, Value, ValueRef};
 //!
 //! /// Planar length, read from the trait: no geometry object is built.
 //! fn length(geometry: &impl GeometryTrait<T = f64>) -> f64 {
@@ -146,7 +147,7 @@
 //!
 //! let mut total = 0.0;
 //! for feature in measured.features()? {
-//!     if let Some(Value::Float(l)) = feature?.value("length") {
+//!     if let Some(ValueRef::Float(l)) = feature?.value("length") {
 //!         total += l;
 //!     }
 //! }
@@ -317,7 +318,7 @@ pub use open::OpenWarning;
 pub use options::{JournalMode, OpenOptions, Synchronous};
 pub use schema::{Column, GeometryColumn, TableSchema};
 pub use srs::Srs;
-pub use value::{ConversionOptions, DateTimeParsing, StorageStrictness, Value};
+pub use value::{ConversionOptions, DateTimeParsing, StorageStrictness, Value, ValueRef};
 pub use writer::{FeatureWriter, NewFeature};
 
 use geopackage_core::{ddl, version};

@@ -22,7 +22,7 @@ use geopackage::core::triggers::{self, TriggerGeneration};
 use geopackage::core::types::{ColumnType, GeometryType, ZmFlag};
 use geopackage::{
     BulkIndexOptions, ColumnSpec, Error, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder,
-    Value,
+    Value, ValueRef,
 };
 
 fn gpkg() -> (tempfile::TempDir, GeoPackage) {
@@ -153,25 +153,25 @@ fn roundtrip_geometries_and_values() {
     let by_fid = |fid: i64| features.iter().find(|f| f.fid() == fid).unwrap();
 
     let a = by_fid(1);
-    assert_eq!(a.value("name"), Some(&Value::Text("a".into())));
-    assert_eq!(a.value("score"), Some(&Value::Float(1.5)));
-    assert_eq!(a.value("num"), Some(&Value::Integer(10)));
-    assert_eq!(a.value("active"), Some(&Value::Boolean(true)));
-    assert_eq!(a.value("seen"), Some(&Value::DateTime(seen)));
-    assert_eq!(a.value("day"), Some(&Value::Date(day)));
-    assert_eq!(a.value("payload"), Some(&Value::Blob(vec![0x01, 0x02])));
+    assert_eq!(a.value("name"), Some(ValueRef::Text("a")));
+    assert_eq!(a.value("score"), Some(ValueRef::Float(1.5)));
+    assert_eq!(a.value("num"), Some(ValueRef::Integer(10)));
+    assert_eq!(a.value("active"), Some(ValueRef::Boolean(true)));
+    assert_eq!(a.value("seen"), Some(ValueRef::DateTime(seen)));
+    assert_eq!(a.value("day"), Some(ValueRef::Date(day)));
+    assert_eq!(a.value("payload"), Some(ValueRef::Blob(&[0x01, 0x02])));
     assert_eq!(
         a.geometry().unwrap().unwrap().to_geo().unwrap(),
         geo_types::Geometry::Point(point)
     );
 
     let b = by_fid(50);
-    assert_eq!(b.value("name"), Some(&Value::Text("b".into())));
-    assert_eq!(b.value("score"), Some(&Value::Null));
-    assert_eq!(b.value("num"), Some(&Value::Integer(-4)));
-    assert_eq!(b.value("active"), Some(&Value::Boolean(false)));
-    assert_eq!(b.value("seen"), Some(&Value::Null));
-    assert_eq!(b.value("day"), Some(&Value::Null));
+    assert_eq!(b.value("name"), Some(ValueRef::Text("b")));
+    assert_eq!(b.value("score"), Some(ValueRef::Null));
+    assert_eq!(b.value("num"), Some(ValueRef::Integer(-4)));
+    assert_eq!(b.value("active"), Some(ValueRef::Boolean(false)));
+    assert_eq!(b.value("seen"), Some(ValueRef::Null));
+    assert_eq!(b.value("day"), Some(ValueRef::Null));
     assert_eq!(
         b.geometry().unwrap().unwrap().to_geo().unwrap(),
         geo_types::Geometry::LineString(line)

@@ -8,7 +8,7 @@
 )]
 
 use geopackage::core::gpb::{Envelope, encode_header};
-use geopackage::{BoundingBox, ContentsDataType, Error, GeoPackage, LayerKind, Value};
+use geopackage::{BoundingBox, ContentsDataType, Error, GeoPackage, LayerKind, Value, ValueRef};
 use geopackage::{ConversionOptions, core::datetime::DateTime};
 
 /// A GPB point blob with an XY envelope (little-endian WKB).
@@ -120,10 +120,7 @@ fn attribute_layer_round_trips() {
     let features: Vec<_> = layer.features().unwrap().collect::<Result<_, _>>().unwrap();
     assert_eq!(features.len(), 2);
     assert!(features[0].geometry().unwrap().is_none());
-    assert_eq!(
-        features[0].value("body"),
-        Some(&Value::Text("hello".into()))
-    );
+    assert_eq!(features[0].value("body"), Some(ValueRef::Text("hello")));
 
     // A feature accessor on an attribute table is a typed error.
     match gpkg.layer("notes") {
@@ -148,12 +145,12 @@ fn features_stream_values_and_geometry() {
     let first = &features[0];
     assert_eq!(first.fid(), 1);
     // By name.
-    assert_eq!(first.value("name"), Some(&Value::Text("a".into())));
-    assert_eq!(first.value("lanes"), Some(&Value::Integer(2)));
-    assert_eq!(first.value("fid"), Some(&Value::Integer(1)));
+    assert_eq!(first.value("name"), Some(ValueRef::Text("a")));
+    assert_eq!(first.value("lanes"), Some(ValueRef::Integer(2)));
+    assert_eq!(first.value("fid"), Some(ValueRef::Integer(1)));
     // By index: fid, name, lanes, built (geometry excluded from values).
-    assert_eq!(first.get(0), Some(&Value::Integer(1)));
-    assert_eq!(first.get(1), Some(&Value::Text("a".into())));
+    assert_eq!(first.get(0), Some(ValueRef::Integer(1)));
+    assert_eq!(first.get(1), Some(ValueRef::Text("a")));
     assert_eq!(first.columns(), &["fid", "name", "lanes", "built"]);
     assert!(first.value("no_such").is_none());
 
@@ -225,7 +222,7 @@ fn conversion_options_apply_to_features() {
         .unwrap();
     assert_eq!(
         row.value("built"),
-        Some(&Value::DateTime(
+        Some(ValueRef::DateTime(
             DateTime::parse_lenient("2026-07-24T12:34:56Z").unwrap()
         ))
     );
@@ -244,7 +241,7 @@ fn select_passthrough_binds_values() {
     let mut names: Vec<&str> = hits
         .iter()
         .map(|f| match f.value("name").unwrap() {
-            Value::Text(s) => s.as_str(),
+            ValueRef::Text(s) => s,
             _ => unreachable!(),
         })
         .collect();

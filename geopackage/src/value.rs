@@ -23,7 +23,7 @@ use crate::{Error, GeoPackage, Result};
 use geopackage_core::datetime::{Date, DateTime};
 use geopackage_core::ident;
 use geopackage_core::types::ColumnType;
-use rusqlite::types::ValueRef;
+use rusqlite::types::ValueRef as SqlValueRef;
 
 /// A typed, non-geometry column value.
 ///
@@ -49,6 +49,102 @@ pub enum Value {
     Date(Date),
     /// A `DATETIME` value.
     DateTime(DateTime),
+}
+
+/// A borrowed [`Value`]: the same cases, with text and binary borrowed from
+/// whatever holds the row's bytes.
+///
+/// This is what the read path hands out. A [`crate::Feature`] keeps its text and
+/// blob cells in one buffer rather than as a `String` or `Vec<u8>` each, so
+/// there is no `Value` to lend out; a `ValueRef` is built pointing into that
+/// buffer instead. Call [`ValueRef::to_owned`] for a `Value` that outlives the
+/// feature.
+///
+/// The variants without a borrow are carried by value: [`Date`] and [`DateTime`]
+/// are `Copy` and smaller than a pointer pair.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum ValueRef<'a> {
+    /// SQL `NULL`.
+    Null,
+    /// A `BOOLEAN` value (`0`/`1` stored as INTEGER).
+    Boolean(bool),
+    /// An integer value of any declared width.
+    Integer(i64),
+    /// A floating-point value.
+    Float(f64),
+    /// A text value.
+    Text(&'a str),
+    /// A binary value.
+    Blob(&'a [u8]),
+    /// A `DATE` value.
+    Date(Date),
+    /// A `DATETIME` value.
+    DateTime(DateTime),
+}
+
+impl ValueRef<'_> {
+    /// Copy this into an owned [`Value`].
+    #[must_use]
+    pub fn to_owned(&self) -> Value {
+        match *self {
+            ValueRef::Null => Value::Null,
+            ValueRef::Boolean(b) => Value::Boolean(b),
+            ValueRef::Integer(i) => Value::Integer(i),
+            ValueRef::Float(f) => Value::Float(f),
+            ValueRef::Text(s) => Value::Text(s.to_owned()),
+            ValueRef::Blob(b) => Value::Blob(b.to_vec()),
+            ValueRef::Date(d) => Value::Date(d),
+            ValueRef::DateTime(dt) => Value::DateTime(dt),
+        }
+    }
+
+    /// The text, if this is a [`ValueRef::Text`].
+    #[must_use]
+    pub fn as_str(&self) -> Option<&str> {
+        match *self {
+            ValueRef::Text(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The bytes, if this is a [`ValueRef::Blob`].
+    #[must_use]
+    pub fn as_blob(&self) -> Option<&[u8]> {
+        match *self {
+            ValueRef::Blob(b) => Some(b),
+            _ => None,
+        }
+    }
+}
+
+impl<'a> From<&'a Value> for ValueRef<'a> {
+    fn from(value: &'a Value) -> Self {
+        match value {
+            Value::Null => ValueRef::Null,
+            Value::Boolean(b) => ValueRef::Boolean(*b),
+            Value::Integer(i) => ValueRef::Integer(*i),
+            Value::Float(f) => ValueRef::Float(*f),
+            Value::Text(s) => ValueRef::Text(s),
+            Value::Blob(b) => ValueRef::Blob(b),
+            Value::Date(d) => ValueRef::Date(*d),
+            Value::DateTime(dt) => ValueRef::DateTime(*dt),
+        }
+    }
+}
+
+/// Compare a borrowed value against an owned one without copying either, so
+/// `feature.value("x") == Some(Value::Integer(1))` reads naturally in a test.
+impl PartialEq<Value> for ValueRef<'_> {
+    fn eq(&self, other: &Value) -> bool {
+        *self == ValueRef::from(other)
+    }
+}
+
+impl PartialEq<ValueRef<'_>> for Value {
+    fn eq(&self, other: &ValueRef<'_>) -> bool {
+        ValueRef::from(self) == *other
+    }
 }
 
 /// How [`Value`] conversion interprets `DATETIME` text.
@@ -218,14 +314,14 @@ pub(crate) fn value_to_sql(value: &Value) -> rusqlite::types::Value {
 /// per row written. Only `DATE` and `DATETIME` are owned here, because they are
 /// formatted rather than copied.
 pub(crate) fn value_to_bind(value: &Value) -> rusqlite::types::ToSqlOutput<'_> {
-    use rusqlite::types::{ToSqlOutput, Value as Sql, ValueRef};
+    use rusqlite::types::{ToSqlOutput, Value as Sql};
     match value {
-        Value::Null => ToSqlOutput::Borrowed(ValueRef::Null),
-        Value::Boolean(b) => ToSqlOutput::Borrowed(ValueRef::Integer(i64::from(*b))),
-        Value::Integer(i) => ToSqlOutput::Borrowed(ValueRef::Integer(*i)),
-        Value::Float(f) => ToSqlOutput::Borrowed(ValueRef::Real(*f)),
-        Value::Text(s) => ToSqlOutput::Borrowed(ValueRef::Text(s.as_bytes())),
-        Value::Blob(b) => ToSqlOutput::Borrowed(ValueRef::Blob(b)),
+        Value::Null => ToSqlOutput::Borrowed(SqlValueRef::Null),
+        Value::Boolean(b) => ToSqlOutput::Borrowed(SqlValueRef::Integer(i64::from(*b))),
+        Value::Integer(i) => ToSqlOutput::Borrowed(SqlValueRef::Integer(*i)),
+        Value::Float(f) => ToSqlOutput::Borrowed(SqlValueRef::Real(*f)),
+        Value::Text(s) => ToSqlOutput::Borrowed(SqlValueRef::Text(s.as_bytes())),
+        Value::Blob(b) => ToSqlOutput::Borrowed(SqlValueRef::Blob(b)),
         Value::Date(d) => ToSqlOutput::Owned(Sql::Text(d.to_string())),
         Value::DateTime(dt) => ToSqlOutput::Owned(Sql::Text(dt.to_string())),
     }
@@ -255,29 +351,29 @@ pub(crate) fn value_into_sql(value: Value) -> rusqlite::types::Value {
 ///
 /// `column_type` is `None` for a column whose declared type is outside the
 /// spec vocabulary; such a value is surfaced by its raw storage class.
-pub(crate) fn value_from_ref(
-    value: ValueRef<'_>,
+pub(crate) fn value_ref_from_sql<'a>(
+    value: SqlValueRef<'a>,
     column_type: Option<&ColumnType>,
     column_name: &str,
     options: ConversionOptions,
-) -> Result<Value> {
+) -> Result<ValueRef<'a>> {
     // NULL is NULL irrespective of the declared type.
-    if let ValueRef::Null = value {
-        return Ok(Value::Null);
+    if let SqlValueRef::Null = value {
+        return Ok(ValueRef::Null);
     }
     let Some(declared) = column_type else {
         return untyped(value);
     };
     match declared {
         ColumnType::Boolean => match value {
-            ValueRef::Integer(0) => Ok(Value::Boolean(false)),
-            ValueRef::Integer(1) => Ok(Value::Boolean(true)),
+            SqlValueRef::Integer(0) => Ok(ValueRef::Boolean(false)),
+            SqlValueRef::Integer(1) => Ok(ValueRef::Boolean(true)),
             // The spec says a BOOLEAN column holds 0 or 1, but SQLite gives the
             // declared type no affinity of its own, so the column holds whatever
             // was inserted. Anything non-zero reads as `true`, which is the C
             // convention the writers that produce such files are following.
-            ValueRef::Integer(value) => match options.storage {
-                StorageStrictness::Lenient => Ok(Value::Boolean(true)),
+            SqlValueRef::Integer(value) => match options.storage {
+                StorageStrictness::Lenient => Ok(ValueRef::Boolean(true)),
                 StorageStrictness::Strict => Err(Error::NonBooleanInteger {
                     column: column_name.to_owned(),
                     value,
@@ -289,11 +385,11 @@ pub(crate) fn value_from_ref(
         | ColumnType::SmallInt
         | ColumnType::MediumInt
         | ColumnType::Integer => match value {
-            ValueRef::Integer(i) => Ok(Value::Integer(i)),
+            SqlValueRef::Integer(i) => Ok(ValueRef::Integer(i)),
             other => Err(mismatch(column_name, declared, other)),
         },
         ColumnType::Float | ColumnType::Double => match value {
-            ValueRef::Real(f) => Ok(Value::Float(f)),
+            SqlValueRef::Real(f) => Ok(ValueRef::Float(f)),
             // A whole number stored with integer affinity in a real column is
             // widened losslessly rather than rejected.
             //
@@ -304,25 +400,25 @@ pub(crate) fn value_from_ref(
             // It is kept as a defensive arm rather than removed, and it answers
             // to the same option as the BOOLEAN case above so that strict
             // conversion means one thing.
-            ValueRef::Integer(i) => match options.storage {
-                StorageStrictness::Lenient => Ok(Value::Float(i as f64)),
+            SqlValueRef::Integer(i) => match options.storage {
+                StorageStrictness::Lenient => Ok(ValueRef::Float(i as f64)),
                 StorageStrictness::Strict => Err(mismatch(column_name, declared, value)),
             },
             other => Err(mismatch(column_name, declared, other)),
         },
         ColumnType::Text(_) => match value {
-            ValueRef::Text(bytes) => Ok(Value::Text(text(bytes)?)),
+            SqlValueRef::Text(bytes) => Ok(ValueRef::Text(text_ref(bytes)?)),
             other => Err(mismatch(column_name, declared, other)),
         },
         ColumnType::Blob(_) => match value {
-            ValueRef::Blob(bytes) => Ok(Value::Blob(bytes.to_vec())),
+            SqlValueRef::Blob(bytes) => Ok(ValueRef::Blob(bytes)),
             other => Err(mismatch(column_name, declared, other)),
         },
         ColumnType::Date => match value {
-            ValueRef::Text(bytes) => {
+            SqlValueRef::Text(bytes) => {
                 let s = text_ref(bytes)?;
                 Date::parse(s)
-                    .map(Value::Date)
+                    .map(ValueRef::Date)
                     .map_err(|source| Error::InvalidDateTimeValue {
                         column: column_name.to_owned(),
                         text: s.to_owned(),
@@ -332,14 +428,14 @@ pub(crate) fn value_from_ref(
             other => Err(mismatch(column_name, declared, other)),
         },
         ColumnType::DateTime => match value {
-            ValueRef::Text(bytes) => {
+            SqlValueRef::Text(bytes) => {
                 let s = text_ref(bytes)?;
                 let parsed = match options.datetime {
                     DateTimeParsing::Strict => DateTime::parse_strict(s),
                     DateTimeParsing::Lenient => DateTime::parse_lenient(s),
                 };
                 parsed
-                    .map(Value::DateTime)
+                    .map(ValueRef::DateTime)
                     .map_err(|source| Error::InvalidDateTimeValue {
                         column: column_name.to_owned(),
                         text: s.to_owned(),
@@ -359,14 +455,27 @@ pub(crate) fn value_from_ref(
 
 /// Surface a value by its raw storage class, used when the declared type is
 /// outside the spec vocabulary.
-fn untyped(value: ValueRef<'_>) -> Result<Value> {
+fn untyped<'a>(value: SqlValueRef<'a>) -> Result<ValueRef<'a>> {
     Ok(match value {
-        ValueRef::Null => Value::Null,
-        ValueRef::Integer(i) => Value::Integer(i),
-        ValueRef::Real(f) => Value::Float(f),
-        ValueRef::Text(bytes) => Value::Text(text(bytes)?),
-        ValueRef::Blob(bytes) => Value::Blob(bytes.to_vec()),
+        SqlValueRef::Null => ValueRef::Null,
+        SqlValueRef::Integer(i) => ValueRef::Integer(i),
+        SqlValueRef::Real(f) => ValueRef::Float(f),
+        SqlValueRef::Text(bytes) => ValueRef::Text(text_ref(bytes)?),
+        SqlValueRef::Blob(bytes) => ValueRef::Blob(bytes),
     })
+}
+
+/// [`value_ref_from_sql`] producing an owned [`Value`].
+///
+/// The conversion itself borrows; this copies the result for the callers that
+/// need a value outliving the row, such as the query-parameter path.
+pub(crate) fn value_from_ref(
+    value: SqlValueRef<'_>,
+    column_type: Option<&ColumnType>,
+    column_name: &str,
+    options: ConversionOptions,
+) -> Result<Value> {
+    value_ref_from_sql(value, column_type, column_name, options).map(|v| v.to_owned())
 }
 
 /// Borrow SQLite TEXT bytes as UTF-8.
@@ -378,13 +487,8 @@ fn text_ref(bytes: &[u8]) -> Result<&str> {
     Ok(std::str::from_utf8(bytes).map_err(rusqlite::Error::from)?)
 }
 
-/// Decode SQLite TEXT bytes as UTF-8.
-fn text(bytes: &[u8]) -> Result<String> {
-    text_ref(bytes).map(str::to_owned)
-}
-
 /// Build a [`Error::ValueTypeMismatch`] for an incompatible storage class.
-fn mismatch(column: &str, declared: &ColumnType, found: ValueRef<'_>) -> Error {
+fn mismatch(column: &str, declared: &ColumnType, found: SqlValueRef<'_>) -> Error {
     Error::ValueTypeMismatch {
         column: column.to_owned(),
         declared: declared.clone(),
@@ -393,12 +497,12 @@ fn mismatch(column: &str, declared: &ColumnType, found: ValueRef<'_>) -> Error {
 }
 
 /// The SQLite storage class name of a value, for diagnostics.
-fn storage_class(value: ValueRef<'_>) -> &'static str {
+fn storage_class(value: SqlValueRef<'_>) -> &'static str {
     match value {
-        ValueRef::Null => "NULL",
-        ValueRef::Integer(_) => "INTEGER",
-        ValueRef::Real(_) => "REAL",
-        ValueRef::Text(_) => "TEXT",
-        ValueRef::Blob(_) => "BLOB",
+        SqlValueRef::Null => "NULL",
+        SqlValueRef::Integer(_) => "INTEGER",
+        SqlValueRef::Real(_) => "REAL",
+        SqlValueRef::Text(_) => "TEXT",
+        SqlValueRef::Blob(_) => "BLOB",
     }
 }
