@@ -386,9 +386,10 @@ impl<'a> Layer<'a> {
     /// is **raw SQL, trusted from the caller**: this crate does not parse or
     /// sanitise it, and provides no query DSL of its own
     /// ([`GeoPackage::connection`] is the full escape hatch). `params` bind its
-    /// placeholders; they are this crate's [`Value`] enum, converted internally
-    /// so rusqlite types stay out of the public API. [`ValueRef::Date`] and
-    /// [`ValueRef::DateTime`] bind as their canonical text form.
+    /// placeholders; they are this crate's [`ValueRef`] values, converted
+    /// internally so rusqlite types stay out of the public API.
+    /// [`ValueRef::Date`] and [`ValueRef::DateTime`] bind as their canonical
+    /// text form.
     ///
     /// Parameters are borrowed, so a literal needs no allocation to bind.
     ///

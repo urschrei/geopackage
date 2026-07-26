@@ -8,6 +8,97 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-26
+
+### Changed
+
+- **A layer's value columns no longer include the primary key.** The read path
+  counted the key among a row's values while the write path excluded it, so the
+  two sides of the API disagreed about what a row's values were: feeding a
+  feature's values straight into a writer for an identically-shaped layer
+  compiled and then failed at run time with `ValueCountMismatch`, and the caller
+  had to know to strip the key by name. The key is reached through
+  `Feature::fid`, as it always was, and GDAL draws the same line between a
+  feature id and its fields. `Feature::value("fid")` is now `None`,
+  `Feature::get` indices shift by one on a layer with a named primary key, and
+  `Feature::columns` no longer lists it. As a side effect every query stopped
+  selecting the key twice.
+- **`Feature` hands out `ValueRef<'_>` rather than `&Value`.** A feature used to
+  be a `Vec<Value>` plus a `String` or `Vec<u8>` for every text and blob cell:
+  seven allocations a row on a thirteen-column layer with four text columns and
+  a blob. Its geometry and every variable-length cell now sit end to end in one
+  buffer with a range recorded per value, which is two allocations a row
+  whatever the row's width, so there is no longer a `Value` inside a feature to
+  lend out. `Feature::value`, `get`, `values` and `iter` return the new borrowed
+  type; `values` returns an iterator rather than a slice. `ValueRef::to_value`,
+  or `Value::from`, gives an owned value where one is needed.
+- **The write path takes borrowed values.** `FeatureWriter::insert`,
+  `insert_row`, `update` and `update_row`, and `Layer::select` and
+  `cursor_select`, take `&[ValueRef<'_>]`. Nothing in the implementation needed
+  ownership: bindings were already made by reference out of the `Value` they
+  were given, so the owned signature only forced callers to build values they
+  then handed straight over. A row read from one layer now binds into another
+  without its text and blob cells being copied, and a literal parameter needs no
+  allocation. `NewFeature` keeps `Vec<Value>`, because `write_all` consumes an
+  iterator whose items must outlive any single call, which is the rule the API
+  now follows: borrowed where a value need not outlive the call, owned where it
+  must.
+
+### Added
+
+- **`ValueRef<'a>`**, the borrowed counterpart of `Value`, with `to_value`,
+  `is_null`, and an accessor per variant (`as_str`, `as_blob`, `as_bool`,
+  `as_i64`, `as_f64`, `as_date`, `as_datetime`). None of them converts between
+  variants: what a cell reads as is driven by its column's declared type, not by
+  its contents, so an `INTEGER` column holding `0` reads as `Integer` and stays
+  that way under `as_bool`. `From` converts in both directions, and a `ValueRef`
+  compares directly against a `Value`.
+- **`gpb::header_len` and `gpb::encode_header_into`** in `geopackage-core`, so a
+  caller can size a blob for a GPB header and its WKB body together and append
+  both into one allocation. `encode_header` is unchanged.
+
+### Performance
+
+Allocation counts below are exact, from a counting global allocator over a
+200,000-row fixture of thirteen attribute columns. Wall-clock effects on these
+paths are mostly smaller than the run-to-run spread of the machine they were
+measured on, so they are not quoted here; see
+`roadmap/benchmarks/2026-07-25-real-datasets.md` for the dataset timings and
+their caveats.
+
+- **The materialising read is 40 allocations a row lighter.** `Layer::execute`
+  rebuilt its per-row context inside the row loop, cloning the table name, the
+  geometry column and the whole column list for every feature returned: 40
+  allocations a row against 8 for the same work through `cursor`. It is built
+  once per query, as the cursor path already did.
+- **A feature is two allocations rather than seven** on that fixture, from the
+  buffer described above, and one fewer again after `DATE` and `DATETIME` cells
+  stopped being copied into a `String` only to be parsed and dropped.
+- **The bulk index build no longer duplicates its entry set.** The gate built a
+  `HashMap` of every `(fid, envelope)` pair to remove entries as it scanned;
+  it now sorts and binary-searches the vector it already owns. The packer
+  collected leaf cells and then drained them into a second keyed vector, and
+  allocated a blob per node and a cell vector per leaf; those are one pass and
+  two reused buffers. Transient bytes over 200,000 rows fall from 52 MB to
+  25 MB, and peak resident memory over 11.5M rows from about 1246 MB to about
+  1148 MB, medians of three runs each.
+- **The write paths bind by reference.** Every insert and update deep-copied
+  each text and blob cell before handing it to SQLite; each also collected a
+  bindings vector per row, and the columnar path collected a second one. The
+  scalar write is 4.08 allocations a row before and 2.04 after, the columnar
+  7.08 and 5.04. Each GPB blob is now sized for its header and body together
+  rather than being grown once per geometry, which removes a reallocation a row.
+
+### Fixed
+
+- **`Feature::geometry_bytes` and the value accessors no longer disagree with
+  the writer about the primary key**, as described under Changed. The
+  round-trip is now covered by a test.
+- **The bulk index gate rejects an index whose stored bounds exclude the
+  geometry they index.** The existing fault test deleted a row, which the row
+  count caught before any bounds were compared, so the comparison itself was
+  never exercised.
+
 ## [0.2.0] - 2026-07-25
 
 ### Added
@@ -364,7 +455,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/urschrei/geopackage/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/urschrei/geopackage/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/urschrei/geopackage/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/urschrei/geopackage/compare/v0.1.0...v0.1.1
