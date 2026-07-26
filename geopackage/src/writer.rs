@@ -64,6 +64,16 @@
 //! is written back and `last_change` is refreshed to the strict 1.4 datetime
 //! form via SQLite's `strftime` (matching the normative column default).
 //!
+//! The fold is written back only when the writer can vouch for it. Seeded from
+//! a usable recorded box, growing it keeps it a valid cover. Starting from no
+//! usable box over an empty table, the geometries written are the whole content
+//! and the fold is exact. But starting from no usable box over a table that
+//! already holds rows, the fold covers only what this writer wrote, and
+//! recording it would replace an honest "unknown" with a box that excludes
+//! every pre-existing row. Readers believe a well-ordered extent indefinitely,
+//! so that case leaves the extent alone; [`Layer::recompute_extent`] is how it
+//! gets fixed. See [`crate::extent`] for the reasoning in full.
+//!
 //! # Envelopes and Z/M
 //!
 //! Every written geometry gets a GPB envelope (XY, or XYZ when it carries Z),
@@ -117,9 +127,7 @@ use geopackage_core::ident::quote;
 use geopackage_core::triggers;
 use geopackage_core::types::ZmFlag;
 use rusqlite::types::{ToSqlOutput, Value as SqlValue, ValueRef};
-use rusqlite::{
-    CachedStatement, Connection, OptionalExtension, Params, Transaction, params_from_iter,
-};
+use rusqlite::{CachedStatement, Connection, Params, Transaction, params_from_iter};
 
 use crate::bulk::{self, BulkIndexOptions};
 
@@ -320,6 +328,11 @@ pub struct FeatureWriter<'conn> {
     dirty: bool,
     /// A geometry was written (drives the bounding-box flush).
     bbox_dirty: bool,
+    /// Whether the fold covers the whole layer, and so may be recorded. False
+    /// when the writer started with no usable recorded box over a table that
+    /// already held rows, which makes the fold a lower bound rather than the
+    /// extent.
+    bbox_covers_layer: bool,
 }
 
 impl<'a> Layer<'a> {
@@ -331,7 +344,10 @@ impl<'a> Layer<'a> {
     pub fn writer(&self) -> Result<FeatureWriter<'a>> {
         let conn: &Connection = self.gpkg().connection();
         let tx = conn.unchecked_transaction()?;
-        let existing = read_contents_bbox(&tx, self.table_name())?;
+        let existing = self.stored_extent()?;
+        // An unusable recorded box over a table that already holds rows makes
+        // the fold a lower bound: it can be grown and used, but not recorded.
+        let bbox_covers_layer = existing.is_some() || !self.has_rows()?;
 
         let pk_name = self.primary_key_column();
         let pk_expr = match pk_name {
@@ -362,7 +378,7 @@ impl<'a> Layer<'a> {
             None => None,
         };
         let mut bbox = BboxFold::new();
-        bbox.seed(existing);
+        bbox.seed(existing.map(|b| [b.min_x, b.max_x, b.min_y, b.max_y]));
         let quoted_table = quote(self.table_name())?;
 
         // Compose every statement the writer can issue, then prepare them all,
@@ -404,6 +420,7 @@ impl<'a> Layer<'a> {
             partial_stmt,
             dirty: false,
             bbox_dirty: false,
+            bbox_covers_layer,
         })
     }
 
@@ -1153,6 +1170,7 @@ impl<'conn> FeatureWriter<'conn> {
             bbox,
             dirty,
             bbox_dirty,
+            bbox_covers_layer,
             ..
         } = self;
         if dirty {
@@ -1163,7 +1181,10 @@ impl<'conn> FeatureWriter<'conn> {
                 [&table_name],
             )?;
         }
-        if bbox_dirty && let Some([min_x, max_x, min_y, max_y]) = bbox.bounds() {
+        if bbox_dirty
+            && bbox_covers_layer
+            && let Some([min_x, max_x, min_y, max_y]) = bbox.bounds()
+        {
             tx.execute(
                 "UPDATE gpkg_contents \
                  SET min_x = ?1, min_y = ?2, max_x = ?3, max_y = ?4 \
@@ -1405,32 +1426,6 @@ fn borrow_bind<'a>(bind: &'a ToSqlOutput<'_>) -> ToSqlOutput<'a> {
         // here, and the remaining variants are all cheap to copy.
         other => other.clone(),
     }
-}
-
-/// Read the existing `gpkg_contents` bounding box for `table` as
-/// `[min_x, max_x, min_y, max_y]`, or `None` when the row or any bound is
-/// absent.
-fn read_contents_bbox(conn: &Connection, table: &str) -> Result<Option<[f64; 4]>> {
-    let row = conn
-        .query_row(
-            "SELECT min_x, min_y, max_x, max_y FROM gpkg_contents WHERE table_name = ?1",
-            [table],
-            |r| {
-                Ok((
-                    r.get::<_, Option<f64>>(0)?,
-                    r.get::<_, Option<f64>>(1)?,
-                    r.get::<_, Option<f64>>(2)?,
-                    r.get::<_, Option<f64>>(3)?,
-                ))
-            },
-        )
-        .optional()?;
-    Ok(match row {
-        Some((Some(min_x), Some(min_y), Some(max_x), Some(max_y))) => {
-            Some([min_x, max_x, min_y, max_y])
-        }
-        _ => None,
-    })
 }
 
 #[cfg(test)]

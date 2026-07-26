@@ -294,6 +294,7 @@ pub mod arrow;
 mod bulk;
 mod create;
 mod error;
+mod extent;
 mod functions;
 mod index;
 mod layer;
