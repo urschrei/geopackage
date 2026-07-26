@@ -39,7 +39,16 @@
 #   5. The write arm reads the source into memory untimed, then times the
 #      write. Timing a read and a write together produces a figure that says
 #      nothing about either; that mistake was made once in this repo already
-#      (see roadmap/benchmarks/2026-07-24-gdal-like-for-like.md).
+#      (see roadmap/benchmarks/2026-07-24-gdal-like-for-like.md). It runs twice,
+#      with and without the index being built during the write, since those are
+#      separate figures and the README quotes both.
+#   6. Peak resident set size is reported for the columnar read, the index build
+#      and the write: three arms whose working set depends on the data rather
+#      than being a constant. These are extra invocations, so the timings do not
+#      pay for the measurement, and they are repeated and taken as a median for
+#      the same reason as the timings. The threaded columnar read's peak varies
+#      by nearly a factor of two run to run, depending on how many batches its
+#      reader threads hold at once, so a single run of it means little.
 #
 # What this does not control: the OS page cache. Every arm here is warm, which
 # is the right choice for a repeated measurement but means these are not
@@ -129,6 +138,44 @@ field() {
     "$BENCH" "$@" | sed -n "s/^$key=//p"
 }
 
+# Peak resident set size of one dataset_bench invocation, in MB.
+#
+# The process is wrapped rather than instrumented: what a caller cares about is
+# what the whole process holds, and this needs no memory-profiling dependency in
+# the example. It is a separate invocation from the timed ones, so the timings
+# are not paying for the measurement.
+#
+# Reported for the arms whose working set is a question rather than a constant:
+# the columnar read holds whole batches (the reason the `admin` read figure
+# moves with host memory), the index build holds an entry per row, and the write
+# holds the batches it is writing. The scalar read holds one row at a time by
+# construction, so it is not measured here.
+#
+# This needs repeating as much as the timings do, and for the same reason. The
+# threaded columnar read was measured over five runs of one dataset at 642, 900,
+# 1046, 1066, 1089 and 1190 MB: peak depends on how many batches the reader
+# threads happen to hold at once, so a single run can be off by a factor of two.
+# The caller repeats it and takes a median.
+#
+# macOS `time -l` reports bytes, GNU `time -v` kilobytes; both are normalised.
+peak_rss_mb() {
+    local err rss
+    err="$(mktemp)"
+    /usr/bin/time -l "$BENCH" "$@" >/dev/null 2>"$err" || true
+    rss="$(awk '/maximum resident set size/ {print $1; exit}' "$err")"
+    if [[ -z "$rss" ]]; then
+        /usr/bin/time -v "$BENCH" "$@" >/dev/null 2>"$err" || true
+        rss="$(awk '/Maximum resident set size/ {print $6; exit}' "$err")"
+        [[ -n "$rss" ]] && rss=$((rss * 1024))
+    fi
+    rm -f "$err"
+    if [[ -n "$rss" ]]; then
+        awk -v b="$rss" 'BEGIN { printf "%.0f", b / 1048576 }'
+    else
+        echo "n/a"
+    fi
+}
+
 run() {
     [[ -x "$BENCH" ]] || {
         echo "building the measurement tool"
@@ -190,10 +237,39 @@ run() {
         echo "  indexed_bytes=$(stat -f%z "$WORK/indexed.gpkg" 2>/dev/null || stat -c%s "$WORK/indexed.gpkg")"
         rm -f "$WORK/indexed.gpkg"
 
-        # Write: source read into memory untimed, the write timed.
+        # Write: source read into memory untimed, the write timed. Both arms,
+        # because they answer different questions and the README quotes both:
+        # what the write costs, and what building the index during it adds. The
+        # indexed arm creates the index empty before the write, which is what
+        # lets the bulk path fill it in one pass instead of through the
+        # triggers.
         rm -f "$WORK/written.gpkg"
-        echo "  write_ms=$(timed write "$local_path" "$layer" "$WORK/written.gpkg" yes)"
+        echo "  write_ms=$(timed write "$local_path" "$layer" "$WORK/written.gpkg" no)"
         rm -f "$WORK/written.gpkg"
+        echo "  write_with_index_ms=$(timed write "$local_path" "$layer" "$WORK/written.gpkg" yes)"
+        rm -f "$WORK/written.gpkg"
+
+        # Peak memory, on the arms whose working set is a question. Last, so a
+        # failure here does not cost the timings, and repeated like them,
+        # because peak RSS varies as much run to run as elapsed time does.
+        samples=()
+        for _ in $(seq 1 "$REPS"); do samples+=("$(peak_rss_mb arrow "$local_path" "$layer" 1 0)"); done
+        echo "  arrow_peak_mb=$(median "${samples[@]}")"
+
+        samples=()
+        for _ in $(seq 1 "$REPS"); do
+            cp "$local_path" "$WORK/rss.gpkg"
+            samples+=("$(peak_rss_mb index "$WORK/rss.gpkg" "$layer")")
+            rm -f "$WORK/rss.gpkg"
+        done
+        echo "  index_peak_mb=$(median "${samples[@]}")"
+
+        samples=()
+        for _ in $(seq 1 "$REPS"); do
+            samples+=("$(peak_rss_mb write "$local_path" "$layer" "$WORK/written.gpkg" no)")
+            rm -f "$WORK/written.gpkg"
+        done
+        echo "  write_peak_mb=$(median "${samples[@]}")"
     done
 
     echo
