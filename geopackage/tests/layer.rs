@@ -147,11 +147,13 @@ fn features_stream_values_and_geometry() {
     // By name.
     assert_eq!(first.value("name"), Some(ValueRef::Text("a")));
     assert_eq!(first.value("lanes"), Some(ValueRef::Integer(2)));
-    assert_eq!(first.value("fid"), Some(ValueRef::Integer(1)));
-    // By index: fid, name, lanes, built (geometry excluded from values).
-    assert_eq!(first.get(0), Some(ValueRef::Integer(1)));
-    assert_eq!(first.get(1), Some(ValueRef::Text("a")));
-    assert_eq!(first.columns(), &["fid", "name", "lanes", "built"]);
+    // The primary key is the fid, not a value: it is reached through `fid()`
+    // alone, and the value columns are the set the writer also takes.
+    assert_eq!(first.value("fid"), None);
+    // By index: name, lanes, built (geometry and primary key both excluded).
+    assert_eq!(first.get(0), Some(ValueRef::Text("a")));
+    assert_eq!(first.get(1), Some(ValueRef::Integer(2)));
+    assert_eq!(first.columns(), &["name", "lanes", "built"]);
     assert!(first.value("no_such").is_none());
 
     // Geometry parses lazily from the owned blob.

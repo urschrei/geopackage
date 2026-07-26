@@ -44,10 +44,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(geometry) => format!("{:?}", geometry.geometry_type()),
             None => "NULL".to_owned(),
         };
-        let pk = layer.primary_key_column().unwrap_or("fid");
         let attributes: Vec<String> = feature
             .iter()
-            .filter(|(name, value)| *name != pk && !matches!(value, ValueRef::Null))
+            .filter(|(_, value)| !matches!(value, ValueRef::Null))
             .map(|(name, value)| format!("{name}={value:?}"))
             .collect();
         println!("  fid {} {kind} {}", feature.fid(), attributes.join(" "));

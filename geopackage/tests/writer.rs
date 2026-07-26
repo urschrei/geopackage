@@ -643,3 +643,60 @@ fn ogrinfo_reads_written_features() {
     }
     eprintln!("ogrinfo round-trip OK: {} features verified", written.len());
 }
+
+/// A feature's values feed straight back into a writer for a layer of the same
+/// schema, with no filtering by the caller.
+///
+/// This is the round-trip that the read and write sides have to agree on: the
+/// value columns a `Feature` carries are exactly the ones `insert` takes, so
+/// neither the primary key nor the geometry appears among them. When the read
+/// side included the primary key, this failed at run time with a
+/// `ValueCountMismatch` and the caller had to know to strip it by name.
+#[test]
+fn a_features_values_insert_into_a_layer_of_the_same_schema() {
+    let (_dir, gpkg) = gpkg();
+    let schema = |table: &str| {
+        TableSchemaBuilder::new(table)
+            .column(ColumnSpec::new("name", ColumnType::Text(None)))
+            .column(ColumnSpec::new("count", ColumnType::Integer))
+            .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+    };
+    gpkg.create_layer(&schema("source")).unwrap();
+    gpkg.create_layer(&schema("copy")).unwrap();
+
+    let source = gpkg.layer("source").unwrap();
+    let mut w = source.writer().unwrap();
+    w.insert(
+        None,
+        &Point::new(1.0, 2.0),
+        &[Value::Text("a".to_owned()), Value::Integer(7)],
+    )
+    .unwrap();
+    w.commit().unwrap();
+
+    // The copy: no knowledge of which columns are special, no filtering.
+    let target = gpkg.layer("copy").unwrap();
+    let mut w = target.writer().unwrap();
+    for feature in source.features().unwrap() {
+        let feature = feature.unwrap();
+        let values: Vec<Value> = feature.values().map(Value::from).collect();
+        let geometry = feature.geometry().unwrap().unwrap();
+        w.insert(None, &geometry, &values).unwrap();
+    }
+    w.commit().unwrap();
+
+    let copied: Vec<_> = gpkg
+        .layer("copy")
+        .unwrap()
+        .features()
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(copied.len(), 1);
+    assert_eq!(copied[0].value("name"), Some(ValueRef::Text("a")));
+    assert_eq!(copied[0].value("count"), Some(ValueRef::Integer(7)));
+    assert_eq!(
+        copied[0].geometry().unwrap().unwrap().to_geo().unwrap(),
+        geo_types::Geometry::Point(Point::new(1.0, 2.0))
+    );
+}

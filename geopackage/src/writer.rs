@@ -96,7 +96,7 @@ use crate::value::value_to_bind;
 use crate::{Error, Layer, Result, Value};
 
 /// A new row for [`Layer::write_all`]: an optional explicit feature id, an
-/// optional geometry, and the non-geometry values in column order.
+/// optional geometry, and the value-column values in column order.
 ///
 /// Construct with [`NewFeature::new`] (a geometry) or
 /// [`NewFeature::attributes`] (none); set an explicit id with
@@ -107,7 +107,8 @@ pub struct NewFeature<G> {
     pub fid: Option<i64>,
     /// The geometry, or `None` for a NULL geometry / attribute row.
     pub geometry: Option<G>,
-    /// The non-geometry column values, in the layer's value-column order.
+    /// The value-column values, in the layer's value-column order: every
+    /// column except the geometry and the primary key.
     pub values: Vec<Value>,
 }
 
@@ -235,7 +236,8 @@ pub struct FeatureWriter<'conn> {
     quoted_table: String,
     /// The primary-key expression: the quoted pk column, or `rowid`.
     pk_expr: String,
-    /// Quoted non-geometry column names, in value order.
+    /// Quoted value-column names, in value order: neither the geometry nor
+    /// the primary key is among them.
     value_columns: Vec<String>,
     geometry: Option<GeomTarget>,
     bbox: BboxFold,
@@ -270,13 +272,12 @@ impl<'a> Layer<'a> {
             Some(pk) => quote(pk)?,
             None => "rowid".to_owned(),
         };
-        // The read path's value columns include the primary key; the write path
-        // treats the primary key as a separate `fid` and the geometry through
-        // its own column, so exclude both here.
+        // The same set the read path yields: the layer's value columns exclude
+        // both the geometry and the primary key, which are written through
+        // their own arguments.
         let value_columns = self
             .value_columns()
             .iter()
-            .filter(|c| Some(c.name.as_str()) != pk_name)
             .map(|c| quote(&c.name))
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let geometry = match self.geometry_column() {
@@ -660,7 +661,7 @@ impl<'conn> FeatureWriter<'conn> {
     /// Insert a feature with a geometry, returning its feature id.
     ///
     /// `fid` is `None` to let SQLite assign the id (returned), or `Some(id)` for
-    /// an explicit id. `values` must have one entry per non-geometry column, in
+    /// an explicit id. `values` must have one entry per value column, in
     /// the layer's value-column order.
     ///
     /// # Errors

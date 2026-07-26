@@ -112,8 +112,9 @@ pub struct Layer<'a> {
     kind: LayerKind,
     geometry_column: Option<GeometryColumn>,
     pk_column: Option<String>,
-    /// Non-geometry columns, in schema order: the values each [`Feature`]
-    /// carries.
+    /// The value columns, in schema order: every column except the geometry
+    /// and the primary key. The values each [`Feature`] carries, and the ones
+    /// the write path binds.
     value_columns: Vec<Column>,
     /// The names of [`Self::value_columns`], shared cheaply into every
     /// [`Feature`] for by-name access.
@@ -212,10 +213,17 @@ impl GeoPackage {
         };
         let pk_column = schema.primary_key().map(|c| c.name.clone());
         let geom_name = geometry_column.as_ref().map(|g| g.column_name.clone());
+        // Neither the geometry nor the primary key is a value column. Both are
+        // reached through their own accessors ([`Feature::geometry`] and
+        // [`Feature::fid`]), and the write path has always taken values without
+        // them, so including them here made the two sides of the API disagree
+        // about what a row's values are. Dropping the primary key also stops
+        // every query selecting it twice, once as the fid and once as a value.
         let value_columns: Vec<Column> = schema
             .columns
             .iter()
             .filter(|c| geom_name.as_deref() != Some(c.name.as_str()))
+            .filter(|c| pk_column.as_deref() != Some(c.name.as_str()))
             .cloned()
             .collect();
         let value_column_names: Arc<[String]> =
@@ -272,7 +280,7 @@ impl<'a> Layer<'a> {
         self.gpkg
     }
 
-    /// The non-geometry columns in schema order (the values a [`Feature`]
+    /// The value columns in schema order (the values a [`Feature`]
     /// carries, and the columns the write path binds).
     pub(crate) fn value_columns(&self) -> &[Column] {
         &self.value_columns
