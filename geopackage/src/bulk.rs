@@ -54,8 +54,6 @@
 //! the caller can prove it accounts for every indexable row, from envelopes
 //! computed while encoding the geometries (see [`fill_index`]'s `precomputed`).
 
-use std::collections::HashMap;
-
 use geopackage_core::geometry::GpbGeometry;
 use geopackage_core::gpb;
 use geopackage_core::ident::quote;
@@ -388,7 +386,10 @@ fn accumulate_envelopes(
     let sql = format!("SELECT {i}, {c} FROM {t} WHERE {c} NOT NULL");
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
+    // The row count is an upper bound on the entries kept: rows with a NULL or
+    // empty geometry are skipped below. One count query is cheaper than the
+    // repeated doubling it saves.
+    let mut out = Vec::with_capacity(table_row_count(conn, table)?);
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
         // Borrow the blob rather than `get::<Vec<u8>>`, so a million rows are
@@ -424,7 +425,7 @@ fn accumulate_envelopes(
 fn gate(
     conn: &Connection,
     rtree: &str,
-    mut expected: HashMap<i64, [f64; 4]>,
+    mut expected: Vec<(i64, [f64; 4])>,
     structural_check: StructuralCheck,
 ) -> Result<bool> {
     let quoted = quote(rtree)?;
@@ -433,20 +434,53 @@ fn gate(
         return Ok(false);
     }
 
+    // Sort and binary-search rather than building a `HashMap` of the whole
+    // accumulated set. The map was a second copy of every entry held for the
+    // duration of the scan, which at the row counts this path is built for is
+    // hundreds of megabytes on top of the set already in hand.
+    expected.sort_unstable_by_key(|&(id, _)| id);
+    // A duplicate fid would make the bijection below ambiguous: two index rows
+    // could match the same entry, or one could match twice. A primary key scan
+    // cannot produce one, so treat it as a failed gate rather than trying to
+    // resolve it.
+    if expected
+        .iter()
+        .zip(expected.iter().skip(1))
+        .any(|(a, b)| a.0 == b.0)
+    {
+        return Ok(false);
+    }
+    // One byte per entry, marking which have been matched, so a repeated id in
+    // the index is caught the same way `HashMap::remove` returning `None`
+    // caught it before.
+    let mut matched = vec![false; expected.len()];
+    let mut hits = 0usize;
+
     let mut stmt = conn.prepare(&format!("SELECT id, minx, maxx, miny, maxy FROM {quoted}"))?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
         let (s_min_x, s_max_x, s_min_y, s_max_y): (f64, f64, f64, f64) =
             (row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?);
-        let Some([min_x, max_x, min_y, max_y]) = expected.remove(&id) else {
+        let Ok(at) = expected.binary_search_by_key(&id, |&(id, _)| id) else {
             return Ok(false);
         };
+        // `at` indexes both vectors, which are the same length, so neither
+        // lookup can miss; the fallible forms keep the panicking index out.
+        let (Some(seen), Some(&(_, [min_x, max_x, min_y, max_y]))) =
+            (matched.get_mut(at), expected.get(at))
+        else {
+            return Ok(false);
+        };
+        if std::mem::replace(seen, true) {
+            return Ok(false);
+        }
+        hits += 1;
         if !(s_min_x <= min_x && s_max_x >= max_x && s_min_y <= min_y && s_max_y >= max_y) {
             return Ok(false);
         }
     }
-    if !expected.is_empty() {
+    if hits != expected.len() {
         return Ok(false);
     }
 
@@ -567,8 +601,7 @@ where
     write_packed(conn, rtree, &accumulated, node_size, options.fill_factor)?;
     fault(conn, rtree)?;
 
-    let expected: HashMap<i64, [f64; 4]> = accumulated.into_iter().collect();
-    let path = if gate(conn, rtree, expected, options.structural_check)? {
+    let path = if gate(conn, rtree, accumulated, options.structural_check)? {
         BuildPath::Bulk
     } else {
         // Discard the packed result and rebuild through the triggered
