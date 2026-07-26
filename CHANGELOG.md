@@ -8,6 +8,8 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-26
+
 ### Added
 
 - **Column projection: `Layer::with_columns` and `Layer::without_geometry`.**
@@ -583,7 +585,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/urschrei/geopackage/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/urschrei/geopackage/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/urschrei/geopackage/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/urschrei/geopackage/compare/v0.1.2...v0.2.0
