@@ -320,12 +320,12 @@ pub(crate) fn value_from_ref(
         },
         ColumnType::Date => match value {
             ValueRef::Text(bytes) => {
-                let s = text(bytes)?;
-                Date::parse(&s)
+                let s = text_ref(bytes)?;
+                Date::parse(s)
                     .map(Value::Date)
                     .map_err(|source| Error::InvalidDateTimeValue {
                         column: column_name.to_owned(),
-                        text: s,
+                        text: s.to_owned(),
                         source,
                     })
             }
@@ -333,16 +333,16 @@ pub(crate) fn value_from_ref(
         },
         ColumnType::DateTime => match value {
             ValueRef::Text(bytes) => {
-                let s = text(bytes)?;
+                let s = text_ref(bytes)?;
                 let parsed = match options.datetime {
-                    DateTimeParsing::Strict => DateTime::parse_strict(&s),
-                    DateTimeParsing::Lenient => DateTime::parse_lenient(&s),
+                    DateTimeParsing::Strict => DateTime::parse_strict(s),
+                    DateTimeParsing::Lenient => DateTime::parse_lenient(s),
                 };
                 parsed
                     .map(Value::DateTime)
                     .map_err(|source| Error::InvalidDateTimeValue {
                         column: column_name.to_owned(),
-                        text: s,
+                        text: s.to_owned(),
                         source,
                     })
             }
@@ -369,11 +369,18 @@ fn untyped(value: ValueRef<'_>) -> Result<Value> {
     })
 }
 
+/// Borrow SQLite TEXT bytes as UTF-8.
+///
+/// The parsed types read through this rather than [`text`]: they consume the
+/// text and keep none of it, so copying it first is a `String` allocated and
+/// dropped per cell, per row.
+fn text_ref(bytes: &[u8]) -> Result<&str> {
+    Ok(std::str::from_utf8(bytes).map_err(rusqlite::Error::from)?)
+}
+
 /// Decode SQLite TEXT bytes as UTF-8.
 fn text(bytes: &[u8]) -> Result<String> {
-    Ok(std::str::from_utf8(bytes)
-        .map_err(rusqlite::Error::from)?
-        .to_owned())
+    text_ref(bytes).map(str::to_owned)
 }
 
 /// Build a [`Error::ValueTypeMismatch`] for an incompatible storage class.
