@@ -8,6 +8,31 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- **Column projection: `Layer::with_columns` and `Layer::without_geometry`.**
+  A read used to fetch every column and copy the geometry into every row
+  whether or not anything looked at it, which on a geometry-heavy layer is
+  most of the cost of an attribute scan: 5,000 rows carrying 1,000-vertex
+  linestrings, reading one integer, went from 15.7 ms to 4.2 ms, against a
+  3.8 ms floor for the same query in raw SQL with no `Feature` built at all.
+  Columns come back in the table's order however they are named, so this
+  selects rather than reorders; the feature id is always present; and an
+  unknown name is rejected by `with_columns` rather than quietly selecting
+  nothing.
+
+  A projection is a read concern. `Layer::writer` on a projected handle still
+  writes the layer's whole column list, so a partial row cannot be inserted by
+  accident, and a bounding-box query still reads each candidate's geometry to
+  filter exactly, it simply does not carry it into the feature.
+- **`Feature::has_column` and `Feature::has_geometry_column`**, and
+  **`Error::GeometryNotProjected`**. `Feature::value` already distinguished a
+  NULL cell (`Some(ValueRef::Null)`) from an absent one (`None`), but
+  `Feature::geometry` could not tell a NULL geometry from one a projection
+  dropped, since both would be `Ok(None)`. The projected case is now an error
+  instead. A layer with no geometry column at all is unaffected: nothing was
+  projected away there, so it answers `Ok(None)` as it always has.
+
 ## [0.4.0] - 2026-07-26
 
 ### Changed

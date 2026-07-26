@@ -249,6 +249,12 @@
 //!   [`StructuralCheck::RtreeOnly`]), and how full each node of the tree is
 //!   packed ([`BulkIndexOptions::fill_factor`], default
 //!   [`DEFAULT_FILL_FACTOR`], `1.0`).
+//! - **Column projection**, through [`Layer::with_columns`] and
+//!   [`Layer::without_geometry`]: which columns a read of that handle fetches
+//!   and carries. Everything, by default. Worth setting on a layer whose
+//!   geometries are large and whose attributes are what you are after, since
+//!   the geometry is otherwise fetched and copied into every row whether or
+//!   not anything looks at it.
 //! - [`ConversionOptions`]: how stored values are read back, through
 //!   [`Layer::with_conversion_options`]: which `DATETIME` text forms are
 //!   accepted ([`DateTimeParsing`], default [`DateTimeParsing::Strict`]) and

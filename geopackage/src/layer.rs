@@ -126,6 +126,21 @@ pub struct Layer<'a> {
     value_column_names: Arc<[String]>,
     options: ConversionOptions,
     validate_geometry_type: bool,
+    /// Which columns a read of this layer yields. `None` selects every one,
+    /// which is the default.
+    ///
+    /// A read concern only: the writer keeps the layer's whole column list, so
+    /// a projected handle cannot silently insert a partial row.
+    projection: Option<Projection>,
+}
+
+/// The columns a projected [`Layer`] reads: a subset of its value columns, in
+/// the table's own order, and whether the geometry comes with them.
+#[derive(Debug, Clone)]
+struct Projection {
+    value_columns: Vec<Column>,
+    value_column_names: Arc<[String]>,
+    geometry: bool,
 }
 
 impl std::fmt::Debug for Layer<'_> {
@@ -248,6 +263,7 @@ impl GeoPackage {
             // implementation opens (see `StorageStrictness`).
             options: ConversionOptions::default(),
             validate_geometry_type: false,
+            projection: None,
         })
     }
 }
@@ -322,13 +338,110 @@ impl<'a> Layer<'a> {
         self
     }
 
+    /// Read only the named columns.
+    ///
+    /// A read of the returned handle selects the feature id, the named value
+    /// columns, and the geometry only if it is named. On a layer whose
+    /// geometries are large this is the difference between fetching and copying
+    /// every blob and touching none of them: a scan of 5,000 rows carrying
+    /// 1,000-vertex linestrings, reading one integer attribute, spends most of
+    /// its time on geometry nobody asked for.
+    ///
+    /// Columns come back in the table's order whatever order they are named in,
+    /// so this selects rather than reorders and [`Feature::get`] indices stay
+    /// predictable. Naming a column twice selects it once. The feature id is
+    /// always present and need not be named.
+    ///
+    /// The projection is a read concern: [`Self::writer`] on a projected handle
+    /// still writes the layer's whole column list, so a partial row cannot be
+    /// inserted by accident.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoSuchColumn`] if a name is neither a value column nor the
+    /// geometry column. Names are checked here rather than at the query, so a
+    /// typo fails at the point it was written instead of quietly selecting
+    /// nothing.
+    pub fn with_columns(mut self, columns: &[&str]) -> Result<Self> {
+        let geometry_name = self.geometry_column.as_ref().map(|g| &g.column_name);
+        for name in columns {
+            let is_value = self.value_columns.iter().any(|c| c.name == *name);
+            let is_geometry = geometry_name.is_some_and(|g| g == *name);
+            if !is_value && !is_geometry {
+                return Err(Error::NoSuchColumn {
+                    table_name: self.table_name.clone(),
+                    column_name: (*name).to_owned(),
+                });
+            }
+        }
+        let value_columns: Vec<Column> = self
+            .value_columns
+            .iter()
+            .filter(|c| columns.contains(&c.name.as_str()))
+            .cloned()
+            .collect();
+        let geometry = geometry_name.is_some_and(|g| columns.contains(&g.as_str()));
+        self.projection = Some(Projection {
+            value_column_names: value_columns.iter().map(|c| c.name.clone()).collect(),
+            value_columns,
+            geometry,
+        });
+        Ok(self)
+    }
+
+    /// Read every value column but not the geometry.
+    ///
+    /// The common half of [`Self::with_columns`], since naming every attribute
+    /// of a wide layer to be rid of one geometry column is tedious. On a layer
+    /// with no geometry column this changes nothing.
+    ///
+    /// A bounding-box query still works on the result: it reads each candidate
+    /// geometry to filter exactly, which is this crate's business rather than
+    /// the caller's, and simply does not carry it into the feature.
+    #[must_use]
+    pub fn without_geometry(mut self) -> Self {
+        let value_columns = self
+            .projection
+            .as_ref()
+            .map_or_else(|| self.value_columns.clone(), |p| p.value_columns.clone());
+        self.projection = Some(Projection {
+            value_column_names: value_columns.iter().map(|c| c.name.clone()).collect(),
+            value_columns,
+            geometry: false,
+        });
+        self
+    }
+
+    /// The value columns a read yields: the projection's, or all of them.
+    fn read_value_columns(&self) -> &[Column] {
+        self.projection
+            .as_ref()
+            .map_or(&self.value_columns, |p| &p.value_columns)
+    }
+
+    /// The names of [`Self::read_value_columns`], for a [`Feature`] to share.
+    fn read_value_column_names(&self) -> &Arc<[String]> {
+        self.projection
+            .as_ref()
+            .map_or(&self.value_column_names, |p| &p.value_column_names)
+    }
+
+    /// Whether a read carries the geometry into the features it yields. A
+    /// filtered query may still select it, to filter with.
+    fn reads_geometry(&self) -> bool {
+        match &self.projection {
+            Some(projection) => projection.geometry,
+            None => self.geometry_column.is_some(),
+        }
+    }
+
     /// Iterate every row of the layer as an owned [`Feature`].
     ///
     /// The iterator is fallible per row: a value that does not fit its declared
     /// column type surfaces as an `Err` for that row without stopping the scan.
     /// Rows are read in the table's natural order.
     pub fn features(&self) -> Result<Features> {
-        let (sql, geom_idx) = self.base_select()?;
+        let (sql, geom_idx) = self.base_select(self.reads_geometry())?;
         self.execute(&sql, Vec::new(), geom_idx, None)
     }
 
@@ -410,7 +523,7 @@ impl<'a> Layer<'a> {
     /// # Ok(()) }
     /// ```
     pub fn select(&self, where_clause: &str, params: &[ValueRef<'_>]) -> Result<Features> {
-        let (base, geom_idx) = self.base_select()?;
+        let (base, geom_idx) = self.base_select(self.reads_geometry())?;
         let sql = format!("{base} WHERE ({where_clause})");
         let sql_params: Vec<rusqlite::types::Value> = params.iter().map(value_ref_to_sql).collect();
         self.execute(&sql, sql_params, geom_idx, None)
@@ -433,7 +546,7 @@ impl<'a> Layer<'a> {
     /// # Ok(()) }
     /// ```
     pub fn cursor(&self) -> Result<FeatureCursor<'_>> {
-        let (sql, geom_idx) = self.base_select()?;
+        let (sql, geom_idx) = self.base_select(self.reads_geometry())?;
         self.prepare_cursor(&sql, Vec::new(), geom_idx, None)
     }
 
@@ -466,7 +579,7 @@ impl<'a> Layer<'a> {
         where_clause: &str,
         params: &[ValueRef<'_>],
     ) -> Result<FeatureCursor<'_>> {
-        let (base, geom_idx) = self.base_select()?;
+        let (base, geom_idx) = self.base_select(self.reads_geometry())?;
         let sql = format!("{base} WHERE ({where_clause})");
         let sql_params: Vec<rusqlite::types::Value> = params.iter().map(value_ref_to_sql).collect();
         self.prepare_cursor(&sql, sql_params, geom_idx, None)
@@ -544,7 +657,8 @@ impl<'a> Layer<'a> {
             let (sql, geom_idx) = self.rtree_select(geom)?;
             Ok((sql, geom_idx, true))
         } else {
-            let (sql, geom_idx) = self.base_select()?;
+            // As `rtree_select`: needed for the exact filter regardless.
+            let (sql, geom_idx) = self.base_select(true)?;
             Ok((sql, geom_idx, false))
         }
     }
@@ -564,24 +678,28 @@ impl<'a> Layer<'a> {
     /// Build the select list: `fid` at index 0, the value columns at
     /// `1..=value_columns.len()`, and (for a feature layer) the geometry blob
     /// last. Returns the joined SQL and the geometry column's index.
-    fn column_exprs(&self, prefix: Option<&str>) -> Result<(String, Option<usize>)> {
-        let mut exprs = Vec::with_capacity(self.value_columns.len() + 2);
+    fn column_exprs(
+        &self,
+        prefix: Option<&str>,
+        select_geometry: bool,
+    ) -> Result<(String, Option<usize>)> {
+        let mut exprs = Vec::with_capacity(self.read_value_columns().len() + 2);
         exprs.push(self.fid_expr(prefix)?);
-        for column in &self.value_columns {
+        for column in self.read_value_columns() {
             exprs.push(qualified(&column.name, prefix)?);
         }
         let geom_idx = match &self.geometry_column {
-            Some(geom) => {
+            Some(geom) if select_geometry => {
                 exprs.push(qualified(&geom.column_name, prefix)?);
                 Some(exprs.len() - 1)
             }
-            None => None,
+            _ => None,
         };
         Ok((exprs.join(", "), geom_idx))
     }
 
-    fn base_select(&self) -> Result<(String, Option<usize>)> {
-        let (list, geom_idx) = self.column_exprs(None)?;
+    fn base_select(&self, select_geometry: bool) -> Result<(String, Option<usize>)> {
+        let (list, geom_idx) = self.column_exprs(None, select_geometry)?;
         Ok((
             format!("SELECT {list} FROM {}", quote(&self.table_name)?),
             geom_idx,
@@ -590,7 +708,9 @@ impl<'a> Layer<'a> {
 
     fn rtree_select(&self, geom: &GeometryColumn) -> Result<(String, Option<usize>)> {
         let table = quote(&self.table_name)?;
-        let (list, geom_idx) = self.column_exprs(Some(&table))?;
+        // Always selected: the exact re-filter reads each candidate's blob,
+        // whether or not the caller asked to be given it.
+        let (list, geom_idx) = self.column_exprs(Some(&table), true)?;
         let rtree = quote(&triggers::rtree_table_name(
             &self.table_name,
             &geom.column_name,
@@ -651,11 +771,12 @@ impl<'a> Layer<'a> {
     fn row_context(&self) -> RowContext {
         RowContext {
             table_name: self.table_name.clone(),
-            value_columns: self.value_columns.clone(),
-            value_column_names: Arc::clone(&self.value_column_names),
+            value_columns: self.read_value_columns().to_vec(),
+            value_column_names: Arc::clone(self.read_value_column_names()),
             options: self.options,
             validate_geometry_type: self.validate_geometry_type,
             geometry_column: self.geometry_column.clone(),
+            store_geometry: self.reads_geometry(),
             value_bytes_hint: std::cell::Cell::new(0),
         }
     }
@@ -777,6 +898,10 @@ struct RowContext {
     options: ConversionOptions,
     validate_geometry_type: bool,
     geometry_column: Option<GeometryColumn>,
+    /// Whether a row keeps its geometry. False under a projection that did not
+    /// name it, in which case a filtered query still selects the blob to filter
+    /// with but no row carries it.
+    store_geometry: bool,
     /// The non-geometry byte count of the last row built, used to size the next
     /// row's buffer. A `Cell` because rows are built through a shared
     /// reference, and the value is a hint: wrong only costs a growth.
@@ -821,7 +946,7 @@ impl RowContext {
         let mut buf: Vec<u8> =
             Vec::with_capacity(geometry.map_or(0, <[u8]>::len) + self.value_bytes_hint.get());
         let mut slots = Vec::with_capacity(self.value_columns.len());
-        let geometry_end = geometry.map(|blob| {
+        let geometry_end = geometry.filter(|_| self.store_geometry).map(|blob| {
             buf.extend_from_slice(blob);
             // SQLite's own value length is an i32, so a row's bytes cannot
             // reach the u32 ceiling.
@@ -860,6 +985,10 @@ impl RowContext {
             fid,
             buf,
             geometry_end,
+            // A layer with no geometry column has had nothing projected away,
+            // so its rows answer `Ok(None)` as they always did; only a layer
+            // that has one and did not select it makes `geometry` an error.
+            geometry_projected: self.geometry_column.is_none() || self.store_geometry,
             slots: slots.into_boxed_slice(),
             columns: Arc::clone(&self.value_column_names),
         })
@@ -994,6 +1123,10 @@ pub struct Feature {
     buf: Vec<u8>,
     /// Where the geometry ends, and so `None` when the row has no geometry.
     geometry_end: Option<u32>,
+    /// Whether the read that built this row carried the geometry, so that a
+    /// row from a projection that dropped it is distinguishable from one whose
+    /// geometry is NULL.
+    geometry_projected: bool,
     slots: Box<[Slot]>,
     columns: Arc<[String]>,
 }
@@ -1031,6 +1164,9 @@ impl Feature {
     /// `Ok(None)` when the geometry cell is NULL (or the layer has none);
     /// `Err` when the blob is not a readable GPB geometry.
     pub fn geometry(&self) -> Result<Option<GpbGeometry<'_>>> {
+        if !self.geometry_projected {
+            return Err(Error::GeometryNotProjected);
+        }
         match self.geometry_bytes() {
             None => Ok(None),
             Some(blob) => Ok(Some(
@@ -1081,6 +1217,30 @@ impl Feature {
     /// The value-column names, parallel to [`Feature::values`].
     pub fn columns(&self) -> &[String] {
         &self.columns
+    }
+
+    /// Whether this row carries `name`.
+    ///
+    /// False both for a column the table does not have and for one a
+    /// projection did not select, which [`Self::value`] cannot tell apart: it
+    /// answers `None` for either, where a column that is present but NULL
+    /// answers `Some(ValueRef::Null)`.
+    #[must_use]
+    pub fn has_column(&self, name: &str) -> bool {
+        self.columns.iter().any(|c| c == name)
+    }
+
+    /// Whether this row carries its layer's geometry.
+    ///
+    /// True for a layer that has no geometry column at all, since nothing was
+    /// projected away there and [`Self::geometry`] answers `Ok(None)` as it
+    /// always has. False only under a projection that did not select it; see
+    /// [`Layer::with_columns`]. [`Self::geometry`] errors rather than
+    /// answering `Ok(None)` in that case, so that an absent geometry column is
+    /// never mistaken for a NULL geometry.
+    #[must_use]
+    pub fn has_geometry_column(&self) -> bool {
+        self.geometry_projected
     }
 
     /// The number of value columns.

@@ -257,6 +257,17 @@ pub enum Error {
         /// the size of every `Result` in the crate.
         source: Box<rusqlite::Error>,
     },
+    /// [`crate::Feature::geometry`] was called on a row whose read did not
+    /// select the geometry column.
+    ///
+    /// Distinct from `Ok(None)`, which means the row's geometry is NULL. This
+    /// says the geometry was never read, because
+    /// [`crate::Layer::with_columns`] did not name it or
+    /// [`crate::Layer::without_geometry`] excluded it, and it is an error
+    /// rather than an empty answer so the two cannot be confused.
+    /// [`crate::Feature::has_geometry_column`] tests for it without erroring.
+    #[error("this feature's read did not select the geometry column")]
+    GeometryNotProjected,
     /// A partial update named the same column more than once.
     ///
     /// SQLite accepts a repeated assignment and applies the last one, so this
