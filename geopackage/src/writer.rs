@@ -84,7 +84,9 @@ use geopackage_core::ident::quote;
 use geopackage_core::triggers;
 use geopackage_core::types::ZmFlag;
 use rusqlite::types::{ToSqlOutput, Value as SqlValue, ValueRef};
-use rusqlite::{Connection, OptionalExtension, Params, Transaction, params_from_iter};
+use rusqlite::{
+    CachedStatement, Connection, OptionalExtension, Params, Transaction, params_from_iter,
+};
 
 use crate::bulk::{self, BulkIndexOptions};
 
@@ -237,28 +239,33 @@ impl BboxFold {
 pub struct FeatureWriter<'conn> {
     tx: Transaction<'conn>,
     table_name: String,
-    quoted_table: String,
-    /// The primary-key expression: the quoted pk column, or `rowid`.
-    pk_expr: String,
     /// Quoted value-column names, in value order: neither the geometry nor
-    /// the primary key is among them.
+    /// the primary key is among them. Kept for the value-count check; the
+    /// statement text they compose is built at construction.
     value_columns: Vec<String>,
     geometry: Option<GeomTarget>,
     bbox: BboxFold,
     /// The four possible `INSERT` statements, by whether the row carries an
     /// explicit feature id and whether it carries a geometry.
     ///
-    /// Built once per writer rather than per row. Composing one costs a `Vec` of
-    /// column names, a `String` per placeholder and two joins, which is around
-    /// seventeen allocations for a fifteen-column table, and it was happening on
-    /// every insert to produce one of four fixed strings.
-    insert_sql: [String; 4],
+    /// A layer's shape is fixed for a writer's lifetime, so every statement it
+    /// can issue is composed and prepared once here rather than per row.
+    /// Composing an `INSERT` costs a `Vec` of column names, a `String` per
+    /// placeholder and two joins, which is around seventeen allocations for a
+    /// fifteen-column table; looking one up in the connection's statement cache
+    /// costs one more. Held this way, a row costs neither.
+    ///
+    /// The statements come from the connection rather than from `tx`, so they
+    /// borrow what the transaction borrows instead of borrowing the transaction
+    /// itself. They still run inside it: a SQLite transaction belongs to the
+    /// connection, not to the statements prepared against it.
+    insert_stmts: [CachedStatement<'conn>; 4],
     /// The two possible `UPDATE` statements, by whether the row carries a
-    /// geometry, held for the same reason as `insert_sql`. A writer's update
-    /// always sets every value column, so there are only these two shapes.
-    update_sql: [String; 2],
+    /// geometry. A writer's update sets every value column, so there are only
+    /// these two shapes.
+    update_stmts: [CachedStatement<'conn>; 2],
     /// The `DELETE`, likewise fixed for the writer's lifetime.
-    delete_sql: String,
+    delete_stmt: CachedStatement<'conn>,
     /// Any insert, or any update/delete that changed a row (drives
     /// `last_change`).
     dirty: bool,
@@ -302,36 +309,41 @@ impl<'a> Layer<'a> {
         };
         let mut bbox = BboxFold::new();
         bbox.seed(existing);
+        let quoted_table = quote(self.table_name())?;
 
-        let mut writer = FeatureWriter {
+        // Compose every statement the writer can issue, then prepare them all,
+        // before anything moves into the writer.
+        let shape = Shape {
+            quoted_table: &quoted_table,
+            pk_expr: &pk_expr,
+            value_columns: &value_columns,
+            geometry: geometry.as_ref(),
+        };
+        let insert_stmts = [
+            conn.prepare_cached(&build_insert_sql(&shape, false, false))?,
+            conn.prepare_cached(&build_insert_sql(&shape, true, false))?,
+            conn.prepare_cached(&build_insert_sql(&shape, false, true))?,
+            conn.prepare_cached(&build_insert_sql(&shape, true, true))?,
+        ];
+        let update_stmts = [
+            conn.prepare_cached(&build_update_sql(&shape, false))?,
+            conn.prepare_cached(&build_update_sql(&shape, true))?,
+        ];
+        let delete_stmt =
+            conn.prepare_cached(&format!("DELETE FROM {quoted_table} WHERE {pk_expr} = ?1"))?;
+
+        Ok(FeatureWriter {
             tx,
             table_name: self.table_name().to_owned(),
-            quoted_table: quote(self.table_name())?,
-            pk_expr,
             value_columns,
             geometry,
             bbox,
-            insert_sql: [const { String::new() }; 4],
-            update_sql: [const { String::new() }; 2],
-            delete_sql: String::new(),
+            insert_stmts,
+            update_stmts,
+            delete_stmt,
             dirty: false,
             bbox_dirty: false,
-        };
-        writer.insert_sql = [
-            writer.build_insert_sql(false, false),
-            writer.build_insert_sql(true, false),
-            writer.build_insert_sql(false, true),
-            writer.build_insert_sql(true, true),
-        ];
-        writer.update_sql = [
-            writer.build_update_sql(false),
-            writer.build_update_sql(true),
-        ];
-        writer.delete_sql = format!(
-            "DELETE FROM {} WHERE {} = ?1",
-            writer.quoted_table, writer.pk_expr
-        );
-        Ok(writer)
+        })
     }
 
     /// Write every item of `features` in batches, each batch its own committed
@@ -746,12 +758,12 @@ impl<'conn> FeatureWriter<'conn> {
     {
         self.check_value_count(count)?;
         let (blob, xy) = self.encode_geometry(geometry)?;
-        let sql = self.insert_sql(fid.is_some(), true);
         // Bound straight from the caller's values and the freshly encoded blob,
         // in one chained iterator: no vector of bindings per row, and no copy
         // of the row's text and blob cells.
         let assigned = self.exec_insert(
-            sql,
+            fid.is_some(),
+            true,
             params_from_iter(
                 fid.map(|id| ToSqlOutput::Borrowed(ValueRef::Integer(id)))
                     .into_iter()
@@ -805,13 +817,13 @@ impl<'conn> FeatureWriter<'conn> {
         self.check_zm("z", geom.z, has_z, &geom.name)?;
         self.check_zm("m", geom.m, has_m, &geom.name)?;
 
-        let sql = self.insert_sql(fid.is_some(), true);
         // The caller's bindings are bound by reference; only the fid and the
         // freshly built blob are owned, and the blob moves into its binding
         // rather than being borrowed from something that has to outlive the
         // statement.
         let assigned = self.exec_insert(
-            sql,
+            fid.is_some(),
+            true,
             params_from_iter(
                 fid.map(|id| ToSqlOutput::Borrowed(ValueRef::Integer(id)))
                     .into_iter()
@@ -838,9 +850,9 @@ impl<'conn> FeatureWriter<'conn> {
         values: &[rusqlite::types::ToSqlOutput<'_>],
     ) -> Result<i64> {
         self.check_value_count(values.len())?;
-        let sql = self.insert_sql(fid.is_some(), false);
         let assigned = self.exec_insert(
-            sql,
+            fid.is_some(),
+            false,
             params_from_iter(
                 fid.map(|id| ToSqlOutput::Borrowed(ValueRef::Integer(id)))
                     .into_iter()
@@ -879,9 +891,9 @@ impl<'conn> FeatureWriter<'conn> {
         I: Iterator<Item = ToSqlOutput<'v>>,
     {
         self.check_value_count(count)?;
-        let sql = self.insert_sql(fid.is_some(), false);
         let assigned = self.exec_insert(
-            sql,
+            fid.is_some(),
+            false,
             params_from_iter(
                 fid.map(|id| ToSqlOutput::Borrowed(ValueRef::Integer(id)))
                     .into_iter()
@@ -907,9 +919,8 @@ impl<'conn> FeatureWriter<'conn> {
     ) -> Result<bool> {
         self.check_value_count(values.len())?;
         let (blob, xy) = self.encode_geometry(geometry)?;
-        let sql = self.update_sql(true);
         let matched = self.exec_update(
-            sql,
+            true,
             params_from_iter(values.iter().copied().map(value_ref_to_bind).chain([
                 ToSqlOutput::Owned(SqlValue::Blob(blob)),
                 ToSqlOutput::Borrowed(ValueRef::Integer(fid)),
@@ -933,10 +944,9 @@ impl<'conn> FeatureWriter<'conn> {
     /// [`Error::ValueCountMismatch`] if `values` has the wrong length.
     pub fn update_row(&mut self, fid: i64, values: &[CellRef<'_>]) -> Result<bool> {
         self.check_value_count(values.len())?;
-        let sql = self.update_sql(false);
         let matched =
             self.exec_update(
-                sql,
+                false,
                 params_from_iter(values.iter().copied().map(value_ref_to_bind).chain(
                     std::iter::once(ToSqlOutput::Borrowed(ValueRef::Integer(fid))),
                 )),
@@ -952,10 +962,7 @@ impl<'conn> FeatureWriter<'conn> {
     /// The bounding box is not shrunk (that would need a rescan; an
     /// over-estimate is spec-legal).
     pub fn delete(&mut self, fid: i64) -> Result<bool> {
-        let matched = {
-            let mut stmt = self.tx.prepare_cached(&self.delete_sql)?;
-            stmt.execute([fid])? > 0
-        };
+        let matched = self.delete_stmt.execute([fid])? > 0;
         if matched {
             self.dirty = true;
         }
@@ -1072,70 +1079,24 @@ impl<'conn> FeatureWriter<'conn> {
         })
     }
 
-    /// The cached `INSERT` for this combination of explicit id and geometry.
-    fn insert_sql(&self, with_fid: bool, with_geometry: bool) -> &str {
-        let index = usize::from(with_fid) | (usize::from(with_geometry) << 1);
-        self.insert_sql.get(index).map_or("", String::as_str)
+    /// The prepared `INSERT` for this combination of explicit id and geometry.
+    ///
+    /// Selected by matching rather than by indexing, so the four cases are
+    /// exhaustive and there is no absent-slot case to invent an answer for.
+    fn insert_stmt(&mut self, with_fid: bool, with_geometry: bool) -> &mut CachedStatement<'conn> {
+        let [plain, fid_only, geom_only, both] = &mut self.insert_stmts;
+        match (with_fid, with_geometry) {
+            (false, false) => plain,
+            (true, false) => fid_only,
+            (false, true) => geom_only,
+            (true, true) => both,
+        }
     }
 
-    /// Compose one of the four `INSERT` statements. Called once per writer.
-    fn build_insert_sql(&self, with_fid: bool, with_geometry: bool) -> String {
-        let mut columns: Vec<&str> = Vec::with_capacity(self.value_columns.len() + 2);
-        if with_fid {
-            columns.push(&self.pk_expr);
-        }
-        for column in &self.value_columns {
-            columns.push(column);
-        }
-        if with_geometry && let Some(geom) = &self.geometry {
-            columns.push(&geom.quoted_name);
-        }
-        if columns.is_empty() {
-            return format!("INSERT INTO {} DEFAULT VALUES", self.quoted_table);
-        }
-        let placeholders = (1..=columns.len())
-            .map(|i| format!("?{i}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(
-            "INSERT INTO {} ({}) VALUES ({placeholders})",
-            self.quoted_table,
-            columns.join(", ")
-        )
-    }
-
-    /// The cached `UPDATE`, with or without the geometry assignment.
-    fn update_sql(&self, with_geometry: bool) -> &str {
-        self.update_sql
-            .get(usize::from(with_geometry))
-            .map_or("", String::as_str)
-    }
-
-    /// Compose one of the two `UPDATE ... WHERE <pk> = ?` statements. Called
-    /// once per writer.
-    fn build_update_sql(&self, with_geometry: bool) -> String {
-        let mut assignments: Vec<String> = Vec::with_capacity(self.value_columns.len() + 1);
-        let mut index = 1;
-        for column in &self.value_columns {
-            assignments.push(format!("{column} = ?{index}"));
-            index += 1;
-        }
-        if with_geometry && let Some(geom) = &self.geometry {
-            assignments.push(format!("{} = ?{index}", geom.quoted_name));
-            index += 1;
-        }
-        if assignments.is_empty() {
-            // Nothing to change (an attribute table with only a primary key):
-            // a self-assignment keeps the statement valid and rows-affected
-            // meaningful.
-            assignments.push(format!("{pk} = {pk}", pk = self.pk_expr));
-        }
-        format!(
-            "UPDATE {} SET {} WHERE {} = ?{index}",
-            self.quoted_table,
-            assignments.join(", "),
-            self.pk_expr
-        )
+    /// The prepared `UPDATE`, with or without the geometry assignment.
+    fn update_stmt(&mut self, with_geometry: bool) -> &mut CachedStatement<'conn> {
+        let [plain, with_geom] = &mut self.update_stmts;
+        if with_geometry { with_geom } else { plain }
     }
 
     /// Run one insert.
@@ -1144,16 +1105,83 @@ impl<'conn> FeatureWriter<'conn> {
     /// a chained iterator of borrowed bindings: a row is then written without
     /// collecting its bindings into a vector first, and without copying the
     /// text and blob cells out of the caller's values.
-    fn exec_insert<P: Params>(&self, sql: &str, binds: P, fid: Option<i64>) -> Result<i64> {
-        let mut stmt = self.tx.prepare_cached(sql)?;
-        stmt.execute(binds)?;
+    fn exec_insert<P: Params>(
+        &mut self,
+        with_fid: bool,
+        with_geometry: bool,
+        binds: P,
+        fid: Option<i64>,
+    ) -> Result<i64> {
+        self.insert_stmt(with_fid, with_geometry).execute(binds)?;
         Ok(fid.unwrap_or_else(|| self.tx.last_insert_rowid()))
     }
 
-    fn exec_update<P: Params>(&self, sql: &str, binds: P) -> Result<bool> {
-        let mut stmt = self.tx.prepare_cached(sql)?;
-        Ok(stmt.execute(binds)? > 0)
+    fn exec_update<P: Params>(&mut self, with_geometry: bool, binds: P) -> Result<bool> {
+        Ok(self.update_stmt(with_geometry).execute(binds)? > 0)
     }
+}
+
+/// The pieces of a layer's shape that its statement text is composed from,
+/// borrowed while [`Layer::writer`] builds them and before they move into the
+/// writer.
+struct Shape<'s> {
+    quoted_table: &'s str,
+    pk_expr: &'s str,
+    value_columns: &'s [String],
+    geometry: Option<&'s GeomTarget>,
+}
+
+/// Compose one of the four `INSERT` statements. Called once per writer.
+fn build_insert_sql(shape: &Shape<'_>, with_fid: bool, with_geometry: bool) -> String {
+    let mut columns: Vec<&str> = Vec::with_capacity(shape.value_columns.len() + 2);
+    if with_fid {
+        columns.push(shape.pk_expr);
+    }
+    for column in shape.value_columns {
+        columns.push(column);
+    }
+    if with_geometry && let Some(geom) = shape.geometry {
+        columns.push(&geom.quoted_name);
+    }
+    if columns.is_empty() {
+        return format!("INSERT INTO {} DEFAULT VALUES", shape.quoted_table);
+    }
+    let placeholders = (1..=columns.len())
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "INSERT INTO {} ({}) VALUES ({placeholders})",
+        shape.quoted_table,
+        columns.join(", ")
+    )
+}
+
+/// Compose one of the two `UPDATE ... WHERE <pk> = ?` statements. Called once
+/// per writer.
+fn build_update_sql(shape: &Shape<'_>, with_geometry: bool) -> String {
+    let mut assignments: Vec<String> = Vec::with_capacity(shape.value_columns.len() + 1);
+    let mut index = 1;
+    for column in shape.value_columns {
+        assignments.push(format!("{column} = ?{index}"));
+        index += 1;
+    }
+    if with_geometry && let Some(geom) = shape.geometry {
+        assignments.push(format!("{} = ?{index}", geom.quoted_name));
+        index += 1;
+    }
+    if assignments.is_empty() {
+        // Nothing to change (an attribute table with only a primary key): a
+        // self-assignment keeps the statement valid and rows-affected
+        // meaningful.
+        assignments.push(format!("{pk} = {pk}", pk = shape.pk_expr));
+    }
+    format!(
+        "UPDATE {} SET {} WHERE {} = ?{index}",
+        shape.quoted_table,
+        assignments.join(", "),
+        shape.pk_expr
+    )
 }
 
 /// Re-borrow a prepared binding so it can be chained with owned ones.
