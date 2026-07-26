@@ -33,7 +33,9 @@ use geo_types::{Geometry, LineString, Point, Polygon};
 use geopackage::core::datetime::{Date, DateTime};
 use geopackage::core::gpb::{Envelope, encode_header, parse_header};
 use geopackage::core::types::{ColumnType, GeometryType, ZmFlag};
-use geopackage::{ColumnSpec, Feature, GeoPackage, GeometrySpec, TableSchemaBuilder, Value};
+use geopackage::{
+    ColumnSpec, Feature, GeoPackage, GeometrySpec, TableSchemaBuilder, Value, ValueRef,
+};
 
 // --- external-tool guards ---------------------------------------------------
 
@@ -357,9 +359,10 @@ fn features_by_name(gpkg: &GeoPackage, table: &str) -> std::collections::BTreeMa
     let mut map = std::collections::BTreeMap::new();
     for feature in layer.features().unwrap() {
         let feature = feature.unwrap();
-        let Some(Value::Text(name)) = feature.value("name").cloned() else {
+        let Some(ValueRef::Text(name)) = feature.value("name") else {
             panic!("every shape has a text name");
         };
+        let name = name.to_owned();
         map.insert(name, feature);
     }
     map

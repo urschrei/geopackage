@@ -59,7 +59,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use geopackage::core::datetime::{Date, DateTime};
-use geopackage::{BoundingBox, Feature, GeoPackage, GpkgVersion, OpenWarning, Value};
+use geopackage::{BoundingBox, Feature, GeoPackage, GpkgVersion, OpenWarning, ValueRef};
 use serde_json::Value as Json;
 
 // --- fixture / snapshot loading ---------------------------------------------
@@ -122,9 +122,9 @@ fn has_warning(warnings: &[OpenWarning], tag: &str) -> bool {
 }
 
 /// Check one attribute value: GDAL's `(type, subtype, json)` against our read.
-fn check_property(ftype: &str, subtype: Option<&str>, gdal: &Json, ours: &Value, ctx: &str) {
+fn check_property(ftype: &str, subtype: Option<&str>, gdal: &Json, ours: ValueRef<'_>, ctx: &str) {
     if gdal.is_null() {
-        assert_eq!(ours, &Value::Null, "{ctx}: expected NULL");
+        assert_eq!(ours, ValueRef::Null, "{ctx}: expected NULL");
         return;
     }
     match ftype {
@@ -132,16 +132,16 @@ fn check_property(ftype: &str, subtype: Option<&str>, gdal: &Json, ours: &Value,
             let b = gdal
                 .as_bool()
                 .unwrap_or_else(|| panic!("{ctx}: not a bool"));
-            assert_eq!(ours, &Value::Boolean(b), "{ctx}: boolean");
+            assert_eq!(ours, ValueRef::Boolean(b), "{ctx}: boolean");
         }
         "Integer" | "Integer64" => {
             let i = gdal.as_i64().unwrap_or_else(|| panic!("{ctx}: not an int"));
-            assert_eq!(ours, &Value::Integer(i), "{ctx}: integer");
+            assert_eq!(ours, ValueRef::Integer(i), "{ctx}: integer");
         }
         "Real" => {
             let f = gdal.as_f64().unwrap_or_else(|| panic!("{ctx}: not a real"));
             match ours {
-                Value::Float(o) => assert!(float_eq(*o, f), "{ctx}: {o} != {f}"),
+                ValueRef::Float(o) => assert!(float_eq(o, f), "{ctx}: {o} != {f}"),
                 other => panic!("{ctx}: expected Float, got {other:?}"),
             }
         }
@@ -149,24 +149,24 @@ fn check_property(ftype: &str, subtype: Option<&str>, gdal: &Json, ours: &Value,
             let s = gdal
                 .as_str()
                 .unwrap_or_else(|| panic!("{ctx}: not a string"));
-            assert_eq!(ours, &Value::Text(s.to_owned()), "{ctx}: text");
+            assert_eq!(ours, ValueRef::Text(s), "{ctx}: text");
         }
         "Binary" => {
             let hex = gdal.as_str().unwrap_or_else(|| panic!("{ctx}: not hex"));
-            assert_eq!(ours, &Value::Blob(hex_decode(hex)), "{ctx}: blob");
+            assert_eq!(ours, ValueRef::Blob(&hex_decode(hex)), "{ctx}: blob");
         }
         "Date" => {
             // GDAL YYYY/MM/DD -> canonical YYYY-MM-DD (module note).
             let canon = gdal.as_str().unwrap().replace('/', "-");
             let expected = Date::parse(&canon).expect("GDAL date parses");
-            assert_eq!(ours, &Value::Date(expected), "{ctx}: date");
+            assert_eq!(ours, ValueRef::Date(expected), "{ctx}: date");
         }
         "DateTime" => {
             // GDAL YYYY/MM/DD HH:MM:SS[.fff]+00 -> ISO, then parse leniently
             // (module note). `+00` and `Z` both mean offset zero.
             let canon = gdal.as_str().unwrap().replace('/', "-").replace(' ', "T");
             let expected = DateTime::parse_lenient(&canon).expect("GDAL datetime parses");
-            assert_eq!(ours, &Value::DateTime(expected), "{ctx}: datetime");
+            assert_eq!(ours, ValueRef::DateTime(expected), "{ctx}: datetime");
         }
         other => panic!("{ctx}: unhandled GDAL field type {other}"),
     }

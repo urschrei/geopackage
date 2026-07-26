@@ -9,7 +9,7 @@
 //! cargo run --example bbox_query -- file.gpkg layer_name -10 50 2 56
 //! ```
 
-use geopackage::{BoundingBox, GeoPackage, Value};
+use geopackage::{BoundingBox, GeoPackage, ValueRef};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let pk = layer.primary_key_column().unwrap_or("fid");
         let attributes: Vec<String> = feature
             .iter()
-            .filter(|(name, value)| *name != pk && !matches!(value, Value::Null))
+            .filter(|(name, value)| *name != pk && !matches!(value, ValueRef::Null))
             .map(|(name, value)| format!("{name}={value:?}"))
             .collect();
         println!("  fid {} {kind} {}", feature.fid(), attributes.join(" "));
