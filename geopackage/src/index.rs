@@ -443,6 +443,21 @@ mod tests {
         Ok(())
     }
 
+    /// A [`TestFault`] that shrinks one stored bound so it no longer contains
+    /// the geometry it indexes, leaving the row count and the set of ids
+    /// intact. The gate has to match the row to its accumulated entry and
+    /// compare the bounds to catch this.
+    fn shrink_one_stored_bound(conn: &Connection, rtree: &str) -> Result<()> {
+        conn.execute_batch(&format!(
+            // Moved rather than inverted: the rtree itself rejects `minx > maxx`,
+            // so the box stays well formed and simply sits somewhere else.
+            "UPDATE {} SET minx = 1e6, maxx = 1e6 WHERE id = (SELECT max(id) FROM {})",
+            quote(rtree)?,
+            quote(rtree)?
+        ))?;
+        Ok(())
+    }
+
     #[test]
     fn bulk_path_builds_a_correct_index() {
         let (_dir, gpkg) = populated(&[(1, 10.0, 20.0), (2, -5.0, 7.0), (3, 100.0, 100.0)]);
@@ -478,6 +493,20 @@ mod tests {
         assert_eq!(path, BuildPath::TriggeredFallback);
         assert!(layer.has_spatial_index().unwrap());
         // The fallback still produced a correct index.
+        assert!(rtree_matches_scan(&gpkg));
+    }
+
+    #[test]
+    fn stored_bounds_that_exclude_their_geometry_fall_back() {
+        let (_dir, gpkg) = populated(&[(1, 10.0, 20.0), (2, -5.0, 7.0), (3, 100.0, 100.0)]);
+        let layer = gpkg.layer("pts").unwrap();
+        let path = layer
+            .create_spatial_index_impl(BulkIndexOptions::always_bulk(), shrink_one_stored_bound)
+            .unwrap();
+        // Every id is still present and the count still matches, so the gate
+        // only rejects this by comparing each row's bounds against the entry it
+        // indexes.
+        assert_eq!(path, BuildPath::TriggeredFallback);
         assert!(rtree_matches_scan(&gpkg));
     }
 
