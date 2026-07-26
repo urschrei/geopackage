@@ -29,7 +29,7 @@ use wkb::Endianness;
 use wkb::reader::{
     GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon, Wkb,
 };
-use wkb::writer::{WriteOptions, write_geometry};
+use wkb::writer::{WriteOptions, geometry_wkb_size, write_geometry};
 
 /// Errors from constructing or reading a [`GpbGeometry`].
 #[derive(Debug, thiserror::Error)]
@@ -323,8 +323,10 @@ pub fn encode_gpb_from_wkb(wkb_body: &[u8], srs_id: i32) -> Result<EncodedGpb, G
         .xy_bounds()
         .map(|(min_x, max_x, min_y, max_y)| [min_x, max_x, min_y, max_y]);
     let body = geometry.buf();
-    let mut blob = gpb::encode_header(srs_id, &envelope, empty, false);
-    blob.reserve(body.len());
+    // Sized for header and body together, so the blob is one allocation per
+    // row rather than an exactly-sized header that the body then grows.
+    let mut blob = Vec::with_capacity(gpb::header_len(&envelope) + body.len());
+    gpb::encode_header_into(&mut blob, srs_id, &envelope, empty, false);
     blob.extend_from_slice(body);
     Ok(EncodedGpb {
         blob,
@@ -366,7 +368,10 @@ pub fn encode_gpb<G: GeometryTrait<T = f64>>(
     let xy = envelope
         .xy_bounds()
         .map(|(min_x, max_x, min_y, max_y)| [min_x, max_x, min_y, max_y]);
-    let mut blob = gpb::encode_header(srs_id, &envelope, empty, false);
+    // As `encode_gpb_from_wkb`: the body's encoded length is known before it is
+    // written, so header and body share one allocation.
+    let mut blob = Vec::with_capacity(gpb::header_len(&envelope) + geometry_wkb_size(geom));
+    gpb::encode_header_into(&mut blob, srs_id, &envelope, empty, false);
     let options = WriteOptions {
         endianness: Endianness::LittleEndian,
     };

@@ -248,12 +248,38 @@ fn read_doubles<const N: usize>(
     Ok(vals)
 }
 
+/// The encoded length of a GPB header carrying `envelope`.
+///
+/// Lets a caller size a blob for the header and its WKB body together, so the
+/// body does not have to grow the vector the header was written into.
+#[must_use]
+pub fn header_len(envelope: &Envelope) -> usize {
+    HEADER_BASE_LEN + envelope.values().len() * 8
+}
+
 /// Encode a GPB header (always little-endian, version 0, reserved bits zero).
 ///
 /// Concatenate the result with an ISO WKB body to form a complete GPB blob.
 pub fn encode_header(srs_id: i32, envelope: &Envelope, empty: bool, extended: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(header_len(envelope));
+    encode_header_into(&mut out, srs_id, envelope, empty, extended);
+    out
+}
+
+/// [`encode_header`] appending into an existing buffer.
+///
+/// The write path builds one blob per geometry: sizing it for the header and
+/// the body up front and appending both means a row is encoded in a single
+/// allocation, where encoding the header into its own exactly-sized vector and
+/// then appending the body grows that vector every time.
+pub fn encode_header_into(
+    out: &mut Vec<u8>,
+    srs_id: i32,
+    envelope: &Envelope,
+    empty: bool,
+    extended: bool,
+) {
     let vals = envelope.values();
-    let mut out = Vec::with_capacity(HEADER_BASE_LEN + vals.len() * 8);
     out.extend_from_slice(&MAGIC);
     out.push(0); // version
     let mut flags = 0b1u8; // little-endian
@@ -269,7 +295,6 @@ pub fn encode_header(srs_id: i32, envelope: &Envelope, empty: bool, extended: bo
     for v in vals {
         out.extend_from_slice(&v.to_le_bytes());
     }
-    out
 }
 
 #[cfg(test)]
