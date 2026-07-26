@@ -253,6 +253,12 @@ pub struct FeatureWriter<'conn> {
     /// seventeen allocations for a fifteen-column table, and it was happening on
     /// every insert to produce one of four fixed strings.
     insert_sql: [String; 4],
+    /// The two possible `UPDATE` statements, by whether the row carries a
+    /// geometry, held for the same reason as `insert_sql`. A writer's update
+    /// always sets every value column, so there are only these two shapes.
+    update_sql: [String; 2],
+    /// The `DELETE`, likewise fixed for the writer's lifetime.
+    delete_sql: String,
     /// Any insert, or any update/delete that changed a row (drives
     /// `last_change`).
     dirty: bool,
@@ -306,6 +312,8 @@ impl<'a> Layer<'a> {
             geometry,
             bbox,
             insert_sql: [const { String::new() }; 4],
+            update_sql: [const { String::new() }; 2],
+            delete_sql: String::new(),
             dirty: false,
             bbox_dirty: false,
         };
@@ -315,6 +323,14 @@ impl<'a> Layer<'a> {
             writer.build_insert_sql(false, true),
             writer.build_insert_sql(true, true),
         ];
+        writer.update_sql = [
+            writer.build_update_sql(false),
+            writer.build_update_sql(true),
+        ];
+        writer.delete_sql = format!(
+            "DELETE FROM {} WHERE {} = ?1",
+            writer.quoted_table, writer.pk_expr
+        );
         Ok(writer)
     }
 
@@ -893,7 +909,7 @@ impl<'conn> FeatureWriter<'conn> {
         let (blob, xy) = self.encode_geometry(geometry)?;
         let sql = self.update_sql(true);
         let matched = self.exec_update(
-            &sql,
+            sql,
             params_from_iter(values.iter().copied().map(value_ref_to_bind).chain([
                 ToSqlOutput::Owned(SqlValue::Blob(blob)),
                 ToSqlOutput::Borrowed(ValueRef::Integer(fid)),
@@ -920,7 +936,7 @@ impl<'conn> FeatureWriter<'conn> {
         let sql = self.update_sql(false);
         let matched =
             self.exec_update(
-                &sql,
+                sql,
                 params_from_iter(values.iter().copied().map(value_ref_to_bind).chain(
                     std::iter::once(ToSqlOutput::Borrowed(ValueRef::Integer(fid))),
                 )),
@@ -936,12 +952,8 @@ impl<'conn> FeatureWriter<'conn> {
     /// The bounding box is not shrunk (that would need a rescan; an
     /// over-estimate is spec-legal).
     pub fn delete(&mut self, fid: i64) -> Result<bool> {
-        let sql = format!(
-            "DELETE FROM {} WHERE {} = ?1",
-            self.quoted_table, self.pk_expr
-        );
         let matched = {
-            let mut stmt = self.tx.prepare_cached(&sql)?;
+            let mut stmt = self.tx.prepare_cached(&self.delete_sql)?;
             stmt.execute([fid])? > 0
         };
         if matched {
@@ -1060,7 +1072,6 @@ impl<'conn> FeatureWriter<'conn> {
         })
     }
 
-    /// Build the `INSERT` statement for the given fid/geometry presence.
     /// The cached `INSERT` for this combination of explicit id and geometry.
     fn insert_sql(&self, with_fid: bool, with_geometry: bool) -> &str {
         let index = usize::from(with_fid) | (usize::from(with_geometry) << 1);
@@ -1093,8 +1104,16 @@ impl<'conn> FeatureWriter<'conn> {
         )
     }
 
-    /// Build the `UPDATE ... WHERE <pk> = ?` statement.
-    fn update_sql(&self, with_geometry: bool) -> String {
+    /// The cached `UPDATE`, with or without the geometry assignment.
+    fn update_sql(&self, with_geometry: bool) -> &str {
+        self.update_sql
+            .get(usize::from(with_geometry))
+            .map_or("", String::as_str)
+    }
+
+    /// Compose one of the two `UPDATE ... WHERE <pk> = ?` statements. Called
+    /// once per writer.
+    fn build_update_sql(&self, with_geometry: bool) -> String {
         let mut assignments: Vec<String> = Vec::with_capacity(self.value_columns.len() + 1);
         let mut index = 1;
         for column in &self.value_columns {
