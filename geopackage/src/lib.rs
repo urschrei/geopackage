@@ -224,8 +224,12 @@
 //! Each of these types documents possible trade-off behind its defaults:
 //!
 //! - [`OpenOptions`]: the journal mode ([`JournalMode`], where
-//!   [`JournalMode::Wal`] is opt-in) and the `synchronous` durability level
-//!   ([`Synchronous`]). Left unset, the file keeps SQLite's own defaults. A
+//!   [`JournalMode::Wal`] is opt-in), the `synchronous` durability level
+//!   ([`Synchronous`]), and how long a statement waits for another
+//!   connection's lock ([`OpenOptions::busy_timeout`], default
+//!   [`DEFAULT_BUSY_TIMEOUT`], five seconds, against SQLite's own default of
+//!   not waiting at all). Left unset, the file keeps SQLite's own defaults for
+//!   the first two. A
 //!   handle that opted into WAL resets the file to a single `DELETE`-journal
 //!   file on close, so the `.gpkg` handed on has no sidecar files; see
 //!   [`GeoPackage`].
@@ -234,8 +238,9 @@
 //!   ([`GeometrySpec`], named [`DEFAULT_GEOMETRY_COLUMN`], `geom`, unless told
 //!   otherwise), and whether it is indexed
 //!   ([`TableSchemaBuilder::spatial_index`], default `true`).
-//!   [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`] and
-//!   [`Layer::repair_spatial_index`] manage the index after creation.
+//!   [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`],
+//!   [`Layer::repair_spatial_index`], [`Layer::audit_spatial_index`] and
+//!   [`Layer::rebuild_spatial_index`] manage the index after creation.
 //! - [`BulkIndexOptions`]: how an RTree index is built, for
 //!   [`Layer::create_spatial_index_with`] and [`Layer::write_all_with`]: the
 //!   row count at which the bulk build takes over from the per-row triggers
@@ -274,6 +279,56 @@
 //!
 //! Anything not covered here is reachable as SQL: [`GeoPackage::connection`]
 //! hands back the underlying rusqlite connection.
+//!
+//! # What writes, and when
+//!
+//! Most of this crate divides cleanly into reads and writes, but three calls do
+//! not, so the whole surface is tabulated here rather than left to be inferred
+//! from the names. [`Layer::extent`] records what it had to measure;
+//! [`Layer::repair_spatial_index`] writes only when there is something to
+//! repair; and [`Layer::writer`] opens without writing, because SQLite's
+//! `BEGIN DEFERRED` takes no lock, so the first failure lands on the first row.
+//!
+//! | Call | Writes to the file | On a read-only connection |
+//! |---|---|---|
+//! | [`Layer::features`], [`Layer::cursor`], [`Layer::features_in`], [`Layer::select`] | never | works |
+//! | [`Layer::spatial_index_status`], [`Layer::has_spatial_index`] | never | works |
+//! | [`Layer::audit_spatial_index`] | never | works |
+//! | [`GeoPackage::contents`] | never | works |
+//! | [`Layer::extent`] | only where the recorded bounds are unusable | works: measures, returns, records nothing |
+//! | [`Layer::repair_spatial_index`] | only where the trigger set is not current | works where there is nothing to repair |
+//! | [`Layer::recompute_extent`] | always | fails |
+//! | [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`], [`Layer::rebuild_spatial_index`] | always | fails |
+//! | [`Layer::writer`] | on its row methods and its commit, not on the call | opens; the first row written fails |
+//! | [`Layer::write_all`], [`Layer::write_arrow`] | always | fails |
+//!
+//! Reading an extent therefore modifies the file when the recorded bounds are
+//! unusable, which is deliberate and matches GDAL: the file stops being wrong
+//! for every later reader rather than only for this one. [`Layer::extent`]
+//! documents why, and the two ways to avoid it.
+//!
+//! ## What can fail, and why
+//!
+//! - **A read-only connection**, per the table: [`Error::Sqlite`] carrying
+//!   SQLite's `SQLITE_READONLY`. [`Layer::extent`] is the exception that treats
+//!   this as a non-event, since it has an answer either way.
+//! - **Another connection holding the write lock**: the statement waits up to
+//!   [`OpenOptions::busy_timeout`] and then fails with `SQLITE_BUSY`. Again
+//!   [`Layer::extent`] is the exception: contention means the measurement
+//!   describes a layer being changed underneath it, so the file keeps what it
+//!   had and the measurement is returned rather than an error. Note that SQLite
+//!   skips the wait entirely for a read-to-write upgrade that would deadlock
+//!   under a rollback journal, and for a stale snapshot under WAL.
+//! - **No spatial index**: [`Error::NoSpatialIndex`] from
+//!   [`Layer::audit_spatial_index`] and [`Layer::rebuild_spatial_index`], and
+//!   from [`Layer::repair_spatial_index`] when there is nothing there at all.
+//! - **No geometry column**: [`Error::NoGeometryColumn`] from
+//!   [`Layer::extent`], [`Layer::recompute_extent`], [`Layer::features_in`] and
+//!   [`Layer::cursor_in`].
+//! - **A store that cannot be written for any other reason**, an unwritable
+//!   directory, a full disk, an I/O error: [`Error::ExtentPersist`] from
+//!   [`Layer::extent`], which carries the measurement so the answer is not lost
+//!   with the failure, and [`Error::Sqlite`] from everything else.
 //!
 //! # Reading untrusted files
 //!

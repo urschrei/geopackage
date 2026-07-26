@@ -1,5 +1,18 @@
 //! RTree spatial-index lifecycle on a [`Layer`]: [`Layer::create_spatial_index`],
-//! [`Layer::drop_spatial_index`], and [`Layer::repair_spatial_index`].
+//! [`Layer::drop_spatial_index`], [`Layer::repair_spatial_index`],
+//! [`Layer::audit_spatial_index`] and [`Layer::rebuild_spatial_index`].
+//!
+//! Two questions can be asked of an index and they have different prices.
+//! [`Layer::spatial_index_status`] is structural: does the virtual table exist,
+//! and which generation of trigger set maintains it. It is cheap, it is what
+//! [`Layer::repair_spatial_index`] acts on, and it cannot tell whether the
+//! entries agree with the geometries. [`Layer::audit_spatial_index`] answers
+//! that second question by reading every geometry in the layer, and
+//! [`Layer::rebuild_spatial_index`] is its remedy, doing unconditionally what
+//! the repair does only when the structure is wrong.
+//!
+//! Of these, only the audit and the status never write; see the crate-level
+//! documentation for what each call does on a read-only connection.
 //!
 //! The normative SQL (the `rtree_<table>_<column>` virtual table, the
 //! GeoPackage 1.4 trigger set, and the population statement) is emitted by
@@ -10,8 +23,18 @@
 //! A new index always gets the 1.4 trigger set (`update5`/`update6`/`update7`),
 //! which is UPSERT-safe. Older generations are never repaired automatically:
 //! [`Layer::repair_spatial_index`] is the sole, explicitly user-invoked path
-//! that rewrites an existing trigger set, because reading a file must not
-//! mutate it.
+//! that rewrites an existing trigger set.
+//!
+//! That is a judgement about indexes rather than a rule that reading never
+//! writes, which is not one this crate keeps: [`Layer::extent`] records an
+//! extent it had to measure. The difference is what the two cost and what
+//! their absence does. Rebuilding an index reads every geometry in the layer
+//! and rewrites the tree, which is not a bill to hand someone who asked a
+//! question; and an index that is stale or of an older generation is not
+//! silently believed, because [`Layer::has_spatial_index`] reports it as
+//! unusable and queries fall back to a correct scan. An extent is neither:
+//! measuring it is comparatively cheap, and a wrong one is believed
+//! indefinitely by every reader.
 //!
 //! Population takes one of two paths. Below the [`BulkIndexOptions`] threshold
 //! it is a single `INSERT INTO rtree SELECT` over the existing rows, using the
@@ -264,8 +287,10 @@ impl Layer<'_> {
     ///
     /// The pre-1.4 `update1` trigger corrupts an index under `UPSERT`; 1.4
     /// renamed the fixed triggers so the repaired state is detectable by name.
-    /// This is **never** invoked automatically, since reading a file never mutates
-    /// it.
+    /// This is **never** invoked automatically: a rebuild is expensive, and an
+    /// index this crate will not trust is one it works around rather than one
+    /// that gives a wrong answer. Contrast [`Layer::extent`], which does record
+    /// what it measures, for the reasons given in the module documentation.
     ///
     /// Repairs every state except a healthy or an absent index (see
     /// [`SpatialIndexStatus`]):
@@ -325,8 +350,9 @@ impl Layer<'_> {
     /// about the entries. This is the operation for an index whose *contents*
     /// are in doubt, which [`Self::audit_spatial_index`] is how to find out.
     ///
-    /// Like the repair, it is never invoked automatically: reading a file does
-    /// not mutate it.
+    /// Like the repair, it is never invoked automatically, and for the same
+    /// reason: this reads every geometry in the layer and rewrites the tree,
+    /// which is not something to do to a caller who only asked a question.
     ///
     /// # Errors
     ///
