@@ -149,7 +149,7 @@ warm page cache, medians over repeated runs.
 | source | [Microsoft Building Footprints](https://github.com/microsoft/USBuildingFootprints), California | [HydroRIVERS](https://www.hydrosheds.org/products/hydrorivers) v1.0, global | [GADM](https://gadm.org/data.html) 4.1, global |
 | rows | 11,542,912 | 8,477,883 | 356,508 |
 | geometry | Polygon | LineString | MultiPolygon |
-| attribute columns | 4 | 16 | 54 |
+| columns, including `fid` and geometry | 4 | 16 | 54 |
 | file | 2.37 GB | 2.03 GB | 2.74 GB |
 
 | operation | `buildings` | `rivers` | `admin` |
