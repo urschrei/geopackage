@@ -1,8 +1,12 @@
 //! Typed column values: mapping SQLite storage classes to GeoPackage column
 //! types.
 //!
-//! [`Value`] is the non-geometry cell type of the read path. Conversion from a
-//! stored SQLite value is driven by the column's declared [`ColumnType`]: an
+//! [`Value`] and its borrowed counterpart [`ValueRef`] are the non-geometry cell
+//! types. A [`crate::Feature`] hands out `ValueRef`s pointing into the buffer it
+//! holds its row in, and the write path takes them; `Value` is the owned form,
+//! for a value that has to outlive the row or the call it was passed to.
+//! Conversion from a stored SQLite value is driven by the column's declared
+//! [`ColumnType`]: an
 //! `INTEGER`-declared column yields [`Value::Integer`], a `DATETIME`-declared
 //! column parses its text into a [`geopackage_core::datetime::DateTime`], and
 //! so on. A storage class that is incompatible with the declared type is

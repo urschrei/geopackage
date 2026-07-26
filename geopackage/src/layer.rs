@@ -6,8 +6,13 @@
 //! introspected [`TableSchema`], its resolved geometry column (feature layers),
 //! and its single-column primary key. The read methods build a prepared
 //! statement from that schema and yield owned [`Feature`]s: a row's values do
-//! not outlive the SQLite cursor, so each [`Feature`] owns its geometry blob
-//! and its converted column values rather than borrowing the row.
+//! not outlive the SQLite cursor, so each [`Feature`] owns its geometry blob and
+//! its converted column values rather than borrowing the row. It holds them in
+//! one buffer with a range recorded per value, and lends them out as
+//! [`crate::ValueRef`]s, so the row costs two allocations whatever its width.
+//! Neither the geometry nor the primary key is among those values: they are
+//! reached through [`Feature::geometry`] and [`Feature::fid`], and the write
+//! path takes exactly the same value set.
 //!
 //! There are two ways to read features, and they return the same rows.
 //!

@@ -10,7 +10,11 @@
 //! `last_change` and bounding box, then commits. Dropping a writer without
 //! committing rolls the transaction back. rusqlite types never appear in the
 //! public API: geometry is `impl geo_traits::GeometryTrait<T = f64>` and
-//! non-geometry values are the crate's [`Value`] enum.
+//! non-geometry values are the crate's own value types. The per-row entry
+//! points take borrowed [`crate::ValueRef`]s, so a row read from one layer
+//! binds into another without its text and blob cells being copied;
+//! [`NewFeature`] holds owned [`Value`]s, because [`Layer::write_all`] consumes
+//! an iterator whose rows have to outlive any single call.
 //!
 //! An owned transaction (rather than a caller-passed transaction object) keeps
 //! the escape-hatch `rusqlite::Transaction` out of the public surface and lets
