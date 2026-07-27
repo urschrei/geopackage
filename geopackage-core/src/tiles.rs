@@ -38,6 +38,47 @@ pub const WEB_MERCATOR_HALF_SPAN: f64 = 20_037_508.342_789_244;
 /// extensions (`gpkg_webp`, `gpkg_zoom_other`) register against.
 pub const TILE_DATA_COLUMN: &str = "tile_data";
 
+/// Registered extension name for zoom levels that do not step by factors of
+/// two (Annex F.4).
+pub const ZOOM_OTHER_EXTENSION_NAME: &str = "gpkg_zoom_other";
+/// `gpkg_extensions.definition` value for [`ZOOM_OTHER_EXTENSION_NAME`].
+pub const ZOOM_OTHER_EXTENSION_DEFINITION: &str =
+    "http://www.geopackage.org/spec140/#extension_zoom_other_intervals";
+/// Registered extension name for WebP tile payloads (Annex F.5).
+pub const WEBP_EXTENSION_NAME: &str = "gpkg_webp";
+/// `gpkg_extensions.definition` value for [`WEBP_EXTENSION_NAME`].
+pub const WEBP_EXTENSION_DEFINITION: &str =
+    "http://www.geopackage.org/spec140/#extension_tiles_webp";
+/// `gpkg_extensions.scope` value both tile extensions carry.
+pub const TILE_EXTENSION_SCOPE: &str = "read-write";
+
+/// Whether these zoom levels form the spec's default ladder, each level's
+/// pixel size exactly half the level below it.
+///
+/// A pyramid that is not one is legal, but only with `gpkg_zoom_other`
+/// registered against its table. Compared with the same relative tolerance
+/// Requirement 45 uses, since a halved pixel size is usually a derived value
+/// rather than a written-down one. A pyramid of fewer than two levels has no
+/// interval to be other than a factor of two, so it counts as one.
+pub fn is_power_of_two_ladder(matrices: &[TileMatrix]) -> bool {
+    let mut sorted: Vec<&TileMatrix> = matrices.iter().collect();
+    sorted.sort_unstable_by_key(|matrix| matrix.zoom_level);
+    sorted.windows(2).all(|pair| {
+        let [lower, upper] = pair else {
+            return true;
+        };
+        [
+            (lower.pixel_x_size, upper.pixel_x_size),
+            (lower.pixel_y_size, upper.pixel_y_size),
+        ]
+        .iter()
+        .all(|(lower, upper)| {
+            let halved = lower / 2.0;
+            (halved - upper).abs() <= EXTENT_TOLERANCE * halved.abs().max(upper.abs())
+        })
+    })
+}
+
 /// `CREATE TABLE` statement for a tile pyramid user data table, in the form
 /// given by Annex C (Requirement 54): an `INTEGER PRIMARY KEY` acting as the
 /// rowid alias, the zoom/column/row index, the payload, and the uniqueness

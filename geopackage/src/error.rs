@@ -160,6 +160,33 @@ pub enum Error {
         /// The WKB body's actual type.
         found: geopackage_core::types::GeometryType,
     },
+    /// A tile pyramid that does not satisfy the spec's consistency rules
+    /// (Requirements 45 to 53), or a tile payload that could not be read.
+    ///
+    /// Raised by [`crate::GeoPackage::create_tile_pyramid`] and by the tile
+    /// write path. Reading an existing pyramid never validates it, so a file
+    /// another implementation wrote opens whatever its matrices say.
+    #[error(transparent)]
+    Tile(#[from] geopackage_core::TileError),
+    /// A tile pyramid whose `gpkg_tile_matrix_set` row is missing, so the
+    /// extent its tiles are addressed against is unknown.
+    #[error(
+        "tile pyramid {table_name:?} has no gpkg_tile_matrix_set row, so its tiles cannot be located"
+    )]
+    NoTileMatrixSet {
+        /// The pyramid that is missing its row.
+        table_name: String,
+    },
+    /// A pyramid whose zoom levels do not step by factors of two was created
+    /// without opting into the `gpkg_zoom_other` extension.
+    #[error(
+        "tile pyramid {table_name:?} has zoom levels that do not step by factors of two, \
+         which needs the gpkg_zoom_other extension: opt in with TilePyramidBuilder::allow_zoom_other"
+    )]
+    ZoomOtherNotEnabled {
+        /// The pyramid that was rejected.
+        table_name: String,
+    },
     /// A layer was requested by a name that is not present in `gpkg_contents`.
     #[error("no such layer: {table_name:?} is not registered in gpkg_contents")]
     NoSuchLayer {

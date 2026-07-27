@@ -365,6 +365,7 @@ mod options;
 mod packed;
 mod schema;
 mod srs;
+mod tiles;
 mod value;
 mod writer;
 
@@ -381,6 +382,7 @@ pub use open::OpenWarning;
 pub use options::{DEFAULT_BUSY_TIMEOUT, JournalMode, OpenOptions, Synchronous};
 pub use schema::{Column, GeometryColumn, TableSchema};
 pub use srs::Srs;
+pub use tiles::{TilePyramid, TilePyramidBuilder};
 pub use value::{ConversionOptions, DateTimeParsing, StorageStrictness, Value, ValueRef};
 pub use writer::{FeatureWriter, NewFeature};
 
