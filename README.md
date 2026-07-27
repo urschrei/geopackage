@@ -113,6 +113,56 @@ Geometry is a GeoArrow WKB column whose metadata stores the CRS as PROJJSON.
 directions of the type mapping, so a layer can be copied without restating its
 schema.
 
+### Extensions
+
+`gpkg_extensions` is where a file declares what it uses beyond the core spec.
+`GeoPackage::extensions` reads that catalogue, and every row says what this
+crate can do with it: read and write it, identify it and leave it alone,
+tolerate it as one of the two extensions OGC removed in 2016, or not recognise
+it at all.
+
+Writing to a table covered by an extension this crate cannot identify is
+refused, because such an extension may constrain the rows, triggers or
+encodings of the table it covers, and writing beside it could produce a file
+its own producer can no longer read. Reading is never refused for this reason,
+and `OpenOptions::allow_unsupported_extension_writes` overrides the refusal for
+a caller who knows the extension is harmless.
+
+Two extensions appear in the model rather than as catalogue rows. `gpkg_crs_wkt`
+puts a WKT2 definition and a coordinate epoch on `Srs`, which is how a CRS with
+no WKT1 form is carried at all. `gpkg_schema` describes columns and constrains
+their values:
+
+```rust
+use geopackage::{ColumnConstraint, ConstraintKind, GeoPackage, OpenOptions};
+
+let gpkg = GeoPackage::open("sites.gpkg")?;
+gpkg.add_column_constraint(&ColumnConstraint {
+    name: "years".into(),
+    kind: ConstraintKind::Range {
+        min: 1900.0,
+        min_is_inclusive: true,
+        max: 2000.0,
+        max_is_inclusive: false,
+    },
+    description: None,
+})?;
+
+// Checking written values against the constraints their columns declare is
+// asked for, not assumed: the format makes them advisory, so a conforming
+// file may hold values its own constraints forbid.
+let checked = OpenOptions::new()
+    .enforce_column_constraints(true)
+    .open("sites.gpkg")?;
+```
+
+A column's description reaches `Column::data_column`, so reading a layer's
+schema shows it without a second lookup. Enforcement covers every write path,
+the columnar one included, and costs about 31% on a write with two constrained
+columns. The `glob` constraint form is evaluated by SQLite itself rather than
+reimplemented here: its pattern language has no definition beyond what SQLite
+does with it, and this crate bundles SQLite.
+
 ### More examples
 
 Runnable programs in [`geopackage/examples`](https://github.com/urschrei/geopackage/tree/main/geopackage/examples):
@@ -174,6 +224,7 @@ reachable as SQL through `GeoPackage::connection()`.
   and no coordinate transformation. `add_epsg_srs` writes WKT1 where the code
   has one, and WKT2 through the `gpkg_crs_wkt_1_1` extension otherwise (for
   codes with no WKT1 form, such as the geographic 3D EPSG:4979), matching GDAL.
+  Both definitions are read back on `Srs`, and a caller can supply either.
 
 ## Performance
 
