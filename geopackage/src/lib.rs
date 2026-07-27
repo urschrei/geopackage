@@ -274,6 +274,85 @@
 //! # Ok(()) }
 //! ```
 //!
+//! # Extensions
+//!
+//! `gpkg_extensions` is where a file declares what it uses beyond the core
+//! spec. [`GeoPackage::extensions`] reads that catalogue, and
+//! [`Layer::extensions`] and [`TilePyramid::extensions`] narrow it to one
+//! table. Every row identifies as an [`Extension`] and carries an
+//! [`ExtensionSupport`]: read and written here, identified and left alone,
+//! removed from the standard in 2016 and tolerated on read, or not recognised
+//! at all.
+//!
+//! That last one is not only informational. Writing to a table covered by an
+//! extension this crate cannot identify is refused with
+//! [`Error::UnsupportedExtension`], because such an extension may constrain
+//! the rows, triggers or encodings of the table it covers and writing beside
+//! it could produce a file its own producer can no longer read. Reading is
+//! never refused for this reason. [`GeoPackage::blocking_extension`] asks the
+//! question directly, and
+//! [`OpenOptions::allow_unsupported_extension_writes`] overrides the refusal.
+//!
+//! Two extensions are surfaced as part of the model rather than as catalogue
+//! rows. `gpkg_crs_wkt` puts a WKT2 CRS definition and a coordinate epoch on
+//! [`Srs`], which is how a CRS with no WKT1 form is carried at all.
+//! `gpkg_schema` describes columns and constrains their values:
+//! [`GeoPackage::data_columns`] and [`Column::data_column`] give the
+//! descriptions, [`GeoPackage::column_constraint`] resolves what a column's
+//! values are limited to, and [`GeoPackage::set_data_column`] and
+//! [`GeoPackage::add_column_constraint`] write them.
+//!
+//! ```
+//! use geopackage::{ColumnConstraint, ConstraintKind, DataColumn, GeoPackage, OpenOptions};
+//! # use geopackage::core::types::{ColumnType, GeometryType};
+//! # use geopackage::{ColumnSpec, GeometrySpec, TableSchemaBuilder};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # let dir = tempfile::tempdir()?;
+//! # let path = dir.path().join("sites.gpkg");
+//! # {
+//! # let gpkg = GeoPackage::create(&path)?;
+//! # gpkg.create_layer(
+//! #     &TableSchemaBuilder::new("sites")
+//! #         .column(ColumnSpec::new("year", ColumnType::Integer))
+//! #         .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+//! # )?;
+//! let gpkg = GeoPackage::open(&path)?;
+//! gpkg.add_column_constraint(&ColumnConstraint {
+//!     name: "years".into(),
+//!     kind: ConstraintKind::Range {
+//!         min: 1900.0,
+//!         min_is_inclusive: true,
+//!         max: 2000.0,
+//!         max_is_inclusive: false,
+//!     },
+//!     description: None,
+//! })?;
+//! gpkg.set_data_column(
+//!     "sites",
+//!     &DataColumn {
+//!         column_name: "year".into(),
+//!         name: Some("Year surveyed".into()),
+//!         title: None,
+//!         description: None,
+//!         mime_type: None,
+//!         constraint_name: Some("years".into()),
+//!     },
+//! )?;
+//! # }
+//!
+//! // The constraints are advisory in the format, so checking written values
+//! // against them is asked for rather than assumed.
+//! let gpkg = OpenOptions::new()
+//!     .enforce_column_constraints(true)
+//!     .open(&path)?;
+//! # let layer = gpkg.layer("sites")?;
+//! # let mut writer = layer.writer()?;
+//! # use geopackage::ValueRef;
+//! # assert!(writer.insert(None, &geo_types::Point::new(0.0, 0.0), &[ValueRef::Integer(1850)]).is_err());
+//! # Ok(()) }
+//! ```
+//!
 //! # Cargo features
 //!
 //! - **`geo-types`** (on by default): forwards `geopackage-core`'s feature of
