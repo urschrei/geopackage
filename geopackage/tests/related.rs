@@ -264,3 +264,95 @@ fn an_unknown_relation_type_still_reads_and_walks() {
     gpkg.add_mapping(read, 1, 42).unwrap();
     assert_eq!(gpkg.related_ids(read, 1).unwrap(), vec![42]);
 }
+
+// --- the GDAL-written fixture -------------------------------------------------
+
+fn fixture() -> (TempDir, GeoPackage) {
+    let dir = tempfile::tempdir().unwrap();
+    let dst = dir.path().join("gdal_related.gpkg");
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("gdal_related.gpkg");
+    std::fs::copy(src, &dst).unwrap();
+    let gpkg = GeoPackage::open(&dst).unwrap();
+    (dir, gpkg)
+}
+
+#[test]
+fn the_gdal_written_relationship_reads() {
+    let (_dir, gpkg) = fixture();
+    let relations = gpkg.relations().unwrap();
+    assert_eq!(relations.len(), 1);
+    let relation = &relations[0];
+
+    assert_eq!(relation.base_table_name, "sites");
+    assert_eq!(relation.related_table_name, "notes");
+    assert_eq!(relation.relation_name, RelationName::SimpleAttributes);
+    assert_eq!(relation.mapping_table_name, "sites_notes");
+    // GDAL keys on the FID column rather than on the `id` the column default
+    // assumes, which is why base_primary_column exists at all.
+    assert_eq!(relation.base_primary_column, "fid");
+    assert_eq!(relation.related_primary_column, "fid");
+}
+
+#[test]
+fn a_gdal_written_mapping_walks() {
+    let (_dir, gpkg) = fixture();
+    let relation = &gpkg.relations_from("sites").unwrap()[0];
+    assert_eq!(gpkg.related_ids(relation, 1).unwrap(), vec![1, 2]);
+    assert_eq!(gpkg.related_ids(relation, 2).unwrap(), vec![3]);
+    assert!(gpkg.related_ids(relation, 3).unwrap().is_empty());
+}
+
+#[test]
+fn gdals_extra_mapping_column_does_not_get_in_the_way() {
+    // GDAL gives the mapping table an `id INTEGER PRIMARY KEY AUTOINCREMENT`
+    // that the spec neither requires nor forbids: Requirement 9 asks for
+    // base_id and related_id and permits other columns. Reading must not
+    // depend on the table having exactly two.
+    let (_dir, gpkg) = fixture();
+    let ddl: String = gpkg
+        .connection()
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name = 'sites_notes'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        ddl.contains("id INTEGER PRIMARY KEY AUTOINCREMENT"),
+        "{ddl}"
+    );
+
+    let relation = &gpkg.relations().unwrap()[0];
+    assert_eq!(gpkg.related_ids(relation, 1).unwrap(), vec![1, 2]);
+
+    // And a pair can still be added to it.
+    gpkg.add_mapping(relation, 2, 1).unwrap();
+    assert_eq!(gpkg.related_ids(relation, 2).unwrap(), vec![3, 1]);
+}
+
+#[test]
+fn the_fixture_registers_the_two_rows_the_spec_tests_look_for() {
+    let (_dir, gpkg) = fixture();
+    let mut rows: Vec<(Option<String>, String)> = gpkg
+        .extensions()
+        .unwrap()
+        .into_iter()
+        .filter(|row| row.name == "gpkg_related_tables")
+        .map(|row| (row.table_name, row.scope.as_str().to_owned()))
+        .collect();
+    rows.sort();
+    // Exactly one for gpkgext_relations, and one per mapping table.
+    assert_eq!(
+        rows,
+        vec![
+            (
+                Some("gpkgext_relations".to_owned()),
+                "read-write".to_owned()
+            ),
+            (Some("sites_notes".to_owned()), "read-write".to_owned()),
+        ]
+    );
+}

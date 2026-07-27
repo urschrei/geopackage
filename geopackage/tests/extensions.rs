@@ -464,6 +464,10 @@ fn every_extension_in_the_committed_fixtures_is_classified() {
                 ExtensionSupport::Implemented
             ),
             ("gpkg_metadata".to_owned(), ExtensionSupport::Implemented),
+            (
+                "gpkg_related_tables".to_owned(),
+                ExtensionSupport::Implemented
+            ),
             ("gpkg_rtree_index".to_owned(), ExtensionSupport::Implemented),
         ]
     );

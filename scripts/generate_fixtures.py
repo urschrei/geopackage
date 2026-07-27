@@ -12,7 +12,10 @@ Only the Python standard library plus the external command-line tools ``ogr2ogr`
 ``ogrinfo`` and ``gdal_translate`` (GDAL) are used; there is no project virtualenv. QGIS's
 ``qgis_process`` is used for one fixture when available (``QGIS_PROCESS`` env
 var, PATH, or a macOS ``/Applications/QGIS*.app`` bundle) and skipped with a
-warning otherwise. ``sqlite3`` is
+warning otherwise. GDAL's ``osgeo`` Python bindings are used for one more, the
+Related Tables fixture, because creating a relationship is available through
+``AddRelationship`` and through neither ``ogr2ogr`` nor the ``gdal`` CLI as of
+3.12; that fixture is skipped with a warning when they are not importable. ``sqlite3`` is
 used through Python's bundled module, both to build the raw fixtures that GDAL
 cannot express directly (exact ``TINYINT``/``DOUBLE`` column types, legacy
 ``application_id``, a case-mismatched catalogue) and to shrink each container to
@@ -787,6 +790,99 @@ def build_gdal_curves(tmp: Path) -> Path:
     return out
 
 
+def osgeo_available() -> bool:
+    """Whether GDAL's Python bindings are importable.
+
+    Only the Related Tables fixture needs them: GDAL can create a relationship
+    through `AddRelationship`, and neither `ogr2ogr` nor the `gdal` CLI exposes
+    that as of 3.12. Treated like `qgis_process`: skipped with a warning when
+    absent, since the committed fixture is what the tests actually read.
+    """
+    try:
+        from osgeo import gdal  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def build_gdal_related(_tmp: Path) -> Path:
+    """A GDAL-written Related Tables relationship (OGC 18-000).
+
+    A `sites` feature layer, a `notes` attributes layer, and a many-to-many
+    relationship between them through a mapping table GDAL names and creates.
+    What the fixture pins is what another implementation writes: the
+    `gpkgext_relations` columns, the two `gpkg_extensions` rows, GDAL's extra
+    `id` primary key on the mapping table, and its `gpkg_contents` row for that
+    table, which the spec permits but does not require.
+
+    No spatial index on `sites`: the seven RTree triggers dominate a small
+    file's schema page, and this fixture is about relations rather than
+    indexing.
+
+    No `.expected.json`: the snapshot format has no place for
+    `gpkgext_relations`, and the two layers are trivial. What a reader should
+    see is asserted in `geopackage/tests/related.rs`.
+    """
+    from osgeo import gdal, ogr, osr
+
+    gdal.UseExceptions()
+    out = FIXTURES / "gdal_related.gpkg"
+    out.unlink(missing_ok=True)
+
+    driver = gdal.GetDriverByName("GPKG")
+    ds = driver.Create(str(out), 0, 0, 0, gdal.GDT_Unknown)
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(4326)
+
+    sites = ds.CreateLayer(
+        "sites", srs=srs, geom_type=ogr.wkbPoint, options=["SPATIAL_INDEX=NO"]
+    )
+    sites.CreateField(ogr.FieldDefn("name", ogr.OFTString))
+    for name, wkt in (("alpha", "POINT (1 2)"), ("beta", "POINT (3 4)")):
+        feature = ogr.Feature(sites.GetLayerDefn())
+        feature.SetField("name", name)
+        feature.SetGeometry(ogr.CreateGeometryFromWkt(wkt))
+        sites.CreateFeature(feature)
+
+    notes = ds.CreateLayer("notes", geom_type=ogr.wkbNone)
+    notes.CreateField(ogr.FieldDefn("note", ogr.OFTString))
+    for note in ("first", "second", "third"):
+        feature = ogr.Feature(notes.GetLayerDefn())
+        feature.SetField("note", note)
+        notes.CreateFeature(feature)
+    ds = None
+
+    # AddRelationship needs an update handle, and needs the key columns named.
+    # Two traps: the left and right table fields are required (the FID column
+    # name is accepted), and naming the mapping table's own field names makes
+    # the call fail while still leaving gpkgext_relations behind.
+    ds = gdal.OpenEx(str(out), gdal.OF_VECTOR | gdal.OF_UPDATE)
+    relationship = gdal.Relationship(
+        "sites_notes", "sites", "notes", gdal.GRC_MANY_TO_MANY
+    )
+    relationship.SetLeftTableFields(["fid"])
+    relationship.SetRightTableFields(["fid"])
+    relationship.SetRelatedTableType("simple_attributes")
+    if not ds.AddRelationship(relationship):
+        sys.exit("error: GDAL AddRelationship failed for the related fixture")
+    ds = None
+
+    # Map both sites to notes, so a walk has something to find: site 1 to notes
+    # 1 and 2, site 2 to note 3.
+    con = connect(out)
+    try:
+        con.executemany(
+            "INSERT INTO sites_notes (base_id, related_id) VALUES (?, ?)",
+            [(1, 1), (1, 2), (2, 3)],
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    finalise(out)
+    return out
+
+
 def build_qgis_lines(tmp: Path, qgis_process: str) -> Path:
     """A GeoPackage written by QGIS itself (``native:savefeatures``).
 
@@ -990,6 +1086,14 @@ def main() -> None:
         # reader should see is asserted in geopackage/tests/tiles.rs and
         # geopackage/tests/curves.rs respectively.
         unsnapshotted = [build_gdal_tiles(tmp), build_gdal_curves(tmp)]
+        if osgeo_available():
+            unsnapshotted.append(build_gdal_related(tmp))
+        else:
+            print(
+                "warning: GDAL's Python bindings are not importable; skipping "
+                "the Related Tables fixture gdal_related.gpkg",
+                file=sys.stderr,
+            )
         qgis = find_qgis_process()
         if qgis:
             plan.append((build_qgis_lines(tmp, qgis), "strict", [], qgis_version(qgis)))
