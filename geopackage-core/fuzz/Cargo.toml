@@ -32,4 +32,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "curve_scan"
+path = "fuzz_targets/curve_scan.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
