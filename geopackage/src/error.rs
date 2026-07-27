@@ -328,6 +328,34 @@ pub enum Error {
         /// The unregistered spatial reference system identifier.
         srs_id: i32,
     },
+    /// A metadata reference names a `gpkg_metadata` row that does not exist.
+    #[error("no gpkg_metadata row with id {id}")]
+    NoSuchMetadata {
+        /// The absent record's id.
+        id: i64,
+    },
+    /// A metadata reference was given itself as its parent, which
+    /// Requirement 102 forbids.
+    #[error("metadata record {md_file_id} cannot be its own parent")]
+    SelfParentedMetadata {
+        /// The record named as both file and parent.
+        md_file_id: i64,
+    },
+    /// Walking `md_parent_id` revisited a record. Requirement 102 forbids only
+    /// the one-step cycle, so a longer one is a file this crate reports rather
+    /// than one it can rule out.
+    #[error("metadata parent chain cycles at record {id}")]
+    MetadataCycle {
+        /// The record the chain returned to.
+        id: i64,
+    },
+    /// A `gpkg_metadata_reference` row carries a `reference_scope` that is not
+    /// one of the five Requirement 96 allows.
+    #[error("unknown metadata reference_scope {scope:?}")]
+    UnknownReferenceScope {
+        /// The value as the file spells it.
+        scope: String,
+    },
     /// [`crate::GeoPackage::create_layer`] was called with a builder that has no
     /// geometry column (use [`crate::GeoPackage::create_attributes_table`] for a
     /// non-spatial table).
