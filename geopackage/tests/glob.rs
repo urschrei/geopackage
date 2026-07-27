@@ -50,23 +50,31 @@ fn draw_string(tc: &hegel::TestCase, alphabet: &[char], max_len: usize) -> Strin
         .collect()
 }
 
+thread_local! {
+    /// One connection for the whole run. Opening one per generated case cost
+    /// more than everything else in this test put together, and a connection
+    /// that only evaluates `GLOB` carries no state between cases.
+    static ORACLE: Connection = Connection::open_in_memory().expect("in-memory SQLite");
+}
+
 /// SQLite's answer for `text GLOB pattern`.
-fn sqlite_glob(conn: &Connection, pattern: &str, text: &str) -> bool {
-    conn.query_row("SELECT ?1 GLOB ?2", rusqlite::params![text, pattern], |r| {
-        r.get::<_, i64>(0)
+fn sqlite_glob(pattern: &str, text: &str) -> bool {
+    ORACLE.with(|conn| {
+        conn.query_row("SELECT ?1 GLOB ?2", rusqlite::params![text, pattern], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap()
+            != 0
     })
-    .unwrap()
-        != 0
 }
 
 #[hegel::test]
 fn glob_match_agrees_with_sqlite(tc: hegel::TestCase) {
-    let conn = Connection::open_in_memory().unwrap();
     let pattern = draw_string(&tc, PATTERN_ALPHABET, 8);
     let text = draw_string(&tc, TEXT_ALPHABET, 8);
     assert_eq!(
         glob_match(&pattern, &text),
-        sqlite_glob(&conn, &pattern, &text),
+        sqlite_glob(&pattern, &text),
         "pattern {pattern:?} against text {text:?}"
     );
 }
@@ -75,7 +83,6 @@ fn glob_match_agrees_with_sqlite(tc: hegel::TestCase) {
 fn the_cases_worth_naming_agree_with_sqlite() {
     // The generated cases above cover these, but a named list fails with a
     // readable message and documents what the awkward corners are.
-    let conn = Connection::open_in_memory().unwrap();
     for (pattern, text) in [
         ("[abc", "a"),
         ("[abc", "[abc"),
@@ -100,7 +107,7 @@ fn the_cases_worth_naming_agree_with_sqlite() {
     ] {
         assert_eq!(
             glob_match(pattern, text),
-            sqlite_glob(&conn, pattern, text),
+            sqlite_glob(pattern, text),
             "pattern {pattern:?} against text {text:?}"
         );
     }

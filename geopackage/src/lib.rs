@@ -432,6 +432,7 @@
 pub mod arrow;
 mod bulk;
 mod create;
+mod data_columns;
 mod error;
 pub mod extensions;
 mod extent;
@@ -456,6 +457,7 @@ pub use extensions::ExtensionRow;
 pub use geopackage_core as core;
 pub use geopackage_core::GpkgVersion;
 pub use geopackage_core::extensions::{Extension, ExtensionScope, ExtensionSupport};
+pub use geopackage_core::schema::{ColumnConstraint, ConstraintKind, DataColumn};
 pub use index::{SpatialIndexAudit, SpatialIndexStatus};
 pub use layer::{BoundingBox, Feature, FeatureCursor, FeatureStream, Features, Layer, LayerKind};
 pub use open::OpenWarning;
@@ -495,6 +497,10 @@ pub struct GeoPackage {
     /// cannot identify. See
     /// [`OpenOptions::allow_unsupported_extension_writes`].
     allow_unsupported_extension_writes: bool,
+    /// Whether written values are checked against the `gpkg_schema`
+    /// constraints their columns declare. See
+    /// [`OpenOptions::enforce_column_constraints`].
+    enforce_column_constraints: bool,
 }
 
 impl GeoPackage {
@@ -538,6 +544,7 @@ impl GeoPackage {
         }
         let options = options.with_default_busy_timeout();
         let allow_unsupported_extension_writes = options.allow_unsupported_extension_writes;
+        let enforce_column_constraints = options.enforce_column_constraints;
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "application_id", version::APPLICATION_ID_GPKG)?;
         conn.pragma_update(
@@ -566,6 +573,7 @@ impl GeoPackage {
             warnings: Vec::new(),
             journal_mode,
             allow_unsupported_extension_writes,
+            enforce_column_constraints,
         })
     }
 
@@ -609,6 +617,7 @@ impl GeoPackage {
             }
         }
         let allow_unsupported_extension_writes = options.allow_unsupported_extension_writes;
+        let enforce_column_constraints = options.enforce_column_constraints;
         let journal_mode = apply_open_options(&conn, options, apply_journal)?;
         functions::register(&conn)?;
         Ok(Self {
@@ -617,6 +626,7 @@ impl GeoPackage {
             warnings: Vec::new(),
             journal_mode,
             allow_unsupported_extension_writes,
+            enforce_column_constraints,
         })
     }
 

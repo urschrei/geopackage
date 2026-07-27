@@ -113,6 +113,7 @@ pub struct OpenOptions {
     pub(crate) synchronous: Option<Synchronous>,
     pub(crate) busy_timeout: Option<Duration>,
     pub(crate) allow_unsupported_extension_writes: bool,
+    pub(crate) enforce_column_constraints: bool,
 }
 
 impl OpenOptions {
@@ -176,6 +177,35 @@ impl OpenOptions {
     #[must_use]
     pub fn allow_unsupported_extension_writes(mut self, allow: bool) -> Self {
         self.allow_unsupported_extension_writes = allow;
+        self
+    }
+
+    /// Check written values against the `gpkg_schema` constraints their
+    /// columns declare, refusing a row that violates one with
+    /// [`Error::ColumnConstraintViolation`].
+    ///
+    /// Off by default, because the format makes these constraints advisory:
+    /// "These restrictions MAY be enforced by SQL triggers or by code in
+    /// applications that update GeoPackage data values". A file can therefore
+    /// hold values its own constraints forbid, and refusing to write beside
+    /// them by default would be this crate imposing a rule the format does
+    /// not.
+    ///
+    /// What is checked, for a column carrying a constraint: a `range` against
+    /// integers and floats, an `enum` or `glob` against text and against the
+    /// decimal form of a number, since the spec's own sample enumerates
+    /// numbers as text. NULL satisfies every constraint, a constraint saying
+    /// what a value may be rather than that there has to be one; use
+    /// `NOT NULL` for that. Blob, date and datetime values are not checked.
+    ///
+    /// Applies to every write path, the columnar one included. The cost is one
+    /// lookup per constrained column per row, and nothing at all for a layer
+    /// with no constraints.
+    ///
+    /// [`Error::ColumnConstraintViolation`]: crate::Error::ColumnConstraintViolation
+    #[must_use]
+    pub fn enforce_column_constraints(mut self, enforce: bool) -> Self {
+        self.enforce_column_constraints = enforce;
         self
     }
 

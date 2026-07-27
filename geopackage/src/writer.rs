@@ -124,6 +124,7 @@ use geopackage_core::geometry::encode_gpb;
 #[cfg(feature = "arrow")]
 use geopackage_core::geometry::encode_gpb_from_wkb;
 use geopackage_core::ident::quote;
+use geopackage_core::schema::{ColumnConstraint, ConstraintKind};
 use geopackage_core::triggers;
 use geopackage_core::types::ZmFlag;
 use rusqlite::types::{ToSqlOutput, Value as SqlValue, ValueRef};
@@ -311,6 +312,9 @@ pub struct FeatureWriter<'conn> {
     update_stmts: [CachedStatement<'conn>; 2],
     /// The `DELETE`, likewise fixed for the writer's lifetime.
     delete_stmt: CachedStatement<'conn>,
+    /// The `gpkg_schema` constraints to check written values against, resolved
+    /// once here. Empty unless the file was opened asking for them.
+    constraints: ColumnConstraints,
     /// The value columns named by the most recent [`Self::update_columns`]
     /// call, in the order given, and the statement prepared for them.
     ///
@@ -404,6 +408,7 @@ impl<'a> Layer<'a> {
         let delete_stmt =
             conn.prepare_cached(&format!("DELETE FROM {quoted_table} WHERE {pk_expr} = ?1"))?;
         let partial_stmt = conn.prepare_cached(&build_partial_update_sql(&shape, &[])?)?;
+        let constraints = ColumnConstraints::read(self, &value_columns)?;
 
         Ok(FeatureWriter {
             tx,
@@ -422,6 +427,7 @@ impl<'a> Layer<'a> {
             dirty: false,
             bbox_dirty: false,
             bbox_covers_layer,
+            constraints,
         })
     }
 
@@ -797,6 +803,7 @@ impl<'conn> FeatureWriter<'conn> {
         geometry: &G,
         values: &[CellRef<'_>],
     ) -> Result<i64> {
+        self.check_constraints(values)?;
         self.insert_geometry_binds(
             fid,
             geometry,
@@ -816,6 +823,7 @@ impl<'conn> FeatureWriter<'conn> {
         geometry: &G,
         values: &[Value],
     ) -> Result<(i64, Option<[f64; 4]>)> {
+        self.check_constraints(values)?;
         self.insert_geometry_binds(
             fid,
             geometry,
@@ -887,6 +895,7 @@ impl<'conn> FeatureWriter<'conn> {
         values: &[rusqlite::types::ToSqlOutput<'_>],
     ) -> Result<(i64, Option<[f64; 4]>)> {
         self.check_value_count(values.len())?;
+        self.check_constraints(values)?;
         let geom = self
             .geometry
             .as_ref()
@@ -932,6 +941,7 @@ impl<'conn> FeatureWriter<'conn> {
         values: &[rusqlite::types::ToSqlOutput<'_>],
     ) -> Result<i64> {
         self.check_value_count(values.len())?;
+        self.check_constraints(values)?;
         let assigned = self.exec_insert(
             fid.is_some(),
             false,
@@ -953,6 +963,7 @@ impl<'conn> FeatureWriter<'conn> {
     ///
     /// [`Error::ValueCountMismatch`] if `values` has the wrong length.
     pub fn insert_row(&mut self, fid: Option<i64>, values: &[CellRef<'_>]) -> Result<i64> {
+        self.check_constraints(values)?;
         self.insert_row_binds(
             fid,
             values.len(),
@@ -962,6 +973,7 @@ impl<'conn> FeatureWriter<'conn> {
 
     /// [`Self::insert_row`] for a caller holding owned values.
     pub(crate) fn insert_row_owned(&mut self, fid: Option<i64>, values: &[Value]) -> Result<i64> {
+        self.check_constraints(values)?;
         self.insert_row_binds(fid, values.len(), values.iter().map(value_to_bind))
     }
 
@@ -1004,6 +1016,7 @@ impl<'conn> FeatureWriter<'conn> {
         values: &[CellRef<'_>],
     ) -> Result<bool> {
         self.check_value_count(values.len())?;
+        self.check_constraints(values)?;
         let (blob, xy) = self.encode_geometry(geometry)?;
         let matched = self.exec_update(
             true,
@@ -1030,6 +1043,7 @@ impl<'conn> FeatureWriter<'conn> {
     /// [`Error::ValueCountMismatch`] if `values` has the wrong length.
     pub fn update_row(&mut self, fid: i64, values: &[CellRef<'_>]) -> Result<bool> {
         self.check_value_count(values.len())?;
+        self.check_constraints(values)?;
         let matched =
             self.exec_update(
                 false,
@@ -1085,6 +1099,7 @@ impl<'conn> FeatureWriter<'conn> {
     ///   accepts a repeated assignment and applies the last, which is more
     ///   likely to be a caller's mistake than an intention.
     pub fn update_columns(&mut self, fid: i64, columns: &[(&str, CellRef<'_>)]) -> Result<bool> {
+        self.check_named_constraints(columns)?;
         if !self.partial_matches(columns) {
             let sql = build_partial_update_sql(&self.shape(), columns)?;
             self.partial_stmt = self.conn.prepare_cached(&sql)?;
@@ -1261,6 +1276,73 @@ impl<'conn> FeatureWriter<'conn> {
         })
     }
 
+    /// Check a whole row's values against the layer's `gpkg_schema`
+    /// constraints, in value-column order.
+    ///
+    /// Returns immediately for a file that did not ask for enforcement, or a
+    /// layer no constraint covers, so the ordinary write path pays one branch.
+    fn check_constraints<V: AsCheckable>(&self, values: &[V]) -> Result<()> {
+        if self.constraints.is_empty() {
+            return Ok(());
+        }
+        for (index, value) in values.iter().enumerate() {
+            if let Some(constraint) = self.constraints.at(index) {
+                let checkable = value.as_checkable();
+                if !satisfies(constraint, checkable) {
+                    return Err(self.violation(index, constraint, checkable));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// As [`Self::check_constraints`], for a partial update naming its columns.
+    fn check_named_constraints(&self, columns: &[(&str, CellRef<'_>)]) -> Result<()> {
+        if self.constraints.is_empty() {
+            return Ok(());
+        }
+        for (name, value) in columns {
+            let Some(index) = self
+                .value_columns
+                .iter()
+                .position(|column| column.name == *name)
+            else {
+                continue;
+            };
+            if let Some(constraint) = self.constraints.at(index) {
+                let checkable = value.as_checkable();
+                if !satisfies(constraint, checkable) {
+                    return Err(self.violation(index, constraint, checkable));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn violation(
+        &self,
+        index: usize,
+        constraint: &ColumnConstraint,
+        value: Checkable<'_>,
+    ) -> Error {
+        Error::ColumnConstraintViolation {
+            table_name: self.table_name.clone(),
+            column_name: self
+                .value_columns
+                .get(index)
+                .map_or_else(String::new, |column| column.name.clone()),
+            constraint_name: constraint.name.clone(),
+            constraint: constraint.kind.to_string(),
+            value: match value {
+                Checkable::Null => "NULL".to_owned(),
+                Checkable::Integer(number) => number.to_string(),
+                Checkable::Real(number) => number.to_string(),
+                Checkable::Text(text) => format!("{text:?}"),
+                Checkable::Unchecked => "(unchecked)".to_owned(),
+            },
+        }
+    }
+
     /// The prepared `INSERT` for this combination of explicit id and geometry.
     ///
     /// Selected by matching rather than by indexing, so the four cases are
@@ -1319,6 +1401,151 @@ struct Shape<'s> {
 struct ValueColumn {
     name: String,
     quoted: String,
+}
+
+/// The `gpkg_schema` constraints a writer checks its values against, one entry
+/// per value column and `None` where a column has none.
+///
+/// Empty, and so free per row, unless
+/// [`OpenOptions::enforce_column_constraints`](crate::OpenOptions::enforce_column_constraints)
+/// was set: the constraints are advisory in the format ("These restrictions
+/// MAY be enforced by SQL triggers or by code in applications that update
+/// GeoPackage data values"), so enforcing them is the caller's decision rather
+/// than this crate's.
+#[derive(Debug, Default)]
+struct ColumnConstraints {
+    per_column: Vec<Option<ColumnConstraint>>,
+}
+
+impl ColumnConstraints {
+    /// Resolve each value column's constraint, once per writer.
+    fn read(layer: &Layer<'_>, value_columns: &[ValueColumn]) -> Result<Self> {
+        if !layer.gpkg().enforces_column_constraints() {
+            return Ok(Self::default());
+        }
+        let described = layer.gpkg().data_columns(layer.table_name())?;
+        let mut per_column = Vec::with_capacity(value_columns.len());
+        for column in value_columns {
+            let constraint_name = described
+                .iter()
+                .find(|described| described.column_name == column.name)
+                .and_then(|described| described.constraint_name.as_deref());
+            per_column.push(match constraint_name {
+                Some(name) => layer.gpkg().column_constraint(name)?,
+                None => None,
+            });
+        }
+        Ok(Self { per_column })
+    }
+
+    /// Whether anything at all is enforced, so the row paths can skip the walk.
+    fn is_empty(&self) -> bool {
+        self.per_column.iter().all(Option::is_none)
+    }
+
+    fn at(&self, index: usize) -> Option<&ColumnConstraint> {
+        self.per_column.get(index).and_then(Option::as_ref)
+    }
+}
+
+/// A value reduced to what a constraint can judge it by.
+///
+/// The three write paths hand values over in three forms; this is what they
+/// have in common as far as a `range`, `enum` or `glob` is concerned.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Checkable<'a> {
+    /// No value. A constraint says what a value may be, not that there has to
+    /// be one, so NULL satisfies every constraint. A column that must hold
+    /// something says so with `NOT NULL`.
+    Null,
+    /// An integer, compared numerically against a `range` and by its decimal
+    /// form against an `enum` or `glob`: the spec's own sample enumerates the
+    /// numbers 1, 3, 5, 7 and 9 as `enum` values.
+    Integer(i64),
+    /// A float, compared as [`Checkable::Integer`] is.
+    Real(f64),
+    /// Text, which no `range` admits and which an `enum` or `glob` compares
+    /// directly.
+    Text(&'a str),
+    /// A blob, date or datetime, none of which any constraint form describes.
+    /// Not checked.
+    Unchecked,
+}
+
+/// The value forms a write path can hand over.
+pub(crate) trait AsCheckable {
+    /// This value, as a constraint sees it.
+    fn as_checkable(&self) -> Checkable<'_>;
+}
+
+impl AsCheckable for Value {
+    fn as_checkable(&self) -> Checkable<'_> {
+        match self {
+            Self::Null => Checkable::Null,
+            Self::Integer(value) => Checkable::Integer(*value),
+            Self::Boolean(value) => Checkable::Integer(i64::from(*value)),
+            Self::Float(value) => Checkable::Real(*value),
+            Self::Text(value) => Checkable::Text(value),
+            Self::Blob(_) | Self::Date(_) | Self::DateTime(_) => Checkable::Unchecked,
+        }
+    }
+}
+
+impl AsCheckable for CellRef<'_> {
+    fn as_checkable(&self) -> Checkable<'_> {
+        match self {
+            Self::Null => Checkable::Null,
+            Self::Integer(value) => Checkable::Integer(*value),
+            Self::Boolean(value) => Checkable::Integer(i64::from(*value)),
+            Self::Float(value) => Checkable::Real(*value),
+            Self::Text(value) => Checkable::Text(value),
+            Self::Blob(_) | Self::Date(_) | Self::DateTime(_) => Checkable::Unchecked,
+        }
+    }
+}
+
+impl AsCheckable for ToSqlOutput<'_> {
+    fn as_checkable(&self) -> Checkable<'_> {
+        let value = match self {
+            Self::Borrowed(value) => *value,
+            Self::Owned(value) => value.into(),
+            _ => return Checkable::Unchecked,
+        };
+        match value {
+            rusqlite::types::ValueRef::Null => Checkable::Null,
+            rusqlite::types::ValueRef::Integer(value) => Checkable::Integer(value),
+            rusqlite::types::ValueRef::Real(value) => Checkable::Real(value),
+            rusqlite::types::ValueRef::Text(bytes) => match std::str::from_utf8(bytes) {
+                Ok(text) => Checkable::Text(text),
+                Err(_) => Checkable::Unchecked,
+            },
+            rusqlite::types::ValueRef::Blob(_) => Checkable::Unchecked,
+        }
+    }
+}
+
+/// Whether `value` satisfies `constraint`.
+fn satisfies(constraint: &ColumnConstraint, value: Checkable<'_>) -> bool {
+    match value {
+        Checkable::Null | Checkable::Unchecked => true,
+        Checkable::Text(text) => constraint.allows_text(text),
+        Checkable::Integer(number) => match constraint.kind {
+            ConstraintKind::Range { .. } => {
+                // i64 to f64 loses precision above 2^53, and a bound that far
+                // out is not a bound anyone wrote deliberately.
+                constraint.allows_number(number as f64)
+            }
+            ConstraintKind::Enum(_) | ConstraintKind::Glob(_) => {
+                constraint.allows_text(&number.to_string())
+            }
+        },
+        Checkable::Real(number) => match constraint.kind {
+            ConstraintKind::Range { .. } => constraint.allows_number(number),
+            ConstraintKind::Enum(_) | ConstraintKind::Glob(_) => {
+                constraint.allows_text(&number.to_string())
+            }
+        },
+    }
 }
 
 /// Compose one of the four `INSERT` statements. Called once per writer.

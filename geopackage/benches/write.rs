@@ -21,8 +21,11 @@ use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, SamplingMode, Throughput, criterion_group, criterion_main};
 use geo_types::{Coord, Geometry, LineString, Point, Polygon};
-use geopackage::core::types::GeometryType;
-use geopackage::{BulkIndexOptions, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder};
+use geopackage::core::types::{ColumnType, GeometryType};
+use geopackage::{
+    BulkIndexOptions, ColumnConstraint, ColumnSpec, ConstraintKind, DataColumn, GeoPackage,
+    GeometrySpec, NewFeature, OpenOptions, TableSchemaBuilder, Value,
+};
 
 /// Number of rows written per benchmark. 1,000,000 by default; override with
 /// `GPKG_BENCH_ROWS` (used to keep quick verification runs small).
@@ -206,5 +209,107 @@ fn bench_writes(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_writes);
+/// A layer whose columns carry `gpkg_schema` constraints, and the rows to
+/// write into it. Both arms get the identical file; only the option differs,
+/// so what is measured is the checking rather than the having.
+fn prepare_constrained(enforce: bool, master: &[NewFeature<Geometry<f64>>]) -> Target {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("bench.gpkg");
+    {
+        let gpkg = GeoPackage::create(&path).expect("create gpkg");
+        gpkg.create_layer(
+            &TableSchemaBuilder::new("sites")
+                .column(ColumnSpec::new("code", ColumnType::Text(None)))
+                .column(ColumnSpec::new("year", ColumnType::Integer))
+                .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+                .spatial_index(false),
+        )
+        .expect("create layer");
+        gpkg.add_column_constraint(&ColumnConstraint {
+            name: "codes".to_owned(),
+            kind: ConstraintKind::Glob("[A-Z][A-Z]-*".to_owned()),
+            description: None,
+        })
+        .expect("glob constraint");
+        gpkg.add_column_constraint(&ColumnConstraint {
+            name: "years".to_owned(),
+            kind: ConstraintKind::Range {
+                min: 0.0,
+                min_is_inclusive: true,
+                max: 1e9,
+                max_is_inclusive: true,
+            },
+            description: None,
+        })
+        .expect("range constraint");
+        for (column, constraint) in [("code", "codes"), ("year", "years")] {
+            gpkg.set_data_column(
+                "sites",
+                &DataColumn {
+                    column_name: column.to_owned(),
+                    name: None,
+                    title: None,
+                    description: None,
+                    mime_type: None,
+                    constraint_name: Some(constraint.to_owned()),
+                },
+            )
+            .expect("describe column");
+        }
+        gpkg.close().expect("close");
+    }
+    let gpkg = OpenOptions::new()
+        .enforce_column_constraints(enforce)
+        .open(&path)
+        .expect("open gpkg");
+    Target {
+        _dir: dir,
+        gpkg,
+        table: "sites".to_owned(),
+        features: master.to_vec(),
+        options: BulkIndexOptions::never_bulk(),
+    }
+}
+
+/// What enforcing `gpkg_schema` constraints costs on the write path.
+///
+/// Two constrained columns of the two forms a value can be checked against: a
+/// glob over text and a range over an integer. Every row satisfies both, so the
+/// measurement is the check itself rather than the cost of failing.
+fn bench_constraint_enforcement(c: &mut Criterion) {
+    let n = rows();
+    let master: Vec<NewFeature<Geometry<f64>>> = (0..n)
+        .map(|i| {
+            let (x, y) = coord(i);
+            NewFeature::new(
+                Geometry::Point(Point::new(x, y)),
+                vec![
+                    Value::Text(format!("IE-{i:07}")),
+                    Value::Integer(i as i64 % 1_000_000),
+                ],
+            )
+        })
+        .collect();
+
+    let mut group = c.benchmark_group("constraints");
+    group.sample_size(10);
+    group.sampling_mode(SamplingMode::Flat);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(12));
+    group.throughput(Throughput::Elements(
+        u64::try_from(n).expect("row count fits u64"),
+    ));
+    for (label, enforce) in [("unenforced", false), ("enforced", true)] {
+        group.bench_function(label, |b| {
+            b.iter_batched(
+                || prepare_constrained(enforce, &master),
+                |target| black_box(run(target)),
+                BatchSize::PerIteration,
+            );
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_writes, bench_constraint_enforcement);
 criterion_main!(benches);

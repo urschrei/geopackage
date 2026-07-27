@@ -202,6 +202,44 @@ pub enum Error {
         /// The encoding the payload's header declared.
         format: geopackage_core::TileFormat,
     },
+    /// A written value that a `gpkg_schema` constraint on its column does not
+    /// allow.
+    ///
+    /// Raised only when the file was opened with
+    /// [`OpenOptions::enforce_column_constraints`](crate::OpenOptions::enforce_column_constraints):
+    /// the spec makes these constraints advisory, enforced "by SQL triggers or
+    /// by code in applications that update GeoPackage data values", so
+    /// enforcing them is the caller's decision.
+    #[error(
+        "{table_name}.{column_name} = {value} violates constraint {constraint_name:?} ({constraint})"
+    )]
+    ColumnConstraintViolation {
+        /// The table written to.
+        table_name: String,
+        /// The column whose value was refused.
+        column_name: String,
+        /// The `gpkg_data_column_constraints.constraint_name` it violates.
+        constraint_name: String,
+        /// What that constraint allows, rendered for the message.
+        constraint: String,
+        /// The value, rendered for the message.
+        value: String,
+    },
+    /// A `gpkg_data_column_constraints` constraint the spec's own rules rule
+    /// out, met while reading it or refused while writing it.
+    ///
+    /// Requirements 108 to 114 pin down what each `constraint_type` may carry:
+    /// a `range` needs both bounds and needs `min` below `max`, an `enum` or
+    /// `glob` needs a `value`, and the type has to be one of the three. A row
+    /// outside that says what it constrains without saying how, and there is
+    /// no honest reading of it.
+    #[error("column constraint {constraint_name:?} is not usable: {reason}")]
+    InvalidColumnConstraint {
+        /// The `constraint_name` the rows share.
+        constraint_name: String,
+        /// What is wrong with it.
+        reason: &'static str,
+    },
     /// A write was refused because the target table carries an extension this
     /// crate cannot identify.
     ///
