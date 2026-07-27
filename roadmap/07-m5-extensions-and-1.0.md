@@ -235,18 +235,71 @@ widespread implementation produces.
 
 ## Phase 5: Related Tables
 
-The largest of the extension items, and the one with the most producer
-variation to check against.
+Still the largest of the extension items, but no longer the least certain: the
+research item below was done first, and it found a single published spec version
+and a single dominant producer to match, rather than the producer variation this
+was originally sized for.
 
 - [ ] Read `gpkgext_relations` and walk a mapping table (`base_id`,
       `related_id`) for any relation type.
 - [ ] Write for `simple_attributes` and `media` first, each registering the
       extension rows the relation needs, including the row for the mapping
       table itself, and adding the related table to `gpkg_contents`.
-- [ ] Establish which OGC 18-000 version the ecosystem actually writes, by
-      reading the relations rows in the corpus and in GDAL-written and
-      QGIS-written samples, before fixing the model. This is the item most
-      likely to need a fixture we do not have yet.
+- [x] Establish which OGC 18-000 version the ecosystem actually writes.
+      **Answered 2026-07-27: there is only one.** 18-000 is version 1.0,
+      approved 2019-03-26 and published 2019-05-08; the 0.1 and 0.2 entries in
+      its Annex E revision history are pre-publication drafts, not releases.
+      There is no 1.1. The item's premise, that a version has to be chosen,
+      dissolves; what remains is matching what GDAL writes.
+
+      **The name variance is an alias, not a version signal.** The spec says
+      "Extension Name or Template: `related_tables`; upon adoption the alias
+      `gpkg_related_tables` MAY be used", and its own abstract test suite
+      queries `extension_name IN ('related_tables', 'gpkg_related_tables')`.
+      `Extension::from_name` already accepts both. The open decision is which to
+      *write*: GDAL 3.12.3 writes `gpkg_related_tables`, and our `name()`
+      currently canonicalises to `related_tables`, so writing our canonical form
+      would make us the odd producer out for no gain.
+
+      **What GDAL 3.12.3 writes**, verified by driving `AddRelationship`
+      through the Python bindings:
+
+      - `gpkgext_relations(id, base_table_name, base_primary_column,
+        related_table_name, related_primary_column, relation_name,
+        mapping_table_name)`, with `relation_name` carrying the related-table
+        type (`simple_attributes`, `media`, …).
+      - Two `gpkg_extensions` rows, both `gpkg_related_tables`, scope
+        `read-write`, `definition` `http://www.geopackage.org/18-000.html`,
+        `column_name` NULL: one for `gpkgext_relations` itself and one per
+        mapping table. This matches the spec's own tests, which require exactly
+        one row for `gpkgext_relations` and at least one mapping-table row.
+      - Mapping table as `CREATE TABLE "x" (id INTEGER PRIMARY KEY
+        AUTOINCREMENT, base_id INTEGER, related_id INTEGER)`. The extra `id` is
+        permitted: Requirement 9 says the table SHALL contain `base_id` and
+        `related_id` and MAY contain other columns.
+      - The mapping table also gets a `gpkg_contents` row as `attributes`.
+        Requirements 5 and 6 mandate that only for the base and related tables;
+        for the mapping table it is permitted rather than required.
+
+      **One place GDAL is looser than the spec**: Table 3 gives `base_id` and
+      `related_id` as Null "no", and GDAL's DDL leaves both nullable. Read
+      permissively, write `NOT NULL`, and do not let `validate()` fail a
+      GDAL-written file over it.
+
+      **Cardinality is deliberately unconstrained.** The spec notes that a
+      `UNIQUE` constraint could enforce one-to-many but is NOT RECOMMENDED,
+      because SQLite does not expose such constraints in an easily queryable
+      way. So the model should not try to infer or enforce cardinality.
+
+      `ets-gpkg12` carries `RTETests`, so acceptance criterion 3 has a path for
+      this extension without new harness work.
+- [ ] Fixture: no GeoPackage in the committed fixtures or the fetched corpus
+      carries `gpkgext_relations`, confirmed by sweeping both, so one has to be
+      generated. GDAL's Python bindings do it, with two traps worth recording
+      because they cost three attempts: the left and right table fields must be
+      set (to the FID column name, which `AddRelationship` accepts), and setting
+      the mapping-table field names explicitly makes the call fail while still
+      leaving `gpkgext_relations` behind, so a half-built file is the symptom.
 
 ## Phase 6: non-linear geometry, passthrough with computed envelopes
 
