@@ -177,6 +177,15 @@ pub enum Error {
         /// The pyramid that is missing its row.
         table_name: String,
     },
+    /// A zoom level the pyramid does not declare a `gpkg_tile_matrix` row for,
+    /// so it has no grid to address tiles against.
+    #[error("tile pyramid {table_name:?} declares no zoom level {zoom_level}")]
+    UnknownZoomLevel {
+        /// The pyramid that was addressed.
+        table_name: String,
+        /// The zoom level that is not declared.
+        zoom_level: i64,
+    },
     /// A pyramid whose zoom levels do not step by factors of two was created
     /// without opting into the `gpkg_zoom_other` extension.
     #[error(

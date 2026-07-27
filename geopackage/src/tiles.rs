@@ -17,12 +17,15 @@
 //! refuses an imperfect file is of no use for looking at one.
 
 use geopackage_core::ddl;
+use geopackage_core::ident::quote;
 use geopackage_core::tiles::{
-    self, TileMatrix, TileMatrixSet, ZOOM_OTHER_EXTENSION_DEFINITION, ZOOM_OTHER_EXTENSION_NAME,
+    self, TileCoord, TileMatrix, TileMatrixSet, TilePayload, ZOOM_OTHER_EXTENSION_DEFINITION,
+    ZOOM_OTHER_EXTENSION_NAME,
 };
+use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::{Error, GeoPackage, Result, resolve_table_name, table_exists};
+use crate::{BoundingBox, Error, GeoPackage, Result, resolve_table_name, table_exists};
 
 /// A declarative builder for a tile pyramid.
 ///
@@ -142,6 +145,85 @@ pub struct TilePyramid<'a> {
     matrix_set: TileMatrixSet,
     /// Ascending by zoom level, which [`Self::matrix`] binary-searches.
     matrices: Vec<TileMatrix>,
+    /// Built once per handle: a statement's text is a `prepare_cached` key, and
+    /// formatting one per tile is the per-row rebuild this crate has spent
+    /// releases removing.
+    sql: TileSql,
+}
+
+/// The statement text a [`TilePyramid`] uses, built once at construction.
+#[derive(Debug, Clone)]
+struct TileSql {
+    get: String,
+    exists: String,
+    count: String,
+    count_at: String,
+    scan: String,
+    scan_at: String,
+    scan_in: String,
+}
+
+impl TileSql {
+    /// Build the statements for a table, whose name is quoted once here rather
+    /// than at every call.
+    fn new(table: &str) -> Result<Self> {
+        let table = quote(table)?;
+        // Matrix order, which is what a consumer walking a pyramid expects:
+        // zoom level, then north to south, then west to east.
+        let order = "ORDER BY zoom_level, tile_row, tile_column";
+        let columns = "zoom_level, tile_column, tile_row, tile_data";
+        let address = "zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3";
+        Ok(Self {
+            get: format!("SELECT tile_data FROM {table} WHERE {address}"),
+            exists: format!("SELECT 1 FROM {table} WHERE {address}"),
+            count: format!("SELECT count(*) FROM {table}"),
+            count_at: format!("SELECT count(*) FROM {table} WHERE zoom_level = ?1"),
+            scan: format!("SELECT {columns} FROM {table} {order}"),
+            scan_at: format!("SELECT {columns} FROM {table} WHERE zoom_level = ?1 {order}"),
+            scan_in: format!(
+                "SELECT {columns} FROM {table} \
+                 WHERE zoom_level = ?1 AND tile_column BETWEEN ?2 AND ?3 \
+                 AND tile_row BETWEEN ?4 AND ?5 {order}"
+            ),
+        })
+    }
+}
+
+/// One tile of a pyramid, borrowing its payload from the row it was read from.
+///
+/// The payload is the bytes as stored, in whatever format the table holds:
+/// this crate does not decode them. [`Tile::to_vec`] copies, and everything
+/// else here borrows.
+#[derive(Debug)]
+pub struct Tile<'a> {
+    coord: TileCoord,
+    data: &'a [u8],
+}
+
+impl Tile<'_> {
+    /// Where this tile sits in the pyramid.
+    pub fn coord(&self) -> TileCoord {
+        self.coord
+    }
+
+    /// The stored payload, borrowed from SQLite's row buffer.
+    pub fn data(&self) -> &[u8] {
+        self.data
+    }
+
+    /// The stored payload, copied into an owned buffer.
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.data.to_vec()
+    }
+
+    /// What the payload's header declares: its encoding and pixel size.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Tile`] when the bytes are not a readable image header.
+    pub fn probe(&self) -> Result<TilePayload> {
+        Ok(tiles::probe(self.data)?)
+    }
 }
 
 impl std::fmt::Debug for TilePyramid<'_> {
@@ -317,11 +399,13 @@ impl GeoPackage {
                 table_name: table_name.clone(),
             })?;
         let matrices = read_matrices(conn, &table_name)?;
+        let sql = TileSql::new(&table_name)?;
         Ok(TilePyramid {
             gpkg: self,
             table_name,
             matrix_set,
             matrices,
+            sql,
         })
     }
 
@@ -378,6 +462,149 @@ impl<'a> TilePyramid<'a> {
             .and_then(|index| self.matrices.get(index))
     }
 
+    /// One tile's payload, or `None` where the pyramid holds no tile at that
+    /// address.
+    ///
+    /// Copies the payload out of SQLite once, which is what an owned return
+    /// costs. [`Self::get_tile_into`] reuses a buffer instead, and
+    /// [`Self::cursor`] lends the bytes without copying at all.
+    ///
+    /// The address is not checked against the zoom level's grid: a tile outside
+    /// it is simply absent, as any other empty address is. The write path is
+    /// where an impossible address is an error.
+    pub fn get_tile(&self, coord: TileCoord) -> Result<Option<Vec<u8>>> {
+        let conn = self.gpkg.connection();
+        let mut stmt = conn.prepare_cached(&self.sql.get)?;
+        Ok(stmt
+            .query_row(
+                rusqlite::params![coord.zoom_level, coord.column, coord.row],
+                |row| tile_blob(row, 0).map(<[u8]>::to_vec),
+            )
+            .optional()?)
+    }
+
+    /// One tile's payload, read into a caller-owned buffer, returning whether a
+    /// tile was there.
+    ///
+    /// The buffer is cleared first and reused, so a loop over many tiles
+    /// allocates once rather than once per tile. Its contents are untouched
+    /// when the tile is absent.
+    pub fn get_tile_into(&self, coord: TileCoord, buffer: &mut Vec<u8>) -> Result<bool> {
+        let conn = self.gpkg.connection();
+        let mut stmt = conn.prepare_cached(&self.sql.get)?;
+        let found = stmt
+            .query_row(
+                rusqlite::params![coord.zoom_level, coord.column, coord.row],
+                |row| {
+                    let data = tile_blob(row, 0)?;
+                    buffer.clear();
+                    buffer.extend_from_slice(data);
+                    Ok(())
+                },
+            )
+            .optional()?;
+        Ok(found.is_some())
+    }
+
+    /// Whether the pyramid holds a tile at an address, without reading its
+    /// payload.
+    pub fn has_tile(&self, coord: TileCoord) -> Result<bool> {
+        let conn = self.gpkg.connection();
+        let mut stmt = conn.prepare_cached(&self.sql.exists)?;
+        Ok(stmt
+            .query_row(
+                rusqlite::params![coord.zoom_level, coord.column, coord.row],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    /// How many tiles the pyramid holds.
+    pub fn tile_count(&self) -> Result<i64> {
+        let conn = self.gpkg.connection();
+        Ok(conn
+            .prepare_cached(&self.sql.count)?
+            .query_row([], |r| r.get(0))?)
+    }
+
+    /// How many tiles the pyramid holds at one zoom level.
+    pub fn tile_count_at(&self, zoom_level: i64) -> Result<i64> {
+        let conn = self.gpkg.connection();
+        Ok(conn
+            .prepare_cached(&self.sql.count_at)?
+            .query_row([zoom_level], |r| r.get(0))?)
+    }
+
+    /// Stream every tile, in matrix order: by zoom level, then north to south,
+    /// then west to east.
+    ///
+    /// Two calls, as the feature read path is: the cursor owns the statement,
+    /// and [`TileCursor::tiles`] borrows it to walk the rows. There is no
+    /// materialising counterpart, because one zoom level of a real pyramid is
+    /// more payload than a `Vec` of them should hold.
+    pub fn cursor(&self) -> Result<TileCursor<'_>> {
+        self.cursor_with(&self.sql.scan, Vec::new())
+    }
+
+    /// Stream the tiles of one zoom level, in matrix order.
+    pub fn cursor_at(&self, zoom_level: i64) -> Result<TileCursor<'_>> {
+        self.cursor_with(&self.sql.scan_at, vec![zoom_level.into()])
+    }
+
+    /// Stream the tiles of one zoom level that a bounding box touches, in
+    /// matrix order.
+    ///
+    /// The box is in the pyramid's own spatial reference system; this crate
+    /// transforms nothing. It is turned into a range of tile indices and asked
+    /// of the table once, so the payloads read are the ones the box selects.
+    /// A box that misses the pyramid's extent yields no tiles.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnknownZoomLevel`] when the pyramid declares no such zoom
+    /// level, since without its grid a box cannot be turned into tile indices.
+    pub fn cursor_in(&self, zoom_level: i64, bbox: BoundingBox) -> Result<TileCursor<'_>> {
+        let matrix = self
+            .matrix(zoom_level)
+            .ok_or_else(|| Error::UnknownZoomLevel {
+                table_name: self.table_name.clone(),
+                zoom_level,
+            })?;
+        // A box outside the extent binds an empty range rather than taking a
+        // path of its own: the query then returns nothing, which is the answer.
+        let range = self
+            .matrix_set
+            .tile_range(matrix, bbox.min_x, bbox.min_y, bbox.max_x, bbox.max_y);
+        let (min_column, max_column, min_row, max_row) = range.map_or((0, -1, 0, -1), |range| {
+            (
+                range.min_column,
+                range.max_column,
+                range.min_row,
+                range.max_row,
+            )
+        });
+        self.cursor_with(
+            &self.sql.scan_in,
+            vec![
+                zoom_level.into(),
+                min_column.into(),
+                max_column.into(),
+                min_row.into(),
+                max_row.into(),
+            ],
+        )
+    }
+
+    fn cursor_with(
+        &self,
+        sql: &str,
+        params: Vec<rusqlite::types::Value>,
+    ) -> Result<TileCursor<'_>> {
+        let stmt = self.gpkg.connection().prepare(sql)?;
+        Ok(TileCursor { stmt, params })
+    }
+
     /// Whether this pyramid satisfies the spec's consistency rules.
     ///
     /// Creation checks this, so a pyramid this crate wrote always passes. Worth
@@ -390,6 +617,127 @@ impl<'a> TilePyramid<'a> {
     pub fn validate(&self) -> Result<()> {
         self.matrix_set.validate(&self.matrices)?;
         Ok(())
+    }
+}
+
+/// A prepared tile scan, holding its statement so that
+/// [`TileCursor::tiles`] can lend each payload straight out of the row.
+///
+/// The split is the one [`crate::FeatureCursor`] uses, and for the same reason:
+/// rusqlite's row cursor borrows its statement, so an iterator owning both
+/// would be self-referential, which `#![forbid(unsafe_code)]` rules out.
+pub struct TileCursor<'a> {
+    stmt: rusqlite::Statement<'a>,
+    params: Vec<rusqlite::types::Value>,
+}
+
+impl std::fmt::Debug for TileCursor<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TileCursor")
+            .field("parameters", &self.params.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl TileCursor<'_> {
+    /// Run the scan and walk its tiles.
+    ///
+    /// Each call re-runs the query from the start, so a cursor can be walked
+    /// more than once.
+    pub fn tiles(&mut self) -> Result<TileStream<'_>> {
+        let rows = self
+            .stmt
+            .query(rusqlite::params_from_iter(self.params.iter()))?;
+        Ok(TileStream { rows })
+    }
+}
+
+/// A scan in progress, lending one tile at a time.
+///
+/// Not an [`Iterator`]: an iterator's item cannot borrow from the iterator, and
+/// the whole point here is to hand out the payload without copying it. Walk it
+/// with `while let Some(tile) = stream.next()?`, or hand a closure to
+/// [`Self::for_each`].
+///
+/// ```
+/// # use geopackage::core::tiles::{TileMatrixSet, ZoomLadder};
+/// # use geopackage::{GeoPackage, TilePyramidBuilder};
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let dir = tempfile::tempdir()?;
+/// # let gpkg = GeoPackage::create(dir.path().join("t.gpkg"))?;
+/// # gpkg.add_epsg_srs(3857)?;
+/// # let set = TileMatrixSet::web_mercator_quad();
+/// # let matrices = set.ladder(ZoomLadder::new(0, 2))?;
+/// # let pyramid = gpkg.create_tile_pyramid(&TilePyramidBuilder::new("basemap", set).matrices(matrices))?;
+/// let mut cursor = pyramid.cursor()?;
+/// let mut stream = cursor.tiles()?;
+/// let mut bytes = 0;
+/// while let Some(tile) = stream.next()? {
+///     // `tile.data()` borrows the row: nothing is copied to count it.
+///     bytes += tile.data().len();
+/// }
+/// # assert_eq!(bytes, 0);
+/// # Ok(()) }
+/// ```
+pub struct TileStream<'c> {
+    rows: rusqlite::Rows<'c>,
+}
+
+impl std::fmt::Debug for TileStream<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `rusqlite::Rows` is not `Debug`, and a scan mid-flight has no state
+        // worth printing beyond the query that produced it.
+        f.debug_struct("TileStream").finish_non_exhaustive()
+    }
+}
+
+impl TileStream<'_> {
+    /// The next tile of the scan, or `None` at its end.
+    ///
+    /// The returned [`Tile`] borrows this stream, so it is dropped before the
+    /// next call. Copy what you need out of it with [`Tile::to_vec`].
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "a lending cursor cannot implement Iterator: its item borrows the iterator. `next` is the name a caller expects in a `while let` loop, and the fallible, borrowing signature is visibly not Iterator::next"
+    )]
+    pub fn next(&mut self) -> Result<Option<Tile<'_>>> {
+        let Some(row) = self.rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(Tile {
+            coord: TileCoord::new(row.get(0)?, row.get(1)?, row.get(2)?),
+            data: tile_blob(row, 3)?,
+        }))
+    }
+
+    /// Run a closure over every remaining tile.
+    ///
+    /// The same walk as [`Self::next`] with the borrow handled for you. The
+    /// closure's error ends the scan.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the closure returns, or a read error from the scan itself.
+    pub fn for_each(&mut self, mut f: impl FnMut(&Tile<'_>) -> Result<()>) -> Result<()> {
+        while let Some(tile) = self.next()? {
+            f(&tile)?;
+        }
+        Ok(())
+    }
+}
+
+/// A tile payload, borrowed from the row rather than copied out of it.
+///
+/// `tile_data` is `NOT NULL` in every table this crate creates, and a
+/// non-blob there is a malformed file rather than a value to coerce.
+fn tile_blob<'a>(row: &'a rusqlite::Row<'a>, index: usize) -> rusqlite::Result<&'a [u8]> {
+    match row.get_ref(index)? {
+        ValueRef::Blob(data) => Ok(data),
+        _ => Err(rusqlite::Error::InvalidColumnType(
+            index,
+            tiles::TILE_DATA_COLUMN.to_owned(),
+            rusqlite::types::Type::Blob,
+        )),
     }
 }
 
