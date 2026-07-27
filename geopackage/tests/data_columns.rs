@@ -345,6 +345,70 @@ fn an_enforced_glob_refuses_a_value_it_does_not_match() {
 }
 
 #[test]
+fn an_enforced_glob_has_sqlite_semantics() {
+    // The pattern language is SQLite's, and enforcement asks SQLite rather
+    // than reimplementing it. These are the corners where a hand-rolled
+    // matcher and the engine tend to part company; each is checked end to end
+    // through the write path, so the test fails if the delegation is ever
+    // replaced by a copy of the rules that gets one of them wrong.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("globs.gpkg");
+    for (pattern, value, allowed, why) in [
+        ("[A-Z][A-Z]", "IE", true, "a range in a class"),
+        (
+            "[A-Z][A-Z]",
+            "ie",
+            false,
+            "GLOB is case sensitive, unlike LIKE",
+        ),
+        (
+            "[*]",
+            "*",
+            true,
+            "no escape character: a literal * is written [*]",
+        ),
+        ("[*]", "x", false, "and matches nothing else"),
+        ("[]]", "]", true, "a ] in the first position is a member"),
+        ("[-a]", "-", true, "a - with nothing before it is a member"),
+        (
+            "[abc",
+            "[abc",
+            false,
+            "an unterminated class matches nothing, and is not a literal [",
+        ),
+        ("?", "e", true, "? is one character"),
+        ("?", "\u{e9}", true, "and counts characters, not bytes"),
+    ] {
+        if path.exists() {
+            std::fs::remove_file(&path).unwrap();
+        }
+        {
+            let gpkg = GeoPackage::create(&path).unwrap();
+            layered(&gpkg);
+            gpkg.add_column_constraint(&ColumnConstraint {
+                name: "codes".to_owned(),
+                kind: ConstraintKind::Glob(pattern.to_owned()),
+                description: None,
+            })
+            .unwrap();
+            gpkg.set_data_column("sites", &described("code", Some("codes")))
+                .unwrap();
+            gpkg.close().unwrap();
+        }
+        let gpkg = OpenOptions::new()
+            .enforce_column_constraints(true)
+            .open(&path)
+            .unwrap();
+        let written = insert(&gpkg, value, 1950);
+        assert_eq!(
+            written.is_ok(),
+            allowed,
+            "{pattern:?} against {value:?}: {why}"
+        );
+    }
+}
+
+#[test]
 fn null_satisfies_every_constraint() {
     let dir = tempfile::tempdir().unwrap();
     let gpkg = constrained(&dir, true);

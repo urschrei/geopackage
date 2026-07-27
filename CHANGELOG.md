@@ -118,15 +118,16 @@ While the version is below 1.0 the API may change in any release.
   constraints their columns declare, refusing a row that violates one. It is
   off by default because the format makes these constraints advisory, so a
   conforming file may hold values its own constraints forbid. It covers every
-  write path, the columnar one included, and costs 14% on a 200,000-row write
-  with two constrained columns
+  write path, the columnar one included, and costs about 31% on a 200,000-row
+  write with two constrained columns
   ([benchmark](roadmap/benchmarks/2026-07-27-constraint-enforcement.md)).
 
-  The `glob` form needed a matcher, since calling back into SQLite per value is
-  not viable on a write path. `geopackage_core::schema::glob_match` implements
-  SQLite's pattern language, including the rule that a `[` with no closing `]`
-  matches nothing rather than standing for a literal `[`, and a property test
-  holds it to SQLite's own answers.
+  The `glob` form is evaluated by SQLite, through a `SELECT ?1 GLOB ?2`
+  prepared once per writer. Its pattern language has no definition beyond what
+  SQLite does with it, and this crate bundles SQLite, so the engine holding the
+  file is the authority on what its own constraints mean; a number also gets
+  SQLite's text coercion rather than an approximation of it. It is the faster
+  of the two as well, by 22% per call against a hand-rolled matcher.
 
 ### Changed
 
