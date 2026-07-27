@@ -64,6 +64,7 @@
 // planned `geopackage-ffi` crate (M3) is the sole intended exception, and will
 // opt out of the workspace lints rather than relax them here.
 
+pub mod curve;
 pub mod datetime;
 pub mod ddl;
 pub mod extensions;

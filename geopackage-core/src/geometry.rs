@@ -51,6 +51,28 @@ pub enum GeometryError {
     /// (Annex G).
     #[error("unknown WKB geometry type code {0}")]
     UnknownWkbType(u32),
+    /// The WKB body declares one of the abstract supertypes (`GEOMETRY`,
+    /// `CURVE`, `SURFACE`), which cannot be instantiated and so cannot appear
+    /// as a body.
+    #[error("WKB geometry type code {0} is an abstract supertype and has no encoding")]
+    AbstractWkbType(u32),
+    /// The WKB body ended before a count, coordinate, or nested geometry its
+    /// structure requires.
+    #[error("WKB body truncated at byte {offset}")]
+    TruncatedAt {
+        /// Byte offset into the body at which the read ran out of bytes.
+        offset: usize,
+    },
+    /// A WKB geometry opened with a byte-order marker that is neither 0 (big
+    /// endian) nor 1 (little endian).
+    #[error("invalid WKB byte order marker at byte {offset}")]
+    InvalidByteOrder {
+        /// Byte offset into the body of the offending marker.
+        offset: usize,
+    },
+    /// Nested geometry containers exceeded the walk's depth limit.
+    #[error("WKB geometry nesting is too deep")]
+    NestingTooDeep,
     /// The geometry could not be encoded to WKB: the georust `wkb` writer
     /// rejected it (for example a coordinate dimension it cannot serialise).
     #[error("failed to encode geometry to WKB")]
@@ -380,8 +402,11 @@ pub fn encode_gpb<G: GeometryTrait<T = f64>>(
 }
 
 /// Accumulator for an XY bounding box over visited coordinates.
+///
+/// Shared with [`crate::curve`], which walks WKB bytes directly rather than
+/// through the `wkb` reader but must apply the same non-finite policy.
 #[derive(Debug, Clone, Copy)]
-struct XyBounds {
+pub(crate) struct XyBounds {
     min_x: f64,
     max_x: f64,
     min_y: f64,
@@ -390,7 +415,7 @@ struct XyBounds {
 }
 
 impl XyBounds {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             min_x: f64::INFINITY,
             max_x: f64::NEG_INFINITY,
@@ -400,7 +425,7 @@ impl XyBounds {
         }
     }
 
-    fn add(&mut self, x: f64, y: f64) {
+    pub(crate) fn add(&mut self, x: f64, y: f64) {
         if !x.is_finite() || !y.is_finite() {
             return;
         }
@@ -411,7 +436,7 @@ impl XyBounds {
         self.seen = true;
     }
 
-    fn finish(self) -> Option<[f64; 4]> {
+    pub(crate) fn finish(self) -> Option<[f64; 4]> {
         self.seen
             .then_some([self.min_x, self.max_x, self.min_y, self.max_y])
     }
@@ -419,8 +444,11 @@ impl XyBounds {
 
 /// Accumulator for an XY bounding box plus, when present, a Z bounds range.
 /// Feeds [`write_envelope`]'s always-envelope policy.
+///
+/// Shared with [`crate::curve`], which fills it by walking WKB bytes rather
+/// than through the `wkb` reader.
 #[derive(Debug, Clone, Copy)]
-struct XyzBounds {
+pub(crate) struct XyzBounds {
     xy: XyBounds,
     min_z: f64,
     max_z: f64,
@@ -428,7 +456,7 @@ struct XyzBounds {
 }
 
 impl XyzBounds {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             xy: XyBounds::new(),
             min_z: f64::INFINITY,
@@ -437,7 +465,7 @@ impl XyzBounds {
         }
     }
 
-    fn add(&mut self, x: f64, y: f64, z: Option<f64>) {
+    pub(crate) fn add(&mut self, x: f64, y: f64, z: Option<f64>) {
         self.xy.add(x, y);
         if let Some(z) = z
             && z.is_finite()
@@ -450,12 +478,12 @@ impl XyzBounds {
 
     /// The XY bounds, or `None` when no finite XY coordinate was seen (an
     /// empty geometry).
-    fn xy_bounds(&self) -> Option<[f64; 4]> {
+    pub(crate) fn xy_bounds(&self) -> Option<[f64; 4]> {
         self.xy.finish()
     }
 
     /// The Z range, when any coordinate carried a finite Z.
-    fn z_bounds(&self) -> Option<(f64, f64)> {
+    pub(crate) fn z_bounds(&self) -> Option<(f64, f64)> {
         self.seen_z.then_some((self.min_z, self.max_z))
     }
 }
