@@ -130,7 +130,7 @@ fn whole_geopackage_rows_belong_to_no_table() {
     assert_eq!(all[0].table_name, None);
     assert_eq!(all[0].column_name, None);
     assert_eq!(all[0].extension(), Extension::Metadata);
-    assert_eq!(all[0].support(), ExtensionSupport::Known);
+    assert_eq!(all[0].support(), ExtensionSupport::Implemented);
 
     // A NULL table_name matches no table, including a table called "null".
     assert_eq!(gpkg.table_extensions("gpkg_metadata").unwrap(), Vec::new());
@@ -463,7 +463,7 @@ fn every_extension_in_the_committed_fixtures_is_classified() {
                 "gpkg_geom_MULTISURFACE".to_owned(),
                 ExtensionSupport::Implemented
             ),
-            ("gpkg_metadata".to_owned(), ExtensionSupport::Known),
+            ("gpkg_metadata".to_owned(), ExtensionSupport::Implemented),
             ("gpkg_rtree_index".to_owned(), ExtensionSupport::Implemented),
         ]
     );

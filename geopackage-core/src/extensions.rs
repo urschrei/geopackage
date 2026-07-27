@@ -204,7 +204,7 @@ impl Extension {
             Self::CrsWkt => "gpkg_crs_wkt".to_owned(),
             Self::CrsWkt11 => "gpkg_crs_wkt_1_1".to_owned(),
             Self::GriddedCoverage => "gpkg_2d_gridded_coverage".to_owned(),
-            Self::RelatedTables => "related_tables".to_owned(),
+            Self::RelatedTables => crate::related::EXTENSION_NAME.to_owned(),
             Self::GdalAspatial => "gdal_aspatial".to_owned(),
             Self::Other(name) => name.clone(),
         }
@@ -218,11 +218,6 @@ impl Extension {
     /// would silently classify it as [`ExtensionSupport::Unrecognised`].
     pub fn support(&self) -> ExtensionSupport {
         match self {
-            Self::RtreeIndex
-            | Self::ZoomOther
-            | Self::Webp
-            | Self::CrsWkt
-            | Self::CrsWkt11
             // A non-linear geometry column is read and written: the blobs are
             // encoded with the extended flag, their envelopes are computed from
             // the WKB, and they index. What a caller cannot do is get one back
@@ -230,12 +225,16 @@ impl Extension {
             // That is a limit of the Rust geometry model rather than of this
             // extension's support, and `Known` would say the data is left
             // untouched, which is no longer true of it.
-            | Self::GeometryType(_) => ExtensionSupport::Implemented,
-            Self::Metadata
+            Self::RtreeIndex
+            | Self::ZoomOther
+            | Self::Webp
+            | Self::CrsWkt
+            | Self::CrsWkt11
+            | Self::GeometryType(_)
+            | Self::Metadata
             | Self::Schema
-            | Self::RelatedTables
-            | Self::GriddedCoverage
-            | Self::GdalAspatial => ExtensionSupport::Known,
+            | Self::RelatedTables => ExtensionSupport::Implemented,
+            Self::GriddedCoverage | Self::GdalAspatial => ExtensionSupport::Known,
             Self::GeometryTypeTrigger | Self::SrsIdTrigger => ExtensionSupport::Removed,
             Self::Other(_) => ExtensionSupport::Unrecognised,
         }

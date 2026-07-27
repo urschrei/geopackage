@@ -522,6 +522,7 @@ mod metadata;
 mod open;
 mod options;
 mod packed;
+mod related;
 mod schema;
 mod srs;
 mod tiles;
@@ -540,12 +541,14 @@ pub use geopackage_core::extensions::{Extension, ExtensionScope, ExtensionSuppor
 pub use geopackage_core::metadata::{
     MetadataRecord, MetadataReference, MetadataScope, ReferenceScope,
 };
+pub use geopackage_core::related::{Relation, RelationName};
 pub use geopackage_core::schema::{ColumnConstraint, ConstraintKind, DataColumn};
 pub use index::{SpatialIndexAudit, SpatialIndexStatus};
 pub use layer::{BoundingBox, Feature, FeatureCursor, FeatureStream, Features, Layer, LayerKind};
 pub use metadata::{MetadataTarget, NewMetadata};
 pub use open::OpenWarning;
 pub use options::{DEFAULT_BUSY_TIMEOUT, JournalMode, OpenOptions, Synchronous};
+pub use related::NewRelation;
 pub use schema::{Column, GeometryColumn, TableSchema};
 pub use srs::Srs;
 pub use tiles::{Tile, TileCursor, TilePyramid, TilePyramidBuilder, TileStream, TileWriter};

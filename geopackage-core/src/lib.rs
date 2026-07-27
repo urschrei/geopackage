@@ -22,6 +22,7 @@
 //!   value constraints (Annex F.9)
 //! - [`metadata`]: the `gpkg_metadata` extension's records and the references
 //!   attaching them to a file's contents (Annex F.8)
+//! - [`related`]: the Related Tables Extension's relationships (OGC 18-000)
 //! - [`curve`]: envelopes read straight from ISO WKB, non-linear types
 //!   included, with exact circular-arc extents
 //!
@@ -78,6 +79,7 @@ pub mod geometry;
 pub mod gpb;
 pub mod ident;
 pub mod metadata;
+pub mod related;
 pub mod schema;
 pub mod srs;
 pub mod tiles;
