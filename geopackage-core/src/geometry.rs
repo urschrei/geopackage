@@ -228,6 +228,87 @@ pub fn geometry_type_matches(actual: GeometryType, declared: GeometryType) -> bo
     false
 }
 
+/// Traverse a GPB blob's body for its XY bounds, non-linear types included.
+///
+/// The one place the curve/linear decision is made, so the `ST_*` functions,
+/// the bulk index build and the layer read path cannot drift apart on it. A
+/// non-linear body is walked by [`crate::curve`], which reads the WKB bytes
+/// directly; everything else goes through [`GpbGeometry`] and the `wkb`
+/// reader, so linear geometries behave exactly as they did before curves were
+/// handled at all.
+fn body_xy_bounds(blob: &[u8]) -> Result<Option<[f64; 4]>, GeometryError> {
+    let (_, offset) = gpb::parse_header(blob)?;
+    // `parse_header` guarantees `offset <= blob.len()`.
+    let body = blob.get(offset..).unwrap_or_default();
+    if wkb_geometry_type(body)?.is_extension() {
+        crate::curve::xy_envelope(body)
+    } else {
+        Ok(GpbGeometry::parse(blob)?.xy_envelope())
+    }
+}
+
+/// The XY bounds `[min_x, max_x, min_y, max_y]` of a GPB blob, or `None` when
+/// the geometry is empty.
+///
+/// The header envelope when the header carries one, which is a constant-time
+/// read, and a body traversal otherwise. This is what `ST_MinX` and its three
+/// siblings answer from.
+///
+/// # Errors
+///
+/// [`GeometryError`] if the header or the body cannot be read.
+pub fn blob_xy_envelope(blob: &[u8]) -> Result<Option<[f64; 4]>, GeometryError> {
+    let (header, _) = gpb::parse_header(blob)?;
+    if let Some((min_x, max_x, min_y, max_y)) = header.envelope.xy_bounds() {
+        return Ok(Some([min_x, max_x, min_y, max_y]));
+    }
+    body_xy_bounds(blob)
+}
+
+/// Whether a GPB blob's geometry is empty.
+///
+/// The header's empty flag when set, which is a constant-time read, and a body
+/// traversal otherwise: a geometry with no finite coordinate is empty however
+/// the flag reads. This is what `ST_IsEmpty` answers from.
+///
+/// # Errors
+///
+/// [`GeometryError`] if the header or the body cannot be read.
+pub fn blob_is_empty(blob: &[u8]) -> Result<bool, GeometryError> {
+    let (header, _) = gpb::parse_header(blob)?;
+    if header.empty {
+        return Ok(true);
+    }
+    Ok(body_xy_bounds(blob)?.is_none())
+}
+
+/// The XY bounds of a GPB blob together with whether it is empty, from a single
+/// traversal.
+///
+/// The bulk index build needs both, and needs them to agree with what the
+/// `ST_IsEmpty`-guarded triggers would have indexed. Asking
+/// [`blob_is_empty`] and [`blob_xy_envelope`] separately would traverse the
+/// body twice, so this pairs them: emptiness is decided from the traversal, and
+/// the bounds are the header envelope when there is one.
+///
+/// # Errors
+///
+/// [`GeometryError`] if the header or the body cannot be read.
+pub fn blob_envelope_and_empty(blob: &[u8]) -> Result<(Option<[f64; 4]>, bool), GeometryError> {
+    let (header, _) = gpb::parse_header(blob)?;
+    if header.empty {
+        return Ok((None, true));
+    }
+    let Some(body_bounds) = body_xy_bounds(blob)? else {
+        return Ok((None, true));
+    };
+    let bounds = match header.envelope.xy_bounds() {
+        Some((min_x, max_x, min_y, max_y)) => [min_x, max_x, min_y, max_y],
+        None => body_bounds,
+    };
+    Ok((Some(bounds), false))
+}
+
 /// Read the geometry type discriminator from the start of an ISO WKB body,
 /// without materialising coordinates.
 ///
@@ -335,10 +416,33 @@ pub fn write_envelope<G: GeometryTrait<T = f64>>(geom: &G) -> (gpb::Envelope, bo
 /// them against the column's `z`/`m` constraints, and parsing twice to learn
 /// them would undo the point of this function.
 ///
+/// A non-linear body is read by [`crate::curve`] rather than the `wkb` reader,
+/// which cannot parse one, and its header carries the extended flag. Writing
+/// one still needs the matching `gpkg_geom_<TYPE>` row in `gpkg_extensions`;
+/// that is the caller's to register, since this function sees a body and not a
+/// table.
+///
 /// # Errors
 ///
-/// [`GeometryError`] if `wkb_body` is not a geometry the `wkb` reader accepts.
+/// [`GeometryError`] if `wkb_body` is not a geometry the `wkb` reader accepts,
+/// or, for a non-linear type, one [`crate::curve::scan`] accepts.
 pub fn encode_gpb_from_wkb(wkb_body: &[u8], srs_id: i32) -> Result<EncodedGpb, GeometryError> {
+    // A non-linear body cannot go through the `wkb` reader at all, so its
+    // envelope, dimensions and extent come from `curve`, which walks the bytes.
+    // The header's extended flag is set for it, per Annex F.1 Requirement 68.
+    if wkb_geometry_type(wkb_body)?.is_extension() {
+        let scan = crate::curve::scan(wkb_body)?;
+        let body = wkb_body.get(..scan.len).unwrap_or(wkb_body);
+        let mut blob = Vec::with_capacity(gpb::header_len(&scan.envelope) + body.len());
+        gpb::encode_header_into(&mut blob, srs_id, &scan.envelope, scan.empty, true);
+        blob.extend_from_slice(body);
+        return Ok(EncodedGpb {
+            blob,
+            xy_envelope: scan.xy_envelope,
+            dimensions: scan.dimensions,
+        });
+    }
+
     let geometry = Wkb::try_new(wkb_body)?;
     let (envelope, empty) = write_envelope(&geometry);
     let xy_envelope = envelope

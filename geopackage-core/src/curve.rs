@@ -42,6 +42,8 @@
 use crate::geometry::{GeometryError, XyBounds, XyzBounds};
 use crate::gpb;
 
+use geo_traits::Dimensions;
+
 /// Cap on nested geometry containers, so a hostile body cannot drive the
 /// recursive walk into a stack overflow. Deeper than any nesting a writer
 /// produces in practice.
@@ -78,38 +80,65 @@ const COLLINEAR_TOLERANCE: f64 = 1e-14;
 /// not a GeoPackage geometry type or is one of the abstract supertypes, is
 /// EWKB rather than ISO WKB, or nests containers deeper than 32.
 pub fn xy_envelope(wkb_body: &[u8]) -> Result<Option<[f64; 4]>, GeometryError> {
-    Ok(walk(wkb_body)?.xy_bounds())
+    Ok(scan(wkb_body)?.xy_envelope)
 }
 
-/// The GPB envelope to write for an ISO WKB body, and whether it is empty.
+/// What one walk of an ISO WKB body found.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodyScan {
+    /// The envelope to write into a GPB header, on the same rule
+    /// [`crate::geometry::write_envelope`] follows: [`gpb::Envelope::Xyz`] when
+    /// the body carries a Z, otherwise [`gpb::Envelope::Xy`], and
+    /// [`gpb::Envelope::None`] when it is empty. An M never widens it.
+    pub envelope: gpb::Envelope,
+    /// The same bounds as `envelope` in the flat form the rtree wants, or
+    /// `None` when the body is empty.
+    pub xy_envelope: Option<[f64; 4]>,
+    /// Whether the body carries no finite coordinate.
+    pub empty: bool,
+    /// The dimensions the body's type code declares, for checking against the
+    /// column's `z` and `m` constraints.
+    pub dimensions: Dimensions,
+    /// How many bytes of the input the geometry occupies. A caller copying the
+    /// body into a blob should copy only this much, so trailing bytes beyond
+    /// the geometry are not carried along.
+    pub len: usize,
+}
+
+/// Walk an ISO WKB body once, returning everything the read and write paths
+/// need from it.
 ///
-/// The write-path counterpart of [`xy_envelope`], matching
-/// [`crate::geometry::write_envelope`]: [`gpb::Envelope::Xyz`] when the body
-/// carries a Z dimension, otherwise [`gpb::Envelope::Xy`], and
-/// [`gpb::Envelope::None`] with `true` when no coordinate is finite. An M
-/// dimension never widens the envelope.
+/// [`xy_envelope`] is this with only the bounds kept.
 ///
 /// # Errors
 ///
 /// As [`xy_envelope`].
-pub fn write_envelope(wkb_body: &[u8]) -> Result<(gpb::Envelope, bool), GeometryError> {
-    let bounds = walk(wkb_body)?;
+pub fn scan(wkb_body: &[u8]) -> Result<BodyScan, GeometryError> {
+    let mut cursor = Cursor::new(wkb_body);
+    let mut bounds = XyzBounds::new();
+    let dimensions = read_geometry(&mut cursor, &mut bounds, 0)?;
+    let len = cursor.offset;
+
     let Some([min_x, max_x, min_y, max_y]) = bounds.xy_bounds() else {
-        return Ok((gpb::Envelope::None, true));
+        return Ok(BodyScan {
+            envelope: gpb::Envelope::None,
+            xy_envelope: None,
+            empty: true,
+            dimensions,
+            len,
+        });
     };
     let envelope = match bounds.z_bounds() {
         Some((min_z, max_z)) => gpb::Envelope::Xyz([min_x, max_x, min_y, max_y, min_z, max_z]),
         None => gpb::Envelope::Xy([min_x, max_x, min_y, max_y]),
     };
-    Ok((envelope, false))
-}
-
-/// Walk a body, accumulating the bounds of every coordinate it carries.
-fn walk(wkb_body: &[u8]) -> Result<XyzBounds, GeometryError> {
-    let mut cursor = Cursor::new(wkb_body);
-    let mut bounds = XyzBounds::new();
-    read_geometry(&mut cursor, &mut bounds, 0)?;
-    Ok(bounds)
+    Ok(BodyScan {
+        envelope,
+        xy_envelope: Some([min_x, max_x, min_y, max_y]),
+        empty: false,
+        dimensions,
+        len,
+    })
 }
 
 /// The XY envelope of the circular arc that runs from `p0` through `p1` to
@@ -255,7 +284,7 @@ fn read_geometry(
     cursor: &mut Cursor<'_>,
     bounds: &mut XyzBounds,
     depth: u32,
-) -> Result<(), GeometryError> {
+) -> Result<Dimensions, GeometryError> {
     if depth > MAX_DEPTH {
         return Err(GeometryError::NestingTooDeep);
     }
@@ -289,6 +318,7 @@ fn read_geometry(
         4..=7 | 9..=12 => {
             let count = cursor.read_u32(little_endian)?;
             for _ in 0..count {
+                // A child's own dimensions do not override the container's.
                 read_geometry(cursor, bounds, depth + 1)?;
             }
         }
@@ -297,7 +327,7 @@ fn read_geometry(
         _ => return Err(GeometryError::AbstractWkbType(code)),
     }
 
-    Ok(())
+    Ok(coord.dimensions)
 }
 
 /// Read a counted coordinate sequence into `bounds`.
@@ -363,6 +393,7 @@ fn read_circular_string(
 struct CoordLayout {
     stride: usize,
     has_z: bool,
+    dimensions: Dimensions,
 }
 
 /// Split an ISO WKB type code into its base type and its coordinate layout.
@@ -378,18 +409,22 @@ fn decode_type(code: u32) -> Result<(u32, CoordLayout), GeometryError> {
         0 => CoordLayout {
             stride: 2,
             has_z: false,
+            dimensions: Dimensions::Xy,
         },
         1 => CoordLayout {
             stride: 3,
             has_z: true,
+            dimensions: Dimensions::Xyz,
         },
         2 => CoordLayout {
             stride: 3,
             has_z: false,
+            dimensions: Dimensions::Xym,
         },
         3 => CoordLayout {
             stride: 4,
             has_z: true,
+            dimensions: Dimensions::Xyzm,
         },
         _ => return Err(GeometryError::UnknownWkbType(code)),
     };
@@ -901,23 +936,60 @@ mod tests {
             bytes
         };
 
-        let (z_envelope, empty) = write_envelope(&wkb(1008, &payload(true))).expect("valid body");
-        assert!(!empty);
+        let z = scan(&wkb(1008, &payload(true))).expect("valid body");
+        assert!(!z.empty);
+        assert_eq!(z.dimensions, Dimensions::Xyz);
         assert_eq!(
-            z_envelope,
+            z.envelope,
             gpb::Envelope::Xyz([-1.0, 1.0, 0.0, 1.0, 5.0, 9.0])
         );
 
-        let (m_envelope, empty) = write_envelope(&wkb(2008, &payload(true))).expect("valid body");
-        assert!(!empty);
-        assert_eq!(m_envelope, gpb::Envelope::Xy([-1.0, 1.0, 0.0, 1.0]));
+        let m = scan(&wkb(2008, &payload(true))).expect("valid body");
+        assert!(!m.empty);
+        assert_eq!(m.dimensions, Dimensions::Xym);
+        assert_eq!(m.envelope, gpb::Envelope::Xy([-1.0, 1.0, 0.0, 1.0]));
     }
 
     #[test]
     fn an_empty_curve_body_is_reported_empty_by_the_write_path() {
-        let (envelope, empty) = write_envelope(&wkb(8, &coords(&[]))).expect("valid body");
-        assert_eq!(envelope, gpb::Envelope::None);
-        assert!(empty);
+        let scanned = scan(&wkb(8, &coords(&[]))).expect("valid body");
+        assert_eq!(scanned.envelope, gpb::Envelope::None);
+        assert_eq!(scanned.xy_envelope, None);
+        assert!(scanned.empty);
+    }
+
+    #[test]
+    fn a_scan_reports_the_geometry_extent_without_trailing_bytes() {
+        let mut body = wkb(8, &coords(&[[-1.0, 0.0], [0.0, 1.0], [1.0, 0.0]]));
+        let extent = body.len();
+        body.extend_from_slice(b"trailing rubbish");
+        assert_eq!(scan(&body).expect("valid body").len, extent);
+    }
+
+    #[test]
+    fn encoding_a_curve_body_sets_the_extended_flag_and_a_true_envelope() {
+        use crate::geometry::encode_gpb_from_wkb;
+
+        let body = wkb(8, &coords(&[[-1.0, 0.0], [0.0, 1.0], [1.0, 0.0]]));
+        let encoded = encode_gpb_from_wkb(&body, 4326).expect("valid curve body");
+
+        let (header, offset) = gpb::parse_header(&encoded.blob).expect("valid header");
+        assert!(header.extended, "Annex F.1 requires the extended flag");
+        assert!(!header.empty);
+        // The apex is the arc's, not the middle control point's, so the header
+        // envelope is one a reader can trust.
+        assert_eq!(
+            header.envelope,
+            gpb::Envelope::Xy([-1.0, 1.0, 0.0, 1.0]),
+            "header envelope should bound the arc"
+        );
+        assert_eq!(encoded.xy_envelope, Some([-1.0, 1.0, 0.0, 1.0]));
+        assert_eq!(encoded.dimensions, Dimensions::Xy);
+        assert_eq!(
+            encoded.blob.get(offset..),
+            Some(body.as_slice()),
+            "the body should be copied through unchanged"
+        );
     }
 
     #[test]
