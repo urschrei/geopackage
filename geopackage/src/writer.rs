@@ -314,7 +314,7 @@ pub struct FeatureWriter<'conn> {
     delete_stmt: CachedStatement<'conn>,
     /// The `gpkg_schema` constraints to check written values against, resolved
     /// once here. Empty unless the file was opened asking for them.
-    constraints: ColumnConstraints,
+    constraints: ColumnConstraints<'conn>,
     /// The value columns named by the most recent [`Self::update_columns`]
     /// call, in the order given, and the statement prepared for them.
     ///
@@ -408,7 +408,7 @@ impl<'a> Layer<'a> {
         let delete_stmt =
             conn.prepare_cached(&format!("DELETE FROM {quoted_table} WHERE {pk_expr} = ?1"))?;
         let partial_stmt = conn.prepare_cached(&build_partial_update_sql(&shape, &[])?)?;
-        let constraints = ColumnConstraints::read(self, &value_columns)?;
+        let constraints = ColumnConstraints::read(self, conn, &value_columns)?;
 
         Ok(FeatureWriter {
             tx,
@@ -1281,23 +1281,20 @@ impl<'conn> FeatureWriter<'conn> {
     ///
     /// Returns immediately for a file that did not ask for enforcement, or a
     /// layer no constraint covers, so the ordinary write path pays one branch.
-    fn check_constraints<V: AsCheckable>(&self, values: &[V]) -> Result<()> {
+    fn check_constraints<V: AsCheckable>(&mut self, values: &[V]) -> Result<()> {
         if self.constraints.is_empty() {
             return Ok(());
         }
         for (index, value) in values.iter().enumerate() {
-            if let Some(constraint) = self.constraints.at(index) {
-                let checkable = value.as_checkable();
-                if !satisfies(constraint, checkable) {
-                    return Err(self.violation(index, constraint, checkable));
-                }
+            if !self.constraints.satisfied(index, value.as_checkable())? {
+                return Err(self.violation(index, value.as_checkable()));
             }
         }
         Ok(())
     }
 
     /// As [`Self::check_constraints`], for a partial update naming its columns.
-    fn check_named_constraints(&self, columns: &[(&str, CellRef<'_>)]) -> Result<()> {
+    fn check_named_constraints(&mut self, columns: &[(&str, CellRef<'_>)]) -> Result<()> {
         if self.constraints.is_empty() {
             return Ok(());
         }
@@ -1309,30 +1306,29 @@ impl<'conn> FeatureWriter<'conn> {
             else {
                 continue;
             };
-            if let Some(constraint) = self.constraints.at(index) {
-                let checkable = value.as_checkable();
-                if !satisfies(constraint, checkable) {
-                    return Err(self.violation(index, constraint, checkable));
-                }
+            if !self.constraints.satisfied(index, value.as_checkable())? {
+                return Err(self.violation(index, value.as_checkable()));
             }
         }
         Ok(())
     }
 
-    fn violation(
-        &self,
-        index: usize,
-        constraint: &ColumnConstraint,
-        value: Checkable<'_>,
-    ) -> Error {
+    /// Build the error for a value the constraint at `index` refused. Off the
+    /// hot path, so it re-reads what it needs rather than being threaded
+    /// through the check.
+    fn violation(&self, index: usize, value: Checkable<'_>) -> Error {
+        let (constraint_name, constraint) = match self.constraints.at(index) {
+            Some(constraint) => (constraint.name.clone(), constraint.kind.to_string()),
+            None => (String::new(), String::new()),
+        };
         Error::ColumnConstraintViolation {
             table_name: self.table_name.clone(),
             column_name: self
                 .value_columns
                 .get(index)
                 .map_or_else(String::new, |column| column.name.clone()),
-            constraint_name: constraint.name.clone(),
-            constraint: constraint.kind.to_string(),
+            constraint_name,
+            constraint,
             value: match value {
                 Checkable::Null => "NULL".to_owned(),
                 Checkable::Integer(number) => number.to_string(),
@@ -1412,16 +1408,27 @@ struct ValueColumn {
 /// MAY be enforced by SQL triggers or by code in applications that update
 /// GeoPackage data values"), so enforcing them is the caller's decision rather
 /// than this crate's.
-#[derive(Debug, Default)]
-struct ColumnConstraints {
+struct ColumnConstraints<'conn> {
     per_column: Vec<Option<ColumnConstraint>>,
+    /// `SELECT ?1 GLOB ?2`, prepared once, for the glob form.
+    ///
+    /// The pattern language is SQLite's, defined by whatever the engine
+    /// holding the file does, so the engine answers rather than a copy of its
+    /// rules living here. That also gives numbers SQLite's own text coercion,
+    /// which is what a trigger enforcing the same constraint would apply.
+    /// `None` when no column carries a glob, which is the usual case.
+    glob: Option<CachedStatement<'conn>>,
 }
 
-impl ColumnConstraints {
+impl<'conn> ColumnConstraints<'conn> {
     /// Resolve each value column's constraint, once per writer.
-    fn read(layer: &Layer<'_>, value_columns: &[ValueColumn]) -> Result<Self> {
+    fn read(
+        layer: &Layer<'_>,
+        conn: &'conn Connection,
+        value_columns: &[ValueColumn],
+    ) -> Result<Self> {
         if !layer.gpkg().enforces_column_constraints() {
-            return Ok(Self::default());
+            return Ok(Self::none());
         }
         let described = layer.gpkg().data_columns(layer.table_name())?;
         let mut per_column = Vec::with_capacity(value_columns.len());
@@ -1435,7 +1442,23 @@ impl ColumnConstraints {
                 None => None,
             });
         }
-        Ok(Self { per_column })
+        let needs_glob = per_column
+            .iter()
+            .flatten()
+            .any(|constraint| matches!(constraint.kind, ConstraintKind::Glob(_)));
+        let glob = match needs_glob {
+            true => Some(conn.prepare_cached("SELECT ?1 GLOB ?2")?),
+            false => None,
+        };
+        Ok(Self { per_column, glob })
+    }
+
+    /// Nothing enforced.
+    fn none() -> Self {
+        Self {
+            per_column: Vec::new(),
+            glob: None,
+        }
     }
 
     /// Whether anything at all is enforced, so the row paths can skip the walk.
@@ -1446,6 +1469,81 @@ impl ColumnConstraints {
     fn at(&self, index: usize) -> Option<&ColumnConstraint> {
         self.per_column.get(index).and_then(Option::as_ref)
     }
+
+    /// Whether `value` satisfies the constraint on the column at `index`.
+    ///
+    /// The range and enum forms are decided here; the glob form is put to
+    /// SQLite.
+    fn satisfied(&mut self, index: usize, value: Checkable<'_>) -> Result<bool> {
+        let Self { per_column, glob } = self;
+        let Some(Some(constraint)) = per_column.get(index) else {
+            return Ok(true);
+        };
+        match (&constraint.kind, value) {
+            (_, Checkable::Null | Checkable::Unchecked) => Ok(true),
+            (ConstraintKind::Range { .. }, Checkable::Text(_)) => Ok(false),
+            (ConstraintKind::Range { .. }, Checkable::Integer(number)) => {
+                // i64 to f64 loses precision above 2^53, and a bound that far
+                // out is not one anybody wrote deliberately.
+                Ok(in_range(&constraint.kind, number as f64))
+            }
+            (ConstraintKind::Range { .. }, Checkable::Real(number)) => {
+                Ok(in_range(&constraint.kind, number))
+            }
+            (ConstraintKind::Enum(members), value) => Ok(match value {
+                Checkable::Text(text) => members.iter().any(|member| member == text),
+                // The members are text, and the spec's own sample enumerates
+                // the numbers 1, 3, 5, 7 and 9, so a number is compared by its
+                // decimal form.
+                Checkable::Integer(number) => members.contains(&number.to_string()),
+                Checkable::Real(number) => members.contains(&number.to_string()),
+                Checkable::Null | Checkable::Unchecked => true,
+            }),
+            (ConstraintKind::Glob(pattern), value) => {
+                let statement = glob
+                    .as_mut()
+                    .expect("a glob constraint means the statement was prepared");
+                let matched: i64 = match value {
+                    Checkable::Text(text) => {
+                        statement.query_one(rusqlite::params![text, pattern], |r| r.get(0))?
+                    }
+                    Checkable::Integer(number) => {
+                        statement.query_one(rusqlite::params![number, pattern], |r| r.get(0))?
+                    }
+                    Checkable::Real(number) => {
+                        statement.query_one(rusqlite::params![number, pattern], |r| r.get(0))?
+                    }
+                    Checkable::Null | Checkable::Unchecked => 1,
+                };
+                Ok(matched != 0)
+            }
+        }
+    }
+}
+
+/// Whether `value` falls inside a range constraint, honouring both bounds'
+/// inclusivity. Anything but a range is outside it.
+fn in_range(kind: &ConstraintKind, value: f64) -> bool {
+    let ConstraintKind::Range {
+        min,
+        min_is_inclusive,
+        max,
+        max_is_inclusive,
+    } = kind
+    else {
+        return false;
+    };
+    let above = if *min_is_inclusive {
+        value >= *min
+    } else {
+        value > *min
+    };
+    let below = if *max_is_inclusive {
+        value <= *max
+    } else {
+        value < *max
+    };
+    above && below
 }
 
 /// A value reduced to what a constraint can judge it by.
@@ -1521,30 +1619,6 @@ impl AsCheckable for ToSqlOutput<'_> {
             },
             rusqlite::types::ValueRef::Blob(_) => Checkable::Unchecked,
         }
-    }
-}
-
-/// Whether `value` satisfies `constraint`.
-fn satisfies(constraint: &ColumnConstraint, value: Checkable<'_>) -> bool {
-    match value {
-        Checkable::Null | Checkable::Unchecked => true,
-        Checkable::Text(text) => constraint.allows_text(text),
-        Checkable::Integer(number) => match constraint.kind {
-            ConstraintKind::Range { .. } => {
-                // i64 to f64 loses precision above 2^53, and a bound that far
-                // out is not a bound anyone wrote deliberately.
-                constraint.allows_number(number as f64)
-            }
-            ConstraintKind::Enum(_) | ConstraintKind::Glob(_) => {
-                constraint.allows_text(&number.to_string())
-            }
-        },
-        Checkable::Real(number) => match constraint.kind {
-            ConstraintKind::Range { .. } => constraint.allows_number(number),
-            ConstraintKind::Enum(_) | ConstraintKind::Glob(_) => {
-                constraint.allows_text(&number.to_string())
-            }
-        },
     }
 }
 

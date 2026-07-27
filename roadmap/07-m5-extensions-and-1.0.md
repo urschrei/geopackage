@@ -180,20 +180,35 @@ widespread implementation produces.
       impose a rule the format does not. The check sits at the `FeatureWriter`
       boundary, where the three value representations meet, so the scalar,
       bulk, Arrow and partial-update paths are all covered by one
-      implementation, and each has a test. The matcher follows `patternCompare`
-      in SQLite's `func.c`: the rule worth naming is that a `[` with no closing
-      `]` matches nothing rather than standing for a literal `[`. NULL
-      satisfies every constraint, and blob, date and datetime values are not
-      checked, both documented on the option.)*
+      implementation, and each has a test. NULL satisfies every constraint, and
+      blob, date and datetime values are not checked, both documented on the
+      option.)*
+
+      *The glob form went the other way from the sketch above. It was first
+      written here, following `patternCompare` in SQLite's `func.c`, with the
+      property test the plan asks for. That was then deleted in favour of
+      asking SQLite through a `SELECT ?1 GLOB ?2` prepared once per writer. The
+      plan's premise, that calling into SQLite per value is not viable, was a
+      judgement rather than a measurement, and measuring it found the opposite:
+      the engine is 22% faster per call, because it walks UTF-8 bytes and
+      allocates nothing where the matcher collected two `Vec<char>`. It is also
+      the authority on its own pattern language, which has no definition beyond
+      what it does, and this crate bundles it, so a copy of its rules could
+      drift from the engine holding the file with nothing failing. What the
+      matcher's property test proved is now structurally true. The awkward
+      corners are kept as an end-to-end test so that reverting to a hand-rolled
+      matcher would have to face them again.)*
 - [x] Benchmark the enforcement cost against the unenforced write, and record
       it. The write path is the one place in this crate where a per-value check
       can be measured against a figure we already publish.
-      *(**14%** on a 200,000-row write with two constrained columns, 569 ms to
-      651 ms, recorded in
-      [benchmarks/2026-07-27-constraint-enforcement.md](benchmarks/2026-07-27-constraint-enforcement.md).
-      The glob check is the expensive half, because `glob_match` collects
-      pattern and value into `Vec<char>` per call; the note says where that
-      could go if it ever matters.)*
+      *(**About 31%** on a 200,000-row write with two constrained columns,
+      159 ms to 209 ms, recorded in
+      [benchmarks/2026-07-27-constraint-enforcement.md](benchmarks/2026-07-27-constraint-enforcement.md),
+      along with the per-call comparison of the two glob implementations. An
+      earlier pair of figures from the same benchmark, 569 ms and 651 ms, was
+      taken while the machine was running the test suite and is not comparable
+      with anything; the note records that too rather than leaving the
+      discrepancy to be found later.)*
 - [x] Interop: GDAL maps these to field domains, so a file written here should
       show its domains in `ogrinfo`, and a GDAL-written domain should read back
       as the equivalent constraint.
