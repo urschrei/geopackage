@@ -99,6 +99,34 @@ While the version is below 1.0 the API may change in any release.
   the file lacks them, so a caller can supply a WKT2 definition for a CRS the
   EPSG registry does not describe. Design decision D3 says users may supply
   arbitrary definitions; until now that was true of WKT1 only.
+- **The `gpkg_schema` extension**: column descriptions and value constraints.
+  `GeoPackage::data_columns` returns a table's `gpkg_data_columns` rows,
+  `column_constraint` and `column_constraints` return the constraints those
+  rows point at, assembled from the rows sharing a name, since an `enum`
+  occupies one row per member while a `range` or `glob` occupies one.
+  `set_data_column` and `add_column_constraint` write them, creating both
+  tables and registering the extension on first use.
+
+  A column's description is attached to `Column::data_column`, so a caller
+  reading a layer's schema sees the aliases and constraint names without a
+  second lookup. Two pieces of leniency for files written elsewhere: the
+  GeoPackage 1.0 spelling of the inclusivity columns (`minIsInclusive`) is read
+  where a file uses it, and a constraint the spec's own rules rule out is an
+  error when something asks what it allows rather than when the file is opened.
+
+  `OpenOptions::enforce_column_constraints` checks written values against the
+  constraints their columns declare, refusing a row that violates one. It is
+  off by default because the format makes these constraints advisory, so a
+  conforming file may hold values its own constraints forbid. It covers every
+  write path, the columnar one included, and costs 14% on a 200,000-row write
+  with two constrained columns
+  ([benchmark](roadmap/benchmarks/2026-07-27-constraint-enforcement.md)).
+
+  The `glob` form needed a matcher, since calling back into SQLite per value is
+  not viable on a write path. `geopackage_core::schema::glob_match` implements
+  SQLite's pattern language, including the rule that a `[` with no closing `]`
+  matches nothing rather than standing for a literal `[`, and a property test
+  holds it to SQLite's own answers.
 
 ### Changed
 

@@ -652,3 +652,140 @@ fn crs_wkt_extension_round_trips_with_gdal() {
         with_wkt2.len()
     );
 }
+
+// --- (g) gpkg_schema: constraints as GDAL field domains ---------------------
+
+#[test]
+#[ignore = "requires GDAL (ogrinfo, ogr2ogr); gpkg_schema constraints as field domains"]
+fn column_constraints_round_trip_as_gdal_field_domains() {
+    if !tool_available("ogrinfo") || !tool_available("ogr2ogr") {
+        eprintln!("skipping: ogrinfo or ogr2ogr not found");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let ours = dir.path().join("domains.gpkg");
+    {
+        let gpkg = GeoPackage::create(&ours).unwrap();
+        gpkg.create_layer(
+            &TableSchemaBuilder::new("sites")
+                .column(ColumnSpec::new("code", ColumnType::Text(None)))
+                .column(ColumnSpec::new("year", ColumnType::Integer))
+                .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+        )
+        .unwrap();
+        gpkg.add_column_constraint(&geopackage::ColumnConstraint {
+            name: "years".to_owned(),
+            kind: geopackage::ConstraintKind::Range {
+                min: 1900.0,
+                min_is_inclusive: true,
+                max: 2000.0,
+                max_is_inclusive: true,
+            },
+            description: Some("in range".to_owned()),
+        })
+        .unwrap();
+        gpkg.add_column_constraint(&geopackage::ColumnConstraint {
+            name: "codes".to_owned(),
+            kind: geopackage::ConstraintKind::Enum(vec!["IE".to_owned(), "GB".to_owned()]),
+            description: None,
+        })
+        .unwrap();
+        for (column, constraint) in [("year", "years"), ("code", "codes")] {
+            gpkg.set_data_column(
+                "sites",
+                &geopackage::DataColumn {
+                    column_name: column.to_owned(),
+                    name: None,
+                    title: None,
+                    description: None,
+                    mime_type: None,
+                    constraint_name: Some(constraint.to_owned()),
+                },
+            )
+            .unwrap();
+        }
+        let layer = gpkg.layer("sites").unwrap();
+        let mut writer = layer.writer().unwrap();
+        writer
+            .insert(
+                None,
+                &Point::new(-6.26, 53.35),
+                &[ValueRef::Text("IE"), ValueRef::Integer(1950)],
+            )
+            .unwrap();
+        writer.commit().unwrap();
+        gpkg.close().unwrap();
+    }
+
+    // GDAL reads gpkg_data_column_constraints as field domains.
+    let out = Command::new("ogrinfo")
+        .args(["-al", "-so"])
+        .arg(&ours)
+        .output()
+        .expect("run ogrinfo");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for domain in ["years", "codes"] {
+        assert!(
+            stdout.contains(domain),
+            "ogrinfo did not report the {domain} domain:\n{stdout}"
+        );
+    }
+    let described = Command::new("ogrinfo")
+        .args(["-fielddomain", "years"])
+        .arg(&ours)
+        .output()
+        .expect("run ogrinfo -fielddomain");
+    let described = String::from_utf8_lossy(&described.stdout);
+    assert!(
+        described.contains("1900") && described.contains("2000"),
+        "ogrinfo did not describe the range:\n{described}"
+    );
+
+    // And writes them back: a copy has to carry the same constraints, which
+    // means GDAL read ours and wrote its own from them.
+    let theirs = dir.path().join("copy.gpkg");
+    let out = Command::new("ogr2ogr")
+        .args(["-f", "GPKG"])
+        .arg(&theirs)
+        .arg(&ours)
+        .output()
+        .expect("run ogr2ogr");
+    assert!(
+        out.status.success(),
+        "ogr2ogr failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let copy = GeoPackage::open_read_only(&theirs).unwrap();
+    assert_eq!(
+        copy.column_constraint("years").unwrap().map(|c| c.kind),
+        Some(geopackage::ConstraintKind::Range {
+            min: 1900.0,
+            min_is_inclusive: true,
+            max: 2000.0,
+            max_is_inclusive: true,
+        })
+    );
+    let members = copy.column_constraint("codes").unwrap().unwrap();
+    // As a set: GDAL hands the members back in its own order, and the spec
+    // calls an enum a set, so the order carries no meaning.
+    match members.kind {
+        geopackage::ConstraintKind::Enum(mut values) => {
+            values.sort();
+            assert_eq!(values, ["GB", "IE"]);
+        }
+        other => panic!("expected an enum, got {other:?}"),
+    }
+    // The descriptions survive the copy too, which is how a reader finds the
+    // constraint from the column.
+    let described = copy.data_columns("sites").unwrap();
+    let years = described
+        .iter()
+        .find(|d| d.column_name == "year")
+        .expect("the year column is still described");
+    assert_eq!(years.constraint_name.as_deref(), Some("years"));
+}
