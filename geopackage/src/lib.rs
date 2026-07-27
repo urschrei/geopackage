@@ -518,6 +518,7 @@ mod extent;
 mod functions;
 mod index;
 mod layer;
+mod metadata;
 mod open;
 mod options;
 mod packed;
@@ -536,9 +537,13 @@ pub use extensions::ExtensionRow;
 pub use geopackage_core as core;
 pub use geopackage_core::GpkgVersion;
 pub use geopackage_core::extensions::{Extension, ExtensionScope, ExtensionSupport};
+pub use geopackage_core::metadata::{
+    MetadataRecord, MetadataReference, MetadataScope, ReferenceScope,
+};
 pub use geopackage_core::schema::{ColumnConstraint, ConstraintKind, DataColumn};
 pub use index::{SpatialIndexAudit, SpatialIndexStatus};
 pub use layer::{BoundingBox, Feature, FeatureCursor, FeatureStream, Features, Layer, LayerKind};
+pub use metadata::{MetadataTarget, NewMetadata};
 pub use open::OpenWarning;
 pub use options::{DEFAULT_BUSY_TIMEOUT, JournalMode, OpenOptions, Synchronous};
 pub use schema::{Column, GeometryColumn, TableSchema};

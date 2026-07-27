@@ -219,19 +219,37 @@ widespread implementation produces.
 
 ## Phase 4: `gpkg_metadata`
 
-- [ ] DDL for `gpkg_metadata` and `gpkg_metadata_reference` verbatim from
-      Annex C. Check whether 1.4 still defines the metadata reference triggers
-      or whether they went the way of the deprecated trigger set, and write
-      what the current spec says rather than what 1.2 said.
-- [ ] Typed `md_scope` and `reference_scope`, both closed sets in the spec.
-      Payloads stay strings: no XML parse, no profile interpretation, which is
-      the same posture as tile payloads staying opaque bytes.
-- [ ] Timestamps go through the existing strict DATETIME handling rather than a
-      second format path.
-- [ ] API: enumerate metadata, add a record, attach a reference to a
-      GeoPackage, table, column or row, and ask what is attached to a given
-      target. Parent and child references (`md_parent_id`) are a graph, so
-      decide whether the read API walks it or hands back the edges.
+- [x] DDL for `gpkg_metadata` and `gpkg_metadata_reference` verbatim from
+      Annex C. **1.4 defines no metadata reference triggers**: 1.2 had
+      `gpkg_metadata_reference_column_name_insert` and `_update`, and 1.4's
+      Annex D defines trigger SQL only for `gpkg_tile_matrix` and the two
+      sample tables, with no mention of the metadata pair anywhere in the spec
+      text. They went the way of the deprecated RTree trigger set. Nothing
+      creates them; a file carrying them is older rather than wrong, and the
+      DDL constant records this.
+- [x] Typed `md_scope` and `reference_scope`. **Only one of them is a closed
+      set**, contrary to how this item was written. `reference_scope` is closed:
+      Requirement 96 gives five lowercase values and no escape hatch, so
+      `ReferenceScope::parse` returns `Option`. `md_scope` is not: Requirement
+      94 says SHALL, then SHOULD, then "however, this list is not exhaustive;
+      new scopes are permitted", so `MetadataScope` carries `Other(String)`.
+      Modelling it closed would have made a conformant file unreadable.
+      Payloads stay strings, as planned.
+- [x] Timestamps go through `geopackage_core::datetime` (Requirement 100 puts
+      them in the same DATETIME form as everything else), so there is no second
+      format path.
+- [x] API: `metadata()`, `metadata_record()`, `add_metadata()`,
+      `add_metadata_reference()`, `metadata_references()`, `metadata_for()`.
+      A `MetadataTarget` states scope and target as one value, so the NULL
+      pattern Requirements 97 to 99 impose cannot be got wrong at a call site.
+      **Decided: enumeration hands back edges, and the walk is its own call.**
+      `metadata_ancestors()` walks `md_parent_id` upwards and reports a cycle
+      as a typed error. Requirement 102 forbids only a record being its own
+      parent, so a longer cycle is a file to survive rather than a case to rule
+      out, and that cost should not be paid by every enumeration.
+
+Not done here: `validate()` checks over these tables belong to phase 7, which
+is where every phase's checks collect.
 
 ## Phase 5: Related Tables
 
