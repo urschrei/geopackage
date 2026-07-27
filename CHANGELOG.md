@@ -54,8 +54,29 @@ While the version is below 1.0 the API may change in any release.
   does not double needs the `gpkg_zoom_other` extension, which
   `TilePyramidBuilder::allow_zoom_other` opts into: the omission is an error
   rather than a silent registration.
+- **The extension catalogue is readable.** `GeoPackage::extensions` returns
+  every `gpkg_extensions` row, `GeoPackage::table_extensions`,
+  `Layer::extensions` and `TilePyramid::extensions` return the rows for one
+  table. Until now the table could only be written, never read, so a caller had
+  no way to ask what a file it had been handed actually declares.
+
+  Each row carries an `ExtensionScope` (Requirement 64) and identifies as an
+  `Extension`: the Annex F names, the two extensions the SWG removed on
+  2016-08-15, and `gdal_aspatial`, with the historical spellings folded in, so
+  `gpkg_elevation_tiles`, `2d_gridded_coverage` and `gpkg_2d_gridded_coverage`
+  are one extension and `related_tables` and `gpkg_related_tables` are another.
+  `ExtensionSupport` then says what this workspace does with it: reads and
+  writes it, knows what it is and leaves it alone, tolerates it as removed from
+  the standard, or does not recognise it at all. Every extension row in every
+  committed fixture and in the fetched corpus is checked to classify, and the
+  test fails on an unrecognised name rather than skipping it.
 
 ### Changed
+
+- **`gpkg_zoom_other` and `gpkg_webp` are Annex F.6 and F.7**, not F.4 and
+  F.5, which is what their constants' documentation claimed. Annex F numbers
+  the extensions in the order the annex includes them, and the two removed in
+  2016 still occupy their places in that sequence. Documentation only.
 
 - **`gpkg_extensions` rows are written in one place**
   (`geopackage::extensions`), rather than by each extension's own module.
