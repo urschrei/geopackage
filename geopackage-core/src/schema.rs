@@ -80,6 +80,11 @@ pub enum ConstraintKind {
     },
     /// `enum`: the set of allowed values, one per row, compared as text
     /// (Requirement 114 makes each row's `value` NOT NULL).
+    ///
+    /// The order is the order the rows came back in, and carries no meaning:
+    /// the spec calls this a set, and round-tripping a file through GDAL
+    /// reorders the members. Compare two enums as sets rather than by
+    /// [`PartialEq`] if the file has been through another implementation.
     Enum(Vec<String>),
     /// `glob`: a pattern the value has to match, in SQLite's `GLOB` syntax.
     Glob(String),

@@ -147,14 +147,26 @@ widespread implementation produces.
 
 ## Phase 3: `gpkg_schema`
 
-- [ ] DDL for `gpkg_data_columns` and `gpkg_data_column_constraints` verbatim
+- [x] DDL for `gpkg_data_columns` and `gpkg_data_column_constraints` verbatim
       from Annex C into `geopackage-core::ddl`, as the tile tables were.
-- [ ] Model: `DataColumn` (name, title, description, mime type, constraint
+      *(Done, less the `//` comments the spec source writes them with, which
+      SQLite does not accept.)*
+- [x] Model: `DataColumn` (name, title, description, mime type, constraint
       name) and a typed `ColumnConstraint` for the enum, range and glob forms,
       with the range's inclusivity flags carried rather than flattened.
-- [ ] Surfaced on `TableSchema`, so a caller asking for a layer's schema sees
+      *(Done in `geopackage_core::schema`. A constraint is assembled from the
+      rows sharing its name rather than returned row by row, since an enum
+      occupies one row per member and a range or glob exactly one. The enum's
+      member order is the file's and means nothing: a round trip through GDAL
+      reorders it, which the interop test compares as a set and the type's
+      documentation now warns about.)*
+- [x] Surfaced on `TableSchema`, so a caller asking for a layer's schema sees
       the aliases and constraints without a second lookup.
-- [ ] **Enforcement on write behind an option.** Two things to settle while
+      *(Done as `Column::data_column`, filled by one query per schema read and
+      none at all for a file without the extension. The constraint itself is
+      resolved by name on demand rather than eagerly, since constraints are
+      shared between columns.)*
+- [x] **Enforcement on write behind an option.** Two things to settle while
       building it. Glob matching needs SQLite's semantics, and calling back
       into SQLite per value on a write path this heavily tuned is not viable,
       so the pattern language gets a Rust implementation with a property test
@@ -162,12 +174,33 @@ widespread implementation produces.
       inputs. And enforcement has to cover the Arrow and bulk write paths, not
       only `FeatureWriter`, or the option means "checked unless you used the
       fast path".
-- [ ] Benchmark the enforcement cost against the unenforced write, and record
+      *(Done as `OpenOptions::enforce_column_constraints`, off by default: the
+      spec makes these constraints advisory, so a conforming file may hold
+      values its own constraints forbid and refusing them by default would
+      impose a rule the format does not. The check sits at the `FeatureWriter`
+      boundary, where the three value representations meet, so the scalar,
+      bulk, Arrow and partial-update paths are all covered by one
+      implementation, and each has a test. The matcher follows `patternCompare`
+      in SQLite's `func.c`: the rule worth naming is that a `[` with no closing
+      `]` matches nothing rather than standing for a literal `[`. NULL
+      satisfies every constraint, and blob, date and datetime values are not
+      checked, both documented on the option.)*
+- [x] Benchmark the enforcement cost against the unenforced write, and record
       it. The write path is the one place in this crate where a per-value check
       can be measured against a figure we already publish.
-- [ ] Interop: GDAL maps these to field domains, so a file written here should
+      *(**14%** on a 200,000-row write with two constrained columns, 569 ms to
+      651 ms, recorded in
+      [benchmarks/2026-07-27-constraint-enforcement.md](benchmarks/2026-07-27-constraint-enforcement.md).
+      The glob check is the expensive half, because `glob_match` collects
+      pattern and value into `Vec<char>` per call; the note says where that
+      could go if it ever matters.)*
+- [x] Interop: GDAL maps these to field domains, so a file written here should
       show its domains in `ogrinfo`, and a GDAL-written domain should read back
       as the equivalent constraint.
+      *(Done as `column_constraints_round_trip_as_gdal_field_domains` in
+      `gdal_interop.rs`, against GDAL 3.12.3: `ogrinfo -fielddomain` describes a
+      range we wrote, and a constraint survives `ogr2ogr` copying the file,
+      which means GDAL read ours and wrote its own from it.)*
 
 ## Phase 4: `gpkg_metadata`
 
