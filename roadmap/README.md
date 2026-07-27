@@ -15,7 +15,7 @@ Data Interface as the bulk data plane.
 | [03-m1-read-path.md](03-m1-read-path.md) | M1: feature/attribute read path, full WKB envelopes |
 | [04-m2-write-rtree.md](04-m2-write-rtree.md) | M2: write path, layer creation, bulk rtree build → **v0.1** |
 | [05-m3-arrow-ffi.md](05-m3-arrow-ffi.md) | M3: GeoArrow batches, C ABI, CLI → **v0.2** |
-| [06-m4-tiles.md](06-m4-tiles.md) | M4: tile pyramids → **v0.3** |
+| [06-m4-tiles.md](06-m4-tiles.md) | M4: tile pyramids → **v0.6** |
 | [07-m5-extensions-and-1.0.md](07-m5-extensions-and-1.0.md) | M5: extensions, bindings, API freeze → **1.0 RFC** |
 | [08-testing-conformance.md](08-testing-conformance.md) | Cross-cutting: conformance harness, fuzzing, benchmarks, corpus |
 

@@ -1,11 +1,13 @@
 //! Read and write [OGC GeoPackage](https://www.geopackage.org/spec140/) files.
 //!
 //! A GeoPackage is an SQLite database with a standardised schema for vector
-//! features. [`GeoPackage::create`], [`GeoPackage::open`] and
+//! features and raster tiles. [`GeoPackage::create`], [`GeoPackage::open`] and
 //! [`GeoPackage::open_read_only`] open the container with pragma and schema
 //! validation;
 //! [`GeoPackage::layer`] returns a [`Layer`] handle for reading and writing
 //! features, and [`GeoPackage::layers`] enumerates them.
+//! [`GeoPackage::tiles`] returns a [`TilePyramid`] handle for the tile side,
+//! described under [Tiles](#tiles) below.
 //!
 //! # Quick start
 //!
@@ -155,6 +157,71 @@
 //! # Ok(()) }
 //! ```
 //!
+//! # Tiles
+//!
+//! A tile pyramid is the container's other data type: pre-rendered raster
+//! tiles, addressed by zoom level, column and row, with a
+//! `gpkg_tile_matrix_set` row fixing the ground extent they are indexed
+//! against and a `gpkg_tile_matrix` row per zoom level.
+//! [`GeoPackage::create_tile_pyramid`] writes one (from a
+//! [`TilePyramidBuilder`]), [`GeoPackage::tiles`] opens one, and
+//! [`GeoPackage::tile_pyramids`] enumerates them.
+//!
+//! **Payloads are opaque.** This crate stores, indexes and validates tiles; it
+//! decodes none of them, and depends on no image codec. It reads each
+//! payload's *header*, which is how a tile written at the wrong pixel size, or
+//! in a format the table may not hold, is rejected rather than stored. Turning
+//! a tile into pixels, or a source raster into a pyramid, needs an image
+//! library or GDAL on top of this one.
+//!
+//! Rows count from the **top** of the extent downwards, as WMTS and XYZ do and
+//! TMS does not, and the indices are relative to the pyramid's own extent
+//! rather than to a global grid. [`TileMatrix::flip_row`](core::tiles::TileMatrix::flip_row)
+//! converts to and from the TMS sense, and
+//! [`TileMatrixSet::xyz_to_tile`](core::tiles::TileMatrixSet::xyz_to_tile)
+//! refuses rather than mis-addressing when a pyramid is not the standard web
+//! mercator quad.
+//!
+//! ```
+//! use geopackage::core::tiles::{TileCoord, TileMatrixSet, ZoomLadder};
+//! use geopackage::{GeoPackage, TilePyramidBuilder};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # let dir = tempfile::tempdir()?;
+//! # let path = dir.path().join("basemap.gpkg");
+//! # let png = |w: u32, h: u32| {
+//! #     let mut b = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+//! #     b.extend_from_slice(&13u32.to_be_bytes());
+//! #     b.extend_from_slice(b"IHDR");
+//! #     b.extend_from_slice(&w.to_be_bytes());
+//! #     b.extend_from_slice(&h.to_be_bytes());
+//! #     b.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+//! #     b
+//! # };
+//! let gpkg = GeoPackage::create(path)?;
+//! gpkg.add_epsg_srs(3857)?;
+//!
+//! // The spec's default arrangement: each zoom level doubles the grid, with
+//! // pixel sizes derived from the extent so they span it exactly.
+//! let matrix_set = TileMatrixSet::web_mercator_quad();
+//! let matrices = matrix_set.ladder(ZoomLadder::new(0, 4))?;
+//! let tiles = gpkg.create_tile_pyramid(
+//!     &TilePyramidBuilder::new("basemap", matrix_set).matrices(matrices),
+//! )?;
+//!
+//! tiles.put_tile(TileCoord::new(1, 0, 0), &png(256, 256))?;
+//! assert!(tiles.get_tile(TileCoord::new(1, 0, 0))?.is_some());
+//!
+//! // Streaming a pyramid lends each payload out of the row it was read from,
+//! // so nothing is copied to walk one.
+//! let mut cursor = tiles.cursor()?;
+//! let mut stream = cursor.tiles()?;
+//! while let Some(tile) = stream.next()? {
+//!     assert_eq!(tile.data().len(), 33);
+//! }
+//! # Ok(()) }
+//! ```
+//!
 //! # Columnar I/O
 //!
 //! Enabled by the `arrow` feature, [`Layer::read_arrow`] reads a layer as Arrow
@@ -249,6 +316,13 @@
 //!   [`StructuralCheck::RtreeOnly`]), and how full each node of the tree is
 //!   packed ([`BulkIndexOptions::fill_factor`], default
 //!   [`DEFAULT_FILL_FACTOR`], `1.0`).
+//! - [`TilePyramidBuilder`]: a new pyramid's extent and spatial reference
+//!   system ([`TileMatrixSet`](core::tiles::TileMatrixSet)), its zoom levels
+//!   ([`TileMatrix`](core::tiles::TileMatrix), usually from
+//!   [`TileMatrixSet::ladder`](core::tiles::TileMatrixSet::ladder)), and
+//!   whether zoom levels that do not step by factors of two are allowed
+//!   ([`TilePyramidBuilder::allow_zoom_other`], off by default, since that
+//!   needs the `gpkg_zoom_other` extension registered).
 //! - **Column projection**, through [`Layer::with_columns`] and
 //!   [`Layer::without_geometry`]: which columns a read of that handle fetches
 //!   and carries. Everything, by default. Worth setting on a layer whose
@@ -307,6 +381,10 @@
 //! | [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`], [`Layer::rebuild_spatial_index`] | always | fails |
 //! | [`Layer::writer`] | on its row methods and its commit, not on the call | opens; the first row written fails |
 //! | [`Layer::write_all`], [`Layer::write_arrow`] | always | fails |
+//! | [`GeoPackage::tiles`], [`TilePyramid::get_tile`], [`TilePyramid::cursor`] | never | works |
+//! | [`TilePyramid::validate`] | never | works |
+//! | [`TilePyramid::put_tile`], [`TilePyramid::delete_tile`], [`TilePyramid::write_all`] | always | fails |
+//! | [`TilePyramid::writer`] | on its tile methods and its commit, not on the call | opens; the first tile written fails |
 //!
 //! Reading an extent therefore modifies the file when the recorded bounds are
 //! unusable, which is deliberate and matches GDAL: the file stops being wrong

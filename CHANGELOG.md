@@ -8,6 +8,59 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- **Tile pyramids (M4).** A GeoPackage's second data type, alongside features
+  and attributes. `GeoPackage::create_tile_pyramid` writes one from a
+  `TilePyramidBuilder`, `GeoPackage::tiles` opens one and
+  `GeoPackage::tile_pyramids` enumerates them; `TilePyramid` reads and writes
+  tiles by address.
+
+  Payloads stay opaque: this crate stores, indexes and validates tiles and
+  decodes none of them, so it depends on no image codec and cannot produce
+  pixels. What it does read is each payload's header, through the new
+  `imagesize` dependency, which is how a tile of the wrong pixel size or in a
+  format the table may not hold is rejected on write rather than stored.
+
+  Reading: `get_tile` returns an owned payload, `get_tile_into` fills a buffer
+  the caller reuses, and `cursor`/`cursor_at`/`cursor_in` stream tiles in matrix
+  order through a lending cursor that hands out the bytes without copying them.
+  There is deliberately no materialising iterator: one zoom level of a real
+  pyramid is more payload than a `Vec` of them should hold. A bounding box
+  becomes one range query over the table's uniqueness index rather than a loop
+  of lookups.
+
+  Writing: `put_tile`, `delete_tile`, a `TileWriter` owning its transaction, and
+  a batched `write_all` taking anything that is `AsRef<[u8]>`, so a tile read
+  from one pyramid reaches another's statement without a copy on either side.
+  Every write is checked against the pyramid it lands in: the zoom level has to
+  be declared, the column and row have to fall inside that level's grid, and the
+  payload has to be a PNG or JPEG, or a WebP, which registers `gpkg_webp` as it
+  lands.
+- **`geopackage_core::tiles`**: the tile matrix model (`TileMatrixSet`,
+  `TileMatrix`, `TileCoord`), the spec's consistency rules (Requirements 45 to
+  53, checked on write and available as `TilePyramid::validate` for a file from
+  elsewhere), the coordinate conventions, and the payload probe. Rows count from
+  the top of the extent downwards, as WMTS and XYZ do and TMS does not;
+  `TileMatrix::flip_row` converts between the two senses. GeoPackage tile
+  indices are relative to a pyramid's own extent rather than to a global grid,
+  so `TileMatrixSet::xyz_to_tile` checks that the pyramid is the standard web
+  mercator quad and returns `NotAnXyzGrid` rather than addressing the wrong
+  tile.
+- **`TileMatrixSet::ladder`** builds the spec's default power-of-two zoom ladder
+  over an extent, deriving pixel sizes from it so Requirement 45 holds by
+  construction, with the web mercator quad as one option
+  (`TileMatrixSet::web_mercator_quad`) rather than the only one. A ladder that
+  does not double needs the `gpkg_zoom_other` extension, which
+  `TilePyramidBuilder::allow_zoom_other` opts into: the omission is an error
+  rather than a silent registration.
+
+### Changed
+
+- **`gpkg_extensions` rows are written in one place**
+  (`geopackage::extensions`), rather than by each extension's own module.
+  Behaviour is unchanged.
+
 ## [0.5.0] - 2026-07-26
 
 ### Added
