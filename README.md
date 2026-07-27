@@ -128,10 +128,16 @@ its own producer can no longer read. Reading is never refused for this reason,
 and `OpenOptions::allow_unsupported_extension_writes` overrides the refusal for
 a caller who knows the extension is harmless.
 
-Two extensions appear in the model rather than as catalogue rows. `gpkg_crs_wkt`
-puts a WKT2 definition and a coordinate epoch on `Srs`, which is how a CRS with
-no WKT1 form is carried at all. `gpkg_schema` describes columns and constrains
-their values:
+Several extensions appear in the model rather than only as catalogue rows.
+`gpkg_crs_wkt` puts a WKT2 definition and a coordinate epoch on `Srs`, which is
+how a CRS with no WKT1 form is carried at all. `gpkg_metadata` stores documents
+and attaches them to the file, a table, a column, a row or a cell, leaving the
+payloads as written and interpreting no metadata profile. The Related Tables
+Extension (OGC 18-000) relates two tables through a mapping table, readable for
+any relation type and writable for the requirements classes the spec defines.
+The non-linear geometry types register themselves as `gpkg_geom_<TYPE>` when a
+layer declares one. And `gpkg_schema` describes columns and constrains their
+values:
 
 ```rust
 use geopackage::{ColumnConstraint, ConstraintKind, GeoPackage, OpenOptions};
@@ -162,6 +168,24 @@ the columnar one included, and costs about 31% on a write with two constrained
 columns. The `glob` constraint form is evaluated by SQLite itself rather than
 reimplemented here: its pattern language has no definition beyond what SQLite
 does with it, and this crate bundles SQLite.
+
+### Checking a file
+
+`GeoPackage::validate` makes one pass over a file and returns what is wrong
+with it: catalogue rows naming tables that are not there, spatial indexes that
+no longer describe their rows, pre-1.4 index triggers, extensions this crate
+cannot identify, tile pyramids that break the matrix rules, and metadata or
+relation rows pointing at things that have gone. Each finding carries a
+severity, and repair advice naming the method that performs it where one
+exists. Nothing is modified.
+
+Severity is about consequence: an error means a reader can get a wrong answer,
+a warning means the file is out of step with the current spec but reads
+correctly, and an advisory is a remark rather than a defect. A file with no
+spatial index reads correctly, so it is the third of those.
+
+This reports what this crate can see, not conformance in every respect the
+spec defines; the OGC executable test suite remains the authority.
 
 ### More examples
 
@@ -302,14 +326,19 @@ holds, probing each payload against the size its zoom level declares.
   bounding them against the buffer, so a malformed 17-byte GPB blob declaring a
   0xFFFFFFFF-member collection drives a multi-gigabyte allocation. The fix
   belongs upstream in [georust/wkb](https://github.com/georust/wkb); do not
-  parse untrusted GeoPackage files. Tracked in
+  parse untrusted GeoPackage files. It applies wherever that reader is used,
+  which is every geometry but the non-linear ones: those are read by this
+  crate's own walker, which allocates nothing and so fails on a bad count
+  rather than reserving for it. Tracked in
   [#3](https://github.com/urschrei/geopackage/issues/3).
 - **Non-linear curve types are bytes, not geometry.** `CIRCULARSTRING`,
   `COMPOUNDCURVE`, `CURVEPOLYGON`, `MULTICURVE` and `MULTISURFACE` can be
   written, indexed and queried by extent, because their envelopes are computed
-  from the WKB directly. They cannot be read back as geometry objects: the
-  `geo-traits` interface this crate reads through has no representation for a
-  curve, so `Layer::features` cannot yield one. Read them as WKB.
+  from the WKB directly, arc extents included. What they cannot do is come back
+  as a geometry object: `geo-traits`, the interface this crate reads through,
+  has no representation for an arc. Iteration itself is unaffected, so
+  `Feature::geometry_bytes` hands back the WKB and `Feature::geometry` is the
+  one call that fails.
 - **Tiles are bytes, not images.** A tile pyramid can be created, read, written
   and validated, but no payload is ever decoded: there is no way to get pixels,
   reproject a pyramid, or build one from a source raster from here.
