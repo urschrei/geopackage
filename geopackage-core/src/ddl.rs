@@ -146,3 +146,33 @@ pub const SEED_SPATIAL_REF_SYS: [&str; 3] = [
      'Undefined geographic SRS', 0, 'NONE', 0, 'undefined', \
      'undefined geographic coordinate reference system')",
 ];
+
+/// `gpkg_metadata` (Annex C.11, extension Annex F.8).
+pub const CREATE_GPKG_METADATA: &str = "\
+CREATE TABLE gpkg_metadata (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  md_scope TEXT NOT NULL DEFAULT 'dataset',
+  md_standard_uri TEXT NOT NULL,
+  mime_type TEXT NOT NULL DEFAULT 'text/xml',
+  metadata TEXT NOT NULL DEFAULT ''
+)";
+
+/// `gpkg_metadata_reference` (Annex C.12, extension Annex F.8).
+///
+/// GeoPackage 1.2 also defined `gpkg_metadata_reference_column_name_insert`
+/// and `_update` triggers over this table. GeoPackage 1.4 does not: Annex D
+/// defines trigger SQL only for `gpkg_tile_matrix` and the two sample tables,
+/// so nothing here creates them, and a file carrying them is not wrong, only
+/// older.
+pub const CREATE_GPKG_METADATA_REFERENCE: &str = "\
+CREATE TABLE gpkg_metadata_reference (
+  reference_scope TEXT NOT NULL,
+  table_name TEXT,
+  column_name TEXT,
+  row_id_value INTEGER,
+  timestamp DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  md_file_id INTEGER NOT NULL,
+  md_parent_id INTEGER,
+  CONSTRAINT crmr_mfi_fk FOREIGN KEY (md_file_id) REFERENCES gpkg_metadata(id),
+  CONSTRAINT crmr_mpi_fk FOREIGN KEY (md_parent_id) REFERENCES gpkg_metadata(id)
+)";

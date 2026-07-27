@@ -18,6 +18,12 @@
 //! - [`triggers`]: RTree spatial index virtual table and trigger SQL (version-aware)
 //! - [`version`]: `application_id` / `user_version` handling
 //! - [`ident`]: SQL identifier quoting
+//! - [`schema`]: the `gpkg_schema` extension's column descriptions and
+//!   value constraints (Annex F.9)
+//! - [`metadata`]: the `gpkg_metadata` extension's records and the references
+//!   attaching them to a file's contents (Annex F.8)
+//! - [`curve`]: envelopes read straight from ISO WKB, non-linear types
+//!   included, with exact circular-arc extents
 //!
 //! SQL text is reproduced verbatim from the spec's normative annexes
 //! (Annex C "Table Definition SQL", Annex F.3 "R-tree Spatial Indexes").
@@ -71,6 +77,7 @@ pub mod extensions;
 pub mod geometry;
 pub mod gpb;
 pub mod ident;
+pub mod metadata;
 pub mod schema;
 pub mod srs;
 pub mod tiles;
