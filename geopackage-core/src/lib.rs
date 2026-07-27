@@ -78,6 +78,7 @@ pub mod version;
 pub use geometry::{GeometryError, GpbGeometry};
 pub use gpb::{Envelope, GpbError, GpbHeader};
 pub use srs::SrsDefinition;
+pub use tiles::{TileError, TileMatrix, TileMatrixSet};
 pub use types::{ColumnType, GeometryType, ZmFlag};
 pub use version::GpkgVersion;
 
@@ -91,6 +92,9 @@ pub enum Error {
     /// A GeoPackage geometry that could not be parsed or read.
     #[error(transparent)]
     Geometry(#[from] GeometryError),
+    /// A tile pyramid that does not satisfy the spec's consistency rules.
+    #[error(transparent)]
+    Tile(#[from] TileError),
     /// An SQL identifier that cannot be safely quoted.
     #[error("invalid SQL identifier: {0}")]
     InvalidIdentifier(String),
