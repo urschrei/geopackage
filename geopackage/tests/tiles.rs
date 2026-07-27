@@ -45,6 +45,50 @@ fn insert_tile(pyramid: &TilePyramid<'_>, coord: TileCoord, data: &[u8]) {
         .unwrap();
 }
 
+/// A PNG header of the given size, with a zeroed CRC: enough for the payload
+/// probe, which reads headers and decodes nothing.
+fn png(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    bytes.extend_from_slice(&13_u32.to_be_bytes());
+    bytes.extend_from_slice(b"IHDR");
+    bytes.extend_from_slice(&width.to_be_bytes());
+    bytes.extend_from_slice(&height.to_be_bytes());
+    bytes.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    bytes
+}
+
+/// A WebP container in its extended (`VP8X`) form, whose dimensions are stored
+/// one less than the real size.
+fn webp(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = Vec::from(*b"RIFF");
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(b"WEBP");
+    bytes.extend_from_slice(b"VP8X");
+    bytes.extend_from_slice(&10_u32.to_le_bytes());
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    bytes.extend_from_slice(&(width - 1).to_le_bytes()[..3]);
+    bytes.extend_from_slice(&(height - 1).to_le_bytes()[..3]);
+    bytes
+}
+
+/// A little-endian baseline TIFF header with one IFD naming the image size.
+/// TIFF is a coverage-extension payload, which a plain tile pyramid may not
+/// hold.
+fn tiff(width: u16, height: u16) -> Vec<u8> {
+    let mut bytes = Vec::from(*b"II");
+    bytes.extend_from_slice(&42_u16.to_le_bytes());
+    bytes.extend_from_slice(&8_u32.to_le_bytes());
+    bytes.extend_from_slice(&2_u16.to_le_bytes());
+    for (tag, value) in [(256_u16, width), (257_u16, height)] {
+        bytes.extend_from_slice(&tag.to_le_bytes());
+        bytes.extend_from_slice(&3_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&u32::from(value).to_le_bytes());
+    }
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes
+}
+
 /// Every tile address a scan yields, in the order it yields them.
 fn scanned(cursor: &mut geopackage::TileCursor<'_>) -> Vec<(i64, i64, i64)> {
     let mut stream = cursor.tiles().unwrap();
@@ -358,6 +402,185 @@ fn a_bounding_box_selects_the_tiles_it_touches() {
         pyramid.cursor_in(7, north_west),
         Err(Error::UnknownZoomLevel { zoom_level: 7, .. })
     ));
+}
+
+#[test]
+fn a_written_tile_reads_back_unchanged() {
+    let (_dir, gpkg) = gpkg();
+    let pyramid = gpkg
+        .create_tile_pyramid(&quad_builder("basemap", 3))
+        .unwrap();
+    let tile = png(256, 256);
+    pyramid.put_tile(TileCoord::new(1, 1, 0), &tile).unwrap();
+    assert_eq!(
+        pyramid
+            .get_tile(TileCoord::new(1, 1, 0))
+            .unwrap()
+            .as_deref(),
+        Some(tile.as_slice())
+    );
+
+    // Writing the same address again replaces the payload and keeps one row.
+    let mut replacement = png(256, 256);
+    replacement.extend_from_slice(b"second");
+    pyramid
+        .put_tile(TileCoord::new(1, 1, 0), &replacement)
+        .unwrap();
+    assert_eq!(pyramid.tile_count().unwrap(), 1);
+    assert_eq!(
+        pyramid
+            .get_tile(TileCoord::new(1, 1, 0))
+            .unwrap()
+            .as_deref(),
+        Some(replacement.as_slice())
+    );
+
+    assert!(pyramid.delete_tile(TileCoord::new(1, 1, 0)).unwrap());
+    assert!(!pyramid.delete_tile(TileCoord::new(1, 1, 0)).unwrap());
+    assert_eq!(pyramid.tile_count().unwrap(), 0);
+}
+
+#[test]
+fn a_write_is_checked_against_the_pyramid_it_lands_in() {
+    let (_dir, gpkg) = gpkg();
+    let pyramid = gpkg
+        .create_tile_pyramid(&quad_builder("basemap", 2))
+        .unwrap();
+    let tile = png(256, 256);
+
+    assert!(matches!(
+        pyramid.put_tile(TileCoord::new(9, 0, 0), &tile),
+        Err(Error::UnknownZoomLevel { zoom_level: 9, .. })
+    ));
+    // Zoom 1 is a two by two grid, so column 2 is off the end of it.
+    assert!(matches!(
+        pyramid.put_tile(TileCoord::new(1, 2, 0), &tile),
+        Err(Error::Tile(TileError::CoordOutsideMatrix { .. }))
+    ));
+    assert!(matches!(
+        pyramid.put_tile(TileCoord::new(0, 0, 0), &png(512, 512)),
+        Err(Error::Tile(TileError::PayloadSizeMismatch {
+            expected_width: 256,
+            actual_width: 512,
+            ..
+        }))
+    ));
+    assert!(matches!(
+        pyramid.put_tile(TileCoord::new(0, 0, 0), b"not an image"),
+        Err(Error::Tile(TileError::UnreadablePayload { .. }))
+    ));
+    assert!(matches!(
+        pyramid.put_tile(TileCoord::new(0, 0, 0), &tiff(256, 256)),
+        Err(Error::TileFormatNotAllowed { .. })
+    ));
+    assert_eq!(pyramid.tile_count().unwrap(), 0, "nothing was stored");
+}
+
+#[test]
+fn a_webp_payload_registers_the_extension_once() {
+    let (_dir, gpkg) = gpkg();
+    let pyramid = gpkg
+        .create_tile_pyramid(&quad_builder("basemap", 2))
+        .unwrap();
+    let registrations = || -> i64 {
+        let conn = gpkg.connection();
+        let catalogue: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'gpkg_extensions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // No extension table at all is no registration, and is the state a
+        // pyramid of PNGs should stay in.
+        if catalogue == 0 {
+            return 0;
+        }
+        conn.query_row(
+            "SELECT count(*) FROM gpkg_extensions \
+             WHERE table_name = 'basemap' AND column_name = 'tile_data' \
+             AND extension_name = 'gpkg_webp' AND scope = 'read-write'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+
+    pyramid
+        .put_tile(TileCoord::new(0, 0, 0), &png(256, 256))
+        .unwrap();
+    assert_eq!(registrations(), 0, "a PNG registers nothing");
+
+    pyramid
+        .put_tile(TileCoord::new(1, 0, 0), &webp(256, 256))
+        .unwrap();
+    assert_eq!(registrations(), 1);
+    pyramid
+        .put_tile(TileCoord::new(1, 1, 0), &webp(256, 256))
+        .unwrap();
+    assert_eq!(registrations(), 1, "and not once per tile");
+}
+
+#[test]
+fn a_batch_write_commits_in_batches() {
+    let (_dir, gpkg) = gpkg();
+    let pyramid = gpkg
+        .create_tile_pyramid(&quad_builder("basemap", 4))
+        .unwrap();
+    let tile = png(256, 256);
+    let tiles: Vec<(TileCoord, &[u8])> = (0..8)
+        .map(|column| (TileCoord::new(3, column, 0), tile.as_slice()))
+        .collect();
+    assert_eq!(pyramid.write_all(tiles, 3).unwrap(), 8);
+    assert_eq!(pyramid.tile_count_at(3).unwrap(), 8);
+
+    // A failure part-way leaves earlier batches written and rolls back the one
+    // in flight.
+    let bad: Vec<(TileCoord, Vec<u8>)> = vec![
+        (TileCoord::new(2, 0, 0), tile.clone()),
+        (TileCoord::new(2, 1, 0), tile.clone()),
+        (TileCoord::new(2, 2, 0), png(512, 512)),
+        (TileCoord::new(2, 3, 0), tile.clone()),
+    ];
+    pyramid.write_all(bad, 2).unwrap_err();
+    assert_eq!(
+        pyramid.tile_count_at(2).unwrap(),
+        2,
+        "the committed batch survives, the failing one does not"
+    );
+}
+
+#[test]
+fn a_dropped_writer_writes_nothing() {
+    let (_dir, gpkg) = gpkg();
+    let pyramid = gpkg
+        .create_tile_pyramid(&quad_builder("basemap", 2))
+        .unwrap();
+    {
+        let mut writer = pyramid.writer().unwrap();
+        writer.put(TileCoord::new(0, 0, 0), &png(256, 256)).unwrap();
+    }
+    assert_eq!(pyramid.tile_count().unwrap(), 0);
+
+    let before: String = gpkg
+        .connection()
+        .query_row(
+            "SELECT last_change FROM gpkg_contents WHERE table_name = 'basemap'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let writer = pyramid.writer().unwrap();
+    writer.commit().unwrap();
+    let after: String = gpkg
+        .connection()
+        .query_row(
+            "SELECT last_change FROM gpkg_contents WHERE table_name = 'basemap'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(before, after, "a writer that wrote nothing stamps nothing");
 }
 
 #[test]

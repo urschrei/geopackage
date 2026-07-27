@@ -186,6 +186,22 @@ pub enum Error {
         /// The zoom level that is not declared.
         zoom_level: i64,
     },
+    /// A tile payload in an encoding no tile pyramid may hold.
+    ///
+    /// The base spec allows PNG and JPEG (Requirements 36 and 37), and the
+    /// `gpkg_webp` extension allows WebP, which the write path registers as it
+    /// goes. A TIFF belongs to the tiled gridded coverage extension, which this
+    /// crate does not implement.
+    #[error(
+        "tile payload for {table_name:?} is {format:?}, which a tile pyramid may not hold: \
+         PNG and JPEG need no extension, WebP registers gpkg_webp"
+    )]
+    TileFormatNotAllowed {
+        /// The pyramid that was written to.
+        table_name: String,
+        /// The encoding the payload's header declared.
+        format: geopackage_core::TileFormat,
+    },
     /// A pyramid whose zoom levels do not step by factors of two was created
     /// without opting into the `gpkg_zoom_other` extension.
     #[error(

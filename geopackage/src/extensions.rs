@@ -9,7 +9,7 @@
 //! [`crate::Layer::drop_spatial_index`] does.
 
 use geopackage_core::ddl;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::{Result, table_exists};
 
@@ -36,6 +36,25 @@ pub(crate) fn register(
         rusqlite::params![table, column, name, definition, scope],
     )?;
     Ok(())
+}
+
+/// Whether `name` is registered for `table`, which is `None` for an extension
+/// scoped to the whole GeoPackage.
+///
+/// `false` for a file with no `gpkg_extensions` table at all, which is the
+/// common case rather than an error.
+pub(crate) fn is_registered(conn: &Connection, table: Option<&str>, name: &str) -> Result<bool> {
+    if !table_exists(conn, "gpkg_extensions")? {
+        return Ok(false);
+    }
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM gpkg_extensions WHERE extension_name = ?1 AND table_name IS ?2",
+            rusqlite::params![name, table],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 /// Remove an extension's registration for a table and column.
