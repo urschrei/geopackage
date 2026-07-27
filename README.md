@@ -6,8 +6,8 @@
 
 A Rust implementation of the
 [OGC GeoPackage 1.4](https://www.geopackage.org/spec140/) format: vector
-features, attribute tables, spatial indexing, and columnar I/O through Apache
-Arrow. Pre-1.0: the API will change without notice.
+features, attribute tables, spatial indexing, tile pyramids, and columnar I/O
+through Apache Arrow. Pre-1.0: the API will change without notice.
 
 ## Install
 
@@ -65,6 +65,44 @@ for feature in layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))? {
 }
 ```
 
+### Tiles
+
+A GeoPackage can also hold pre-rendered raster tiles, addressed by zoom level,
+column and row. `GeoPackage::create_tile_pyramid` writes a pyramid,
+`GeoPackage::tiles` opens one, and the payloads are stored and returned as they
+are:
+
+```rust
+use geopackage::core::tiles::{TileCoord, TileMatrixSet, ZoomLadder};
+use geopackage::{GeoPackage, TilePyramidBuilder};
+
+let gpkg = GeoPackage::create("basemap.gpkg")?;
+gpkg.add_epsg_srs(3857)?;
+
+// The spec's default arrangement: each zoom level doubles the grid, with pixel
+// sizes derived from the extent so they span it exactly.
+let matrix_set = TileMatrixSet::web_mercator_quad();
+let matrices = matrix_set.ladder(ZoomLadder::new(0, 12))?;
+let tiles = gpkg
+    .create_tile_pyramid(&TilePyramidBuilder::new("basemap", matrix_set).matrices(matrices))?;
+
+tiles.put_tile(TileCoord::new(12, 2048, 1362), &png_bytes)?;
+let tile = tiles.get_tile(TileCoord::new(12, 2048, 1362))?;
+```
+
+**This crate decodes no images.** It stores, indexes and validates tiles, and
+depends on no image codec: what it reads of a payload is its header, which is
+how a tile of the wrong pixel size, or in a format the table may not hold, is
+rejected on write rather than stored. Turning tiles into pixels, or a source
+raster into a pyramid, needs an image library or GDAL on top of this one.
+
+Writing a tile checks its address against the zoom level's grid and its header
+against the declared tile size; a WebP payload registers `gpkg_webp` as it
+lands. Rows count from the top of the extent downwards (the WMTS and XYZ sense,
+not TMS), and the indices are relative to the pyramid's own extent rather than
+a global grid, so the XYZ conversion refuses on a pyramid that is not the
+standard web mercator quad instead of quietly pointing somewhere else.
+
 ### Columnar read and write
 
 With the `arrow` feature, `Layer::read_arrow` reads a layer as Arrow record
@@ -119,7 +157,7 @@ reachable as SQL through `GeoPackage::connection()`.
 |---|---|
 | [`geopackage-core`](geopackage-core) | Format primitives, no IO or SQLite: GeoPackage Binary (GPB) header codec, normative table DDL, version-aware RTree trigger SQL, identifier quoting, `application_id`/`user_version` handling. |
 | [`geopackage`](geopackage) | The container: create/open over [rusqlite](https://github.com/rusqlite/rusqlite) with bundled SQLite, the feature and attribute read and write paths, columnar read and write through Apache Arrow (feature `arrow`), the RTree spatial-index lifecycle, and the `ST_*` SQL functions the index triggers require. |
-| `geopackage-core/fuzz` | cargo-fuzz targets for the GPB parser. |
+| `geopackage-core/fuzz` | cargo-fuzz targets for the GPB parser and the tile payload probe. |
 
 ## Design
 
@@ -180,6 +218,14 @@ Method, per-dataset detail and the rest of the caveats are in
 [`scripts/bench_datasets.sh`](https://github.com/urschrei/geopackage/blob/main/scripts/bench_datasets.sh)
 fetches the datasets and reproduces the table.
 
+Tiles, over a full web mercator ladder to zoom 7 (21,845 tiles of 4 KiB,
+101 MB): about 146,000 tiles/s read by address, 108,000 streamed in matrix
+order, and 131,000 written through `write_all`. GDAL reads the same file at
+about 2,700 tiles/s, but that is a different operation and not a comparison:
+GDAL returns pixels, decoding each PNG, and this crate returns the stored
+bytes. See
+[the tile write-up](https://github.com/urschrei/geopackage/blob/main/roadmap/benchmarks/2026-07-27-tiles.md).
+
 ## Conformance
 
 Files written by this crate are checked against OGC
@@ -190,6 +236,13 @@ set and rejects a correct 1.4 one (no 1.3/1.4 ETS exists). The
 advisory findings, both on deliberate test-file choices. A GDAL round-trip
 byte-compares geometry WKB and attribute values after an `ogr2ogr` copy, and
 the test corpus includes GDAL-written, QGIS-written and raw-SQLite files.
+
+On the tile side, the ETS Tiles conformance class passes on a pyramid this
+crate wrote (24 passed, 0 failed, alongside 17 in Core). A pyramid this crate
+writes is read back by `gdalinfo`, a
+`GoogleMapsCompatible` pyramid written by `gdal_translate` is read back here,
+and the corpus sweep walks every tile of the GDAL- and NGA-written pyramids it
+holds, probing each payload against the size its zoom level declares.
 
 ## Known limitations
 
@@ -203,8 +256,13 @@ the test corpus includes GDAL-written, QGIS-written and raw-SQLite files.
 - **Non-linear curve types** (`CIRCULARSTRING`, `COMPOUNDCURVE`, ...) cannot
   have their envelopes computed and so cannot be inserted into an indexed
   table. Tracked in [#5](https://github.com/urschrei/geopackage/issues/5).
-- **Tile pyramids are not implemented.** A file's tile tables are visible
-  through `contents()` but there is no read or write path for them.
+- **Tiles are bytes, not images.** A tile pyramid can be created, read, written
+  and validated, but no payload is ever decoded: there is no way to get pixels,
+  reproject a pyramid, or build one from a source raster from here.
+- **Tiled gridded coverage** (elevation and other gridded data, which stores
+  values rather than pictures in its tiles) is not implemented: a TIFF payload
+  is rejected on write, and such a pyramid reads as ordinary tiles whose bytes
+  make no sense as images.
 
 ## License
 

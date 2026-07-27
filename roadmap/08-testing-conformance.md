@@ -18,8 +18,9 @@ This file is the harness plan; milestone docs reference it.
    ported to it when the dev-dependency lands.
 3. **Fuzzing** (cargo-fuzz, continuous once public via OSS-Fuzz):
    `gpb_parse` (M0 ✅), `gpb_geometry` (header+body via wkb, M1),
-   `open_arbitrary` (arbitrary bytes as .gpkg file, M1), tile matrix
-   consistency parser (M4). Corpus seeded from the fixture corpus.
+   `open_arbitrary` (arbitrary bytes as .gpkg file, M1), `tile_payload`
+   (payload probe and tile matrix consistency rules, M4 ✅). Corpus seeded
+   from the fixture corpus.
 4. **External validators** (CI, from M2, on files *we* write):
    - OGC [ets-gpkg12](https://github.com/opengeospatial/ets-gpkg12) all-in-one
      jar (Java in CI). Note: it validates 1.2 semantics, and no 1.3/1.4 ETS
