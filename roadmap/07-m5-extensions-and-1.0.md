@@ -258,11 +258,23 @@ research item below was done first, and it found a single published spec version
 and a single dominant producer to match, rather than the producer variation this
 was originally sized for.
 
-- [ ] Read `gpkgext_relations` and walk a mapping table (`base_id`,
-      `related_id`) for any relation type.
-- [ ] Write for `simple_attributes` and `media` first, each registering the
-      extension rows the relation needs, including the row for the mapping
-      table itself, and adding the related table to `gpkg_contents`.
+- [x] Read `gpkgext_relations` and walk a mapping table (`base_id`,
+      `related_id`) for any relation type. `relations()`, `relations_from()`
+      and `related_ids()`. Reading deliberately does not depend on recognising
+      the relation type: a relationship is a base table, a related table and a
+      mapping table, and that is all a walk needs.
+- [x] Write, for every requirements class rather than two: `media`,
+      `simple_attributes`, `features`, `attributes` and `tiles` are all defined
+      classes, and the `x-<author>_<name>` form is accepted too, so there was
+      no reason to start with a subset. `add_relation()` creates the mapping
+      table, registers a `gpkg_extensions` row for it and for
+      `gpkgext_relations`, and checks Requirements 5 and 6 (both ends in
+      `gpkg_contents`) and Requirement 8 (the `relation_name` form).
+      `add_mapping()` writes pairs.
+
+      Cardinality stays unmodelled and duplicates are kept, per the research
+      above. Mapping table columns are written `NOT NULL`, following Table 3
+      rather than GDAL.
 - [x] Establish which OGC 18-000 version the ecosystem actually writes.
       **Answered 2026-07-27: there is only one.** 18-000 is version 1.0,
       approved 2019-03-26 and published 2019-05-08; the 0.1 and 0.2 entries in

@@ -328,6 +328,17 @@ pub enum Error {
         /// The unregistered spatial reference system identifier.
         srs_id: i32,
     },
+    /// A relationship was given a `relation_name` that Requirement 8 does not
+    /// accept: neither a defined requirements class nor the
+    /// `x-<author>_<name>` form.
+    #[error(
+        "relation_name {relation_name:?} is neither a defined requirements class \
+         nor of the form x-<author>_<name>"
+    )]
+    NonConformantRelationName {
+        /// The rejected value.
+        relation_name: String,
+    },
     /// A metadata reference names a `gpkg_metadata` row that does not exist.
     #[error("no gpkg_metadata row with id {id}")]
     NoSuchMetadata {

@@ -79,7 +79,7 @@ fn a_description_reaches_the_table_schema() {
         .filter(|row| row.name == "gpkg_schema")
         .collect();
     assert_eq!(rows.len(), 2, "{rows:?}");
-    assert_eq!(rows[0].support(), ExtensionSupport::Known);
+    assert_eq!(rows[0].support(), ExtensionSupport::Implemented);
     let tables: Vec<_> = rows.iter().filter_map(|r| r.table_name.clone()).collect();
     assert_eq!(
         tables,
