@@ -81,6 +81,54 @@ CREATE TABLE gpkg_extensions (
   CONSTRAINT ge_tce UNIQUE (table_name, column_name, extension_name)
 )";
 
+/// `gpkg_data_columns` (Annex F.9, Requirement 103), the first of the two
+/// tables the `gpkg_schema` extension defines.
+///
+/// Verbatim from the spec, less the comments: the spec source writes them with
+/// `//`, which SQLite does not accept.
+///
+/// The primary key is `(table_name, column_name)`, so a column has at most one
+/// row. Before 1.2.1 `table_name` carried a foreign key to `gpkg_contents`;
+/// that was relaxed, but files written under the old definition still have it.
+pub const CREATE_GPKG_DATA_COLUMNS: &str = "\
+CREATE TABLE gpkg_data_columns (
+  table_name TEXT NOT NULL,
+  column_name TEXT NOT NULL,
+  name TEXT,
+  title TEXT,
+  description TEXT,
+  mime_type TEXT,
+  constraint_name TEXT,
+  CONSTRAINT pk_gdc PRIMARY KEY (table_name, column_name),
+  CONSTRAINT gdc_tn UNIQUE (table_name, name)
+)";
+
+/// `gpkg_data_column_constraints` (Annex F.9, Requirement 107), the second of
+/// the `gpkg_schema` tables.
+///
+/// Verbatim, less the `//` comments, as [`CREATE_GPKG_DATA_COLUMNS`].
+///
+/// One constraint occupies one row for `range` and `glob`, and one row per
+/// member for `enum`, which is why the unique constraint spans
+/// `(constraint_name, constraint_type, value)` rather than the name alone.
+/// `min` and `max` are NUMERIC, the spec's only exception to its own rule that
+/// column types come from Table 1.
+///
+/// In GeoPackage 1.0 the inclusivity columns were named `minIsInclusive` and
+/// `maxIsInclusive`; files written then still use those names.
+pub const CREATE_GPKG_DATA_COLUMN_CONSTRAINTS: &str = "\
+CREATE TABLE gpkg_data_column_constraints (
+  constraint_name TEXT NOT NULL,
+  constraint_type TEXT NOT NULL,
+  value TEXT,
+  min NUMERIC,
+  min_is_inclusive BOOLEAN,
+  max NUMERIC,
+  max_is_inclusive BOOLEAN,
+  description TEXT,
+  CONSTRAINT gdcc_ntv UNIQUE (constraint_name, constraint_type, value)
+)";
+
 /// The three `gpkg_spatial_ref_sys` records required by Requirement 11:
 /// EPSG:4326, undefined Cartesian (−1), undefined geographic (0).
 pub const SEED_SPATIAL_REF_SYS: [&str; 3] = [
