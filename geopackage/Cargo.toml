@@ -69,6 +69,10 @@ name = "read"
 harness = false
 
 [[bench]]
+name = "tiles"
+harness = false
+
+[[bench]]
 name = "arrow"
 harness = false
 required-features = ["arrow"]
