@@ -15,5 +15,10 @@ geopackage-core/fuzz/coverage
 # Default output path of the bulk_load example when run without an argument.
 /bulk_load.gpkg
 
+# The file emit_representative_file writes for the external validators. It
+# defaults to target/, so this only catches a GPKG_REPRESENTATIVE_OUT pointed
+# at the source tree; one of these was committed by accident once.
+representative.gpkg
+
 # Hegel property-test server cache + failure database.
 .hegel/

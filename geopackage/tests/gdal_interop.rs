@@ -283,16 +283,31 @@ fn ogrinfo_full_read_and_manual_1_4_checks() {
     );
 }
 
-/// Emit the representative file to `$GPKG_REPRESENTATIVE_OUT` so the external
-/// validator scripts (`scripts/run_ets_gpkg12.sh`, `scripts/run_pdok_validator.sh`)
-/// can run against a file this crate wrote. No external tool needed; ignored so
+/// Emit the representative file so the external validator scripts
+/// (`scripts/run_ets_gpkg12.sh`, `scripts/run_pdok_validator.sh`) can run
+/// against a file this crate wrote. Both take the path as an argument, so
+/// nothing depends on where this puts it. No external tool needed; ignored so
 /// it never runs in CI.
+///
+/// Writes to `$GPKG_REPRESENTATIVE_OUT`, or to cargo's per-target temp
+/// directory under `target/` when that is unset. It used to default to the
+/// working directory, which is the crate directory under a test runner: that
+/// left an untracked `.gpkg` in the source tree, and one duly got committed by
+/// accident.
+///
+/// An existing file at the path is **replaced**. Emitting a fresh file is the
+/// whole job, and `GeoPackage::create` refuses to overwrite, so without this a
+/// second run of the test failed on the output of the first.
 #[test]
-#[ignore = "writes the representative file to $GPKG_REPRESENTATIVE_OUT for the external validators"]
+#[ignore = "writes the representative file for the external validators"]
 fn emit_representative_file() {
-    let out = std::env::var("GPKG_REPRESENTATIVE_OUT")
-        .unwrap_or_else(|_| "representative.gpkg".to_owned());
-    let path = std::path::PathBuf::from(&out);
+    let path = std::path::PathBuf::from(
+        std::env::var("GPKG_REPRESENTATIVE_OUT")
+            .unwrap_or_else(|_| format!("{}/representative.gpkg", env!("CARGO_TARGET_TMPDIR"))),
+    );
+    if path.exists() {
+        std::fs::remove_file(&path).expect("replace the previous representative file");
+    }
     build_representative(&path);
     eprintln!("wrote representative GeoPackage: {}", path.display());
 }
