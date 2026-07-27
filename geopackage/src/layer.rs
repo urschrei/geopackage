@@ -1041,13 +1041,7 @@ fn row_in_box(
 /// the header envelope when present, else a full WKB traversal. `None` for an
 /// empty geometry. This is the same rule the registered `ST_*` functions use.
 fn blob_xy_envelope(blob: &[u8]) -> Result<Option<[f64; 4]>> {
-    let (header, _) = gpb::parse_header(blob).map_err(|e| Error::Core(e.into()))?;
-    if let Some((min_x, max_x, min_y, max_y)) = header.envelope.xy_bounds() {
-        return Ok(Some([min_x, max_x, min_y, max_y]));
-    }
-    Ok(GpbGeometry::parse(blob)
-        .map_err(|e| Error::Core(e.into()))?
-        .xy_envelope())
+    geometry::blob_xy_envelope(blob).map_err(|e| Error::Core(e.into()))
 }
 
 /// Round a query upper bound outward: to `f32` (nearest), then one ULP up.

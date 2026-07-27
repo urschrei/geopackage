@@ -54,8 +54,7 @@
 //! the caller can prove it accounts for every indexable row, from envelopes
 //! computed while encoding the geometries (see [`fill_index`]'s `precomputed`).
 
-use geopackage_core::geometry::GpbGeometry;
-use geopackage_core::gpb;
+use geopackage_core::geometry;
 use geopackage_core::ident::quote;
 use geopackage_core::triggers;
 use rusqlite::Connection;
@@ -346,22 +345,12 @@ pub(crate) fn table_row_count(conn: &Connection, table: &str) -> Result<usize> {
 /// otherwise, exactly as `ST_MinX`/`ST_MaxX`/`ST_MinY`/`ST_MaxY` do. So the
 /// returned set is identical to the one the old scan produced.
 fn envelope_of(blob: &[u8]) -> std::result::Result<Option<[f64; 4]>, geopackage_core::Error> {
-    let (header, _) = gpb::parse_header(blob)?;
-    if header.empty {
-        return Ok(None);
-    }
     // `ST_IsEmpty` traverses the body whenever the header flag is unset, so a
     // faithful set requires the same traversal here rather than trusting a
     // present header envelope. That traversal also yields the bounds for a blob
-    // whose header carries no envelope, so this one parse serves both purposes.
-    let Some(body_bounds) = GpbGeometry::parse(blob)?.xy_envelope() else {
-        return Ok(None);
-    };
-    let bounds = match header.envelope.xy_bounds() {
-        Some((min_x, max_x, min_y, max_y)) => [min_x, max_x, min_y, max_y],
-        None => body_bounds,
-    };
-    Ok(Some(bounds))
+    // whose header carries no envelope, so one walk serves both purposes.
+    let (bounds, _) = geometry::blob_envelope_and_empty(blob)?;
+    Ok(bounds)
 }
 
 /// Accumulate `(fid, [min_x, max_x, min_y, max_y])` for every row whose geometry

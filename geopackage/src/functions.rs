@@ -14,15 +14,14 @@
 //! `ST_IsEmpty` reports emptiness from the same wrapper (header empty flag,
 //! the NaN empty-point convention, and zero-coordinate geometries).
 //!
-//! Limitation: a WKB body whose type the `wkb` crate cannot read, namely the
-//! non-linear curve types (`CIRCULARSTRING`, `CURVEPOLYGON`, …) and the
-//! abstract `CURVE`/`SURFACE`, produces a typed SQL error rather than an
-//! envelope, so such a geometry cannot be inserted into an rtree-indexed
-//! table. Curve-type envelope support is tracked as an open roadmap item and
-//! needs curve support in `wkb` upstream.
+//! The non-linear types (`CIRCULARSTRING`, `CURVEPOLYGON`, …) are read by
+//! `geopackage_core::curve`, which walks the WKB bytes rather than going
+//! through the `wkb` crate, so a curve geometry indexes like any other. Only
+//! the abstract `CURVE`/`SURFACE` codes, which cannot be instantiated, and
+//! structurally malformed bodies produce a typed SQL error.
 
-use geopackage_core::geometry::{GeometryError, GpbGeometry};
-use geopackage_core::gpb::{self, GpbError};
+use geopackage_core::geometry::{self, GeometryError};
+use geopackage_core::gpb::GpbError;
 use rusqlite::Connection;
 use rusqlite::functions::{Context, FunctionFlags};
 use rusqlite::types::ValueRef;
@@ -32,15 +31,7 @@ pub fn register(conn: &Connection) -> rusqlite::Result<()> {
     let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;
 
     conn.create_scalar_function("ST_IsEmpty", 1, flags, |ctx| {
-        with_blob(ctx, |blob| {
-            // The header empty flag is authoritative and cheap; only fall back
-            // to a body traversal when it is not set.
-            let (header, _) = gpb::parse_header(blob)?;
-            if header.empty {
-                return Ok(Some(true));
-            }
-            Ok(Some(GpbGeometry::parse(blob)?.is_empty()))
-        })
+        with_blob(ctx, |blob| Ok(Some(geometry::blob_is_empty(blob)?)))
     })?;
 
     // Each function selects one component of the `[min_x, max_x, min_y, max_y]`
@@ -54,14 +45,10 @@ pub fn register(conn: &Connection) -> rusqlite::Result<()> {
     ] {
         conn.create_scalar_function(name, 1, flags, move |ctx| {
             with_blob(ctx, |blob| {
-                let (header, _) = gpb::parse_header(blob)?;
-                if let Some((min_x, max_x, min_y, max_y)) = header.envelope.xy_bounds() {
-                    return Ok(Some(select([min_x, max_x, min_y, max_y])));
-                }
-                // No header envelope: traverse the body. An empty geometry has
-                // no spatial extent; report NaN (the rtree triggers guard these
-                // calls with ST_IsEmpty, so a bound is never indexed for one).
-                match GpbGeometry::parse(blob)?.xy_envelope() {
+                // An empty geometry has no spatial extent; report NaN (the
+                // rtree triggers guard these calls with ST_IsEmpty, so a bound
+                // is never indexed for one).
+                match geometry::blob_xy_envelope(blob)? {
                     Some(bounds) => Ok(Some(select(bounds))),
                     None => Ok(Some(f64::NAN)),
                 }
