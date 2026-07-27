@@ -44,7 +44,6 @@
 //! write the shadow tables directly, gated with automatic fallback to the
 //! triggered path.
 
-use geopackage_core::ddl;
 use geopackage_core::ident::quote;
 use geopackage_core::triggers::{self, TriggerGeneration};
 use rusqlite::Connection;
@@ -267,17 +266,12 @@ impl Layer<'_> {
         let tx = conn.unchecked_transaction()?;
         drop_all_rtree_triggers(&tx, self.table_name(), &geom.column_name)?;
         tx.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote(&rtree)?))?;
-        if table_exists(&tx, "gpkg_extensions")? {
-            tx.execute(
-                "DELETE FROM gpkg_extensions \
-                 WHERE table_name = ?1 AND column_name = ?2 AND extension_name = ?3",
-                rusqlite::params![
-                    self.table_name(),
-                    geom.column_name,
-                    triggers::EXTENSION_NAME
-                ],
-            )?;
-        }
+        crate::extensions::unregister(
+            &tx,
+            self.table_name(),
+            &geom.column_name,
+            triggers::EXTENSION_NAME,
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -528,22 +522,14 @@ pub(crate) fn create_index_in_transaction(
 }
 
 fn register_extension_row(conn: &Connection, table: &str, column: &str) -> Result<()> {
-    if !table_exists(conn, "gpkg_extensions")? {
-        conn.execute_batch(ddl::CREATE_GPKG_EXTENSIONS)?;
-    }
-    conn.execute(
-        "INSERT INTO gpkg_extensions \
-         (table_name, column_name, extension_name, definition, scope) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![
-            table,
-            column,
-            triggers::EXTENSION_NAME,
-            triggers::EXTENSION_DEFINITION,
-            triggers::EXTENSION_SCOPE,
-        ],
-    )?;
-    Ok(())
+    crate::extensions::register(
+        conn,
+        Some(table),
+        Some(column),
+        triggers::EXTENSION_NAME,
+        triggers::EXTENSION_DEFINITION,
+        triggers::EXTENSION_SCOPE,
+    )
 }
 
 /// Drop every RTree trigger for `table`/`column`, of any generation, by name.

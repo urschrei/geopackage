@@ -355,6 +355,7 @@ pub mod arrow;
 mod bulk;
 mod create;
 mod error;
+mod extensions;
 mod extent;
 mod functions;
 mod index;
