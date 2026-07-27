@@ -1,7 +1,6 @@
 //! `gpkg_spatial_ref_sys` access: lookup and registration of SRS rows.
 
-use crate::{Error, GeoPackage, Result, table_exists};
-use geopackage_core::ddl;
+use crate::{Error, GeoPackage, Result};
 use geopackage_core::ident::quote;
 use geopackage_core::srs::epsg_definition;
 use rusqlite::{Connection, OptionalExtension};
@@ -173,15 +172,14 @@ fn enable_crs_wkt_extension(conn: &Connection) -> Result<()> {
          ALTER TABLE gpkg_spatial_ref_sys ADD COLUMN epoch DOUBLE;",
     )?;
     backfill_wkt2(conn)?;
-    if !table_exists(conn, "gpkg_extensions")? {
-        conn.execute_batch(ddl::CREATE_GPKG_EXTENSIONS)?;
-    }
     for column in ["definition_12_063", "epoch"] {
-        conn.execute(
-            "INSERT INTO gpkg_extensions \
-             (table_name, column_name, extension_name, definition, scope) \
-             VALUES ('gpkg_spatial_ref_sys', ?1, ?2, ?3, 'read-write')",
-            rusqlite::params![column, CRS_WKT_EXTENSION, CRS_WKT_DEFINITION],
+        crate::extensions::register(
+            conn,
+            Some("gpkg_spatial_ref_sys"),
+            Some(column),
+            CRS_WKT_EXTENSION,
+            CRS_WKT_DEFINITION,
+            "read-write",
         )?;
     }
     Ok(())
