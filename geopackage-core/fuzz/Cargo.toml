@@ -25,4 +25,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "tile_payload"
+path = "fuzz_targets/tile_payload.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
