@@ -78,7 +78,7 @@ pub mod version;
 pub use geometry::{GeometryError, GpbGeometry};
 pub use gpb::{Envelope, GpbError, GpbHeader};
 pub use srs::SrsDefinition;
-pub use tiles::{TileError, TileMatrix, TileMatrixSet};
+pub use tiles::{TileCoord, TileError, TileMatrix, TileMatrixSet};
 pub use types::{ColumnType, GeometryType, ZmFlag};
 pub use version::GpkgVersion;
 
