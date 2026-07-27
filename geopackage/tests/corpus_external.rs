@@ -21,7 +21,7 @@
 
 use std::path::PathBuf;
 
-use geopackage::{ContentsDataType, ConversionOptions, GeoPackage};
+use geopackage::{ContentsDataType, ConversionOptions, Extension, GeoPackage};
 
 fn corpus_dir() -> PathBuf {
     match std::env::var_os("GEOPACKAGE_CORPUS_DIR") {
@@ -56,6 +56,13 @@ struct Tally {
     pyramids: usize,
     tiles: usize,
     tile_errors: usize,
+    /// Extension names this crate could not identify.
+    ///
+    /// Unlike the error counts, this one is asserted empty by the caller: the
+    /// corpus is pinned by sha256, so a name turning up here is a real file
+    /// declaring something we have never seen, which is worth knowing about
+    /// rather than tallying.
+    unclassified: Vec<String>,
 }
 
 fn sweep(path: &std::path::Path) -> Tally {
@@ -63,6 +70,11 @@ fn sweep(path: &std::path::Path) -> Tally {
         .unwrap_or_else(|e| panic!("open_lenient({}): {e:?}", path.display()));
 
     let mut tally = Tally::default();
+    for row in gpkg.extensions().unwrap() {
+        if matches!(row.extension(), Extension::Other(_)) {
+            tally.unclassified.push(row.name);
+        }
+    }
     let contents = gpkg.contents().unwrap();
     for entry in contents {
         if entry.data_type == ContentsDataType::Tiles {
@@ -167,13 +179,15 @@ fn sweep_external_corpus() {
     }
 
     let mut total_features = 0usize;
+    let mut unclassified: Vec<(String, String)> = Vec::new();
     for path in &files {
         let t = sweep(path);
         total_features += t.features;
+        let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
         println!(
             "{:40} layers={:<3} features={:<7} row_errors={:<4} geometry_errors={:<4} \
-             pyramids={:<3} tiles={:<6} tile_errors={}",
-            path.file_name().unwrap().to_string_lossy(),
+             pyramids={:<3} tiles={:<6} tile_errors={:<4} unclassified_extensions={}",
+            file_name,
             t.layers,
             t.features,
             t.row_errors,
@@ -181,6 +195,12 @@ fn sweep_external_corpus() {
             t.pyramids,
             t.tiles,
             t.tile_errors,
+            t.unclassified.len(),
+        );
+        unclassified.extend(
+            t.unclassified
+                .into_iter()
+                .map(|name| (file_name.clone(), name)),
         );
     }
     println!(
@@ -192,4 +212,12 @@ fn sweep_external_corpus() {
     // counts are reported, not asserted: some published samples carry curve-type
     // geometries the wkb reader cannot yet parse (tracked in the M1 roadmap).
     assert!(!files.is_empty());
+    // Extension names are the exception, and are asserted: a real file
+    // declaring a name this crate cannot identify is what the catalogue exists
+    // to surface, and the fix is to name it rather than to widen this test.
+    assert_eq!(
+        unclassified,
+        Vec::new(),
+        "unclassified extension names, as (file, extension_name)"
+    );
 }

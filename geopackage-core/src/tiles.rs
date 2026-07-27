@@ -39,12 +39,12 @@ pub const WEB_MERCATOR_HALF_SPAN: f64 = 20_037_508.342_789_244;
 pub const TILE_DATA_COLUMN: &str = "tile_data";
 
 /// Registered extension name for zoom levels that do not step by factors of
-/// two (Annex F.4).
+/// two (Annex F.6).
 pub const ZOOM_OTHER_EXTENSION_NAME: &str = "gpkg_zoom_other";
 /// `gpkg_extensions.definition` value for [`ZOOM_OTHER_EXTENSION_NAME`].
 pub const ZOOM_OTHER_EXTENSION_DEFINITION: &str =
     "http://www.geopackage.org/spec140/#extension_zoom_other_intervals";
-/// Registered extension name for WebP tile payloads (Annex F.5).
+/// Registered extension name for WebP tile payloads (Annex F.7).
 pub const WEBP_EXTENSION_NAME: &str = "gpkg_webp";
 /// `gpkg_extensions.definition` value for [`WEBP_EXTENSION_NAME`].
 pub const WEBP_EXTENSION_DEFINITION: &str =

@@ -66,6 +66,7 @@
 
 pub mod datetime;
 pub mod ddl;
+pub mod extensions;
 pub mod geometry;
 pub mod gpb;
 pub mod ident;

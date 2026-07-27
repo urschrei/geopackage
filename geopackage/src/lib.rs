@@ -433,7 +433,7 @@ pub mod arrow;
 mod bulk;
 mod create;
 mod error;
-mod extensions;
+pub mod extensions;
 mod extent;
 mod functions;
 mod index;
@@ -452,8 +452,10 @@ pub use create::{
     ColumnSpec, DEFAULT_GEOMETRY_COLUMN, DEFAULT_PRIMARY_KEY, GeometrySpec, TableSchemaBuilder,
 };
 pub use error::{Error, Result};
+pub use extensions::ExtensionRow;
 pub use geopackage_core as core;
 pub use geopackage_core::GpkgVersion;
+pub use geopackage_core::extensions::{Extension, ExtensionScope, ExtensionSupport};
 pub use index::{SpatialIndexAudit, SpatialIndexStatus};
 pub use layer::{BoundingBox, Feature, FeatureCursor, FeatureStream, Features, Layer, LayerKind};
 pub use open::OpenWarning;
