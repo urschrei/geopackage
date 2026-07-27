@@ -323,13 +323,22 @@ was originally sized for.
 
       `ets-gpkg12` carries `RTETests`, so acceptance criterion 3 has a path for
       this extension without new harness work.
-- [ ] Fixture: no GeoPackage in the committed fixtures or the fetched corpus
-      carries `gpkgext_relations`, confirmed by sweeping both, so one has to be
-      generated. GDAL's Python bindings do it, with two traps worth recording
-      because they cost three attempts: the left and right table fields must be
-      set (to the FID column name, which `AddRelationship` accepts), and setting
-      the mapping-table field names explicitly makes the call fail while still
-      leaving `gpkgext_relations` behind, so a half-built file is the symptom.
+- [x] Fixture: `gdal_related.gpkg`. No GeoPackage in the committed fixtures or
+      the fetched corpus carried `gpkgext_relations`, confirmed by sweeping
+      both, so one is generated through GDAL's `osgeo` Python bindings, which
+      is the only entry point offering `AddRelationship`: neither `ogr2ogr` nor
+      the `gdal` CLI exposes it as of 3.12. The bindings are optional the way
+      `qgis_process` is, so the generator warns and skips rather than failing
+      where they are absent, and the committed fixture is what the tests read.
+      Two traps are recorded at the builder, because they cost three attempts:
+      the left and right table fields must be set (the FID column name is
+      accepted), and naming the mapping table's own field names makes the call
+      fail while still leaving `gpkgext_relations` behind, so a half-built file
+      is the symptom rather than an error.
+
+Corpus budget: the fixtures now total 247 KB of the 256 KB cap, so the next
+one needs a trim first. The two curve and related fixtures cost 82 KB between
+them, most of it RTree trigger SQL.
 
 ## Phase 6: non-linear geometry, passthrough with computed envelopes
 
