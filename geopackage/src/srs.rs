@@ -9,10 +9,28 @@ use rusqlite::{Connection, OptionalExtension};
 ///
 /// The 1.1 form, which adds `epoch` alongside `definition_12_063`. Both
 /// columns are added together, so both get a row.
+///
+/// The CRS WKT 1.1 document lists three rows as required: `gpkg_crs_wkt`
+/// against `definition_12_063`, and `gpkg_crs_wkt_1_1` against each of
+/// `definition_12_063` and `epoch`. GDAL writes the first of those on its own
+/// while a file has no epoch column, and on adding one it *renames* that row
+/// to `gpkg_crs_wkt_1_1` rather than keeping both
+/// (`OGRGeoPackageDataSource`, `UPDATE gpkg_extensions SET extension_name =
+/// 'gpkg_crs_wkt_1_1' WHERE extension_name = 'gpkg_crs_wkt'`), so a 1.1 file
+/// from GDAL carries the two rows this crate writes and no `gpkg_crs_wkt` row.
+/// The ETS agrees, since its `gpkg_crs_wkt` check is "not testable" on an
+/// empty result set. We follow GDAL: interoperating with the files that exist
+/// beats matching a table no widespread implementation produces.
 const CRS_WKT_EXTENSION: &str = "gpkg_crs_wkt_1_1";
 const CRS_WKT_DEFINITION: &str = "http://www.geopackage.org/spec/#extension_crs_wkt";
 
 /// A row of `gpkg_spatial_ref_sys`.
+///
+/// The last two fields belong to the `gpkg_crs_wkt` extension (Annex F.10) and
+/// its 1.1 revision, and are `None` for a file that does not carry it. Between
+/// them the fields cover the whole of that extension's table definition, which
+/// is why this is a plain struct rather than a builder: the spec fixes the
+/// column set, so there is nothing here that is expected to grow.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Srs {
     /// Human-readable SRS name.
@@ -28,47 +46,141 @@ pub struct Srs {
     pub definition: String,
     /// Human-readable description.
     pub description: Option<String>,
+    /// The `definition_12_063` column: a WKT2 definition, per the
+    /// `gpkg_crs_wkt` extension.
+    ///
+    /// `None` when the file does not carry the extension. Where both this and
+    /// [`Srs::definition`] are populated, this one takes priority, which is
+    /// the note under Requirement 117. Some CRSs have no WKT1 form at all, so
+    /// for them [`Srs::definition`] is the literal `undefined` and this is
+    /// where the definition lives.
+    pub definition_wkt2: Option<String>,
+    /// The `epoch` column: the coordinate epoch, per the 1.1 revision of the
+    /// `gpkg_crs_wkt` extension.
+    ///
+    /// `None` when the file carries neither the extension nor an epoch for
+    /// this row. A GeoPackage may hold several rows for one
+    /// `organization_coordsys_id` differing only in epoch.
+    pub epoch: Option<f64>,
+}
+
+/// The six columns every `gpkg_spatial_ref_sys` has, in the order
+/// [`row_to_srs`] reads them.
+const BASE_COLUMNS: &str =
+    "srs_name, srs_id, organization, organization_coordsys_id, definition, description";
+
+/// Which of the `gpkg_crs_wkt` extension's columns a file carries.
+///
+/// The two are added together by this crate and by GDAL, but they arrived in
+/// different versions of the extension, so a file can have `definition_12_063`
+/// without `epoch` and the two are checked separately rather than inferred
+/// from each other.
+#[derive(Debug, Clone, Copy)]
+struct CrsWktColumns {
+    definition_12_063: bool,
+    epoch: bool,
+}
+
+impl CrsWktColumns {
+    /// One `PRAGMA table_info` rather than one per column.
+    fn read(conn: &Connection) -> Result<Self> {
+        let mut stmt = conn.prepare("PRAGMA table_info(gpkg_spatial_ref_sys)")?;
+        let mut rows = stmt.query([])?;
+        let mut columns = Self {
+            definition_12_063: false,
+            epoch: false,
+        };
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name.eq_ignore_ascii_case("definition_12_063") {
+                columns.definition_12_063 = true;
+            } else if name.eq_ignore_ascii_case("epoch") {
+                columns.epoch = true;
+            }
+        }
+        Ok(columns)
+    }
+
+    /// The select list: the base columns, then the extension columns the file
+    /// has, so the reader can index by position either way.
+    fn select_list(self) -> String {
+        let mut list = BASE_COLUMNS.to_owned();
+        if self.definition_12_063 {
+            list.push_str(", definition_12_063");
+        }
+        if self.epoch {
+            list.push_str(", epoch");
+        }
+        list
+    }
+}
+
+/// Read one row of [`CrsWktColumns::select_list`].
+fn row_to_srs(row: &rusqlite::Row<'_>, columns: CrsWktColumns) -> rusqlite::Result<Srs> {
+    // The extension columns follow the six base ones, in the order
+    // `select_list` appends them, so an absent column shifts the next one down
+    // rather than leaving a hole.
+    let mut next = 6;
+    let mut take = |present: bool| {
+        present.then(|| {
+            let index = next;
+            next += 1;
+            index
+        })
+    };
+    let wkt2_index = take(columns.definition_12_063);
+    let epoch_index = take(columns.epoch);
+    Ok(Srs {
+        name: row.get(0)?,
+        srs_id: row.get(1)?,
+        organization: row.get(2)?,
+        organization_coordsys_id: row.get(3)?,
+        definition: row.get(4)?,
+        description: row.get(5)?,
+        // `undefined` is the spec's own "no definition here" value
+        // (Requirement 117), and the default this crate and GDAL give the
+        // column, so it reads back as absent rather than as a definition.
+        definition_wkt2: match wkt2_index {
+            Some(index) => row.get::<_, Option<String>>(index)?.filter(is_defined),
+            None => None,
+        },
+        epoch: match epoch_index {
+            Some(index) => row.get(index)?,
+            None => None,
+        },
+    })
+}
+
+fn is_defined(definition: &String) -> bool {
+    definition != "undefined"
 }
 
 impl GeoPackage {
     /// Look up the SRS row with the given `srs_id`, if present.
     pub fn srs(&self, srs_id: i32) -> Result<Option<Srs>> {
-        self.connection()
-            .query_row(
-                "SELECT srs_name, srs_id, organization, organization_coordsys_id, \
-                 definition, description FROM gpkg_spatial_ref_sys WHERE srs_id = ?1",
-                [srs_id],
-                |r| {
-                    Ok(Srs {
-                        name: r.get(0)?,
-                        srs_id: r.get(1)?,
-                        organization: r.get(2)?,
-                        organization_coordsys_id: r.get(3)?,
-                        definition: r.get(4)?,
-                        description: r.get(5)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(Error::from)
+        let conn = self.connection();
+        let columns = CrsWktColumns::read(conn)?;
+        conn.query_row(
+            &format!(
+                "SELECT {} FROM gpkg_spatial_ref_sys WHERE srs_id = ?1",
+                columns.select_list()
+            ),
+            [srs_id],
+            |r| row_to_srs(r, columns),
+        )
+        .optional()
+        .map_err(Error::from)
     }
 
     /// All SRS rows, ascending by `srs_id`.
     pub fn srs_list(&self) -> Result<Vec<Srs>> {
-        let mut stmt = self.connection().prepare(
-            "SELECT srs_name, srs_id, organization, organization_coordsys_id, \
-             definition, description FROM gpkg_spatial_ref_sys ORDER BY srs_id",
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok(Srs {
-                name: r.get(0)?,
-                srs_id: r.get(1)?,
-                organization: r.get(2)?,
-                organization_coordsys_id: r.get(3)?,
-                definition: r.get(4)?,
-                description: r.get(5)?,
-            })
-        })?;
+        let conn = self.connection();
+        let columns = CrsWktColumns::read(conn)?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM gpkg_spatial_ref_sys ORDER BY srs_id",
+            columns.select_list()
+        ))?;
+        let rows = stmt.query_map([], |r| row_to_srs(r, columns))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -77,23 +189,62 @@ impl GeoPackage {
     /// Returns `true` if the row was inserted, `false` if a row with that
     /// `srs_id` already exists (the existing row is left untouched: within a
     /// file, the existing definition is authoritative).
+    ///
+    /// Supplying [`Srs::definition_wkt2`] or [`Srs::epoch`] adds the
+    /// `gpkg_crs_wkt` extension's columns to the file and registers the
+    /// extension if it is not there already, which is how a caller supplies a
+    /// definition for a CRS that has no WKT1 form. The added columns and the
+    /// insert share one transaction, so a failure leaves the file as it was
+    /// rather than half-extended.
     pub fn add_srs(&self, srs: &Srs) -> Result<bool> {
         if self.srs(srs.srs_id)?.is_some() {
             return Ok(false);
         }
-        self.connection().execute(
-            "INSERT INTO gpkg_spatial_ref_sys \
-             (srs_name, srs_id, organization, organization_coordsys_id, definition, description) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            (
-                &srs.name,
-                srs.srs_id,
-                &srs.organization,
-                srs.organization_coordsys_id,
-                &srs.definition,
-                &srs.description,
-            ),
+        let conn = self.connection();
+        let tx = conn.unchecked_transaction()?;
+        if srs.definition_wkt2.is_some() || srs.epoch.is_some() {
+            enable_crs_wkt_extension(&tx)?;
+        }
+        // Whether the extension columns can be bound at all depends on the
+        // file, not on this row: a file that already carries them takes the
+        // values, one that does not cannot be given them without the ALTER
+        // above, which only a caller supplying one of the two asks for.
+        let columns = CrsWktColumns::read(&tx)?;
+        let mut names = BASE_COLUMNS.to_owned();
+        let mut placeholders = "?1, ?2, ?3, ?4, ?5, ?6".to_owned();
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![
+            Box::new(srs.name.clone()),
+            Box::new(srs.srs_id),
+            Box::new(srs.organization.clone()),
+            Box::new(srs.organization_coordsys_id),
+            Box::new(srs.definition.clone()),
+            Box::new(srs.description.clone()),
+        ];
+        if columns.definition_12_063 {
+            names.push_str(", definition_12_063");
+            placeholders.push_str(", ?7");
+            // The column is NOT NULL, and `undefined` is the spec's value for
+            // a definition that cannot be produced (Requirement 117).
+            params.push(Box::new(
+                srs.definition_wkt2
+                    .clone()
+                    .unwrap_or_else(|| "undefined".to_owned()),
+            ));
+        }
+        if columns.epoch {
+            names.push_str(", epoch");
+            placeholders.push_str(if columns.definition_12_063 {
+                ", ?8"
+            } else {
+                ", ?7"
+            });
+            params.push(Box::new(srs.epoch));
+        }
+        tx.execute(
+            &format!("INSERT INTO gpkg_spatial_ref_sys ({names}) VALUES ({placeholders})"),
+            rusqlite::params_from_iter(params.iter()),
         )?;
+        tx.commit()?;
         Ok(true)
     }
 
@@ -117,6 +268,8 @@ impl GeoPackage {
                 organization_coordsys_id: def.organization_coordsys_id,
                 definition: def.definition.into_owned(),
                 description: None,
+                definition_wkt2: None,
+                epoch: None,
             });
         }
         self.add_epsg_srs_via_wkt2(code)
@@ -134,25 +287,16 @@ impl GeoPackage {
         let wkt2 = epsg_utils::epsg_to_wkt2(code)
             .ok()
             .ok_or(Error::UnknownEpsgCode { code })?;
-        if self.srs(code)?.is_some() {
-            return Ok(false);
-        }
-        let conn = self.connection();
-        let tx = conn.unchecked_transaction()?;
-        // Enabling the extension rewrites the SRS table's shape and backfills
-        // other rows, so it shares the transaction with the insert: a caller
-        // that hits an error here finds the file exactly as it was, rather
-        // than carrying a half-applied extension.
-        enable_crs_wkt_extension(&tx)?;
-        tx.execute(
-            "INSERT INTO gpkg_spatial_ref_sys \
-             (srs_name, srs_id, organization, organization_coordsys_id, definition, \
-              description, definition_12_063) \
-             VALUES (?1, ?2, 'EPSG', ?2, 'undefined', NULL, ?3)",
-            rusqlite::params![srs_name_from_wkt2(wkt2, code), code, wkt2],
-        )?;
-        tx.commit()?;
-        Ok(true)
+        self.add_srs(&Srs {
+            name: srs_name_from_wkt2(wkt2, code),
+            srs_id: code,
+            organization: "EPSG".to_owned(),
+            organization_coordsys_id: code,
+            definition: "undefined".to_owned(),
+            description: None,
+            definition_wkt2: Some(wkt2.to_owned()),
+            epoch: None,
+        })
     }
 }
 

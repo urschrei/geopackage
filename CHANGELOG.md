@@ -88,6 +88,17 @@ While the version is below 1.0 the API may change in any release.
   `OpenOptions::allow_unsupported_extension_writes` turns the refusal off for
   a caller who knows the extension is harmless. Extensions this crate can
   name, implemented or not, never trigger it.
+- **`Srs` carries the `gpkg_crs_wkt` extension's columns**: `definition_wkt2`
+  (`definition_12_063`) and `epoch`, both `Option`. The extension could be
+  written, by `add_epsg_srs` for a code with no WKT1 form, but not read: a file
+  carrying a WKT2 definition read back as though it had none. `srs` and
+  `srs_list` now select the columns where the file has them, and the spec's
+  `undefined` reads back as `None` rather than as a definition.
+
+  `add_srs` accepts both, adding the columns and registering the extension if
+  the file lacks them, so a caller can supply a WKT2 definition for a CRS the
+  EPSG registry does not describe. Design decision D3 says users may supply
+  arbitrary definitions; until now that was true of WKT1 only.
 
 ### Changed
 

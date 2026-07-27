@@ -565,3 +565,90 @@ fn we_read_a_pyramid_gdal_wrote() {
     assert_eq!(seen, 16);
     eprintln!("read GDAL's GoogleMapsCompatible pyramid: 3 levels, 16 tiles at zoom 2");
 }
+
+// --- (f) gpkg_crs_wkt: WKT2 definitions both ways ---------------------------
+
+#[test]
+#[ignore = "requires GDAL (ogrinfo, ogr2ogr); WKT2 definitions written here and written by GDAL"]
+fn crs_wkt_extension_round_trips_with_gdal() {
+    if !tool_available("ogrinfo") || !tool_available("ogr2ogr") {
+        eprintln!("skipping: ogrinfo or ogr2ogr not found");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+
+    // (1) A file we write carrying a code with no WKT1 form: the definition
+    // lives in definition_12_063, and GDAL has to find it there.
+    let ours = dir.path().join("ours.gpkg");
+    {
+        let gpkg = GeoPackage::create(&ours).unwrap();
+        gpkg.add_epsg_srs(4979).unwrap();
+        let layer = gpkg
+            .create_layer(&TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(
+                geopackage::core::types::GeometryType::Point,
+                4979,
+            )))
+            .unwrap();
+        let mut writer = layer.writer().unwrap();
+        writer.insert(None, &Point::new(-6.26, 53.35), &[]).unwrap();
+        writer.commit().unwrap();
+        gpkg.close().unwrap();
+    }
+    let out = Command::new("ogrinfo")
+        .args(["-al", "-so"])
+        .arg(&ours)
+        .output()
+        .expect("run ogrinfo");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("4979"),
+        "GDAL did not resolve the CRS from definition_12_063:\n{stdout}"
+    );
+
+    // (2) The other direction: GDAL writes the extension itself when a CRS has
+    // no WKT1 form, adding both columns and renaming its own `gpkg_crs_wkt`
+    // row to `gpkg_crs_wkt_1_1`. Reading that file back has to surface the
+    // definition, which means reading a column GDAL added rather than one we
+    // did.
+    let theirs = dir.path().join("theirs.gpkg");
+    let out = Command::new("ogr2ogr")
+        .args(["-f", "GPKG"])
+        .arg(&theirs)
+        .arg(&ours)
+        .args(["-t_srs", "EPSG:4979"])
+        .output()
+        .expect("run ogr2ogr");
+    assert!(
+        out.status.success(),
+        "ogr2ogr failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let gpkg = GeoPackage::open_read_only(&theirs).unwrap();
+    let with_wkt2: Vec<_> = gpkg
+        .srs_list()
+        .unwrap()
+        .into_iter()
+        .filter(|srs| srs.definition_wkt2.is_some())
+        .collect();
+    assert!(
+        !with_wkt2.is_empty(),
+        "a GDAL file carrying the extension read back with no WKT2 definition"
+    );
+    for row in &gpkg.extensions().unwrap() {
+        assert_ne!(
+            row.support(),
+            geopackage::ExtensionSupport::Unrecognised,
+            "GDAL wrote {} and we cannot name it",
+            row.name
+        );
+    }
+    eprintln!(
+        "read {} WKT2 definition(s) from a GDAL-written file",
+        with_wkt2.len()
+    );
+}
