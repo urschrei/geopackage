@@ -8,8 +8,8 @@ read of that file (``ogrinfo -json -features``). The Rust corpus tests
 check our read against the snapshot, so the snapshot is the cross-implementation
 oracle: what GDAL saw when it read the same bytes.
 
-Only the Python standard library plus the external command-line tools ``ogr2ogr``
-and ``ogrinfo`` (GDAL) are used; there is no project virtualenv. QGIS's
+Only the Python standard library plus the external command-line tools ``ogr2ogr``,
+``ogrinfo`` and ``gdal_translate`` (GDAL) are used; there is no project virtualenv. QGIS's
 ``qgis_process`` is used for one fixture when available (``QGIS_PROCESS`` env
 var, PATH, or a macOS ``/Applications/QGIS*.app`` bundle) and skipped with a
 warning otherwise. ``sqlite3`` is
@@ -90,7 +90,7 @@ def run(args: list[str], **kwargs) -> subprocess.CompletedProcess:
 
 
 def require_tools() -> None:
-    for tool in ("ogr2ogr", "ogrinfo"):
+    for tool in ("ogr2ogr", "ogrinfo", "gdal_translate"):
         if shutil.which(tool) is None:
             sys.exit(
                 f"error: {tool} not found on PATH; GDAL is required to "
@@ -630,6 +630,60 @@ QGIS_LINES_GEOJSON = {
 }
 
 
+def build_gdal_tiles(tmp: Path) -> Path:
+    """A GDAL-written tile pyramid: one 256-pixel PNG tile over the web
+    mercator quad.
+
+    The raster path of the GPKG driver rather than the vector one, so this
+    fixture carries no feature layer and has no ``ogrinfo`` snapshot beside it;
+    what a reader should see is asserted directly in
+    ``geopackage/tests/tiles.rs``. The shape is the one ``gdal_translate``
+    produces with no tiling scheme asked for: a single zoom level whose tile
+    matrix set is the raster's own extent.
+    """
+    out = FIXTURES / "gdal_tiles.gpkg"
+    out.unlink(missing_ok=True)
+
+    # A greyscale PGM written by hand, so the only external tool needed is
+    # GDAL itself. The pattern is a gradient, which gives the PNG encoder
+    # something to compress without making the fixture large.
+    width = height = 256
+    source = tmp / "tiles.pgm"
+    rows = b"".join(
+        bytes((x * 3 + y * 5) % 256 for x in range(width)) for y in range(height)
+    )
+    source.write_bytes(b"P5\n%d %d\n255\n" % (width, height) + rows)
+
+    half_span = 20037508.34
+    run(
+        [
+            "gdal_translate",
+            "-q",
+            "-of",
+            "GPKG",
+            "-a_srs",
+            "EPSG:3857",
+            "-a_ullr",
+            f"-{half_span}",
+            f"{half_span}",
+            f"{half_span}",
+            f"-{half_span}",
+            "-co",
+            "TILE_FORMAT=PNG",
+            "-co",
+            "RASTER_TABLE=tiles",
+            "-co",
+            "METADATA_TABLES=NO",
+            "-co",
+            "ADD_GPKG_OGR_CONTENTS=NO",
+            str(source),
+            str(out),
+        ]
+    )
+    finalise(out)
+    return out
+
+
 def build_qgis_lines(tmp: Path, qgis_process: str) -> Path:
     """A GeoPackage written by QGIS itself (``native:savefeatures``).
 
@@ -827,6 +881,9 @@ def main() -> None:
             (build_legacy_gp10(tmp), "lenient", ["LegacyApplicationId"], None),
             (build_case_mismatch(tmp), "lenient", ["TableNameCaseMismatch"], None),
         ]
+        # Raster fixtures: no vector layers, so no ogrinfo snapshot. What a
+        # reader should see is asserted in geopackage/tests/tiles.rs.
+        tile_fixtures = [build_gdal_tiles(tmp)]
         qgis = find_qgis_process()
         if qgis:
             plan.append((build_qgis_lines(tmp, qgis), "strict", [], qgis_version(qgis)))
@@ -855,12 +912,22 @@ def main() -> None:
             )
         print(f"  {path.name:28} {size:>7} bytes")
 
+    for path in tile_fixtures:
+        size = path.stat().st_size
+        total += size
+        if size > PER_FILE_BUDGET:
+            sys.exit(
+                f"error: {path.name} is {size} bytes, over the "
+                f"{PER_FILE_BUDGET}-byte per-file budget"
+            )
+        print(f"  {path.name:28} {size:>7} bytes")
+
     print(f"  {'total':28} {total:>7} bytes")
     if total > TOTAL_BUDGET:
         sys.exit(
             f"error: fixtures total {total} bytes, over the {TOTAL_BUDGET}-byte budget"
         )
-    print(f"Generated {len(plan)} fixtures with {version}.")
+    print(f"Generated {len(plan) + len(tile_fixtures)} fixtures with {version}.")
 
 
 if __name__ == "__main__":

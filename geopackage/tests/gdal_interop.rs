@@ -30,11 +30,14 @@ use std::path::Path;
 use std::process::Command;
 
 use geo_types::{Geometry, LineString, Point, Polygon};
+use geopackage::core::TileFormat;
 use geopackage::core::datetime::{Date, DateTime};
 use geopackage::core::gpb::{Envelope, encode_header, parse_header};
+use geopackage::core::tiles::{TileCoord, TileMatrixSet, ZoomLadder};
 use geopackage::core::types::{ColumnType, GeometryType, ZmFlag};
 use geopackage::{
-    ColumnSpec, Feature, GeoPackage, GeometrySpec, TableSchemaBuilder, Value, ValueRef,
+    ColumnSpec, Feature, GeoPackage, GeometrySpec, TableSchemaBuilder, TilePyramidBuilder, Value,
+    ValueRef,
 };
 
 // --- external-tool guards ---------------------------------------------------
@@ -123,7 +126,6 @@ fn build_representative(path: &Path) {
                 .unwrap();
         }
         w.commit().unwrap();
-        layer.create_spatial_index().unwrap();
     }
 
     // Z point layer (z mandatory), indexed.
@@ -140,7 +142,6 @@ fn build_representative(path: &Path) {
             w.insert(None, &g, &[ValueRef::Text(&name)]).unwrap();
         }
         w.commit().unwrap();
-        layer.create_spatial_index().unwrap();
     }
 
     // Linestring layer in EPSG:3857, indexed.
@@ -157,7 +158,6 @@ fn build_representative(path: &Path) {
             w.insert(None, &line, &[ValueRef::Text(&name)]).unwrap();
         }
         w.commit().unwrap();
-        layer.create_spatial_index().unwrap();
     }
 
     // Polygon layer, indexed.
@@ -184,7 +184,6 @@ fn build_representative(path: &Path) {
             .unwrap();
         }
         w.commit().unwrap();
-        layer.create_spatial_index().unwrap();
     }
 
     // Non-spatial attributes table with every attribute type.
@@ -342,7 +341,6 @@ fn build_roundtrip_source(path: &Path) {
         .unwrap();
     }
     w.commit().unwrap();
-    layer.create_spatial_index().unwrap();
     gpkg.close().unwrap();
 }
 
@@ -429,4 +427,141 @@ fn gdal_roundtrip_wkb_and_values() {
         "GDAL round-trip passed: {} shapes, WKB bodies and all values byte-identical",
         src_features.len()
     );
+}
+
+// --- tiles (M4) -------------------------------------------------------------
+
+/// A greyscale PGM, the one raster format that can be written here without an
+/// encoder: `gdal_translate` turns it into a tile pyramid.
+fn write_pgm(path: &Path, side: usize) {
+    let mut bytes = format!("P5\n{side} {side}\n255\n").into_bytes();
+    for y in 0..side {
+        for x in 0..side {
+            bytes.push(((x * 3 + y * 5) % 256) as u8);
+        }
+    }
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// The committed pyramid fixture's single PNG tile, which is a real image
+/// GDAL encoded rather than the bare headers the unit tests use.
+fn fixture_tile() -> Vec<u8> {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gdal_tiles.gpkg");
+    let gpkg = GeoPackage::open_read_only(fixture).unwrap();
+    gpkg.tiles("tiles")
+        .unwrap()
+        .get_tile(TileCoord::new(0, 0, 0))
+        .unwrap()
+        .expect("the fixture holds one tile")
+}
+
+#[test]
+#[ignore = "requires GDAL (gdalinfo); reads a tile pyramid we wrote"]
+fn gdal_reads_a_pyramid_we_wrote() {
+    if !tool_available("gdalinfo") {
+        eprintln!("skipping: gdalinfo not found");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ours.gpkg");
+    let tile = fixture_tile();
+    {
+        let gpkg = GeoPackage::create(&path).unwrap();
+        gpkg.add_epsg_srs(3857).unwrap();
+        let matrix_set = TileMatrixSet::web_mercator_quad();
+        let matrices = matrix_set.ladder(ZoomLadder::new(0, 1)).unwrap();
+        let pyramid = gpkg
+            .create_tile_pyramid(&TilePyramidBuilder::new("basemap", matrix_set).matrices(matrices))
+            .unwrap();
+        // Zoom 1 is a two by two grid; fill it, so GDAL sees a full level.
+        let tiles: Vec<(TileCoord, &[u8])> = (0..2)
+            .flat_map(|row| (0..2).map(move |column| TileCoord::new(1, column, row)))
+            .map(|coord| (coord, tile.as_slice()))
+            .collect();
+        pyramid.write_all(tiles, 0).unwrap();
+        gpkg.close().unwrap();
+    }
+
+    let out = Command::new("gdalinfo")
+        .arg("-json")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "gdalinfo failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let info: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(info["driverShortName"], "GPKG");
+    // Two tiles across at 256 pixels each, at the pyramid's highest zoom level.
+    assert_eq!(info["size"], serde_json::json!([512, 512]));
+    let wkt = info["coordinateSystem"]["wkt"].as_str().unwrap_or_default();
+    assert!(
+        wkt.contains("3857") || wkt.contains("Pseudo-Mercator"),
+        "GDAL did not resolve the pyramid's CRS: {wkt}"
+    );
+    eprintln!("gdalinfo read our pyramid: 512x512 over the web mercator quad");
+}
+
+#[test]
+#[ignore = "requires GDAL (gdal_translate); reads a multi-level pyramid GDAL wrote"]
+fn we_read_a_pyramid_gdal_wrote() {
+    if !tool_available("gdal_translate") {
+        eprintln!("skipping: gdal_translate not found");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.pgm");
+    let path = dir.path().join("gdal.gpkg");
+    write_pgm(&source, 256);
+    let half_span = "20037508.34";
+    let out = Command::new("gdal_translate")
+        .args(["-q", "-of", "GPKG", "-a_srs", "EPSG:3857", "-a_ullr"])
+        .args([
+            format!("-{half_span}"),
+            half_span.to_owned(),
+            half_span.to_owned(),
+            format!("-{half_span}"),
+        ])
+        .args(["-co", "TILING_SCHEME=GoogleMapsCompatible"])
+        .args(["-co", "ZOOM_LEVEL=2", "-co", "TILE_FORMAT=PNG"])
+        .args(["-co", "RASTER_TABLE=tiles"])
+        .arg(&source)
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "gdal_translate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let gpkg = GeoPackage::open_read_only(&path).unwrap();
+    let pyramid = gpkg.tiles("tiles").unwrap();
+    // GDAL's own ladder satisfies the rules we check our own writes against.
+    pyramid.validate().unwrap();
+    assert_eq!(pyramid.zoom_levels(), vec![0, 1, 2]);
+    assert!(
+        pyramid.matrix_set().is_web_mercator_quad(),
+        "the GoogleMapsCompatible scheme is the web mercator quad"
+    );
+
+    // Only the highest level is populated, which is legal: a pyramid may be
+    // sparse. Every tile there is a PNG of the size its zoom level declares.
+    assert_eq!(pyramid.tile_count().unwrap(), 16);
+    assert_eq!(pyramid.tile_count_at(0).unwrap(), 0);
+    let matrix = *pyramid.matrix(2).unwrap();
+    let mut cursor = pyramid.cursor_at(2).unwrap();
+    let mut stream = cursor.tiles().unwrap();
+    let mut seen = 0;
+    while let Some(tile) = stream.next().unwrap() {
+        let payload = tile.probe().unwrap();
+        assert_eq!(payload.format, TileFormat::Png);
+        matrix.check_payload(&payload).unwrap();
+        assert!(matrix.contains(tile.coord().column, tile.coord().row));
+        seen += 1;
+    }
+    assert_eq!(seen, 16);
+    eprintln!("read GDAL's GoogleMapsCompatible pyramid: 3 levels, 16 tiles at zoom 2");
 }

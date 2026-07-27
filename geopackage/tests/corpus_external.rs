@@ -4,10 +4,11 @@
 //! whatever larger, third-party GeoPackages happen to be present under `corpus/`
 //! (git-ignored; populate it with `scripts/fetch_corpus.sh`). For each file it
 //! opens leniently, enumerates every `features`/`attributes` layer, iterates all
-//! features and tallies read errors -- a broad "does our reader survive real
-//! files written by other tools, at other spec versions" check rather than a
-//! value-for-value comparison. It is `#[ignore]`d and the downloads are never
-//! committed, so the default test run is unaffected.
+//! features, walks every tile of every pyramid probing its payload, and tallies
+//! read errors -- a broad "does our reader survive real files written by other
+//! tools, at other spec versions" check rather than a value-for-value
+//! comparison. It is `#[ignore]`d and the downloads are never committed, so the
+//! default test run is unaffected.
 //!
 //! Run: `scripts/fetch_corpus.sh` then
 //! `cargo test -p geopackage --test corpus_external -- --ignored --nocapture`.
@@ -52,6 +53,9 @@ struct Tally {
     features: usize,
     row_errors: usize,
     geometry_errors: usize,
+    pyramids: usize,
+    tiles: usize,
+    tile_errors: usize,
 }
 
 fn sweep(path: &std::path::Path) -> Tally {
@@ -61,10 +65,14 @@ fn sweep(path: &std::path::Path) -> Tally {
     let mut tally = Tally::default();
     let contents = gpkg.contents().unwrap();
     for entry in contents {
+        if entry.data_type == ContentsDataType::Tiles {
+            sweep_pyramid(&gpkg, &entry.table_name, &mut tally);
+            continue;
+        }
         let layer = match entry.data_type {
             ContentsDataType::Features => gpkg.layer(&entry.table_name),
             ContentsDataType::Attributes => gpkg.attributes(&entry.table_name),
-            // Tiles and extension data types are out of scope for the read path.
+            // Extension data types are out of scope for the read path.
             _ => continue,
         };
         let Ok(layer) = layer else { continue };
@@ -95,6 +103,56 @@ fn sweep(path: &std::path::Path) -> Tally {
     tally
 }
 
+/// Walk one tile pyramid: every tile, with its payload probed against the size
+/// its zoom level declares.
+///
+/// The payload is what a file from elsewhere is least constrained in, so a
+/// header that cannot be read, or that disagrees with `gpkg_tile_matrix`, is
+/// counted rather than fatal: this sweep asks whether real files can be read at
+/// all, and reports what is odd about them.
+fn sweep_pyramid(gpkg: &GeoPackage, table_name: &str, tally: &mut Tally) {
+    let Ok(pyramid) = gpkg.tiles(table_name) else {
+        tally.tile_errors += 1;
+        return;
+    };
+    tally.pyramids += 1;
+    if pyramid.validate().is_err() {
+        tally.tile_errors += 1;
+    }
+    let Ok(mut cursor) = pyramid.cursor() else {
+        tally.tile_errors += 1;
+        return;
+    };
+    let Ok(mut stream) = cursor.tiles() else {
+        tally.tile_errors += 1;
+        return;
+    };
+    loop {
+        match stream.next() {
+            Ok(Some(tile)) => {
+                tally.tiles += 1;
+                let matrix = pyramid.matrix(tile.coord().zoom_level);
+                match (tile.probe(), matrix) {
+                    (Ok(payload), Some(matrix)) => {
+                        if matrix.check_payload(&payload).is_err() {
+                            tally.tile_errors += 1;
+                        }
+                    }
+                    // A zoom level with tiles but no gpkg_tile_matrix row
+                    // breaks Requirement 44; an unreadable payload is its own
+                    // fault. Both are counted the same way.
+                    _ => tally.tile_errors += 1,
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {
+                tally.tile_errors += 1;
+                break;
+            }
+        }
+    }
+}
+
 #[test]
 #[ignore = "needs scripts/fetch_corpus.sh to populate corpus/ with external files"]
 fn sweep_external_corpus() {
@@ -113,12 +171,16 @@ fn sweep_external_corpus() {
         let t = sweep(path);
         total_features += t.features;
         println!(
-            "{:40} layers={:<3} features={:<7} row_errors={:<4} geometry_errors={}",
+            "{:40} layers={:<3} features={:<7} row_errors={:<4} geometry_errors={:<4} \
+             pyramids={:<3} tiles={:<6} tile_errors={}",
             path.file_name().unwrap().to_string_lossy(),
             t.layers,
             t.features,
             t.row_errors,
             t.geometry_errors,
+            t.pyramids,
+            t.tiles,
+            t.tile_errors,
         );
     }
     println!(
