@@ -351,6 +351,8 @@ fn a_derived_layer_keeps_the_srs_and_takes_any_geometry() {
         organization_coordsys_id: 27700,
         definition: "undefined".into(),
         description: None,
+        definition_wkt2: None,
+        epoch: None,
     };
 
     let dir = tempfile::tempdir().unwrap();

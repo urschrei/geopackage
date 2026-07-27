@@ -107,19 +107,43 @@ not a publication schedule; what ships, and when, is decided after M5.
 Write support landed early, brought forward by #23, but only for definitions
 `epsg-utils` supplies. Two gaps remain.
 
-- [ ] `Srs` gains `definition_wkt2: Option<String>` and `epoch: Option<f64>`,
+- [x] `Srs` gains `definition_wkt2: Option<String>` and `epoch: Option<f64>`,
       populated by `srs()` and `srs_list()` when the columns exist. `Srs` has
       public fields, so this is a breaking change: take the
       `#[non_exhaustive]` decision here rather than in phase 10, since the
       freeze is the last chance to make it and this is the change that forces
       the question.
-- [ ] `add_srs` accepts a caller-supplied WKT2 definition and epoch, enabling
+      *(Done, and the decision is **not** `#[non_exhaustive]`. The argument for
+      it is that the struct might grow; with these two fields it now covers the
+      whole of the CRS WKT 1.1 table definition, and the spec fixes that column
+      set, so there is nothing left to grow into. Marking it would also break
+      construction, which `add_srs` requires of callers, and would need a
+      builder to replace. The same reasoning made `ExtensionRow` a plain struct
+      in phase 1. `undefined`, the spec's value for a definition that could not
+      be produced, reads back as `None` rather than as a definition.)*
+- [x] `add_srs` accepts a caller-supplied WKT2 definition and epoch, enabling
       the extension on demand through the existing `enable_crs_wkt_extension`.
       D3 says users can supply arbitrary definitions; that is currently true of
       WKT1 only.
-- [ ] Round trip: a file we write with a WKT2 definition reads back through
+      *(Done. `add_epsg_srs_via_wkt2` now goes through `add_srs` rather than
+      carrying its own insert.)*
+- [x] Round trip: a file we write with a WKT2 definition reads back through
       GDAL with the same CRS, and a GDAL-written file with the extension reads
       back here with both definitions intact.
+      *(Done as `crs_wkt_extension_round_trips_with_gdal` in `gdal_interop.rs`,
+      both directions, against GDAL 3.12.3.)*
+
+One thing settled while reading the spec source here, recorded because it looks
+like a conformance gap and is not one. The CRS WKT 1.1 document
+(`spec/crs_wkt/clause_7_normative_text.adoc`) lists three `gpkg_extensions`
+rows as required: `gpkg_crs_wkt` against `definition_12_063`, and
+`gpkg_crs_wkt_1_1` against each of `definition_12_063` and `epoch`. This crate
+writes two, both `gpkg_crs_wkt_1_1`. So does GDAL, which writes the
+`gpkg_crs_wkt` row while a file has no epoch column and *renames* it on adding
+one rather than keeping both. The ETS does not catch the difference, since its
+`gpkg_crs_wkt` check is "not testable" against an empty result set. We follow
+GDAL: interoperating with the files that exist beats matching a table no
+widespread implementation produces.
 
 ## Phase 3: `gpkg_schema`
 

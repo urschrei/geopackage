@@ -214,13 +214,10 @@ impl Extension {
     /// would silently classify it as [`ExtensionSupport::Unrecognised`].
     pub fn support(&self) -> ExtensionSupport {
         match self {
-            Self::RtreeIndex | Self::ZoomOther | Self::Webp => ExtensionSupport::Implemented,
-            // The CRS WKT columns are written by `GeoPackage::add_epsg_srs`
-            // but are not surfaced on read, so this is not yet an extension
-            // the workspace implements in the round.
-            Self::CrsWkt
-            | Self::CrsWkt11
-            | Self::Metadata
+            Self::RtreeIndex | Self::ZoomOther | Self::Webp | Self::CrsWkt | Self::CrsWkt11 => {
+                ExtensionSupport::Implemented
+            }
+            Self::Metadata
             | Self::Schema
             | Self::RelatedTables
             | Self::GriddedCoverage
