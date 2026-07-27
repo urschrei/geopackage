@@ -555,7 +555,7 @@ fn upsert_null(conn: &Connection, fid: i64) {
 /// trigger set by construction.
 #[hegel::test]
 fn rtree_tracks_full_scan_through_write_ops(tc: hegel::TestCase) {
-    let (_dir, gpkg) = gpkg_with_points(&[]);
+    let gpkg = in_memory_with_points(&[]);
     let layer = gpkg.layer("pts").unwrap();
     let conn = gpkg.connection();
 

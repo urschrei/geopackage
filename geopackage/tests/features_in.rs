@@ -197,8 +197,15 @@ fn rtree_path_uses_vtab_full_scan_does_not() {
 
 #[hegel::test]
 fn features_in_matches_full_scan_filter(tc: hegel::TestCase) {
-    let dir = tempfile::tempdir().unwrap();
-    let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+    // In memory, and the setup inserts in one transaction. A case writes up to
+    // 60 rows through the RTree triggers; autocommitted against a file that is
+    // 60 journal cycles, and on a Windows runner it was enough for hegel to
+    // report the *generator* as too slow (issue #44), since the writes happen
+    // inside the case. Same reasoning as `in_memory_with_points` in
+    // `spatial_index.rs`, and neither the file nor the per-row commits are what
+    // this property is about: the example-based tests in this file still use
+    // real files.
+    let gpkg = GeoPackage::create(std::path::Path::new(":memory:")).unwrap();
     build_layers(&gpkg);
     let conn = gpkg.connection();
 
@@ -206,10 +213,11 @@ fn features_in_matches_full_scan_filter(tc: hegel::TestCase) {
     // recording each true `f64` envelope for the independent oracle.
     let n = tc.draw(generators::integers::<usize>().min_value(1).max_value(30));
     let mut envelopes: Vec<(i64, [f64; 4])> = Vec::with_capacity(n);
+    let tx = conn.unchecked_transaction().unwrap();
     for fid in 1..=(n as i64) {
         let (blob, env) = draw_geom(&tc);
         for table in ["pts", "plain"] {
-            conn.execute(
+            tx.execute(
                 &format!("INSERT INTO {table} (fid, geom) VALUES (?1, ?2)"),
                 rusqlite::params![fid, blob],
             )
@@ -217,6 +225,7 @@ fn features_in_matches_full_scan_filter(tc: hegel::TestCase) {
         }
         envelopes.push((fid, env));
     }
+    tx.commit().unwrap();
 
     let indexed = gpkg.layer("pts").unwrap();
     let plain = gpkg.layer("plain").unwrap();

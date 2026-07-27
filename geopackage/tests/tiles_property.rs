@@ -15,10 +15,26 @@
 )]
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use geopackage::core::tiles::{TileCoord, TileMatrix, TileMatrixSet, ZoomLadder};
 use geopackage::{BoundingBox, GeoPackage, TilePyramid, TilePyramidBuilder};
 use hegel::generators;
+
+/// A GeoPackage held in SQLite's private per-connection in-memory database (the
+/// `:memory:` filename) rather than in a file.
+///
+/// The reasoning is `in_memory_with_points`'s in `spatial_index.rs`: a property
+/// test builds a whole container per generated case, and on Windows CI creating
+/// that file and cycling a rollback journal per transaction costs orders of
+/// magnitude more than on macOS or Linux. That is what tripped hegel's
+/// `TooSlow` health check on `features_in` (issue #44), which counts the
+/// container build as generation because it happens inside the case. These
+/// properties are about tile addressing and payload storage, neither of which
+/// depends on the container being a file; `tiles.rs` writes real ones.
+fn in_memory() -> GeoPackage {
+    GeoPackage::create(Path::new(":memory:")).unwrap()
+}
 
 /// A PNG header of the given size, followed by `tag` so that two tiles of the
 /// same size are distinguishable. Only the header is ever read.
@@ -95,8 +111,7 @@ fn fill_level(pyramid: &TilePyramid<'_>, matrix: &TileMatrix) {
 
 #[hegel::test]
 fn written_tiles_read_back_and_scan_in_matrix_order(tc: hegel::TestCase) {
-    let dir = tempfile::tempdir().unwrap();
-    let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+    let gpkg = in_memory();
     let (matrix_set, matrices) = draw_pyramid(&tc);
     let pyramid = gpkg
         .create_tile_pyramid(
@@ -166,8 +181,7 @@ fn written_tiles_read_back_and_scan_in_matrix_order(tc: hegel::TestCase) {
 
 #[hegel::test]
 fn a_box_query_returns_the_tiles_it_covers(tc: hegel::TestCase) {
-    let dir = tempfile::tempdir().unwrap();
-    let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+    let gpkg = in_memory();
     let (matrix_set, matrices) = draw_pyramid(&tc);
     let pyramid = gpkg
         .create_tile_pyramid(
