@@ -301,6 +301,11 @@ impl GeoPackage {
     /// - [`Error::ExtensionGeometryUnsupported`] for a non-linear or abstract
     ///   geometry type.
     pub fn create_layer(&self, builder: &TableSchemaBuilder) -> Result<Layer<'_>> {
+        // The new table has no rows of its own to be covered yet, so what this
+        // catches is a whole-GeoPackage registration: an extension we cannot
+        // identify that applies to the file may govern what a table in it has
+        // to look like.
+        self.check_writable(&builder.table_name)?;
         let geometry = builder
             .geometry
             .as_ref()

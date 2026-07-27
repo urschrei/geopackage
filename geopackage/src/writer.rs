@@ -342,6 +342,7 @@ impl<'a> Layer<'a> {
     /// `delete` methods, then call [`FeatureWriter::commit`]. Dropping the
     /// writer without committing rolls the transaction back.
     pub fn writer(&self) -> Result<FeatureWriter<'a>> {
+        self.gpkg().check_writable(self.table_name())?;
         let conn: &Connection = self.gpkg().connection();
         let tx = conn.unchecked_transaction()?;
         let existing = self.stored_extent()?;
@@ -486,6 +487,9 @@ impl<'a> Layer<'a> {
         R: WritableRow,
         I: IntoIterator<Item = R>,
     {
+        // The chokepoint for every bulk write, the Arrow path included, which
+        // is why the check sits here rather than in each public entry point.
+        self.gpkg().check_writable(self.table_name())?;
         let mut iter = features.into_iter();
         let (bulk, buffered) = self.bulk_write_engages(&mut iter, options)?;
         // Rows pulled to reach the decision are put back in front of the rest,

@@ -112,6 +112,7 @@ pub struct OpenOptions {
     pub(crate) journal_mode: Option<JournalMode>,
     pub(crate) synchronous: Option<Synchronous>,
     pub(crate) busy_timeout: Option<Duration>,
+    pub(crate) allow_unsupported_extension_writes: bool,
 }
 
 impl OpenOptions {
@@ -153,6 +154,28 @@ impl OpenOptions {
     #[must_use]
     pub fn busy_timeout(mut self, timeout: Duration) -> Self {
         self.busy_timeout = Some(timeout);
+        self
+    }
+
+    /// Write to tables carrying an extension this crate cannot identify,
+    /// instead of refusing with [`Error::UnsupportedExtension`].
+    ///
+    /// By default a write to such a table is refused, because an extension we
+    /// cannot name may constrain the rows, triggers or encodings of the table
+    /// it covers, and Requirement 64 makes every extension one a writer has to
+    /// understand. Set this when you know what the extension is and know that
+    /// writing beside it is safe: the check is the crate's, not the format's,
+    /// and a caller who knows more than the catalogue does should be able to
+    /// say so.
+    ///
+    /// Reads are unaffected either way, and extensions this crate can name
+    /// never trigger the refusal. GDAL, for comparison, warns in this
+    /// situation and proceeds.
+    ///
+    /// [`Error::UnsupportedExtension`]: crate::Error::UnsupportedExtension
+    #[must_use]
+    pub fn allow_unsupported_extension_writes(mut self, allow: bool) -> Self {
+        self.allow_unsupported_extension_writes = allow;
         self
     }
 

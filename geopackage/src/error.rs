@@ -202,6 +202,34 @@ pub enum Error {
         /// The encoding the payload's header declared.
         format: geopackage_core::TileFormat,
     },
+    /// A write was refused because the target table carries an extension this
+    /// crate cannot identify.
+    ///
+    /// Requirement 64 makes every extension one a writer has to understand:
+    /// `read-write` affects readers and writers, `write-only` affects writers.
+    /// Since an unrecognised extension may constrain the rows, the triggers or
+    /// the encodings of the table it covers, writing to it could produce a
+    /// file its own producer can no longer read. This is the "fail fast" that
+    /// clause 2.3.2 gives the catalogue as its purpose.
+    ///
+    /// Reading is never refused for this reason, and an extension this crate
+    /// can name does not raise it: see
+    /// [`ExtensionSupport`](geopackage_core::extensions::ExtensionSupport).
+    /// A caller who knows the extension is harmless can proceed with
+    /// [`OpenOptions::allow_unsupported_extension_writes`](crate::OpenOptions::allow_unsupported_extension_writes).
+    #[error(
+        "table {table_name:?} carries the unrecognised {extension_name:?} extension \
+         (scope {scope:?}), so writing to it could produce a file its producer cannot read: \
+         override with OpenOptions::allow_unsupported_extension_writes"
+    )]
+    UnsupportedExtension {
+        /// The table the write targeted.
+        table_name: String,
+        /// The `gpkg_extensions.extension_name` value that blocks it.
+        extension_name: String,
+        /// That row's `scope` value.
+        scope: String,
+    },
     /// A pyramid whose zoom levels do not step by factors of two was created
     /// without opting into the `gpkg_zoom_other` extension.
     #[error(
