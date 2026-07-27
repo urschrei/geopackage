@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 thiserror.workspace = true
+imagesize.workspace = true
 jiff.workspace = true
 wkb.workspace = true
 geo-traits.workspace = true

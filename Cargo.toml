@@ -43,6 +43,13 @@ jiff = { version = "0.2", default-features = false, features = ["std"] }
 # covers the geographic 3D codes WKT1 cannot express. MIT, and by the
 # rusqlite-gpkg author, which is the coordination 02-ecosystem asks for.
 epsg-utils = "0.0.3"
+# Tile payload probing: the format a tile's magic bytes declare, and the pixel
+# dimensions its header gives, so a written tile can be checked against the
+# `tile_width`/`tile_height` of its zoom level. Reads a header, never an image,
+# and has no dependencies of its own. No `imagesize` type appears in this
+# workspace's API (the probe returns our own `TileFormat`), so a version bump
+# there is not a breaking change here, on the same principle as `jiff`.
+imagesize = "0.15"
 serde_json = "1"
 # Total system memory, for the Arrow read path's default batch byte ceiling.
 # Only the `system` feature: the default set also probes disks, networks,

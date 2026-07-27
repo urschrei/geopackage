@@ -214,6 +214,29 @@ pub enum TileError {
         /// Zoom level the conversion was asked for.
         zoom_level: i64,
     },
+    /// A tile payload whose header could not be read.
+    #[error("tile payload is not a readable image: {reason}")]
+    UnreadablePayload {
+        /// What the header reader made of it.
+        reason: String,
+    },
+    /// A tile payload whose pixel dimensions are not the ones its zoom level
+    /// declares.
+    #[error(
+        "tile is {actual_width} by {actual_height} pixels, but zoom level {zoom_level} declares {expected_width} by {expected_height}"
+    )]
+    PayloadSizeMismatch {
+        /// Zoom level the tile was written at.
+        zoom_level: i64,
+        /// `tile_width` of that zoom level.
+        expected_width: i64,
+        /// `tile_height` of that zoom level.
+        expected_height: i64,
+        /// Width the payload's header declares.
+        actual_width: i64,
+        /// Height the payload's header declares.
+        actual_height: i64,
+    },
     /// A zoom ladder whose range is empty, negative, or too wide for the grid
     /// to stay representable.
     #[error(
@@ -225,6 +248,95 @@ pub enum TileError {
         /// Highest zoom level asked for.
         max_zoom: i64,
     },
+}
+
+/// The encoding of a tile payload, as its first bytes declare it.
+///
+/// The base tiles requirement class allows PNG (Requirement 36) and JPEG
+/// (Requirement 37), mixed freely within one table. WebP is allowed under the
+/// `gpkg_webp` extension, and TIFF only inside the tiled gridded coverage
+/// extension, which this crate does not implement. Whether a given payload may
+/// be written is therefore a container question, not a format one: this enum
+/// only says what the bytes are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TileFormat {
+    /// `image/png`.
+    Png,
+    /// `image/jpeg`.
+    Jpeg,
+    /// WebP, which needs the `gpkg_webp` extension registered.
+    Webp,
+    /// TIFF, which appears only in tiled gridded coverages.
+    Tiff,
+    /// An image this crate recognises but no tile table may hold.
+    Other,
+}
+
+impl TileFormat {
+    /// Whether the base tiles requirement class permits this encoding with no
+    /// extension registered.
+    pub fn is_core(self) -> bool {
+        matches!(self, Self::Png | Self::Jpeg)
+    }
+
+    /// The MIME type the spec names for this encoding, where it names one.
+    pub fn mime_type(self) -> Option<&'static str> {
+        match self {
+            Self::Png => Some("image/png"),
+            Self::Jpeg => Some("image/jpeg"),
+            Self::Webp => Some("image/webp"),
+            Self::Tiff => Some("image/tiff"),
+            Self::Other => None,
+        }
+    }
+}
+
+/// What a tile payload's header declares: its encoding and its pixel size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TilePayload {
+    /// The encoding identified from the payload's magic bytes.
+    pub format: TileFormat,
+    /// Width in pixels.
+    pub width: i64,
+    /// Height in pixels.
+    pub height: i64,
+}
+
+/// Read the encoding and pixel dimensions out of a tile payload's header.
+///
+/// Reads a header, not an image: no pixel data is decoded, nothing is copied,
+/// and the slice is borrowed throughout. A tile whose dimensions disagree with
+/// its zoom level's `tile_width`/`tile_height` is a fault no amount of
+/// magic-byte sniffing catches, which is why the size comes back with the
+/// format ([`TileMatrix::check_payload`]).
+///
+/// # Errors
+///
+/// [`TileError::UnreadablePayload`] when the bytes are not a recognisable
+/// image, or are truncated before the header ends.
+pub fn probe(bytes: &[u8]) -> Result<TilePayload, TileError> {
+    let unreadable = |error: imagesize::ImageError| TileError::UnreadablePayload {
+        reason: error.to_string(),
+    };
+    let format = match imagesize::image_type(bytes).map_err(unreadable)? {
+        imagesize::ImageType::Png => TileFormat::Png,
+        imagesize::ImageType::Jpeg => TileFormat::Jpeg,
+        imagesize::ImageType::Webp => TileFormat::Webp,
+        imagesize::ImageType::Tiff => TileFormat::Tiff,
+        _ => TileFormat::Other,
+    };
+    let size = imagesize::blob_size(bytes).map_err(unreadable)?;
+    let (Ok(width), Ok(height)) = (i64::try_from(size.width), i64::try_from(size.height)) else {
+        return Err(TileError::UnreadablePayload {
+            reason: format!("header declares {} by {} pixels", size.width, size.height),
+        });
+    };
+    Ok(TilePayload {
+        format,
+        width,
+        height,
+    })
 }
 
 /// A tile's address within a pyramid.
@@ -704,6 +816,26 @@ impl TileMatrix {
         }
     }
 
+    /// Check a payload's pixel dimensions against the tile size this zoom
+    /// level declares.
+    ///
+    /// # Errors
+    ///
+    /// [`TileError::PayloadSizeMismatch`] when they disagree.
+    pub fn check_payload(&self, payload: &TilePayload) -> Result<(), TileError> {
+        if payload.width == self.tile_width && payload.height == self.tile_height {
+            Ok(())
+        } else {
+            Err(TileError::PayloadSizeMismatch {
+                zoom_level: self.zoom_level,
+                expected_width: self.tile_width,
+                expected_height: self.tile_height,
+                actual_width: payload.width,
+                actual_height: payload.height,
+            })
+        }
+    }
+
     /// Convert a row index between the GeoPackage sense, counting south from
     /// the top, and the TMS sense, counting north from the bottom.
     ///
@@ -946,6 +1078,108 @@ mod tests {
             set.validate(&duplicated),
             Err(TileError::DuplicateZoomLevel { zoom_level: 0 })
         ));
+    }
+
+    /// A PNG header: signature and IHDR, with a zeroed CRC, which a header
+    /// probe does not check.
+    fn png_bytes(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        bytes.extend_from_slice(&13_u32.to_be_bytes());
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        // Bit depth, colour type, compression, filter, interlace, then CRC.
+        bytes.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        bytes
+    }
+
+    /// A JPEG start-of-image followed by a baseline SOF0 frame header.
+    fn jpeg_bytes(width: u16, height: u16) -> Vec<u8> {
+        let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08];
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&[0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01]);
+        bytes
+    }
+
+    /// A WebP container in the extended (`VP8X`) form, whose dimensions are
+    /// stored as 24-bit little-endian values one less than the real size.
+    fn webp_bytes(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = Vec::from(*b"RIFF");
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(b"WEBP");
+        bytes.extend_from_slice(b"VP8X");
+        bytes.extend_from_slice(&10_u32.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0, 0, 0]);
+        bytes.extend_from_slice(&(width - 1).to_le_bytes()[..3]);
+        bytes.extend_from_slice(&(height - 1).to_le_bytes()[..3]);
+        bytes
+    }
+
+    #[test]
+    fn probe_reads_format_and_size() {
+        assert_eq!(
+            probe(&png_bytes(256, 256)).unwrap(),
+            TilePayload {
+                format: TileFormat::Png,
+                width: 256,
+                height: 256,
+            }
+        );
+        assert_eq!(
+            probe(&jpeg_bytes(512, 128)).unwrap(),
+            TilePayload {
+                format: TileFormat::Jpeg,
+                width: 512,
+                height: 128,
+            }
+        );
+        assert_eq!(
+            probe(&webp_bytes(256, 256)).unwrap(),
+            TilePayload {
+                format: TileFormat::Webp,
+                width: 256,
+                height: 256,
+            }
+        );
+    }
+
+    #[test]
+    fn probe_rejects_what_is_not_a_readable_image() {
+        let png = png_bytes(256, 256);
+        for bytes in [b"not an image at all".as_slice(), &[], &png[..12]] {
+            assert!(matches!(
+                probe(bytes),
+                Err(TileError::UnreadablePayload { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn payload_size_is_checked_against_its_zoom_level() {
+        let (_, matrices) = square_pyramid();
+        let zoom0 = matrices[0];
+        zoom0
+            .check_payload(&probe(&png_bytes(256, 256)).unwrap())
+            .unwrap();
+        assert!(matches!(
+            zoom0.check_payload(&probe(&png_bytes(512, 256)).unwrap()),
+            Err(TileError::PayloadSizeMismatch {
+                expected_width: 256,
+                actual_width: 512,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn only_png_and_jpeg_need_no_extension() {
+        assert!(TileFormat::Png.is_core());
+        assert!(TileFormat::Jpeg.is_core());
+        assert!(!TileFormat::Webp.is_core());
+        assert!(!TileFormat::Tiff.is_core());
+        assert_eq!(TileFormat::Png.mime_type(), Some("image/png"));
+        assert_eq!(TileFormat::Other.mime_type(), None);
     }
 
     #[test]
