@@ -684,6 +684,109 @@ def build_gdal_tiles(tmp: Path) -> Path:
     return out
 
 
+# One layer per non-linear type (Annex F.1), each as (layer, -nlt type, WKT).
+#
+# The arcs are chosen so a control-point bounding box is visibly wrong. The
+# CIRCULARSTRING runs from 20 to 160 degrees on the unit circle with its middle
+# control point at 40 degrees rather than at the apex: the arc reaches y = 1 at
+# 90 degrees, but no control point rises above y = 0.643. Anything that bounds
+# the three points instead of the arc is short by a third of the height, so the
+# fixture fails loudly rather than subtly. The closed CIRCULARSTRINGs are whole
+# circles, where every one of the four axis extremes is on the arc.
+CURVE_LAYERS = [
+    (
+        "circularstring",
+        "CIRCULARSTRING",
+        (
+            "CIRCULARSTRING ("
+            "0.9396926207859084 0.3420201433256687, "
+            "0.766044443118978 0.6427876096865393, "
+            "-0.9396926207859083 0.3420201433256689)"
+        ),
+    ),
+    (
+        "compoundcurve",
+        "COMPOUNDCURVE",
+        (
+            "COMPOUNDCURVE ("
+            "(-3 -1, 0.9396926207859084 0.3420201433256687), "
+            "CIRCULARSTRING ("
+            "0.9396926207859084 0.3420201433256687, "
+            "0.766044443118978 0.6427876096865393, "
+            "-0.9396926207859083 0.3420201433256689))"
+        ),
+    ),
+    (
+        "curvepolygon",
+        "CURVEPOLYGON",
+        "CURVEPOLYGON (CIRCULARSTRING (2 0, 0 0, 2 0))",
+    ),
+    (
+        "multicurve",
+        "MULTICURVE",
+        "MULTICURVE (CIRCULARSTRING (5 5, 6 6, 7 5))",
+    ),
+    (
+        "multisurface",
+        "MULTISURFACE",
+        "MULTISURFACE (CURVEPOLYGON (CIRCULARSTRING (12 10, 10 10, 12 10)))",
+    ),
+]
+
+
+def build_gdal_curves(tmp: Path) -> Path:
+    """One GDAL-written layer per non-linear geometry type (Annex F.1).
+
+    Every layer is spatially indexed, which is GDAL's default and which the
+    GeoPackage spec requires to work for these types (Annex F.3 Requirement 78).
+    The RTree entries GDAL computes are the point of the fixture: they are an
+    independent implementation's answer for the extent of an arc, so our own
+    envelopes can be checked against them rather than only against themselves.
+
+    No ``.expected.json`` snapshot: ``ogrinfo -json`` has to express geometry as
+    GeoJSON, which has no curve type, so GDAL stroke-converts each arc into a
+    linestring on the way out. That is a rendering of the geometry rather than a
+    reading of it, and comparing our bytes against it would assert the wrong
+    thing. ``geopackage/tests/curves.rs`` asserts what a reader should see.
+    """
+    out = FIXTURES / "gdal_curves.gpkg"
+    out.unlink(missing_ok=True)
+
+    for index, (layer, geometry_type, wkt) in enumerate(CURVE_LAYERS):
+        # The WKT column is named `wkt`, not `geom`: GDAL names the geometry
+        # column `geom` here, and a same-named attribute column is an error.
+        csv = tmp / f"{layer}.csv"
+        write(csv, f'id,wkt\n1,"{wkt}"\n')
+        write(tmp / f"{layer}.csvt", "Integer,WKT\n")
+        create = [
+            "-f",
+            "GPKG",
+            "-dsco",
+            "VERSION=1.4",
+            "-dsco",
+            "ADD_GPKG_OGR_CONTENTS=NO",
+            "-dsco",
+            "METADATA_TABLES=NO",
+        ]
+        append = ["-update", "-append"]
+        ogr2ogr(
+            *(create if index == 0 else append),
+            "-nln",
+            layer,
+            "-a_srs",
+            "EPSG:4326",
+            "-nlt",
+            geometry_type,
+            "-lco",
+            "GEOMETRY_NAME=geom",
+            str(out),
+            str(csv),
+        )
+
+    finalise(out)
+    return out
+
+
 def build_qgis_lines(tmp: Path, qgis_process: str) -> Path:
     """A GeoPackage written by QGIS itself (``native:savefeatures``).
 
@@ -881,9 +984,12 @@ def main() -> None:
             (build_legacy_gp10(tmp), "lenient", ["LegacyApplicationId"], None),
             (build_case_mismatch(tmp), "lenient", ["TableNameCaseMismatch"], None),
         ]
-        # Raster fixtures: no vector layers, so no ogrinfo snapshot. What a
-        # reader should see is asserted in geopackage/tests/tiles.rs.
-        tile_fixtures = [build_gdal_tiles(tmp)]
+        # Fixtures with no ogrinfo snapshot, for two different reasons: the
+        # raster one has no vector layers at all, and the curve one has layers
+        # whose geometry GeoJSON cannot express (see build_gdal_curves). What a
+        # reader should see is asserted in geopackage/tests/tiles.rs and
+        # geopackage/tests/curves.rs respectively.
+        unsnapshotted = [build_gdal_tiles(tmp), build_gdal_curves(tmp)]
         qgis = find_qgis_process()
         if qgis:
             plan.append((build_qgis_lines(tmp, qgis), "strict", [], qgis_version(qgis)))
@@ -912,7 +1018,7 @@ def main() -> None:
             )
         print(f"  {path.name:28} {size:>7} bytes")
 
-    for path in tile_fixtures:
+    for path in unsnapshotted:
         size = path.stat().st_size
         total += size
         if size > PER_FILE_BUDGET:
@@ -927,7 +1033,7 @@ def main() -> None:
         sys.exit(
             f"error: fixtures total {total} bytes, over the {TOTAL_BUDGET}-byte budget"
         )
-    print(f"Generated {len(plan) + len(tile_fixtures)} fixtures with {version}.")
+    print(f"Generated {len(plan) + len(unsnapshotted)} fixtures with {version}.")
 
 
 if __name__ == "__main__":
