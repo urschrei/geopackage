@@ -7,10 +7,11 @@
 )]
 
 use geopackage::core::TileError;
-use geopackage::core::tiles::{TileMatrix, TileMatrixSet, ZoomLadder};
+use geopackage::core::tiles::{TileCoord, TileMatrix, TileMatrixSet, ZoomLadder};
 use geopackage::core::types::GeometryType;
 use geopackage::{
-    ContentsDataType, Error, GeoPackage, GeometrySpec, TableSchemaBuilder, TilePyramidBuilder,
+    BoundingBox, ContentsDataType, Error, GeoPackage, GeometrySpec, TableSchemaBuilder,
+    TilePyramid, TilePyramidBuilder,
 };
 
 fn gpkg() -> (tempfile::TempDir, GeoPackage) {
@@ -25,6 +26,34 @@ fn quad_builder(name: &str, levels: i64) -> TilePyramidBuilder {
     let matrix_set = TileMatrixSet::web_mercator_quad();
     let matrices = matrix_set.ladder(ZoomLadder::new(0, levels - 1)).unwrap();
     TilePyramidBuilder::new(name, matrix_set).matrices(matrices)
+}
+
+/// Insert a tile through raw SQL, which is how a pyramid written by another
+/// implementation arrives: the read path is exercised without the write path.
+fn insert_tile(pyramid: &TilePyramid<'_>, coord: TileCoord, data: &[u8]) {
+    pyramid
+        .gpkg()
+        .connection()
+        .execute(
+            &format!(
+                "INSERT INTO {} (zoom_level, tile_column, tile_row, tile_data) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                pyramid.table_name()
+            ),
+            rusqlite::params![coord.zoom_level, coord.column, coord.row, data],
+        )
+        .unwrap();
+}
+
+/// Every tile address a scan yields, in the order it yields them.
+fn scanned(cursor: &mut geopackage::TileCursor<'_>) -> Vec<(i64, i64, i64)> {
+    let mut stream = cursor.tiles().unwrap();
+    let mut out = Vec::new();
+    while let Some(tile) = stream.next().unwrap() {
+        let coord = tile.coord();
+        out.push((coord.zoom_level, coord.column, coord.row));
+    }
+    out
 }
 
 #[test]
@@ -217,6 +246,117 @@ fn pyramids_open_and_enumerate() {
     assert!(matches!(
         gpkg.tiles("nothing"),
         Err(Error::NoSuchLayer { .. })
+    ));
+}
+
+#[test]
+fn a_tile_reads_back_by_address() {
+    let (_dir, gpkg) = gpkg();
+    let pyramid = gpkg
+        .create_tile_pyramid(&quad_builder("basemap", 3))
+        .unwrap();
+    insert_tile(&pyramid, TileCoord::new(1, 1, 0), b"north east");
+
+    assert_eq!(
+        pyramid
+            .get_tile(TileCoord::new(1, 1, 0))
+            .unwrap()
+            .as_deref(),
+        Some(b"north east".as_slice())
+    );
+    assert!(pyramid.has_tile(TileCoord::new(1, 1, 0)).unwrap());
+    assert_eq!(pyramid.get_tile(TileCoord::new(1, 0, 0)).unwrap(), None);
+    assert!(!pyramid.has_tile(TileCoord::new(1, 0, 0)).unwrap());
+    // An address outside the grid is absent, not an error: only writing one is.
+    assert_eq!(pyramid.get_tile(TileCoord::new(1, 99, 99)).unwrap(), None);
+
+    let mut buffer = vec![b'x'; 64];
+    assert!(
+        pyramid
+            .get_tile_into(TileCoord::new(1, 1, 0), &mut buffer)
+            .unwrap()
+    );
+    assert_eq!(buffer, b"north east");
+    assert!(
+        !pyramid
+            .get_tile_into(TileCoord::new(1, 0, 0), &mut buffer)
+            .unwrap()
+    );
+    assert_eq!(buffer, b"north east", "an absent tile leaves the buffer be");
+
+    assert_eq!(pyramid.tile_count().unwrap(), 1);
+    assert_eq!(pyramid.tile_count_at(1).unwrap(), 1);
+    assert_eq!(pyramid.tile_count_at(0).unwrap(), 0);
+}
+
+#[test]
+fn a_scan_walks_the_pyramid_in_matrix_order() {
+    let (_dir, gpkg) = gpkg();
+    let pyramid = gpkg
+        .create_tile_pyramid(&quad_builder("basemap", 3))
+        .unwrap();
+    // Inserted out of order: zoom 1's south-east tile first.
+    for coord in [
+        TileCoord::new(1, 1, 1),
+        TileCoord::new(0, 0, 0),
+        TileCoord::new(1, 0, 1),
+        TileCoord::new(1, 1, 0),
+        TileCoord::new(1, 0, 0),
+    ] {
+        insert_tile(&pyramid, coord, b"tile");
+    }
+
+    assert_eq!(
+        scanned(&mut pyramid.cursor().unwrap()),
+        vec![(0, 0, 0), (1, 0, 0), (1, 1, 0), (1, 0, 1), (1, 1, 1),],
+        "zoom level, then north to south, then west to east"
+    );
+    assert_eq!(scanned(&mut pyramid.cursor_at(0).unwrap()), vec![(0, 0, 0)]);
+
+    // A scan lends its payloads rather than copying them.
+    let mut cursor = pyramid.cursor().unwrap();
+    let mut stream = cursor.tiles().unwrap();
+    let mut bytes = 0;
+    stream
+        .for_each(|tile| {
+            bytes += tile.data().len();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(bytes, 5 * b"tile".len());
+}
+
+#[test]
+fn a_bounding_box_selects_the_tiles_it_touches() {
+    let (_dir, gpkg) = gpkg();
+    let pyramid = gpkg
+        .create_tile_pyramid(&quad_builder("basemap", 3))
+        .unwrap();
+    for coord in [
+        TileCoord::new(1, 0, 0),
+        TileCoord::new(1, 1, 0),
+        TileCoord::new(1, 0, 1),
+        TileCoord::new(1, 1, 1),
+    ] {
+        insert_tile(&pyramid, coord, b"tile");
+    }
+
+    // The north-west quadrant of the web mercator quad is tile (0, 0) at zoom 1.
+    let north_west = BoundingBox::new(-15_000_000.0, 5_000_000.0, -5_000_000.0, 15_000_000.0);
+    assert_eq!(
+        scanned(&mut pyramid.cursor_in(1, north_west).unwrap()),
+        vec![(1, 0, 0)]
+    );
+    // A box spanning the origin touches all four.
+    let centre = BoundingBox::new(-1_000_000.0, -1_000_000.0, 1_000_000.0, 1_000_000.0);
+    assert_eq!(scanned(&mut pyramid.cursor_in(1, centre).unwrap()).len(), 4);
+    // A box outside the pyramid's extent selects nothing.
+    let elsewhere = BoundingBox::new(30_000_000.0, 30_000_000.0, 31_000_000.0, 31_000_000.0);
+    assert!(scanned(&mut pyramid.cursor_in(1, elsewhere).unwrap()).is_empty());
+
+    assert!(matches!(
+        pyramid.cursor_in(7, north_west),
+        Err(Error::UnknownZoomLevel { zoom_level: 7, .. })
     ));
 }
 
