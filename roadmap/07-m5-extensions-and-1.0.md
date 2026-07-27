@@ -30,36 +30,77 @@ not a publication schedule; what ships, and when, is decided after M5.
 
 ## Phase 0: the Windows flake
 
-- [ ] Fix #44: cut the per-case work in
+- [x] Fix #44: cut the per-case work in
       `features_in_matches_full_scan_filter` so Hegel's `TooSlow` generation
       check stops firing on the slowest filesystem of the three. Option 1 in the
       issue, not the health-check suppression, and it wants doing before the
-      tile property tests grow the same way.
+      tile property tests grow the same way. *(Done: the container goes in
+      memory and the setup inserts share one transaction, following the
+      reasoning already recorded on `in_memory_with_points` in
+      `spatial_index.rs`. 3.401 s to 0.214 s locally, and the two tile
+      properties and `rtree_tracks_full_scan_through_write_ops` got the same
+      treatment, since they have the same shape. No generator draws fewer
+      values than before.)*
 
 ## Phase 1: the extension catalogue as public API
 
-- [ ] Public `extensions` module: `ExtensionRow` (table, column, name,
+- [x] Public `extensions` module: `ExtensionRow` (table, column, name,
       definition, scope) and `ExtensionScope`, with `GeoPackage::extensions()`,
       `Layer::extensions()` and `TilePyramid::extensions()`. Reading the
       catalogue is currently impossible from outside the crate.
-- [ ] Classify each row: an enum covering what this crate implements
+      *(Done, plus `GeoPackage::table_extensions`, which the two handle methods
+      call. Table names compare case-insensitively, as the note under
+      Requirement 60 asks.)*
+- [x] Classify each row: an enum covering what this crate implements
       (`gpkg_rtree_index`, `gpkg_zoom_other`, `gpkg_webp`, `gpkg_crs_wkt_1_1`,
       and each extension added below), the deprecated ones (geometry type and
       srs id triggers, legacy aspatial, the pre-rename elevation tiles name),
       and `Unknown(String)`. Support level per row: implemented, read only,
       deprecated, or unrecognised.
-- [ ] **Refusal policy for extensions we do not implement.** Settle what the
+      *(Done as `geopackage_core::extensions::Extension` and
+      `ExtensionSupport`. Two departures from the sketch. The names live in
+      core, not in `geopackage`, because they are spec facts; `support()` went
+      with them so its match is exhaustive, since across a crate boundary
+      `#[non_exhaustive]` would force a wildcard and a new variant would
+      classify itself silently. And "deprecated" is `Removed`: the SWG voted
+      the two trigger extensions out of the standard on 2016-08-15 rather than
+      deprecating them. Extensions with several historical spellings fold into
+      one variant, which is where the pre-rename elevation tiles name went,
+      along with `2d_gridded_coverage` and `gpkg_related_tables`.)*
+- [x] **Refusal policy for extensions we do not implement.** Settle what the
       spec requires of a client meeting an extension it does not understand,
       quoting the clause rather than reasoning from the scope strings, then
       implement that. Today this crate will happily write to a table carrying
       an unknown extension, which is the one place the catalogue being private
       has a correctness cost rather than an ergonomic one.
-- [ ] `OpenWarning::UnsupportedExtension { name, table, scope }` from
+      *(Settled. The spec requires nothing of a client here: Requirements 58 to
+      64 constrain the file, not the reader. What it offers is clause 2.3.2's
+      purpose for the table, that an application can query it "to determine if
+      it has the required capabilities to read or write to tables with
+      extensions, and to 'fail fast' and return an error message if it does
+      not", and Requirement 64's division, `read-write` affecting readers and
+      writers, `write-only` affecting only writers. So: writes to a table
+      covered by an extension we cannot identify are refused with
+      `Error::UnsupportedExtension`, of either scope, since both affect
+      writers; reads are never refused, since only `read-write` affects readers
+      and a reader that turns a file away helps nobody. Extensions we can name
+      never trigger it, so `gpkg_metadata` beside a feature table is no
+      obstacle.* *This is stricter than GDAL, which warns on update and
+      proceeds (`OGRGeoPackageTableLayer`, `GetUnknownExtensionsTableSpecific`),
+      so `OpenOptions::allow_unsupported_extension_writes` exists for a caller
+      who knows better than the catalogue does.)*
+- [x] `OpenWarning::UnsupportedExtension { name, table, scope }` from
       `open_lenient`, alongside the existing three variants.
-- [ ] Corpus test: enumerate every `gpkg_extensions` row across the committed
+- [x] Corpus test: enumerate every `gpkg_extensions` row across the committed
       fixtures and the fetched corpus, and assert each classifies rather than
       falling through. This doubles as the inventory of what real files carry,
       which is the evidence the phase order below should be revisited against.
+      *(Done in `tests/extensions.rs` for the fixtures, which also pins the
+      inventory so a fixture gaining an extension shows as a diff, and in
+      `tests/corpus_external.rs` for the fetched corpus. What the corpus
+      carries today: `gpkg_rtree_index`, `gpkg_metadata`, `gpkg_schema`. That
+      is thin evidence for the phase order below, and worth revisiting against
+      a wider corpus rather than treating as settled.)*
 
 ## Phase 2: `gpkg_crs_wkt_1_1`, the read side
 

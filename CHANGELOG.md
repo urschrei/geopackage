@@ -70,6 +70,24 @@ While the version is below 1.0 the API may change in any release.
   the standard, or does not recognise it at all. Every extension row in every
   committed fixture and in the fetched corpus is checked to classify, and the
   test fails on an unrecognised name rather than skipping it.
+- **Writing to a table carrying an unidentified extension is refused**, with
+  `Error::UnsupportedExtension` naming it. Requirement 64 makes every
+  extension one a writer has to understand, so an extension we cannot name may
+  constrain the rows, triggers or encodings of the table it covers, and
+  writing beside it could produce a file its own producer can no longer read.
+  This is the "fail fast" that clause 2.3.2 gives the catalogue as its purpose.
+  Until now such a write went ahead silently.
+
+  The refusal covers feature and tile writes, index builds, repairs and drops,
+  and the creation of a table where the file itself carries such an extension.
+  Reads are never refused: a `write-only` extension is one Requirement 64 says
+  a reader may ignore, and refusing to read a file helps nobody.
+  `GeoPackage::blocking_extension` and `TilePyramid::blocking_extension`
+  answer the question directly, `open_lenient` reports
+  `OpenWarning::UnsupportedExtension`, and
+  `OpenOptions::allow_unsupported_extension_writes` turns the refusal off for
+  a caller who knows the extension is harmless. Extensions this crate can
+  name, implemented or not, never trigger it.
 
 ### Changed
 

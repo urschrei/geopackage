@@ -199,6 +199,209 @@ fn the_2016_removals_are_identified_rather_than_unrecognised() {
     }
 }
 
+/// Build a layer with one row, then register an extension against it that this
+/// crate cannot identify, as another implementation would have.
+fn layer_with_unknown_extension(gpkg: &GeoPackage, extension_name: &str) {
+    gpkg.add_epsg_srs(4326).unwrap();
+    let layer = gpkg
+        .create_layer(
+            &TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+        )
+        .unwrap();
+    let mut writer = layer.writer().unwrap();
+    writer
+        .insert(None, &geo_types::Point::new(1.0, 2.0), &[])
+        .unwrap();
+    writer.commit().unwrap();
+    raw_register(gpkg, Some("pts"), Some("geom"), extension_name);
+}
+
+#[test]
+fn an_unidentified_extension_blocks_writes_to_the_table_it_covers() {
+    let (_dir, gpkg) = gpkg();
+    layer_with_unknown_extension(&gpkg, "acme_secret_sauce");
+    let layer = gpkg.layer("pts").unwrap();
+
+    let blocked = |result: geopackage::Result<()>| match result {
+        Err(geopackage::Error::UnsupportedExtension {
+            table_name,
+            extension_name,
+            scope,
+        }) => {
+            assert_eq!(table_name, "pts");
+            assert_eq!(extension_name, "acme_secret_sauce");
+            assert_eq!(scope, "read-write");
+        }
+        other => panic!("expected UnsupportedExtension, got {other:?}"),
+    };
+
+    blocked(layer.writer().map(|_| ()));
+    blocked(
+        layer
+            .write_all(
+                [geopackage::NewFeature::new(
+                    geo_types::Point::new(0.0, 0.0),
+                    Vec::new(),
+                )],
+                0,
+            )
+            .map(|_| ()),
+    );
+    blocked(layer.create_spatial_index());
+    blocked(layer.drop_spatial_index());
+    blocked(layer.repair_spatial_index());
+
+    // Reading is not refused: Requirement 64 makes this a writer's problem,
+    // and a reader that turns the file away helps nobody.
+    assert_eq!(layer.features().unwrap().count(), 1);
+    assert_eq!(
+        gpkg.blocking_extension("pts").unwrap().unwrap().name,
+        "acme_secret_sauce"
+    );
+}
+
+#[test]
+fn an_extension_we_can_name_does_not_block_writes() {
+    let (_dir, gpkg) = gpkg();
+    // gpkg_metadata is not implemented here, but it is identified, and what it
+    // adds sits beside the feature data rather than inside it.
+    layer_with_unknown_extension(&gpkg, "gpkg_metadata");
+    let layer = gpkg.layer("pts").unwrap();
+
+    assert_eq!(gpkg.blocking_extension("pts").unwrap(), None);
+    let mut writer = layer.writer().unwrap();
+    writer
+        .insert(None, &geo_types::Point::new(3.0, 4.0), &[])
+        .unwrap();
+    writer.commit().unwrap();
+    assert_eq!(layer.features().unwrap().count(), 2);
+}
+
+#[test]
+fn a_whole_geopackage_extension_blocks_writes_to_every_table() {
+    let (_dir, gpkg) = gpkg();
+    gpkg.add_epsg_srs(4326).unwrap();
+    // Requirement 60's third case: a NULL table_name, for an extension that
+    // applies to the file. It covers tables that do not exist yet.
+    raw_register(&gpkg, None, None, "acme_whole_file");
+
+    let created = gpkg.create_layer(
+        &TableSchemaBuilder::new("later").geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+    );
+    assert!(
+        matches!(created, Err(geopackage::Error::UnsupportedExtension { .. })),
+        "{created:?}"
+    );
+}
+
+#[test]
+fn an_unidentified_extension_blocks_tile_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.gpkg");
+    {
+        let gpkg = GeoPackage::create(&path).unwrap();
+        gpkg.add_epsg_srs(3857).unwrap();
+        let matrix_set = TileMatrixSet::web_mercator_quad();
+        let matrices = matrix_set
+            .ladder(geopackage::core::tiles::ZoomLadder::new(0, 0))
+            .unwrap();
+        gpkg.create_tile_pyramid(
+            &TilePyramidBuilder::new("basemap", matrix_set).matrices(matrices),
+        )
+        .unwrap();
+        raw_register(&gpkg, Some("basemap"), Some("tile_data"), "acme_tile_codec");
+        gpkg.close().unwrap();
+    }
+
+    // The pyramid handle reads the block once, so a per-tile write pays a
+    // branch rather than a catalogue query.
+    let gpkg = GeoPackage::open(&path).unwrap();
+    let pyramid = gpkg.tiles("basemap").unwrap();
+    assert_eq!(
+        pyramid.blocking_extension().map(|row| row.name.as_str()),
+        Some("acme_tile_codec")
+    );
+    let put = pyramid.put_tile(geopackage::core::tiles::TileCoord::new(0, 0, 0), &png());
+    assert!(
+        matches!(put, Err(geopackage::Error::UnsupportedExtension { .. })),
+        "{put:?}"
+    );
+    pyramid.writer().unwrap_err();
+    // Reading the pyramid is untouched.
+    assert_eq!(pyramid.tile_count().unwrap(), 0);
+}
+
+/// A 256x256 PNG header, which is all the payload probe reads.
+fn png() -> Vec<u8> {
+    let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    bytes.extend_from_slice(&13_u32.to_be_bytes());
+    bytes.extend_from_slice(b"IHDR");
+    bytes.extend_from_slice(&256_u32.to_be_bytes());
+    bytes.extend_from_slice(&256_u32.to_be_bytes());
+    bytes.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    bytes
+}
+
+#[test]
+fn the_refusal_can_be_overridden() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.gpkg");
+    {
+        let gpkg = GeoPackage::create(&path).unwrap();
+        layer_with_unknown_extension(&gpkg, "acme_secret_sauce");
+        gpkg.close().unwrap();
+    }
+
+    // The check is this crate's, not the format's: a caller who knows the
+    // extension is harmless says so, and writes.
+    let gpkg = geopackage::OpenOptions::new()
+        .allow_unsupported_extension_writes(true)
+        .open(&path)
+        .unwrap();
+    assert_eq!(gpkg.blocking_extension("pts").unwrap(), None);
+    let layer = gpkg.layer("pts").unwrap();
+    let mut writer = layer.writer().unwrap();
+    writer
+        .insert(None, &geo_types::Point::new(5.0, 6.0), &[])
+        .unwrap();
+    writer.commit().unwrap();
+    assert_eq!(layer.features().unwrap().count(), 2);
+}
+
+#[test]
+fn open_lenient_warns_about_what_it_cannot_identify() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.gpkg");
+    {
+        let gpkg = GeoPackage::create(&path).unwrap();
+        layer_with_unknown_extension(&gpkg, "acme_secret_sauce");
+        // An extension we can name is not warned about, whether or not it is
+        // implemented.
+        raw_register(&gpkg, None, None, "gpkg_schema");
+        gpkg.close().unwrap();
+    }
+
+    let gpkg = GeoPackage::open_lenient(&path).unwrap();
+    let warnings: Vec<_> = gpkg
+        .open_warnings()
+        .iter()
+        .filter(|w| matches!(w, geopackage::OpenWarning::UnsupportedExtension { .. }))
+        .collect();
+    assert_eq!(warnings.len(), 1, "{:?}", gpkg.open_warnings());
+    match warnings[0] {
+        geopackage::OpenWarning::UnsupportedExtension {
+            extension_name,
+            table_name,
+            scope,
+        } => {
+            assert_eq!(extension_name, "acme_secret_sauce");
+            assert_eq!(table_name.as_deref(), Some("pts"));
+            assert_eq!(*scope, ExtensionScope::ReadWrite);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
 fn every_extension_in_the_committed_fixtures_is_classified() {
     let mut seen: Vec<(String, ExtensionSupport)> = Vec::new();

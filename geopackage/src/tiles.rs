@@ -25,7 +25,9 @@ use geopackage_core::tiles::{
 use rusqlite::types::ValueRef;
 use rusqlite::{CachedStatement, Connection, OptionalExtension, Transaction};
 
-use crate::{BoundingBox, Error, GeoPackage, Result, resolve_table_name, table_exists};
+use crate::{
+    BoundingBox, Error, ExtensionRow, GeoPackage, Result, resolve_table_name, table_exists,
+};
 
 /// A declarative builder for a tile pyramid.
 ///
@@ -149,6 +151,10 @@ pub struct TilePyramid<'a> {
     /// formatting one per tile is the per-row rebuild this crate has spent
     /// releases removing.
     sql: TileSql,
+    /// The unidentified extension that blocks writes to this pyramid, read
+    /// once for the same reason the statements are built once: `put_tile` is a
+    /// per-tile call, and a catalogue query inside it would be paid per tile.
+    write_block: Option<ExtensionRow>,
 }
 
 /// The statement text a [`TilePyramid`] uses, built once at construction.
@@ -268,6 +274,9 @@ impl GeoPackage {
     ///   set.
     pub fn create_tile_pyramid(&self, builder: &TilePyramidBuilder) -> Result<TilePyramid<'_>> {
         let name = &builder.table_name;
+        // As with `create_layer`: a whole-GeoPackage extension we cannot
+        // identify covers a table that does not exist yet.
+        self.check_writable(name)?;
         if name
             .get(..5)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("gpkg_"))
@@ -409,12 +418,14 @@ impl GeoPackage {
             })?;
         let matrices = read_matrices(conn, &table_name)?;
         let sql = TileSql::new(&table_name)?;
+        let write_block = self.blocking_extension(&table_name)?;
         Ok(TilePyramid {
             gpkg: self,
             table_name,
             matrix_set,
             matrices,
             sql,
+            write_block,
         })
     }
 
@@ -657,6 +668,27 @@ impl<'a> TilePyramid<'a> {
         TileWriter::new(self)
     }
 
+    /// The extension this crate cannot identify that stops it writing to this
+    /// pyramid, if there is one.
+    ///
+    /// Read when the handle was opened, so a row registered since then is not
+    /// reflected here. See [`GeoPackage::blocking_extension`].
+    pub fn blocking_extension(&self) -> Option<&ExtensionRow> {
+        self.write_block.as_ref()
+    }
+
+    /// Refuse a write when an unidentified extension covers the pyramid.
+    fn check_writable(&self) -> Result<()> {
+        match &self.write_block {
+            None => Ok(()),
+            Some(row) => Err(Error::UnsupportedExtension {
+                table_name: self.table_name.clone(),
+                extension_name: row.name.clone(),
+                scope: row.scope.as_str().to_owned(),
+            }),
+        }
+    }
+
     /// Write many tiles, committing every `batch_size` of them (`0` writes
     /// them all in one transaction), and return how many were written.
     ///
@@ -742,6 +774,9 @@ pub struct TileWriter<'conn> {
 
 impl<'conn> TileWriter<'conn> {
     fn new(pyramid: &TilePyramid<'conn>) -> Result<Self> {
+        // Every tile write reaches a writer, `put_tile` and `delete_tile`
+        // included, so this is the one place the check belongs.
+        pyramid.check_writable()?;
         let conn = pyramid.gpkg.connection();
         let tx = conn.unchecked_transaction()?;
         let put_stmt = conn.prepare_cached(&pyramid.sql.put)?;

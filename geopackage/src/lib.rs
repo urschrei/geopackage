@@ -491,6 +491,10 @@ pub struct GeoPackage {
     /// The journal mode this handle is responsible for finalising: `Wal` only
     /// when it opted into WAL and must reset the file to `Delete` on close/drop.
     journal_mode: JournalMode,
+    /// Whether writes proceed to tables carrying an extension this crate
+    /// cannot identify. See
+    /// [`OpenOptions::allow_unsupported_extension_writes`].
+    allow_unsupported_extension_writes: bool,
 }
 
 impl GeoPackage {
@@ -533,6 +537,7 @@ impl GeoPackage {
             return Err(Error::AlreadyExists(path.to_owned()));
         }
         let options = options.with_default_busy_timeout();
+        let allow_unsupported_extension_writes = options.allow_unsupported_extension_writes;
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "application_id", version::APPLICATION_ID_GPKG)?;
         conn.pragma_update(
@@ -560,6 +565,7 @@ impl GeoPackage {
             version: GpkgVersion::V1_4,
             warnings: Vec::new(),
             journal_mode,
+            allow_unsupported_extension_writes,
         })
     }
 
@@ -602,6 +608,7 @@ impl GeoPackage {
                 });
             }
         }
+        let allow_unsupported_extension_writes = options.allow_unsupported_extension_writes;
         let journal_mode = apply_open_options(&conn, options, apply_journal)?;
         functions::register(&conn)?;
         Ok(Self {
@@ -609,6 +616,7 @@ impl GeoPackage {
             version,
             warnings: Vec::new(),
             journal_mode,
+            allow_unsupported_extension_writes,
         })
     }
 

@@ -13,6 +13,7 @@ use crate::{
     Error, GeoPackage, Result, functions, read_header_u32, resolve_table_name, table_exists,
 };
 use geopackage_core::GpkgVersion;
+use geopackage_core::extensions::{ExtensionScope, ExtensionSupport};
 use geopackage_core::version::{APPLICATION_ID_GP10, APPLICATION_ID_GP11};
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
@@ -41,6 +42,21 @@ pub enum OpenWarning {
         declared: String,
         /// The physical SQLite table name.
         actual: String,
+    },
+    /// The file registers an extension this crate cannot identify.
+    ///
+    /// Reading continues: a `write-only` extension is one a reader may ignore
+    /// by Requirement 64, and even a `read-write` one is more useful reported
+    /// than refused, since what it affects may be a table the caller never
+    /// touches. Writing to the affected table is refused instead, with
+    /// [`Error::UnsupportedExtension`](crate::Error::UnsupportedExtension).
+    UnsupportedExtension {
+        /// The `extension_name` value, as the file spells it.
+        extension_name: String,
+        /// The table it applies to, or `None` for the whole GeoPackage.
+        table_name: Option<String>,
+        /// The `scope` value, which says whether readers are affected too.
+        scope: ExtensionScope,
     },
 }
 
@@ -95,6 +111,7 @@ impl GeoPackage {
             warnings.push(OpenWarning::MissingGeometryColumns);
         }
         collect_case_mismatches(&conn, &mut warnings)?;
+        collect_unsupported_extensions(&conn, &mut warnings)?;
 
         functions::register(&conn)?;
         Ok(Self {
@@ -103,8 +120,31 @@ impl GeoPackage {
             warnings,
             // The lenient path leaves the file's journal mode untouched.
             journal_mode: crate::JournalMode::Delete,
+            allow_unsupported_extension_writes: false,
         })
     }
+}
+
+/// Push an [`OpenWarning::UnsupportedExtension`] for every `gpkg_extensions`
+/// row naming an extension this crate cannot identify.
+///
+/// The rows this crate can name are not reported, whether or not it implements
+/// them: knowing what an extension is and which tables it owns is enough to
+/// leave it alone.
+fn collect_unsupported_extensions(
+    conn: &Connection,
+    warnings: &mut Vec<OpenWarning>,
+) -> Result<()> {
+    for row in crate::extensions::read_all(conn)? {
+        if row.support() == ExtensionSupport::Unrecognised {
+            warnings.push(OpenWarning::UnsupportedExtension {
+                extension_name: row.name,
+                table_name: row.table_name,
+                scope: row.scope,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Push a [`OpenWarning::TableNameCaseMismatch`] for every `gpkg_contents` row

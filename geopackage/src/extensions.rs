@@ -86,6 +86,16 @@ fn read_rows(
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// Every row, in a stable order. Shared with the lenient open path, which
+/// collects its warnings before a [`GeoPackage`] exists.
+pub(crate) fn read_all(conn: &Connection) -> Result<Vec<ExtensionRow>> {
+    read_rows(
+        conn,
+        &format!("{SELECT_ROWS} ORDER BY extension_name, table_name, column_name"),
+        &[],
+    )
+}
+
 impl GeoPackage {
     /// Every row of `gpkg_extensions`, ordered by extension name then by what
     /// it applies to.
@@ -94,11 +104,7 @@ impl GeoPackage {
     /// defines as a GeoPackage rather than an Extended GeoPackage, and empty
     /// for a file whose table has no rows, which means the same thing.
     pub fn extensions(&self) -> Result<Vec<ExtensionRow>> {
-        read_rows(
-            self.connection(),
-            &format!("{SELECT_ROWS} ORDER BY extension_name, table_name, column_name"),
-            &[],
-        )
+        read_all(self.connection())
     }
 
     /// The rows that apply to one table.
@@ -117,6 +123,49 @@ impl GeoPackage {
             ),
             &[&table_name],
         )
+    }
+
+    /// The extension this crate cannot identify that stops it writing to
+    /// `table_name`, if there is one.
+    ///
+    /// A row covers a table when it names that table, or when its
+    /// `table_name` is NULL and it therefore applies to the whole GeoPackage
+    /// (Requirement 60). Asking before writing is the "fail fast" clause 2.3.2
+    /// describes; the write paths ask on the caller's behalf and return
+    /// [`Error::UnsupportedExtension`] if the answer is `Some`.
+    ///
+    /// Always `None` when
+    /// [`OpenOptions::allow_unsupported_extension_writes`](crate::OpenOptions::allow_unsupported_extension_writes)
+    /// was set, since then nothing blocks a write.
+    ///
+    /// [`Error::UnsupportedExtension`]: crate::Error::UnsupportedExtension
+    pub fn blocking_extension(&self, table_name: &str) -> Result<Option<ExtensionRow>> {
+        if self.allow_unsupported_extension_writes {
+            return Ok(None);
+        }
+        let rows = read_rows(
+            self.connection(),
+            &format!(
+                "{SELECT_ROWS} WHERE lower(table_name) = lower(?1) OR table_name IS NULL \
+                 ORDER BY extension_name, column_name"
+            ),
+            &[&table_name],
+        )?;
+        Ok(rows
+            .into_iter()
+            .find(|row| row.support() == ExtensionSupport::Unrecognised))
+    }
+
+    /// Refuse a write to `table_name` if an unidentified extension covers it.
+    pub(crate) fn check_writable(&self, table_name: &str) -> Result<()> {
+        match self.blocking_extension(table_name)? {
+            None => Ok(()),
+            Some(row) => Err(crate::Error::UnsupportedExtension {
+                table_name: table_name.to_owned(),
+                extension_name: row.name,
+                scope: row.scope.as_str().to_owned(),
+            }),
+        }
     }
 }
 

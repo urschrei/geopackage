@@ -202,6 +202,10 @@ impl Layer<'_> {
         options: BulkIndexOptions,
         fault: TestFault,
     ) -> Result<BuildPath> {
+        // Building an index reads every geometry and writes a shadow table
+        // against them, so an extension we cannot identify over this table
+        // blocks it for the same reason it blocks a row write.
+        self.gpkg().check_writable(self.table_name())?;
         let geom = self.require_geometry_column()?;
         let pk = self.require_primary_key()?;
         let conn = self.gpkg().connection();
@@ -259,6 +263,7 @@ impl Layer<'_> {
     ///
     /// [`Error::NoGeometryColumn`] on a layer with no geometry column.
     pub fn drop_spatial_index(&self) -> Result<()> {
+        self.gpkg().check_writable(self.table_name())?;
         let geom = self.require_geometry_column()?;
         let conn = self.gpkg().connection();
         let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
@@ -309,6 +314,7 @@ impl Layer<'_> {
     /// - [`Error::NoPrimaryKey`] if the table has no single-column primary key.
     /// - [`Error::NoSpatialIndex`] if there is no index at all to repair.
     pub fn repair_spatial_index(&self) -> Result<()> {
+        self.gpkg().check_writable(self.table_name())?;
         let geom = self.require_geometry_column()?;
         let pk = self.require_primary_key()?;
         let conn = self.gpkg().connection();
