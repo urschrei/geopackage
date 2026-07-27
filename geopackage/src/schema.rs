@@ -3,6 +3,7 @@
 
 use crate::{Error, GeoPackage, Result, table_exists};
 use geopackage_core::ident;
+use geopackage_core::schema::DataColumn;
 use geopackage_core::types::{ColumnType, GeometryType, ZmFlag};
 use rusqlite::OptionalExtension;
 
@@ -173,7 +174,7 @@ impl GeoPackage {
         let sql = format!("PRAGMA table_info({})", ident::quote(table_name)?);
         let mut stmt = self.connection().prepare(&sql)?;
         // PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk.
-        let columns = stmt
+        let mut columns = stmt
             .query_map([], |r| {
                 let declared_type: String = r.get(2)?;
                 Ok(Column {
@@ -183,6 +184,7 @@ impl GeoPackage {
                     not_null: r.get::<_, i64>(3)? != 0,
                     default_value: r.get(4)?,
                     primary_key: r.get::<_, u32>(5)?,
+                    data_column: None,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -190,6 +192,19 @@ impl GeoPackage {
             return Err(Error::NoSuchTable {
                 table_name: table_name.to_owned(),
             });
+        }
+        // One query for the table's `gpkg_data_columns` rows, attached by
+        // name, rather than a lookup per column. Empty, and so free beyond the
+        // `sqlite_master` check, for a file without the `gpkg_schema`
+        // extension.
+        let mut descriptions = self.data_columns(table_name)?;
+        for column in &mut columns {
+            if let Some(index) = descriptions
+                .iter()
+                .position(|described| described.column_name == column.name)
+            {
+                column.data_column = Some(descriptions.swap_remove(index));
+            }
         }
         Ok(TableSchema {
             table_name: table_name.to_owned(),
@@ -221,6 +236,15 @@ pub struct Column {
     /// as `1, 2, …`; a conformant GeoPackage feature or attribute table has a
     /// single `INTEGER` primary key column reported as `1`.
     pub primary_key: u32,
+    /// The column's `gpkg_data_columns` row, for a file carrying the
+    /// `gpkg_schema` extension: a human-readable name and title, a
+    /// description, a MIME type, and the name of any constraint its values are
+    /// subject to.
+    ///
+    /// `None` for a file without the extension, or a column it does not
+    /// describe. Resolve [`DataColumn::constraint_name`] with
+    /// [`GeoPackage::column_constraint`].
+    pub data_column: Option<DataColumn>,
 }
 
 impl Column {

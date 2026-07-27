@@ -121,6 +121,7 @@ impl GeoPackage {
             // The lenient path leaves the file's journal mode untouched.
             journal_mode: crate::JournalMode::Delete,
             allow_unsupported_extension_writes: false,
+            enforce_column_constraints: false,
         })
     }
 }
