@@ -1,55 +1,229 @@
-# M5: extensions, bindings, hardening → 1.0 RFC
+# M5: extensions, then CLI and C ABI, then the API freeze
 
-Goal: the extensions that real files actually carry, official language
-bindings where demand exists, and an API freeze.
+Goal: the extensions that files in the wild actually carry, the two consumer
+surfaces M3 left unbuilt, and an API freeze.
 
-## Extensions (each: read support first, write behind explicit registration)
+## Shape of the milestone
 
-- [x] **`gpkg_crs_wkt_1_1`**: `definition_12_063` + `epoch` columns on
-      `gpkg_spatial_ref_sys`, added and registered on demand. Brought forward
-      from M5 by issue #23: `add_epsg_srs` needs it for any code with no WKT1
-      form. Write support only so far, and the definitions come from
-      `epsg-utils` rather than from a caller supplying WKT2 (D3), so the read
-      side and the caller-supplied path remain M5 work.
-- [ ] **`gpkg_metadata`**: `gpkg_metadata` + `gpkg_metadata_reference` models,
-      typed scopes/reference targets; no XML/profile interpretation; payloads
-      are strings.
-- [ ] **`gpkg_schema`**: `gpkg_data_columns` (aliases, descriptions, mime) +
-      `gpkg_data_column_constraints` (enum/range/glob); surfaced on
-      `TableSchema` and *enforced on write* behind an option.
-- [ ] **Non-linear geometry types** (CircularString, CompoundCurve,
-      CurvePolygon, MultiCurve, MultiSurface): read-through as raw
-      WKB (typed as unsupported-by-geo-traits passthrough), extension rows
-      honoured; no linearization in core.
-- [ ] **Related Tables** (OGC 18-000): read `gpkgext_relations` + mapping
-      tables; write for `simple_attributes` and `media` first.
-- [ ] Deprecated extensions (geometry type/srs triggers, legacy aspatial):
-      tolerate on read, never write, `gpkg validate` flags them.
-- [ ] Tiled gridded coverage: re-assess upstream status; implement if
-      stabilised, otherwise document the decision and punt to post-1.0.
+Sequencing decided 2026-07-27: **extensions first, CLI and C ABI after**. Two
+consequences worth stating before the task list, because they change how the
+extension work is written rather than just when it happens.
 
-## Bindings (demand-gated, in this order of presumption)
+- The M5 plan as originally drafted said "`gpkg validate` flags them" for
+  deprecated extensions. There is no CLI to put that in, and there will not be
+  one until phase 8, so every check lives in the library as
+  `GeoPackage::validate()` and the CLI becomes a printer for it. That is the
+  better division anyway: a check reachable only through a binary cannot be
+  used by a caller embedding the crate.
+- `gpkg_extensions` is entirely private today
+  (`geopackage/src/extensions.rs` is three `pub(crate)` functions). Every
+  extension below needs a public catalogue to hang off, so phase 1 is a
+  prerequisite for the rest rather than one item among them.
 
-- [ ] `geopackage-py`: PyO3 + maturin abi3 wheels; API surface =
-      open/create + Arrow streams + geopandas `from_arrow`/`to_arrow`
-      convenience; benchmark page vs pyogrio.
-- [ ] Node via napi-rs or browser via wasm + `serialize` bytes API (D5):
-      pick based on who shows up asking.
-- [ ] uniffi (Swift/Kotlin): pursue when a mobile consumer materialises;
-      NGA-maintenance-mode users are the audience.
+This milestone also carries M3's unbuilt items. `geopackage-cli` and
+`geopackage-ffi` do not exist, which leaves M3 acceptance criteria 6 and 7
+unmet, M4's tile subcommands deferred, and design decision D12's single
+`unsafe` carve-out hypothetical. They are phases 8 and 9 here.
 
-## Hardening / 1.0 gate
+No release is planned for any of this. The phases below are an order of work,
+not a publication schedule; what ships, and when, is decided after M5.
 
-- [ ] OSS-Fuzz onboarding (gpb, WKB fallback, `open()` on arbitrary SQLite
-      files, tile matrix parsing).
-- [ ] Full-corpus soak: every file in the corpus opened, fully read, indexes
-      rebuilt and compared, weekly CI.
-- [ ] API review: audit every `pub` item; `#[non_exhaustive]` where growth is
-      plausible; error variants stabilised; rusqlite kept out of public API
-      except documented escape hatches; MSRV policy written down.
-- [ ] Docs: book-style guide (mdBook): cookbook for the 10 common tasks,
-      migration notes from gdal/gpkg-rs/rusqlite-gpkg, FFI integration guide.
-- [ ] Performance regression CI (criterion + threshold alerts).
+## Phase 0: the Windows flake
+
+- [ ] Fix #44: cut the per-case work in
+      `features_in_matches_full_scan_filter` so Hegel's `TooSlow` generation
+      check stops firing on the slowest filesystem of the three. Option 1 in the
+      issue, not the health-check suppression, and it wants doing before the
+      tile property tests grow the same way.
+
+## Phase 1: the extension catalogue as public API
+
+- [ ] Public `extensions` module: `ExtensionRow` (table, column, name,
+      definition, scope) and `ExtensionScope`, with `GeoPackage::extensions()`,
+      `Layer::extensions()` and `TilePyramid::extensions()`. Reading the
+      catalogue is currently impossible from outside the crate.
+- [ ] Classify each row: an enum covering what this crate implements
+      (`gpkg_rtree_index`, `gpkg_zoom_other`, `gpkg_webp`, `gpkg_crs_wkt_1_1`,
+      and each extension added below), the deprecated ones (geometry type and
+      srs id triggers, legacy aspatial, the pre-rename elevation tiles name),
+      and `Unknown(String)`. Support level per row: implemented, read only,
+      deprecated, or unrecognised.
+- [ ] **Refusal policy for extensions we do not implement.** Settle what the
+      spec requires of a client meeting an extension it does not understand,
+      quoting the clause rather than reasoning from the scope strings, then
+      implement that. Today this crate will happily write to a table carrying
+      an unknown extension, which is the one place the catalogue being private
+      has a correctness cost rather than an ergonomic one.
+- [ ] `OpenWarning::UnsupportedExtension { name, table, scope }` from
+      `open_lenient`, alongside the existing three variants.
+- [ ] Corpus test: enumerate every `gpkg_extensions` row across the committed
+      fixtures and the fetched corpus, and assert each classifies rather than
+      falling through. This doubles as the inventory of what real files carry,
+      which is the evidence the phase order below should be revisited against.
+
+## Phase 2: `gpkg_crs_wkt_1_1`, the read side
+
+Write support landed early, brought forward by #23, but only for definitions
+`epsg-utils` supplies. Two gaps remain.
+
+- [ ] `Srs` gains `definition_wkt2: Option<String>` and `epoch: Option<f64>`,
+      populated by `srs()` and `srs_list()` when the columns exist. `Srs` has
+      public fields, so this is a breaking change: take the
+      `#[non_exhaustive]` decision here rather than in phase 10, since the
+      freeze is the last chance to make it and this is the change that forces
+      the question.
+- [ ] `add_srs` accepts a caller-supplied WKT2 definition and epoch, enabling
+      the extension on demand through the existing `enable_crs_wkt_extension`.
+      D3 says users can supply arbitrary definitions; that is currently true of
+      WKT1 only.
+- [ ] Round trip: a file we write with a WKT2 definition reads back through
+      GDAL with the same CRS, and a GDAL-written file with the extension reads
+      back here with both definitions intact.
+
+## Phase 3: `gpkg_schema`
+
+- [ ] DDL for `gpkg_data_columns` and `gpkg_data_column_constraints` verbatim
+      from Annex C into `geopackage-core::ddl`, as the tile tables were.
+- [ ] Model: `DataColumn` (name, title, description, mime type, constraint
+      name) and a typed `ColumnConstraint` for the enum, range and glob forms,
+      with the range's inclusivity flags carried rather than flattened.
+- [ ] Surfaced on `TableSchema`, so a caller asking for a layer's schema sees
+      the aliases and constraints without a second lookup.
+- [ ] **Enforcement on write behind an option.** Two things to settle while
+      building it. Glob matching needs SQLite's semantics, and calling back
+      into SQLite per value on a write path this heavily tuned is not viable,
+      so the pattern language gets a Rust implementation with a property test
+      asserting agreement with SQLite's own `GLOB` over generated patterns and
+      inputs. And enforcement has to cover the Arrow and bulk write paths, not
+      only `FeatureWriter`, or the option means "checked unless you used the
+      fast path".
+- [ ] Benchmark the enforcement cost against the unenforced write, and record
+      it. The write path is the one place in this crate where a per-value check
+      can be measured against a figure we already publish.
+- [ ] Interop: GDAL maps these to field domains, so a file written here should
+      show its domains in `ogrinfo`, and a GDAL-written domain should read back
+      as the equivalent constraint.
+
+## Phase 4: `gpkg_metadata`
+
+- [ ] DDL for `gpkg_metadata` and `gpkg_metadata_reference` verbatim from
+      Annex C. Check whether 1.4 still defines the metadata reference triggers
+      or whether they went the way of the deprecated trigger set, and write
+      what the current spec says rather than what 1.2 said.
+- [ ] Typed `md_scope` and `reference_scope`, both closed sets in the spec.
+      Payloads stay strings: no XML parse, no profile interpretation, which is
+      the same posture as tile payloads staying opaque bytes.
+- [ ] Timestamps go through the existing strict DATETIME handling rather than a
+      second format path.
+- [ ] API: enumerate metadata, add a record, attach a reference to a
+      GeoPackage, table, column or row, and ask what is attached to a given
+      target. Parent and child references (`md_parent_id`) are a graph, so
+      decide whether the read API walks it or hands back the edges.
+
+## Phase 5: Related Tables
+
+The largest of the extension items, and the one with the most producer
+variation to check against.
+
+- [ ] Read `gpkgext_relations` and walk a mapping table (`base_id`,
+      `related_id`) for any relation type.
+- [ ] Write for `simple_attributes` and `media` first, each registering the
+      extension rows the relation needs, including the row for the mapping
+      table itself, and adding the related table to `gpkg_contents`.
+- [ ] Establish which OGC 18-000 version the ecosystem actually writes, by
+      reading the relations rows in the corpus and in GDAL-written and
+      QGIS-written samples, before fixing the model. This is the item most
+      likely to need a fixture we do not have yet.
+
+## Phase 6: non-linear geometry, passthrough only
+
+Decided 2026-07-27: read the bytes through, do not compute envelopes for them,
+do not linearise. Issue #5 stays open for the envelope question.
+
+- [ ] Read: a GPB whose body declares CircularString, CompoundCurve,
+      CurvePolygon, MultiCurve or MultiSurface must not fail at
+      `GpbGeometry::parse`, which today builds a `Wkb` eagerly and will reject
+      the type code. The geometry surfaces as its type plus its raw WKB bytes,
+      with the existing `wkb_geometry_type` doing the classification off the
+      body directly.
+- [ ] Write: accept raw WKB carrying a curve type, register the matching
+      `gpkg_geom_<TYPE>` row, and set the GPB header's extended flag, which
+      `encode_header` already takes as a parameter.
+- [ ] Refuse insertion into an rtree-indexed table with a typed error naming
+      the reason, since `encode_gpb_from_wkb` derives the envelope by parsing
+      and cannot parse these. **Escape hatch to design:** a caller who knows
+      the envelope can supply it, at which point the header and the index can
+      both be written and the refusal does not apply. That keeps the crate
+      useful for curve data without putting arc mathematics in core.
+- [ ] Fixture: a curve-carrying file, written by GDAL, committed alongside the
+      others and walked by the corpus tests.
+
+## Phase 7: `validate()` in the library, extended by each phase after
+
+The check surface M3 planned to put in `gpkg validate`. It lands in the library
+because the CLI is now phase 8, and because a check only a binary can run is
+not much use to an embedding caller.
+
+- [ ] `GeoPackage::validate()` returning typed findings with a severity, over:
+      the deprecated extensions from phase 1 (tolerated on read, never written,
+      reported here), the spatial index audit that already exists as
+      `SpatialIndexAudit`, the open warnings, `gpkg_contents` rows whose table
+      is missing, and the tile matrix consistency rules that
+      `TilePyramid::validate` already checks.
+- [ ] Each finding carries repair advice where repair exists, since that is
+      what the CLI will print.
+- [ ] Run it over every corpus file in CI. Known findings on known files become
+      the expected output, so a change in what we detect shows up as a diff.
+
+## Phase 8: `geopackage-cli`
+
+Closes M3's CLI item, M3 acceptance criterion 6, and M4's deferred tile
+commands.
+
+- [ ] `gpkg info <file>`: version, contents, srs, index status including
+      trigger generation, extensions with their support level.
+- [ ] `gpkg validate <file>`: prints phase 7's findings and their repair
+      advice.
+- [ ] `gpkg copy <src> <dst>`: any supported read to our write. The dogfood
+      command, and the full-circle test in M3 criterion 6.
+- [ ] `gpkg index <file> <layer>` and `gpkg repair`.
+- [ ] `gpkg tiles info` and `gpkg tiles get z/x/y --out tile.png`, deferred
+      from M4 for want of this crate.
+- [ ] Ships as a bin crate, and becomes the corpus generation harness the
+      testing plan assumes from M3 onwards.
+
+## Phase 9: `geopackage-ffi`
+
+Closes M3's C ABI item and acceptance criterion 7, and makes D12's carve-out
+concrete.
+
+- [ ] New crate, `cdylib` plus `staticlib`, packaged with cargo-c
+      (pkg-config, versioned soname). Opaque `gpkg_t` and `gpkg_layer_t`,
+      UTF-8, `gpkg_error_t` out-params with code, message and a free function.
+- [ ] The sole crate not taking `[lints] workspace = true`: `unsafe` confined
+      to the C ABI surface, `undocumented_unsafe_blocks` applied, sanitizer and
+      miri gating in CI before anything outside the workspace links against it.
+- [ ] Control plane: open, create, close, list layers, schema introspection,
+      create layer, create and drop spatial index, begin and commit.
+- [ ] Data plane: `gpkg_layer_read_arrow` and `gpkg_layer_write_arrow` through
+      the Arrow C Data Interface. Row-at-a-time C accessors stay omitted.
+- [ ] cbindgen header checked in, CI failing on an undocumented header diff,
+      and a C program in CI reading a corpus file through the stream.
+- [ ] SQLite thread model documented: handle per thread, or an external lock.
+
+## Phase 10: hardening and the API freeze
+
+- [ ] **API review.** Audit every `pub` item; `#[non_exhaustive]` where growth
+      is plausible; error variants stabilised; rusqlite kept out of the public
+      API except through documented escape hatches; MSRV policy written down.
+      Mechanise it with a `cargo public-api` diff gate in CI so the freeze is
+      enforced continuously rather than asserted once.
+- [ ] **Settle #29, the lending cursor.** The recommendation from the evidence
+      in #30 is to close it as work for after the freeze: column projection shipped in
+      0.5.0 and captured most of the benefit on geometry-heavy layers, and a
+      borrowed cursor is purely additive API, so deferring it costs nothing at
+      the freeze. Record the decision either way, since the issue has been open
+      across three milestones.
 - [ ] **Revisit the D8 bulk-build gate.** Every bulk index build verifies itself
       before it is trusted: a bijection and containment check of the written
       index against the accumulated envelopes, plus `rtreecheck` over the tree,
@@ -58,13 +232,78 @@ bindings where demand exists, and an API freeze.
       builder runs no equivalent, so without it we would be faster than GDAL
       rather than level with it. The cost is the right call while
       `geopackage/src/packed.rs` is new: it writes an RTree by hand into a format
-      SQLite does not document as an interface. The 1.0 question is whether the
-      packer has enough history by then to make the gate opt-in, or to keep only
+      SQLite does not document as an interface. The question at the freeze is
+      whether the packer has enough history by then to make the gate opt-in, or to keep only
       the cheaper half. Decide it on the evidence at the time rather than on the
       benchmark alone, and if it is relaxed, keep a way to turn it back on. See
       [benchmarks/2026-07-24-gdal-like-for-like.md](benchmarks/2026-07-24-gdal-like-for-like.md).
-- [ ] 1.0 RFC issue in georust with the frozen API summary; two-release
-      deprecation policy adopted.
+- [ ] OSS-Fuzz onboarding (gpb, WKB fallback, `open()` on arbitrary SQLite
+      files, tile matrix parsing, and the new parsers from phases 3 to 6).
+- [ ] Full-corpus soak: every file opened, fully read, indexes rebuilt and
+      compared, weekly CI.
+- [ ] Performance regression CI (criterion plus threshold alerts), and the
+      allocation benches with it: #28 for the index build and #31 for the tile
+      paths, both needing a Linux runner because Valgrind has no macOS arm64
+      port. Deciding where that runner comes from is the blocking part of both
+      issues, not the benches themselves.
+- [ ] The QGIS interop job (#6), which also carries M4's undelivered acceptance
+      criterion 2: a pyramid written here rendering correctly in QGIS.
+- [ ] Docs: book-style guide (mdBook), cookbook for the ten common tasks,
+      migration notes from gdal, gpkg-rs and rusqlite-gpkg, FFI integration
+      guide.
+- [ ] The M3 Arrow items still unticked, if they are still wanted at the
+      freeze: parallel `write_arrow` (one writer, CPU work moved off the
+      writing thread), GeoArrow field metadata with CRS as PROJJSON, and the
+      pyarrow and pyogrio interop test.
+
+## Bindings: a slot, unscheduled
+
+Sized here, not scheduled: no consumer has asked. Revisit before the freeze,
+since a binding is easier to add against a frozen API than to keep in step with
+a moving one.
+
+- `geopackage-py`: PyO3 plus maturin abi3 wheels; open and create, Arrow
+  streams, geopandas `from_arrow`/`to_arrow` convenience, benchmark page
+  against pyogrio. The C ABI from phase 9 plus a ctypes shim already covers the
+  read case, which is what M3 criterion 5 exercises, so this is an ergonomics
+  and packaging piece rather than a capability one.
+- Node via napi-rs, or browser via wasm plus the D5 `serialize` bytes API:
+  pick on who asks.
+- uniffi (Swift and Kotlin): when a mobile consumer materialises.
+
+## Acceptance criteria
+
+1. **Nothing in the corpus is silently ignored.** Every `gpkg_extensions` row
+   across the committed fixtures and the fetched corpus classifies through the
+   public API, and the test fails on an unrecognised name rather than skipping
+   it.
+2. **An extension we do not implement blocks the writes the spec says it
+   should.** A file carrying such a row cannot be written through this crate,
+   and the error names the extension.
+3. **ets-gpkg12 passes on files carrying each extension we write**, as it does
+   for tiles, with the classes it skips recorded and explained as M4 did for
+   `Tiles Encoding WebP`.
+4. **GDAL round trip for the extensions GDAL implements**: schema as field
+   domains, metadata, related tables where its support reaches, with anything
+   it does not support recorded rather than quietly untested.
+5. **`gpkg copy` GDAL file to ours, validators clean** (M3 criterion 6).
+6. **C header diff gate active, `cargo c-build` artifacts install and link on
+   all three OSes** (M3 criterion 7).
+7. **The API is frozen and the freeze is mechanised**: `cargo public-api` diff
+   gate in CI, MSRV policy written down, two-release deprecation policy
+   adopted.
+
+## Explicit non-goals
+
+- **Tiled gridded coverage.** Re-assess upstream status once during this
+  milestone and record the answer. If it is still under revision, it stays out
+  and the TIFF rejection M4 added stands.
+- **Curve envelopes** (#5). Phase 6 takes the passthrough, so an arc's exact
+  extrema stay unimplemented and curve geometries stay out of the rtree unless
+  the caller supplies an envelope. Reconsider if georust/wkb grows a curve
+  reader.
+- **Linearisation** of any curve type, in core or elsewhere.
+- **A second backend**, as the standing items below already record.
 
 ## Standing items (never "done")
 
@@ -74,3 +313,5 @@ bindings where demand exists, and an API freeze.
   alongside ets-gpkg12.
 - Track Turso/limbo rtree + vtab parity for a possible second backend
   (explicitly not before 1.0).
+- Org coordination (#18) is tracked in its own issue and is not planned around
+  here.
