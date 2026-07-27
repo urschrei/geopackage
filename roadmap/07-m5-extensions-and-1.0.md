@@ -283,8 +283,27 @@ So the escape hatch is not needed, and `gpkg_rtree_index` covers curve layers.
       `geo-traits` representation for an arc, not just a reader, so it is an
       upstream question rather than a local one. Tracked in
       [02-ecosystem.md](02-ecosystem.md).
-- [ ] Fixture: a curve-carrying file, written by GDAL, committed alongside the
-      others and walked by the corpus tests.
+- [x] Fixture: `gdal_curves.gpkg`, one GDAL-written layer per non-linear type,
+      all five spatially indexed. No `.expected.json`: `ogrinfo -json` has to
+      emit GeoJSON, which has no curve type, so GDAL stroke-converts each arc on
+      the way out and the snapshot would assert a linearisation. The RTree
+      entries GDAL wrote are the oracle instead, checked in
+      `geopackage/tests/curves.rs`, and they agree with ours to within a few
+      ulps despite GDAL reaching them by a quadrant sweep rather than the
+      chord-side test.
+- [ ] Register the member types of a container geometry, not only the declared
+      column type. Found by the fixture: GDAL's `multicurve` layer carries
+      `gpkg_geom_CIRCULARSTRING` alongside `gpkg_geom_MULTICURVE`, and its
+      `multisurface` layer carries `gpkg_geom_CURVEPOLYGON`. `create_layer`
+      registers only what it is told, which is the column's declared type, so
+      ours is the thinner registration. Doing this properly means noticing
+      member types as geometries are written rather than at create time.
+      `geopackage/tests/curves.rs` pins the current divergence.
+
+Fixture budget note: the five indexed layers cost 57 KB of the 256 KB corpus
+budget, because each carries the seven-trigger RTree schema. The total is now
+223 KB. A sixth curve layer would not fit; trimming a layer or raising the
+budget is the choice if one is wanted.
 
 Issue #5 can close once the fixture lands; the envelope question it was open
 for is answered.

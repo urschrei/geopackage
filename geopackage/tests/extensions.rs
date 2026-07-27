@@ -155,8 +155,7 @@ fn table_names_match_case_insensitively() {
             rows[0].extension(),
             Extension::GeometryType(GeometryType::CircularString)
         );
-        // Named, but neither read nor written yet.
-        assert_eq!(rows[0].support(), ExtensionSupport::Known);
+        assert_eq!(rows[0].support(), ExtensionSupport::Implemented);
     }
 }
 
@@ -444,6 +443,26 @@ fn every_extension_in_the_committed_fixtures_is_classified() {
     assert_eq!(
         seen,
         vec![
+            (
+                "gpkg_geom_CIRCULARSTRING".to_owned(),
+                ExtensionSupport::Implemented
+            ),
+            (
+                "gpkg_geom_COMPOUNDCURVE".to_owned(),
+                ExtensionSupport::Implemented
+            ),
+            (
+                "gpkg_geom_CURVEPOLYGON".to_owned(),
+                ExtensionSupport::Implemented
+            ),
+            (
+                "gpkg_geom_MULTICURVE".to_owned(),
+                ExtensionSupport::Implemented
+            ),
+            (
+                "gpkg_geom_MULTISURFACE".to_owned(),
+                ExtensionSupport::Implemented
+            ),
             ("gpkg_metadata".to_owned(), ExtensionSupport::Known),
             ("gpkg_rtree_index".to_owned(), ExtensionSupport::Implemented),
         ]

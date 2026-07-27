@@ -228,3 +228,192 @@ fn an_abstract_geometry_type_has_no_encoding_and_is_refused() {
         .insert_wkb(None, &body, &[])
         .expect_err("CURVE has no encoding");
 }
+
+// --- the GDAL-written fixture -------------------------------------------------
+//
+// `gdal_curves.gpkg` holds one GDAL-written layer per non-linear type, each
+// spatially indexed. GDAL computed those RTree entries with its own arc
+// mathematics (`OGRCircularString::ExtendEnvelopeWithCircular`, which sweeps
+// quadrant boundaries) rather than with the chord-side test this crate uses, so
+// the entries are an independent oracle for our envelopes rather than a
+// restatement of them.
+
+/// Every layer in the fixture, with the extent GDAL recorded for its one
+/// feature. Kept here rather than read from the file so a regression in our
+/// reader cannot quietly rewrite the expectation.
+///
+/// `circularstring` and `compoundcurve` reach y = 1 at the arc's apex, which is
+/// above every control point. The other three close their arcs into whole
+/// circles, so all four axis extremes are on them.
+const FIXTURE_EXTENTS: &[(&str, [f64; 4])] = &[
+    (
+        "circularstring",
+        [
+            -0.939_692_620_785_908_3,
+            0.939_692_620_785_908_4,
+            0.342_020_143_325_668_7,
+            1.0,
+        ],
+    ),
+    ("compoundcurve", [-3.0, 0.939_692_620_785_908_4, -1.0, 1.0]),
+    ("curvepolygon", [0.0, 2.0, -1.0, 1.0]),
+    ("multicurve", [5.0, 7.0, 5.0, 6.0]),
+    ("multisurface", [10.0, 12.0, 9.0, 11.0]),
+];
+
+fn fixture() -> (TempDir, GeoPackage) {
+    let dir = tempfile::tempdir().unwrap();
+    let dst = dir.path().join("gdal_curves.gpkg");
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("gdal_curves.gpkg");
+    std::fs::copy(src, &dst).unwrap();
+    let gpkg = GeoPackage::open(&dst).unwrap();
+    (dir, gpkg)
+}
+
+#[test]
+fn the_fixture_opens_and_reports_each_declared_curve_type() {
+    let (_dir, gpkg) = fixture();
+    let mut got: Vec<(String, GeometryType)> = gpkg
+        .layers()
+        .unwrap()
+        .into_iter()
+        .map(|layer| {
+            let column = layer.geometry_column().expect("a feature layer").clone();
+            (column.table_name, column.geometry_type)
+        })
+        .collect();
+    got.sort_by(|a, b| a.0.cmp(&b.0));
+
+    assert_eq!(
+        got,
+        vec![
+            ("circularstring".to_owned(), GeometryType::CircularString),
+            ("compoundcurve".to_owned(), GeometryType::CompoundCurve),
+            ("curvepolygon".to_owned(), GeometryType::CurvePolygon),
+            ("multicurve".to_owned(), GeometryType::MultiCurve),
+            ("multisurface".to_owned(), GeometryType::MultiSurface),
+        ]
+    );
+}
+
+#[test]
+fn our_envelope_matches_what_gdal_recorded_for_each_arc() {
+    let (_dir, gpkg) = fixture();
+    for (table, expected) in FIXTURE_EXTENTS {
+        let blob: Vec<u8> = gpkg
+            .connection()
+            .query_row(&format!("SELECT geom FROM \"{table}\""), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let ours = geopackage_core::geometry::blob_xy_envelope(&blob)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{table}: no envelope"));
+
+        for (index, name) in ["min_x", "max_x", "min_y", "max_y"].iter().enumerate() {
+            let got = ours[index];
+            let want = expected[index];
+            // GDAL's quadrant sweep and our chord-side test are different
+            // routes to the same box, so they agree to within a few ulps
+            // rather than bit for bit.
+            assert!(
+                (got - want).abs() <= 1e-12,
+                "{table} {name}: ours {got}, GDAL {want}"
+            );
+        }
+    }
+}
+
+#[test]
+fn our_envelope_sits_inside_the_index_cell_gdal_wrote() {
+    // The stronger statement: whatever GDAL's own index claims for the row, our
+    // envelope is inside it, so a query planned against GDAL's index and
+    // re-filtered by our exact test cannot lose the feature.
+    let (_dir, gpkg) = fixture();
+    for (table, _) in FIXTURE_EXTENTS {
+        let (cell_min_x, cell_max_x, cell_min_y, cell_max_y): (f64, f64, f64, f64) = gpkg
+            .connection()
+            .query_row(
+                &format!("SELECT minx, maxx, miny, maxy FROM \"rtree_{table}_geom\""),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+
+        let blob: Vec<u8> = gpkg
+            .connection()
+            .query_row(&format!("SELECT geom FROM \"{table}\""), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let [min_x, max_x, min_y, max_y] = geopackage_core::geometry::blob_xy_envelope(&blob)
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            min_x >= cell_min_x && max_x <= cell_max_x,
+            "{table}: x [{min_x}, {max_x}] outside GDAL cell [{cell_min_x}, {cell_max_x}]"
+        );
+        assert!(
+            min_y >= cell_min_y && max_y <= cell_max_y,
+            "{table}: y [{min_y}, {max_y}] outside GDAL cell [{cell_min_y}, {cell_max_y}]"
+        );
+    }
+}
+
+#[test]
+fn a_query_through_gdals_index_finds_the_apex_of_a_gdal_written_arc() {
+    let (_dir, gpkg) = fixture();
+    let layer = gpkg.layer("circularstring").unwrap();
+
+    // Above every control point of the arc, which tops out at y = 0.643.
+    let apex = BoundingBox::new(-0.2, 0.95, 0.2, 1.2);
+    assert_eq!(layer.features_in(apex).unwrap().count(), 1);
+
+    let below = BoundingBox::new(-0.2, -1.2, 0.2, -0.8);
+    assert_eq!(layer.features_in(below).unwrap().count(), 0);
+}
+
+#[test]
+fn every_extension_row_in_the_fixture_classifies() {
+    use geopackage::core::extensions::ExtensionSupport;
+
+    let (_dir, gpkg) = fixture();
+    for row in gpkg.extensions().unwrap() {
+        assert_ne!(
+            row.extension().support(),
+            ExtensionSupport::Unrecognised,
+            "unrecognised extension {} on {:?}",
+            row.name,
+            row.table_name
+        );
+    }
+}
+
+#[test]
+fn gdal_registers_member_types_that_we_do_not() {
+    // A divergence worth pinning rather than discovering later: GDAL registers
+    // a gpkg_geom_<TYPE> row for the member types it actually wrote, so its
+    // multicurve layer carries CIRCULARSTRING alongside MULTICURVE. Our
+    // create_layer registers only the declared column type, because that is all
+    // it is given. Recorded as an open roadmap item under M5 phase 6.
+    let (_dir, gpkg) = fixture();
+    let mut names: Vec<String> = gpkg
+        .table_extensions("multicurve")
+        .unwrap()
+        .into_iter()
+        .map(|row| row.name)
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "gpkg_geom_CIRCULARSTRING",
+            "gpkg_geom_MULTICURVE",
+            "gpkg_rtree_index",
+        ]
+    );
+}
