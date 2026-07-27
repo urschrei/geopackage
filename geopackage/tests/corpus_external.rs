@@ -56,6 +56,14 @@ struct Tally {
     pyramids: usize,
     tiles: usize,
     tile_errors: usize,
+    /// `validate()` findings, as `(variant name, count)` sorted by name.
+    ///
+    /// Counted rather than listed: a sixteen-layer file with no indexes
+    /// reports sixteen identical findings, and the count is the readable form
+    /// of that. Pinned per file by the caller rather than tallied, because the
+    /// corpus is fixed by sha256: what each file reports is a fact about that
+    /// file, and a change in it is a change in what this crate detects.
+    findings: Vec<(String, usize)>,
     /// Extension names this crate could not identify.
     ///
     /// Unlike the error counts, this one is asserted empty by the caller: the
@@ -65,11 +73,37 @@ struct Tally {
     unclassified: Vec<String>,
 }
 
+/// The variant name of a finding, which is what gets pinned: the payload
+/// carries table names and counts that would make the expectation a
+/// restatement of the file rather than of what we detect in it.
+fn finding_kind(finding: &geopackage::Finding) -> String {
+    let debug = format!("{finding:?}");
+    debug
+        .split_once(' ')
+        .map_or(debug.clone(), |(head, _)| head.to_owned())
+        .trim_end_matches('{')
+        .trim()
+        .to_owned()
+}
+
 fn sweep(path: &std::path::Path) -> Tally {
     let gpkg = GeoPackage::open_lenient(path)
         .unwrap_or_else(|e| panic!("open_lenient({}): {e:?}", path.display()));
 
     let mut tally = Tally::default();
+    let mut kinds: Vec<String> = gpkg
+        .validate()
+        .unwrap_or_else(|e| panic!("validate({}): {e:?}", path.display()))
+        .iter()
+        .map(finding_kind)
+        .collect();
+    kinds.sort();
+    for kind in kinds {
+        match tally.findings.last_mut() {
+            Some((seen, count)) if *seen == kind => *count += 1,
+            _ => tally.findings.push((kind, 1)),
+        }
+    }
     for row in gpkg.extensions().unwrap() {
         if matches!(row.extension(), Extension::Other(_)) {
             tally.unclassified.push(row.name);
@@ -180,13 +214,15 @@ fn sweep_external_corpus() {
 
     let mut total_features = 0usize;
     let mut unclassified: Vec<(String, String)> = Vec::new();
+    let mut reported: Vec<(String, Vec<(String, usize)>)> = Vec::new();
     for path in &files {
         let t = sweep(path);
         total_features += t.features;
         let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
         println!(
             "{:40} layers={:<3} features={:<7} row_errors={:<4} geometry_errors={:<4} \
-             pyramids={:<3} tiles={:<6} tile_errors={:<4} unclassified_extensions={}",
+             pyramids={:<3} tiles={:<6} tile_errors={:<4} unclassified_extensions={} \
+             findings={:?}",
             file_name,
             t.layers,
             t.features,
@@ -196,7 +232,9 @@ fn sweep_external_corpus() {
             t.tiles,
             t.tile_errors,
             t.unclassified.len(),
+            t.findings,
         );
+        reported.push((file_name.clone(), t.findings));
         unclassified.extend(
             t.unclassified
                 .into_iter()
@@ -208,9 +246,11 @@ fn sweep_external_corpus() {
         files.len(),
         total_features
     );
-    // Every file opened and enumerated without panicking; that is the bar. Error
-    // counts are reported, not asserted: some published samples carry curve-type
-    // geometries the wkb reader cannot yet parse (tracked in the M1 roadmap).
+    // Every file opened and enumerated without panicking; that is the bar.
+    // Error counts are reported rather than asserted, so a file this crate
+    // cannot fully read is visible without failing the soak. As of 2026-07-27
+    // the pinned corpus reads with none: no file in it declares a non-linear
+    // geometry type, so the curve read limitation is not exercised here.
     assert!(!files.is_empty());
     // Extension names are the exception, and are asserted: a real file
     // declaring a name this crate cannot identify is what the catalogue exists
@@ -220,4 +260,47 @@ fn sweep_external_corpus() {
         Vec::new(),
         "unclassified extension names, as (file, extension_name)"
     );
+
+    // What each pinned file reports. The corpus is fixed by sha256, so this is
+    // an expectation about the files rather than a tolerance: a change here is
+    // a change in what `validate` detects, which is the point of pinning it.
+    // A file the fetch script did not produce is skipped rather than failed.
+    let expected: &[(&str, &[(&str, usize)])] = &[
+        // GeoPackage 1.0: the GP10 application_id, the pre-1.4 trigger set on
+        // all fifteen indexed layers, and one layer with no index at all.
+        (
+            "gdal_sample_v1.0.gpkg",
+            &[
+                ("LegacyApplicationId", 1),
+                ("LegacySpatialIndexTriggers", 15),
+                ("NoSpatialIndex", 1),
+            ],
+        ),
+        // Written with no indexes, as its name says it carries no extensions.
+        (
+            "gdal_sample_v1.2_no_extensions.gpkg",
+            &[("NoSpatialIndex", 16)],
+        ),
+        (
+            "nga_rivers.gpkg",
+            &[("LegacyApplicationId", 1), ("NoSpatialIndex", 1)],
+        ),
+        // A 1.2 file, so its one indexed layer carries the pre-1.4 triggers.
+        ("ogc_sample1_2.gpkg", &[("LegacySpatialIndexTriggers", 1)]),
+    ];
+    for (name, want) in expected {
+        let Some(path) = files
+            .iter()
+            .find(|p| p.file_name().is_some_and(|f| f == *name))
+        else {
+            eprintln!("skipping {name}: not present under {}", dir.display());
+            continue;
+        };
+        let got = sweep(path).findings;
+        let want: Vec<(String, usize)> = want
+            .iter()
+            .map(|(kind, count)| ((*kind).to_owned(), *count))
+            .collect();
+        assert_eq!(got, want, "{name}");
+    }
 }

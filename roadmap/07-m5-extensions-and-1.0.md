@@ -406,16 +406,43 @@ The check surface M3 planned to put in `gpkg validate`. It lands in the library
 because the CLI is now phase 8, and because a check only a binary can run is
 not much use to an embedding caller.
 
-- [ ] `GeoPackage::validate()` returning typed findings with a severity, over:
-      the deprecated extensions from phase 1 (tolerated on read, never written,
-      reported here), the spatial index audit that already exists as
-      `SpatialIndexAudit`, the open warnings, `gpkg_contents` rows whose table
-      is missing, and the tile matrix consistency rules that
-      `TilePyramid::validate` already checks.
-- [ ] Each finding carries repair advice where repair exists, since that is
-      what the CLI will print.
-- [ ] Run it over every corpus file in CI. Known findings on known files become
-      the expected output, so a change in what we detect shows up as a diff.
+- [x] `GeoPackage::validate()` returning typed findings with a severity, over
+      everything the item listed plus the two catalogues phases 4 and 5 added:
+      dangling `gpkg_metadata_reference` rows and relationships whose mapping
+      table is gone. `Severity` is `Error` when a reader can get a wrong
+      answer, `Warning` when the file is out of step with the current spec but
+      reads correctly, and `Advisory` for a remark such as an unindexed layer.
+      Findings come back most severe first.
+- [x] Each finding carries repair advice where repair exists, naming the method
+      that performs it. `repair()` is `None` where the fix needs the producing
+      writer or a decision about data this crate should not take on the
+      caller's behalf, which is most of the extension findings.
+- [x] Run it over every committed fixture, with the findings pinned, so a
+      change in what is detected is a diff. Two the sweep established rather
+      than confirmed: `gdal_points_1_2.gpkg` reports
+      `LegacySpatialIndexTriggers`, correctly, since a 1.2 file carries the
+      pre-1.4 trigger set, and `gdal_multilayer_1_4.gpkg` reports three
+      unindexed layers, which is how it was built.
+
+The fetched corpus is pinned the same way, in the ignored
+`corpus_external.rs`, as counts per finding kind rather than a list, since a
+sixteen-layer file with no indexes reports sixteen identical findings. What the
+four pinned files report: `gdal_sample_v1.0` has the GP10 identifier, the
+pre-1.4 trigger set on fifteen indexed layers and one unindexed layer;
+`gdal_sample_v1.2_no_extensions` has sixteen unindexed layers; `nga_rivers` has
+GP10 and one unindexed layer; `ogc_sample1_2` has the pre-1.4 triggers on its
+one indexed layer. No errors anywhere, so nothing in the corpus is unreadable.
+
+Corrected while doing it: the soak's comment said some published samples carry
+curve geometries the `wkb` reader cannot parse. Not true of the pinned corpus,
+which declares no non-linear geometry type in any of the four files, so the
+curve read limitation is not exercised there at all.
+
+Noticed while writing the tests: a dangling `gpkg_metadata_reference` cannot be
+created through SQL while foreign keys are enforced, since Annex C's DDL
+declares them. Such a file arrives from a writer that had enforcement off,
+which is the default in SQLite and what the common producers do, so the check
+earns its place; the test turns them off to build the case.
 
 ## Phase 8: `geopackage-cli`
 

@@ -526,6 +526,7 @@ mod related;
 mod schema;
 mod srs;
 mod tiles;
+mod validate;
 mod value;
 mod writer;
 
@@ -552,6 +553,7 @@ pub use related::NewRelation;
 pub use schema::{Column, GeometryColumn, TableSchema};
 pub use srs::Srs;
 pub use tiles::{Tile, TileCursor, TilePyramid, TilePyramidBuilder, TileStream, TileWriter};
+pub use validate::{Finding, Severity};
 pub use value::{ConversionOptions, DateTimeParsing, StorageStrictness, Value, ValueRef};
 pub use writer::{FeatureWriter, NewFeature};
 
