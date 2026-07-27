@@ -116,7 +116,11 @@ engineering.
   (`Vec::with_capacity(num_geometries)` / `num_rings`) without bounding it
   against the buffer, so a malformed count drives an out-of-memory, found by
   our `gpb_geometry` fuzz target; (2) no reader support for the non-linear
-  curve types, so their envelopes cannot be computed yet.
+  curve types. The second no longer blocks us: `geopackage-core::curve` reads
+  those bodies itself for envelopes and passes the bytes through. Curve support
+  in `wkb` would still be worth having, since it is what would let a curve be
+  read back as a geometry object rather than as bytes, and that needs a
+  `geo-traits` representation for an arc as much as it needs a reader.
 - **geozero**: adapt with attribution, don't depend (geozero's gpkg support
   drags in sqlx). Worth lifting: the `WkbDialect::Geopackage` test cases and
   fixtures (battle-tested against real files since 2020), the empty-flag and

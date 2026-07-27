@@ -14,11 +14,13 @@
 //! is quoted via [`ident::quote`].
 
 use geopackage_core::ddl;
+use geopackage_core::extensions::{Extension, GEOM_TYPE_EXTENSION_DEFINITION};
 use geopackage_core::ident::quote;
 use geopackage_core::types::{ColumnType, GeometryType, ZmFlag};
 
 use rusqlite::Connection;
 
+use crate::extensions;
 use crate::{Error, GeoPackage, Layer, Result, table_exists};
 
 /// The conventional primary-key column name for a GeoPackage feature or
@@ -298,8 +300,9 @@ impl GeoPackage {
     /// - [`Error::TableAlreadyExists`] if a table or view of that name exists.
     /// - [`Error::UnknownSrs`] if the geometry `srs_id` is not registered in
     ///   `gpkg_spatial_ref_sys`.
-    /// - [`Error::ExtensionGeometryUnsupported`] for a non-linear or abstract
-    ///   geometry type.
+    ///
+    /// A non-linear geometry type is accepted, and registers its Annex F.1
+    /// `gpkg_geom_<TYPE>` row in `gpkg_extensions`.
     pub fn create_layer(&self, builder: &TableSchemaBuilder) -> Result<Layer<'_>> {
         // The new table has no rows of its own to be covered yet, so what this
         // catches is a whole-GeoPackage registration: an extension we cannot
@@ -383,17 +386,12 @@ impl GeoPackage {
                 table_name: name.clone(),
             });
         }
-        if let Some(geometry) = geometry {
-            if geometry.geometry_type.is_extension() {
-                return Err(Error::ExtensionGeometryUnsupported {
-                    geometry_type: geometry.geometry_type,
-                });
-            }
-            if self.srs(geometry.srs_id)?.is_none() {
-                return Err(Error::UnknownSrs {
-                    srs_id: geometry.srs_id,
-                });
-            }
+        if let Some(geometry) = geometry
+            && self.srs(geometry.srs_id)?.is_none()
+        {
+            return Err(Error::UnknownSrs {
+                srs_id: geometry.srs_id,
+            });
         }
 
         let create_sql = builder.create_table_sql()?;
@@ -430,6 +428,20 @@ impl GeoPackage {
                     geometry.m.code(),
                 ],
             )?;
+            // Annex F.1 Requirement 67: a column declared as one of the
+            // non-linear types needs its gpkg_geom_<TYPE> row, or the file
+            // claims a core-only geometry encoding it does not use.
+            if geometry.geometry_type.is_extension() {
+                let extension = Extension::GeometryType(geometry.geometry_type);
+                extensions::register(
+                    tx,
+                    Some(name),
+                    Some(&geometry.column_name),
+                    &extension.name(),
+                    GEOM_TYPE_EXTENSION_DEFINITION,
+                    "read-write",
+                )?;
+            }
         }
         Ok(())
     }

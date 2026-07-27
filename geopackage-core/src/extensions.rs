@@ -144,6 +144,10 @@ pub enum Extension {
 /// The prefix of an Annex F.1 geometry type extension name.
 const GEOM_PREFIX: &str = "gpkg_geom_";
 
+/// The `definition` column value for an Annex F.1 `gpkg_geom_<TYPE>` row.
+pub const GEOM_TYPE_EXTENSION_DEFINITION: &str =
+    "http://www.geopackage.org/spec140/#extension_geometry_types";
+
 impl Extension {
     /// Identify an `extension_name` column value.
     ///
