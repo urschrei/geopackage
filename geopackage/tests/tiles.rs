@@ -6,9 +6,9 @@
     reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"
 )]
 
-use geopackage::core::TileError;
 use geopackage::core::tiles::{TileCoord, TileMatrix, TileMatrixSet, ZoomLadder};
 use geopackage::core::types::GeometryType;
+use geopackage::core::{TileError, TileFormat};
 use geopackage::{
     BoundingBox, ContentsDataType, Error, GeoPackage, GeometrySpec, TableSchemaBuilder,
     TilePyramid, TilePyramidBuilder,
@@ -598,4 +598,47 @@ fn a_pyramid_with_no_matrix_set_row_is_an_error() {
         gpkg.tiles("basemap"),
         Err(Error::NoTileMatrixSet { .. })
     ));
+}
+
+#[test]
+fn a_gdal_written_pyramid_reads_as_gdal_wrote_it() {
+    // The committed fixture from scripts/generate_fixtures.py: one PNG tile
+    // over the web mercator quad, written by gdal_translate.
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gdal_tiles.gpkg");
+    let gpkg = GeoPackage::open_read_only(path).unwrap();
+
+    let names: Vec<String> = gpkg
+        .tile_pyramids()
+        .unwrap()
+        .iter()
+        .map(|p| p.table_name().to_owned())
+        .collect();
+    assert_eq!(names, vec!["tiles".to_owned()]);
+
+    let pyramid = gpkg.tiles("tiles").unwrap();
+    // GDAL's own pyramid satisfies the rules our writes are checked against.
+    pyramid.validate().unwrap();
+    assert_eq!(pyramid.zoom_levels(), vec![0]);
+    let matrix = *pyramid.matrix(0).unwrap();
+    assert_eq!((matrix.matrix_width, matrix.matrix_height), (1, 1));
+    assert_eq!((matrix.tile_width, matrix.tile_height), (256, 256));
+    assert_eq!(pyramid.matrix_set().srs_id, 3857);
+
+    assert_eq!(pyramid.tile_count().unwrap(), 1);
+    let tile = pyramid
+        .get_tile(TileCoord::new(0, 0, 0))
+        .unwrap()
+        .expect("the fixture's single tile");
+    let payload = geopackage::core::tiles::probe(&tile).unwrap();
+    assert_eq!(payload.format, TileFormat::Png);
+    matrix.check_payload(&payload).unwrap();
+
+    // Reading a pyramid writes nothing, so a read-only handle is enough for
+    // all of the above.
+    let bbox = BoundingBox::new(-1.0, -1.0, 1.0, 1.0);
+    assert_eq!(
+        scanned(&mut pyramid.cursor_in(0, bbox).unwrap()),
+        vec![(0, 0, 0)]
+    );
 }
