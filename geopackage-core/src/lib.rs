@@ -70,6 +70,7 @@ pub mod extensions;
 pub mod geometry;
 pub mod gpb;
 pub mod ident;
+pub mod schema;
 pub mod srs;
 pub mod tiles;
 pub mod triggers;
