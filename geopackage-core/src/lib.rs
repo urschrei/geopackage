@@ -14,6 +14,7 @@
 //!   calendar validation, and epoch conversion
 //! - [`ddl`]: normative `CREATE TABLE` SQL and required `gpkg_spatial_ref_sys` seed rows
 //! - [`srs`]: vendored EPSG WKT1 subset for `gpkg_spatial_ref_sys` seeding
+//! - [`tiles`]: tile pyramid user table SQL and the tile matrix model
 //! - [`triggers`]: RTree spatial index virtual table and trigger SQL (version-aware)
 //! - [`version`]: `application_id` / `user_version` handling
 //! - [`ident`]: SQL identifier quoting
@@ -69,6 +70,7 @@ pub mod geometry;
 pub mod gpb;
 pub mod ident;
 pub mod srs;
+pub mod tiles;
 pub mod triggers;
 pub mod types;
 pub mod version;
