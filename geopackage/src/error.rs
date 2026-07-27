@@ -328,16 +328,6 @@ pub enum Error {
         /// The unregistered spatial reference system identifier.
         srs_id: i32,
     },
-    /// A layer was created with an extension (non-linear or abstract) geometry
-    /// type. Writing those types is a later milestone.
-    #[error(
-        "geometry type {geometry_type} requires a gpkg_geom_<TYPE> extension; \
-         writing extension geometry types is not yet supported"
-    )]
-    ExtensionGeometryUnsupported {
-        /// The rejected geometry type.
-        geometry_type: geopackage_core::types::GeometryType,
-    },
     /// [`crate::GeoPackage::create_layer`] was called with a builder that has no
     /// geometry column (use [`crate::GeoPackage::create_attributes_table`] for a
     /// non-spatial table).

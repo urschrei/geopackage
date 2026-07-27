@@ -72,12 +72,14 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       geometries). The eventual home is an upstreamed `gpb` feature in georust
       `wkb` itself (tracked in [02-ecosystem.md](02-ecosystem.md)); until then
       this is ours.
-- [ ] Curve-type envelope support: a WKB body whose type the `wkb` crate
-      cannot read, the non-linear curve types (`CIRCULARSTRING`,
-      `CURVEPOLYGON`, `MULTICURVE`, …) and the abstract `CURVE`/`SURFACE`,
-      makes the `ST_*` functions return a typed SQL error rather than an
-      envelope, so such a geometry cannot be inserted into an rtree-indexed
-      table. Needs curve support in georust `wkb` upstream.
+- [x] Curve-type envelope support. Done in M5 without waiting on `wkb`:
+      `geopackage-core::curve` walks the WKB structure itself, so the `ST_*`
+      functions return a true envelope for the non-linear types and such a
+      geometry indexes like any other. Arc extents are computed exactly rather
+      than from the control points, which bound an arc too tightly. The
+      abstract `CURVE`/`SURFACE` codes still error, correctly: they have no
+      encoding. See [07-m5-extensions-and-1.0.md](07-m5-extensions-and-1.0.md)
+      phase 6.
 - [ ] **wkb upstream (fuzz finding):** `wkb` 0.9.2 pre-allocates from an
       untrusted element count without bounding it against the remaining buffer
       (`Vec::with_capacity(num_geometries)` in `reader::GeometryCollection`,

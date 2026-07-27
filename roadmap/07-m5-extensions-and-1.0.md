@@ -248,28 +248,46 @@ variation to check against.
       QGIS-written samples, before fixing the model. This is the item most
       likely to need a fixture we do not have yet.
 
-## Phase 6: non-linear geometry, passthrough only
+## Phase 6: non-linear geometry, passthrough with computed envelopes
 
 Decided 2026-07-27: read the bytes through, do not compute envelopes for them,
-do not linearise. Issue #5 stays open for the envelope question.
+do not linearise, and refuse to index them. **Revised the same day**, after
+checking what the spec and the other implementations actually do:
 
-- [ ] Read: a GPB whose body declares CircularString, CompoundCurve,
-      CurvePolygon, MultiCurve or MultiSurface must not fail at
-      `GpbGeometry::parse`, which today builds a `Wkb` eagerly and will reject
-      the type code. The geometry surfaces as its type plus its raw WKB bytes,
-      with the existing `wkb_geometry_type` doing the classification off the
-      body directly.
-- [ ] Write: accept raw WKB carrying a curve type, register the matching
-      `gpkg_geom_<TYPE>` row, and set the GPB header's extended flag, which
-      `encode_header` already takes as a parameter.
-- [ ] Refuse insertion into an rtree-indexed table with a typed error naming
-      the reason, since `encode_gpb_from_wkb` derives the envelope by parsing
-      and cannot parse these. **Escape hatch to design:** a caller who knows
-      the envelope can supply it, at which point the header and the index can
-      both be written and the refusal does not apply. That keeps the crate
-      useful for curve data without putting arc mathematics in core.
+- Annex F.3 Requirement 78 says the `ST_*` functions *shall* work on the
+  non-linear types when that extension is implemented, and the extension
+  applies to "any column specified in the `gpkg_geometry_columns` table". So
+  supporting curves and refusing to index them diverges from the spec rather
+  than conforming to it.
+- PostGIS (`lw_arc_calculate_gbox_cartesian_2d`) and GDAL
+  (`OGRCircularString::ExtendEnvelopeWithCircular`) both compute an exact arc
+  envelope analytically. Neither refuses, and neither linearises to do it.
+- The arc mathematics is about 150 lines and needs no dependency, and the
+  envelope has to be right anyway: an arc bulges past its control points, so a
+  control-point envelope in the GPB header is a silent correctness bug for any
+  reader that trusts the header, which GDAL does.
+
+So the escape hatch is not needed, and `gpkg_rtree_index` covers curve layers.
+
+- [x] `geopackage-core::curve`: walk an ISO WKB body directly, computing exact
+      arc extents. Removes the dependency on curve support landing in `wkb`.
+- [x] Write: accept raw WKB carrying a curve type, register the matching
+      `gpkg_geom_<TYPE>` row, and set the GPB header's extended flag.
+      `FeatureWriter::insert_wkb` is the scalar entry point, so this does not
+      need the non-default `arrow` feature.
+- [x] Index: curve layers get an rtree like any other, with entries that bound
+      the arc rather than its control points.
+- [ ] Read: a GPB whose body declares a curve type still fails at
+      `GpbGeometry::parse`, so `Feature::geometry` errors and
+      `Feature::geometry_bytes` is the way to get one. Fixing this needs a
+      `geo-traits` representation for an arc, not just a reader, so it is an
+      upstream question rather than a local one. Tracked in
+      [02-ecosystem.md](02-ecosystem.md).
 - [ ] Fixture: a curve-carrying file, written by GDAL, committed alongside the
       others and walked by the corpus tests.
+
+Issue #5 can close once the fixture lands; the envelope question it was open
+for is answered.
 
 ## Phase 7: `validate()` in the library, extended by each phase after
 
@@ -411,10 +429,11 @@ a moving one.
 - **Tiled gridded coverage.** Re-assess upstream status once during this
   milestone and record the answer. If it is still under revision, it stays out
   and the TIFF rejection M4 added stands.
-- **Curve envelopes** (#5). Phase 6 takes the passthrough, so an arc's exact
-  extrema stay unimplemented and curve geometries stay out of the rtree unless
-  the caller supplies an envelope. Reconsider if georust/wkb grows a curve
-  reader.
+- **Curve envelopes** (#5). No longer a non-goal: phase 6 was revised on
+  2026-07-27 and arc extrema are computed exactly, so curve geometries index
+  like any other. What stays out is reading a curve back as a geometry object,
+  which needs a `geo-traits` representation for an arc rather than anything
+  local.
 - **Linearisation** of any curve type, in core or elsewhere.
 - **A second backend**, as the standing items below already record.
 

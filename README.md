@@ -304,9 +304,12 @@ holds, probing each payload against the size its zoom level declares.
   belongs upstream in [georust/wkb](https://github.com/georust/wkb); do not
   parse untrusted GeoPackage files. Tracked in
   [#3](https://github.com/urschrei/geopackage/issues/3).
-- **Non-linear curve types** (`CIRCULARSTRING`, `COMPOUNDCURVE`, ...) cannot
-  have their envelopes computed and so cannot be inserted into an indexed
-  table. Tracked in [#5](https://github.com/urschrei/geopackage/issues/5).
+- **Non-linear curve types are bytes, not geometry.** `CIRCULARSTRING`,
+  `COMPOUNDCURVE`, `CURVEPOLYGON`, `MULTICURVE` and `MULTISURFACE` can be
+  written, indexed and queried by extent, because their envelopes are computed
+  from the WKB directly. They cannot be read back as geometry objects: the
+  `geo-traits` interface this crate reads through has no representation for a
+  curve, so `Layer::features` cannot yield one. Read them as WKB.
 - **Tiles are bytes, not images.** A tile pyramid can be created, read, written
   and validated, but no payload is ever decoded: there is no way to get pixels,
   reproject a pyramid, or build one from a source raster from here.

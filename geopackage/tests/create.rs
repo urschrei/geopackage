@@ -156,16 +156,56 @@ fn rejects_unregistered_srs() {
 }
 
 #[test]
-fn rejects_extension_geometry_type() {
+fn extension_geometry_type_registers_its_annex_f1_row() {
     let (_dir, gpkg) = gpkg();
     let builder = TableSchemaBuilder::new("curves")
         .geometry(GeometrySpec::new(GeometryType::CurvePolygon, 4326));
-    match gpkg.create_layer(&builder) {
-        Err(Error::ExtensionGeometryUnsupported { geometry_type }) => {
-            assert_eq!(geometry_type, GeometryType::CurvePolygon);
-        }
-        other => panic!("expected ExtensionGeometryUnsupported, got {other:?}"),
-    }
+    gpkg.create_layer(&builder).unwrap();
+
+    let registered: Vec<(String, Option<String>, Option<String>, String)> = gpkg
+        .connection()
+        .prepare(
+            "SELECT extension_name, table_name, column_name, scope \
+             FROM gpkg_extensions \
+             WHERE table_name = 'curves' \
+             AND substr(extension_name, 1, 10) = 'gpkg_geom_'",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+
+    assert_eq!(
+        registered,
+        vec![(
+            "gpkg_geom_CURVEPOLYGON".to_owned(),
+            Some("curves".to_owned()),
+            Some("geom".to_owned()),
+            "read-write".to_owned(),
+        )]
+    );
+}
+
+#[test]
+fn a_linear_geometry_type_registers_no_geometry_extension() {
+    let (_dir, gpkg) = gpkg();
+    let builder = TableSchemaBuilder::new("roads")
+        .geometry(GeometrySpec::new(GeometryType::LineString, 4326));
+    gpkg.create_layer(&builder).unwrap();
+
+    let count: i64 = gpkg
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM gpkg_extensions \
+             WHERE substr(extension_name, 1, 10) = 'gpkg_geom_'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0, "a core geometry type needs no Annex F.1 row");
 }
 
 #[test]

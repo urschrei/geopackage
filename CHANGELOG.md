@@ -129,6 +129,34 @@ While the version is below 1.0 the API may change in any release.
   SQLite's text coercion rather than an approximation of it. It is the faster
   of the two as well, by 22% per call against a hand-rolled matcher.
 
+- **Non-linear geometry types (Annex F.1).** `CIRCULARSTRING`,
+  `COMPOUNDCURVE`, `CURVEPOLYGON`, `MULTICURVE` and `MULTISURFACE` can now be
+  written, indexed and queried by extent. `create_layer` accepts one and
+  registers its `gpkg_geom_<TYPE>` row; the new
+  `FeatureWriter::insert_wkb` writes a body as bytes, since `geo-traits` has no
+  representation for a curve to pass through `insert`.
+
+  The new `geopackage_core::curve` computes envelopes by walking the WKB
+  structure itself rather than through the georust `wkb` reader, which cannot
+  parse these types. This is what removes the previous limitation ([#5]): the
+  blocker was never the index, it was having no envelope to put in it.
+
+  Arc extents are exact. A circular arc bulges away from the chord between its
+  endpoints and can bulge past its middle control point, so the box of the
+  three points defining it is not its bounding box. `curve::arc_envelope`
+  computes the true one, by the chord-side test PostGIS uses in
+  `lw_arc_calculate_gbox_cartesian_2d`. A too-small envelope would be a silent
+  correctness bug rather than a tuning matter: both the GPB header envelope and
+  the rtree entry derive from it, and a reader trusting either would drop
+  features it should return.
+
+  Reading a curve back as a geometry object is still not possible: `geo-traits`
+  cannot describe an arc, so `Feature::geometry` errors and
+  `Feature::geometry_bytes` is how one is read. That is an upstream question,
+  not a local one.
+
+  `Error::ExtensionGeometryUnsupported` is removed, since nothing raises it.
+
 ### Changed
 
 - **`gpkg_zoom_other` and `gpkg_webp` are Annex F.6 and F.7**, not F.4 and

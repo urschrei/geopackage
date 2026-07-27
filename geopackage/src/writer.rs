@@ -121,7 +121,6 @@
 
 use geo_traits::{Dimensions, GeometryTrait};
 use geopackage_core::geometry::encode_gpb;
-#[cfg(feature = "arrow")]
 use geopackage_core::geometry::encode_gpb_from_wkb;
 use geopackage_core::ident::quote;
 use geopackage_core::schema::{ColumnConstraint, ConstraintKind};
@@ -811,6 +810,65 @@ impl<'conn> FeatureWriter<'conn> {
             values.iter().copied().map(value_ref_to_bind),
         )
         .map(|(assigned, _)| assigned)
+    }
+
+    /// Insert a feature whose geometry is already ISO WKB, returning its
+    /// feature id.
+    ///
+    /// [`Self::insert`] takes a geometry object, which the `geo-traits`
+    /// interface can only describe for the linear types. The non-linear types
+    /// (`CIRCULARSTRING`, `COMPOUNDCURVE`, `CURVEPOLYGON`, `MULTICURVE`,
+    /// `MULTISURFACE`) have no such representation, so WKB bytes are how one is
+    /// written. The bytes are read for the envelope the header and the index
+    /// both need, and to reject a body that is not ISO WKB.
+    ///
+    /// The bytes are copied into the blob rather than re-serialised, so a body
+    /// read from another GeoPackage passes through unchanged.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::insert`], plus [`Error::Core`] if the bytes are not a
+    /// geometry that can be read: malformed, EWKB rather than ISO WKB, or one
+    /// of the abstract supertypes, which have no encoding.
+    pub fn insert_wkb(
+        &mut self,
+        fid: Option<i64>,
+        wkb: &[u8],
+        values: &[CellRef<'_>],
+    ) -> Result<i64> {
+        self.check_value_count(values.len())?;
+        self.check_constraints(values)?;
+        let geom = self
+            .geometry
+            .as_ref()
+            .ok_or_else(|| Error::NoGeometryColumn {
+                table_name: self.table_name.clone(),
+            })?;
+        let encoded = encode_gpb_from_wkb(wkb, geom.srs_id).map_err(|e| Error::Core(e.into()))?;
+        let has_z = matches!(encoded.dimensions, Dimensions::Xyz | Dimensions::Xyzm);
+        let has_m = matches!(encoded.dimensions, Dimensions::Xym | Dimensions::Xyzm);
+        self.check_zm("z", geom.z, has_z, &geom.name)?;
+        self.check_zm("m", geom.m, has_m, &geom.name)?;
+
+        let assigned = self.exec_insert(
+            fid.is_some(),
+            true,
+            params_from_iter(
+                fid.map(|id| ToSqlOutput::Borrowed(ValueRef::Integer(id)))
+                    .into_iter()
+                    .chain(values.iter().copied().map(value_ref_to_bind))
+                    .chain(std::iter::once(ToSqlOutput::Owned(SqlValue::Blob(
+                        encoded.blob,
+                    )))),
+            ),
+            fid,
+        )?;
+        if let Some(envelope) = encoded.xy_envelope {
+            self.bbox.add(envelope);
+            self.bbox_dirty = true;
+        }
+        self.dirty = true;
+        Ok(assigned)
     }
 
     /// [`Self::insert`], additionally returning the geometry's XY envelope
