@@ -73,6 +73,10 @@ name = "tiles"
 harness = false
 
 [[bench]]
+name = "handles"
+harness = false
+
+[[bench]]
 name = "arrow"
 harness = false
 required-features = ["arrow"]
