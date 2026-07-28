@@ -114,6 +114,7 @@ pub struct OpenOptions {
     pub(crate) busy_timeout: Option<Duration>,
     pub(crate) allow_unsupported_extension_writes: bool,
     pub(crate) enforce_column_constraints: bool,
+    pub(crate) lenient: bool,
 }
 
 impl OpenOptions {
@@ -127,6 +128,25 @@ impl OpenOptions {
     #[must_use]
     pub fn journal_mode(mut self, mode: JournalMode) -> Self {
         self.journal_mode = Some(mode);
+        self
+    }
+
+    /// Tolerate legacy and lightly non-conforming files, recording what was
+    /// tolerated as [`crate::OpenWarning`]s rather than refusing to open.
+    ///
+    /// Composes with every other setting here, which is the point: before this
+    /// existed, leniency was reachable only through [`GeoPackage::open_lenient`]
+    /// and [`GeoPackage::open_read_only_lenient`], which take no options at all,
+    /// so a caller wanting WAL and leniency, or constraint enforcement and
+    /// leniency, could have either but not both.
+    ///
+    /// Leniency covers presentation, not identity: a file that cannot be
+    /// identified as a GeoPackage, or that is missing a required core table, is
+    /// still an error. Retrieve what was tolerated with
+    /// [`GeoPackage::open_warnings`].
+    #[must_use]
+    pub fn lenient(mut self, lenient: bool) -> Self {
+        self.lenient = lenient;
         self
     }
 

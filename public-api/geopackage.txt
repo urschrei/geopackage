@@ -1103,6 +1103,7 @@ pub fn geopackage::OpenOptions::create<P: core::convert::AsRef<std::path::Path>>
 pub fn geopackage::OpenOptions::enforce_column_constraints(self, bool) -> Self
 pub fn geopackage::OpenOptions::from_connection(self, rusqlite::Connection) -> geopackage::Result<geopackage::GeoPackage>
 pub fn geopackage::OpenOptions::journal_mode(self, geopackage::JournalMode) -> Self
+pub fn geopackage::OpenOptions::lenient(self, bool) -> Self
 pub fn geopackage::OpenOptions::new() -> Self
 pub fn geopackage::OpenOptions::open<P: core::convert::AsRef<std::path::Path>>(self, P) -> geopackage::Result<geopackage::GeoPackage>
 pub fn geopackage::OpenOptions::open_read_only<P: core::convert::AsRef<std::path::Path>>(self, P) -> geopackage::Result<geopackage::GeoPackage>
