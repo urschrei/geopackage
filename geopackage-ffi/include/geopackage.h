@@ -17,6 +17,53 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#ifndef ARROW_C_DATA_INTERFACE
+#define ARROW_C_DATA_INTERFACE
+
+#define ARROW_FLAG_DICTIONARY_ORDERED 1
+#define ARROW_FLAG_NULLABLE 2
+#define ARROW_FLAG_MAP_KEYS_SORTED 4
+
+struct ArrowSchema {
+  const char *format;
+  const char *name;
+  const char *metadata;
+  int64_t flags;
+  int64_t n_children;
+  struct ArrowSchema **children;
+  struct ArrowSchema *dictionary;
+  void (*release)(struct ArrowSchema *);
+  void *private_data;
+};
+
+struct ArrowArray {
+  int64_t length;
+  int64_t null_count;
+  int64_t offset;
+  int64_t n_buffers;
+  int64_t n_children;
+  const void **buffers;
+  struct ArrowArray **children;
+  struct ArrowArray *dictionary;
+  void (*release)(struct ArrowArray *);
+  void *private_data;
+};
+
+#endif  /* ARROW_C_DATA_INTERFACE */
+
+#ifndef ARROW_C_STREAM_INTERFACE
+#define ARROW_C_STREAM_INTERFACE
+
+struct ArrowArrayStream {
+  int (*get_schema)(struct ArrowArrayStream *, struct ArrowSchema *out);
+  int (*get_next)(struct ArrowArrayStream *, struct ArrowArray *out);
+  const char *(*get_last_error)(struct ArrowArrayStream *);
+  void (*release)(struct ArrowArrayStream *);
+  void *private_data;
+};
+
+#endif  /* ARROW_C_STREAM_INTERFACE */
+
 
 /**
  * What kind of failure occurred.
@@ -308,6 +355,46 @@ gpkg_status gpkg_layer_names_count(const gpkg_t *gpkg, size_t *out, gpkg_error_t
  * `gpkg` must be a live container handle; `error` NULL or writable.
  */
 char *gpkg_layer_name_at(const gpkg_t *gpkg, size_t index, gpkg_error_t *error);
+
+/**
+ * Read a layer as an Arrow C Data Interface stream.
+ *
+ * `out` is filled in with a stream the caller owns and must release through
+ * its own `release` callback, as the C Data Interface specifies. The stream
+ * borrows the layer's container: the container cannot be closed until the
+ * stream has been released, exactly as for a layer handle.
+ *
+ * Batches come back on one thread. The threaded reader assigns key windows to
+ * workers, which needs a second connection per worker; a stream handed to C is
+ * pulled on the caller's thread instead.
+ *
+ * # Safety
+ *
+ * `layer` must be a live layer handle, `out` must point at writable storage
+ * for an `ArrowArrayStream`, and `error` must be NULL or writable. The
+ * returned stream must be used from the thread that created it.
+ */
+gpkg_status gpkg_layer_read_arrow(const gpkg_layer_t *layer,
+                                  struct ArrowArrayStream *out,
+                                  gpkg_error_t *error);
+
+/**
+ * Read the rows of a layer intersecting a bounding box, as an Arrow stream.
+ *
+ * The columnar counterpart of a bounding-box query, returning the same rows a
+ * scalar `features_in` would.
+ *
+ * # Safety
+ *
+ * As [`gpkg_layer_read_arrow`].
+ */
+gpkg_status gpkg_layer_read_arrow_in(const gpkg_layer_t *layer,
+                                     double min_x,
+                                     double min_y,
+                                     double max_x,
+                                     double max_y,
+                                     struct ArrowArrayStream *out,
+                                     gpkg_error_t *error);
 
 /**
  * Release a string this library returned.
