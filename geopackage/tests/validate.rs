@@ -315,3 +315,146 @@ fn every_committed_fixture_reports_what_it_is_expected_to() {
         assert_eq!(got, want, "{name}");
     }
 }
+
+#[test]
+fn every_finding_renders_as_a_sentence_naming_its_subject() {
+    // One of each variant, so a new variant without a Display arm fails to
+    // compile here rather than printing its debug form to a user.
+    //
+    // `SpatialIndexAudit` is `#[non_exhaustive]`, so the audit comes from a
+    // real layer rather than a literal: one row inserted through the writer,
+    // then the index emptied behind the triggers' back, which is the same
+    // divergence `an_out_of_step_spatial_index_is_an_error` builds.
+    let (_dir, gpkg) = with_layer();
+    let layer = gpkg.layer("roads").unwrap();
+    let mut writer = layer.writer().unwrap();
+    writer
+        .insert(
+            None,
+            &geo_types::Line::new(
+                geo_types::Coord { x: 0.0, y: 0.0 },
+                geo_types::Coord { x: 1.0, y: 1.0 },
+            ),
+            &[geopackage::ValueRef::Text("a")],
+        )
+        .unwrap();
+    writer.commit().unwrap();
+    gpkg.connection()
+        .execute("DELETE FROM rtree_roads_geom", [])
+        .unwrap();
+    let audit = layer.audit_spatial_index().unwrap();
+    assert_eq!(
+        audit.missing, 1,
+        "the emptied index should lose its one row"
+    );
+
+    let cases: Vec<(Finding, &str)> = vec![
+        (
+            Finding::LegacyApplicationId {
+                version: geopackage::GpkgVersion::V1_0,
+                application_id: 0x4750_3130,
+            },
+            "GP10",
+        ),
+        (
+            Finding::MissingContentsTable {
+                table_name: "roads".into(),
+            },
+            "roads",
+        ),
+        (
+            Finding::TableNameCaseMismatch {
+                declared: "Roads".into(),
+                actual: "roads".into(),
+            },
+            "case",
+        ),
+        (
+            Finding::RemovedExtension {
+                extension_name: "gpkg_geom_CIRCULARSTRING".into(),
+                table_name: Some("roads".into()),
+            },
+            "roads",
+        ),
+        (
+            Finding::UnrecognisedExtension {
+                extension_name: "acme_thing".into(),
+                table_name: None,
+                scope: geopackage::ExtensionScope::ReadWrite,
+            },
+            "acme_thing",
+        ),
+        (
+            Finding::SpatialIndexOutOfStep {
+                table_name: "roads".into(),
+                audit,
+            },
+            "1 missing",
+        ),
+        (
+            Finding::LegacySpatialIndexTriggers {
+                table_name: "roads".into(),
+            },
+            "pre-1.4",
+        ),
+        (
+            Finding::NoSpatialIndex {
+                table_name: "roads".into(),
+            },
+            "no spatial index",
+        ),
+        (
+            Finding::TilePyramidInconsistent {
+                table_name: "basemap".into(),
+                detail: "zoom 3 missing".into(),
+            },
+            "zoom 3 missing",
+        ),
+        (Finding::DanglingMetadataReference { md_id: 7 }, "7"),
+        (
+            Finding::MissingMappingTable {
+                mapping_table_name: "map".into(),
+            },
+            "map",
+        ),
+        (
+            Finding::NonConformantRelationName {
+                relation_name: "sideways".into(),
+            },
+            "sideways",
+        ),
+    ];
+
+    for (finding, expected_fragment) in cases {
+        let rendered = finding.to_string();
+        assert!(
+            rendered.contains(expected_fragment),
+            "{finding:?} rendered as {rendered:?}, which does not mention {expected_fragment:?}"
+        );
+        // A finding's own line carries neither its severity nor its repair:
+        // those are separate accessors so a caller arranges them itself.
+        assert!(!rendered.contains("Severity"), "{rendered:?}");
+        assert!(!rendered.is_empty());
+    }
+}
+
+#[test]
+fn an_optional_table_name_reads_as_a_sentence_either_way() {
+    let with = Finding::RemovedExtension {
+        extension_name: "gpkg_geom_CIRCULARSTRING".into(),
+        table_name: Some("roads".into()),
+    };
+    let without = Finding::RemovedExtension {
+        extension_name: "gpkg_geom_CIRCULARSTRING".into(),
+        table_name: None,
+    };
+    assert!(with.to_string().contains(r#"on "roads""#), "{with:?}");
+    assert!(!without.to_string().contains(" on "), "{without:?}");
+}
+
+#[test]
+fn severity_renders_as_a_lowercase_word() {
+    assert_eq!(Severity::Advisory.to_string(), "advisory");
+    assert_eq!(Severity::Warning.to_string(), "warning");
+    assert_eq!(Severity::Error.to_string(), "error");
+}
