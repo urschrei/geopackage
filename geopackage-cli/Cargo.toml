@@ -1,0 +1,28 @@
+[package]
+name = "geopackage-cli"
+description = "Command-line tool for OGC GeoPackage (.gpkg) files: inspect, validate, index and copy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+# The binary is `gpkg`; the crate is `geopackage-cli` so it sits beside
+# `geopackage` and `geopackage-core` on crates.io under the same name stem.
+[[bin]]
+name = "gpkg"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+geopackage.workspace = true
+clap.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
