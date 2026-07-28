@@ -553,11 +553,16 @@ that already exists. The filtered columnar read is one C entry point instead.
 This is `geopackage` work, not `geopackage-ffi` work, and it is M3 debt that the
 FFI merely surfaces, so it sits before phase 9 rather than inside it.
 
-- [ ] `Layer::read_arrow_in(bbox, options)`. The SQL is the existing paginated
-      query plus the `rtree_select` join and its four bound parameters. Without
-      a spatial index it declines to a full scan carrying the exact filter,
-      matching what `features_in_plan` already does.
-- [ ] **The exact re-filter is required, not optional.** The rtree parameters
+- [x] `Layer::read_arrow_in(bbox, options)`. Without a spatial index it
+      declines to a full scan carrying the exact filter, matching what
+      `features_in_plan` already does.
+      *(Done. The spatial predicate is an `IN (SELECT id FROM rtree ...)`
+      subquery rather than the join this sketched, so the select list stays
+      unqualified and the surrounding paginated query is otherwise unchanged;
+      SQLite drives the same index lookup. The key and limit keep `?1` and `?2`
+      so the unfiltered path binds exactly as before, and the four widened
+      bounds follow as `?3` to `?6`.)*
+- [x] **The exact re-filter is required, not optional.** The rtree parameters
       are deliberately widened (`widen_up`/`widen_down`) because the index
       stores float32 envelopes, so its candidates are a superset.
       `FeatureStream` re-tests each candidate's blob before converting the row;
@@ -565,9 +570,16 @@ FFI merely surfaces, so it sits before phase 9 rather than inside it.
       `features_in` would not. A batch of N candidates therefore yields at most
       N rows, and under-filling a batch is acceptable, as the byte ceiling
       already cuts batches short.
-- [ ] **The aggregate and parallel paths decline to the direct loop when a
+- [x] **The aggregate and parallel paths decline to the direct loop when a
       bounding box is set**, rather than failing, which is the idiom the
-      threaded read already uses for each of its three conditions. The
+      threaded read already uses for each of its three conditions.
+      *(Done. One hazard found while building it, which the sketch did not
+      anticipate: pagination advanced on rows appended, and the filter removes
+      rows after the query has bounded them, so a page whose candidates were all
+      dropped read as the end of the layer and silently lost every match after
+      it. Candidates read and rows appended are now counted separately, and
+      pagination runs off the former. Both this and the re-filter were
+      mutation-checked: with each disabled in turn, a test fails.)* The
       aggregate builds columns inside a SQLite aggregate function, so the
       re-filter would have to move in there too. The parallel path assigns key
       *windows* to workers on a density rule (`max - min + 1 == count`), and a

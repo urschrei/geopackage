@@ -69,7 +69,7 @@ use rusqlite::types::ValueRef;
 
 use crate::schema::{Column, GeometryColumn};
 use crate::value::DateTimeParsing;
-use crate::{Error, Layer, Result};
+use crate::{BoundingBox, Error, Layer, Result};
 
 /// Default number of rows per [`RecordBatch`].
 ///
@@ -505,9 +505,56 @@ impl Layer<'_> {
         })
     }
 
+    /// Read the layer's rows intersecting `bbox` as Arrow record batches.
+    ///
+    /// The columnar counterpart of [`Layer::features_in`], returning the same
+    /// rows in the same order. Single-threaded: the parallel path assigns key
+    /// *windows* to workers on the assumption that a window's key span implies
+    /// its row count, and a spatial filter voids that, since matching rows
+    /// scatter through the key space. Whether a threaded filtered read pays is
+    /// a separate question, to be answered by measurement against this.
+    ///
+    /// Uses the RTree index when the layer has one, and falls back to a full
+    /// scan carrying the same exact filter when it does not, exactly as
+    /// [`Layer::features_in`] does. Either way the geometry of every candidate
+    /// is re-tested against its true `f64` envelope, because the index stores
+    /// `f32` envelopes and is queried with widened bounds, so its candidates
+    /// are a superset.
+    ///
+    /// A batch can therefore come back with fewer rows than the batch size
+    /// while rows remain: filtering removes candidates after the query has
+    /// bounded them. That is already true of the byte ceiling, so a caller
+    /// reading until `None` is unaffected.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoGeometryColumn`] if the layer has none, as
+    /// [`Layer::features_in`]; otherwise as [`Layer::read_arrow`].
+    pub fn read_arrow_in(
+        &self,
+        bbox: BoundingBox,
+        options: ArrowReadOptions,
+    ) -> Result<ArrowBatches<'_>> {
+        if self.geometry_column().is_none() {
+            return Err(Error::NoGeometryColumn {
+                table_name: self.table_name().to_owned(),
+            });
+        }
+        self.read_arrow_filtered(options, Some(bbox))
+    }
+
     /// The single-threaded reader, which the threaded one falls back to and its
     /// workers are built from.
     fn read_arrow_sequential(&self, options: ArrowReadOptions) -> Result<ArrowBatches<'_>> {
+        self.read_arrow_filtered(options, None)
+    }
+
+    /// The single-threaded reader, optionally filtered to a bounding box.
+    fn read_arrow_filtered(
+        &self,
+        options: ArrowReadOptions,
+        filter: Option<BoundingBox>,
+    ) -> Result<ArrowBatches<'_>> {
         let schema = self.arrow_schema()?;
         // The pagination key: the declared primary key, or SQLite's rowid for a
         // table that has none. This is the same fallback the write path uses.
@@ -543,8 +590,48 @@ impl Layer<'_> {
             ),
         };
         let table = quote(self.table_name())?;
-        let rows_sql =
-            format!("SELECT {row_columns} FROM {table} WHERE {key} >= ?1 ORDER BY {key} LIMIT ?2");
+        // The spatial predicate, when there is one and the layer has an index
+        // to answer it with. A subquery against the RTree rather than a join,
+        // so the select list stays unqualified and the surrounding query is
+        // unchanged; SQLite drives the same index lookup either way. The key
+        // and limit keep `?1` and `?2` so the unfiltered path binds as before,
+        // and the four widened bounds follow as `?3` to `?6`.
+        let (spatial_sql, filter_params) = match filter {
+            Some(bbox) if self.has_spatial_index()? => {
+                let geom = self
+                    .geometry_column()
+                    .ok_or_else(|| Error::NoGeometryColumn {
+                        table_name: self.table_name().to_owned(),
+                    })?;
+                let rtree = quote(&geopackage_core::triggers::rtree_table_name(
+                    self.table_name(),
+                    &geom.column_name,
+                ))?;
+                let id = match self.primary_key_column() {
+                    Some(pk) => quote(pk)?,
+                    None => "rowid".to_owned(),
+                };
+                (
+                    format!(
+                        " AND {id} IN (SELECT id FROM {rtree} \
+                          WHERE minx <= ?3 AND maxx >= ?4 AND miny <= ?5 AND maxy >= ?6)"
+                    ),
+                    vec![
+                        rusqlite::types::Value::Real(crate::layer::widen_up(bbox.max_x)),
+                        rusqlite::types::Value::Real(crate::layer::widen_down(bbox.min_x)),
+                        rusqlite::types::Value::Real(crate::layer::widen_up(bbox.max_y)),
+                        rusqlite::types::Value::Real(crate::layer::widen_down(bbox.min_y)),
+                    ],
+                )
+            }
+            // No index, or no filter: a full scan. When a filter is set the
+            // exact re-test still runs over every row, which is what
+            // `features_in` falls back to as well.
+            _ => (String::new(), Vec::new()),
+        };
+        let rows_sql = format!(
+            "SELECT {row_columns} FROM {table} WHERE {key} >= ?1{spatial_sql} ORDER BY {key} LIMIT ?2"
+        );
         let sql = rows_sql.clone();
         let geometry_index = self.geometry_column().and_then(|geom| {
             schema
@@ -567,30 +654,37 @@ impl Layer<'_> {
         // maintain and the case is rare.
         let arg_count =
             i32::try_from(names.len() + usize::from(key_field.is_none())).unwrap_or(i32::MAX);
-        let aggregate = if arg_count <= conn.limit(Limit::SQLITE_LIMIT_FUNCTION_ARG)? {
-            Some(AggregateState::register(
-                conn,
-                arg_count,
-                BatchFiller {
-                    names: names.clone(),
-                    types: schema
-                        .fields()
-                        .iter()
-                        .map(|field| field.data_type().clone())
-                        .collect(),
-                    key_argument: key_field.unwrap_or(0),
-                    field_offset: usize::from(key_field.is_none()),
-                    geometry_index,
-                    datetime,
-                    capacity: options.batch_size.clamp(1, DEFAULT_BATCH_SIZE),
-                    max_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
-                    output: Arc::new(Mutex::new(None)),
-                    failure: Arc::new(Mutex::new(None)),
-                },
-            )?)
-        } else {
-            None
-        };
+        // A filtered read declines the aggregate and takes the direct loop. The
+        // aggregate builds the columns inside SQLite's own scan, where the
+        // exact re-test against each geometry's true envelope has nowhere to
+        // run; the direct loop can drop a candidate between reading it and
+        // appending it. Declining rather than failing is what the threaded path
+        // does for each of its own conditions.
+        let aggregate =
+            if filter.is_none() && arg_count <= conn.limit(Limit::SQLITE_LIMIT_FUNCTION_ARG)? {
+                Some(AggregateState::register(
+                    conn,
+                    arg_count,
+                    BatchFiller {
+                        names: names.clone(),
+                        types: schema
+                            .fields()
+                            .iter()
+                            .map(|field| field.data_type().clone())
+                            .collect(),
+                        key_argument: key_field.unwrap_or(0),
+                        field_offset: usize::from(key_field.is_none()),
+                        geometry_index,
+                        datetime,
+                        capacity: options.batch_size.clamp(1, DEFAULT_BATCH_SIZE),
+                        max_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
+                        output: Arc::new(Mutex::new(None)),
+                        failure: Arc::new(Mutex::new(None)),
+                    },
+                )?)
+            } else {
+                None
+            };
 
         // The batch has to be bounded by the inner query. An aggregate collapses
         // its input to a single result row, so a LIMIT beside it would bound the
@@ -623,6 +717,12 @@ impl Layer<'_> {
                 last_batch_rows: 0,
                 next_key: i64::MIN,
                 exhausted: false,
+                filter: filter.map(|bbox| {
+                    Box::new(SpatialFilter {
+                        bbox,
+                        params: filter_params,
+                    })
+                }),
                 aggregate,
             }),
         })
@@ -1087,6 +1187,10 @@ struct SequentialBatches<'a> {
     /// Rows with a key at or above this are still to be read.
     next_key: i64,
     exhausted: bool,
+    /// The spatial filter, set only by `read_arrow_in`. Boxed so an unfiltered
+    /// reader, which is every reader the threaded path builds, carries one
+    /// pointer rather than the whole of it.
+    filter: Option<Box<SpatialFilter>>,
     /// The aggregate function, when this reader uses it. `None` falls back to
     /// the direct loop.
     aggregate: Option<AggregateState>,
@@ -1202,6 +1306,22 @@ impl SequentialBatches<'_> {
     /// The direct path: step the rows and fetch each value. Kept as the
     /// fallback for a table too wide for the aggregate's argument list.
     fn next_batch_direct(&mut self) -> Result<Option<RecordBatch>> {
+        // Looped rather than recursive: under a selective filter many pages in
+        // a row can come back with every candidate dropped, and one stack frame
+        // per empty page would be a stack overflow waiting for a large enough
+        // layer.
+        loop {
+            match self.next_batch_page()? {
+                Page::Batch(batch) => return Ok(Some(batch)),
+                Page::Exhausted => return Ok(None),
+                Page::AllFiltered => {}
+            }
+        }
+    }
+
+    /// One page of candidates: a batch, nothing left, or a page whose rows were
+    /// all filtered out and which the caller should follow with another.
+    fn next_batch_page(&mut self) -> Result<Page> {
         // Pre-size the arrays so a batch does not spend its time growing them.
         // Capped rather than taken from `batch_size` directly, so an enormous
         // batch size does not reserve enormous buffers for a small table.
@@ -1224,12 +1344,21 @@ impl SequentialBatches<'_> {
         let mut last_key = None;
         let mut bytes = 0usize;
         let mut truncated = false;
+        // Candidates the query returned, as against rows that survived the
+        // filter. Pagination and exhaustion run off this one: a page whose rows
+        // were all filtered out is not the end of the layer, and treating it as
+        // one would silently drop everything after it.
+        let mut candidates = 0usize;
         {
             let mut stmt = self.conn.prepare_cached(&self.sql)?;
-            let mut rows = stmt.query(rusqlite::params![
-                self.next_key,
-                i64::try_from(self.batch_size).unwrap_or(i64::MAX)
-            ])?;
+            let mut params: Vec<rusqlite::types::Value> = vec![
+                rusqlite::types::Value::Integer(self.next_key),
+                rusqlite::types::Value::Integer(i64::try_from(self.batch_size).unwrap_or(i64::MAX)),
+            ];
+            if let Some(filter) = &self.filter {
+                params.extend(filter.params.iter().cloned());
+            }
+            let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
             // Where the fields start: at 0 when the key is one of them, at 1
             // when it had to be selected separately.
             let offset = usize::from(self.key_field.is_none());
@@ -1247,7 +1376,24 @@ impl SequentialBatches<'_> {
                     truncated = true;
                     break;
                 }
+                // Counted, and its key remembered, before the filter: a
+                // candidate that is filtered out has still been read, and the
+                // next page must start after it.
+                candidates += 1;
                 last_key = Some(row.get::<_, i64>(self.key_field.unwrap_or(0))?);
+
+                // The exact re-test, against the true f64 envelope. Done before
+                // any value is converted, so a row outside the box costs
+                // nothing beyond reading its geometry, and conversion errors
+                // surface only for rows that are actually returned. Same rule
+                // and same helper as the row path.
+                if let Some(filter) = &self.filter {
+                    let geometry_index = self.geometry_index.map(|index| index + offset);
+                    if !crate::layer::row_in_box(row, geometry_index, &filter.bbox)? {
+                        continue;
+                    }
+                }
+
                 for (index, builder) in builders.iter_mut().enumerate() {
                     builder.append(
                         &self.names,
@@ -1261,19 +1407,55 @@ impl SequentialBatches<'_> {
             }
         }
 
-        if rows_read == 0 {
+        if candidates == 0 {
             self.exhausted = true;
-            return Ok(None);
+            return Ok(Page::Exhausted);
+        }
+        if rows_read == 0 {
+            // Every candidate on this page was filtered out. Advance past them
+            // and let the caller try the next page rather than reporting the
+            // layer exhausted.
+            self.advance(last_key, candidates, truncated);
+            return Ok(if self.exhausted {
+                Page::Exhausted
+            } else {
+                Page::AllFiltered
+            });
         }
         self.last_batch_rows = rows_read;
-        self.advance(last_key, rows_read, truncated);
+        self.advance(last_key, candidates, truncated);
 
         let arrays: Vec<ArrayRef> = builders.into_iter().map(ColumnBuilder::finish).collect();
-        Ok(Some(RecordBatch::try_new(
+        Ok(Page::Batch(RecordBatch::try_new(
             Arc::clone(&self.schema),
             arrays,
         )?))
     }
+}
+
+/// The exact re-filter a `read_arrow_in` carries, with the rtree bounds its
+/// query binds.
+///
+/// The index stores `f32` envelopes and is queried with outward-widened bounds,
+/// so its candidates are a superset: every one has to be re-tested against its
+/// true `f64` envelope, or a filtered columnar read would return rows
+/// `features_in` does not.
+struct SpatialFilter {
+    bbox: BoundingBox,
+    /// The four widened bounds, bound as `?3` to `?6`. Empty when the layer has
+    /// no index, in which case the read is a full scan and the exact test does
+    /// all the work.
+    params: Vec<rusqlite::types::Value>,
+}
+
+/// What one page of candidates produced.
+enum Page {
+    /// A batch with at least one row in it.
+    Batch(RecordBatch),
+    /// Nothing left to read.
+    Exhausted,
+    /// Candidates were read and every one was filtered out; there may be more.
+    AllFiltered,
 }
 
 impl Iterator for SequentialBatches<'_> {

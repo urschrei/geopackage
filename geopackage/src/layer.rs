@@ -1051,7 +1051,7 @@ impl RowContext {
 /// Whether the row's true `f64` geometry envelope intersects `bbox`, read
 /// straight from the raw blob. A NULL geometry cell, or an empty geometry (no
 /// finite coordinate), never matches.
-fn row_in_box(
+pub(crate) fn row_in_box(
     row: &rusqlite::Row<'_>,
     geom_idx: Option<usize>,
     bbox: &BoundingBox,
@@ -1079,12 +1079,12 @@ fn blob_xy_envelope(blob: &[u8]) -> Result<Option<[f64; 4]>> {
 
 /// Round a query upper bound outward: to `f32` (nearest), then one ULP up.
 /// Conservative for any input; the `f64` re-filter restores exactness.
-fn widen_up(v: f64) -> f64 {
+pub(crate) fn widen_up(v: f64) -> f64 {
     f64::from((v as f32).next_up())
 }
 
 /// Round a query lower bound outward: to `f32` (nearest), then one ULP down.
-fn widen_down(v: f64) -> f64 {
+pub(crate) fn widen_down(v: f64) -> f64 {
     f64::from((v as f32).next_down())
 }
 
