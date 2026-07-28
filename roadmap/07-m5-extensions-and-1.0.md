@@ -475,10 +475,35 @@ concrete.
 - [ ] Control plane: open, create, close, list layers, schema introspection,
       create layer, create and drop spatial index, begin and commit.
 - [ ] Data plane: `gpkg_layer_read_arrow` and `gpkg_layer_write_arrow` through
-      the Arrow C Data Interface. Row-at-a-time C accessors stay omitted.
+      the Arrow C Data Interface.
 - [ ] cbindgen header checked in, CI failing on an undocumented header diff,
       and a C program in CI reading a corpus file through the stream.
 - [ ] SQLite thread model documented: handle per thread, or an external lock.
+
+### Scope: the C API mirrors the Rust API
+
+**Decided 2026-07-28.** Every Rust API call is exposed through the C ABI, within
+reason. The earlier sketch above was a control plane plus Arrow streams, with
+row-at-a-time accessors "deliberately omitted (Arrow is the data plane; revisit
+only on concrete demand)". That is too narrow to be worth building: a C consumer
+that cannot read a tile or run a bounding-box query is not a binding to this
+crate, it is a binding to part of it.
+
+Three consequences follow, none of them free:
+
+- **A tile handle is needed.** The sketch names only `gpkg_t` and
+  `gpkg_layer_t`, so `TilePyramid` had no C representation at all. It needs one,
+  and on the measurements `get_tile` is the most call-heavy entry point in the
+  crate, so it is the handle whose design costs most to get wrong.
+- **`features_in` has no Arrow counterpart.** `read_arrow` reads a whole layer;
+  there is no bounding-box-filtered columnar read (`geopackage/src/arrow.rs`).
+  So a spatial query has no columnar path today, and exposing one through C
+  needs either that counterpart built first (M3 already chose the approach: one
+  thread runs the rtree scan and hands candidate ids to workers in blocks) or
+  row-at-a-time accessors after all. Decide which before the header is frozen.
+- **Cursors and streams need C representations**, so `FeatureCursor`,
+  `FeatureStream`, `TileCursor` and `TileStream` join the handle question rather
+  than sitting outside it.
 
 ### The handle-lifetime question, and what it costs
 
@@ -488,7 +513,7 @@ container handle is exactly the use-after-free the lifetime prevents. This has
 to be settled before the crate is written, and before phase 10 freezes whatever
 it settles on.
 
-Two facts, both established rather than assumed.
+Three facts, all established rather than assumed.
 
 **The performance side is decided.** Rebuilding a borrowed handle inside every
 FFI call costs a near-constant 37 to 51 µs, so the overhead is inversely
@@ -499,40 +524,61 @@ is built once per scan. An owned handle would add 3.77 ns per construction, and
 nothing builds a handle per row or per batch. See
 [benchmarks/2026-07-28-handle-construction.md](benchmarks/2026-07-28-handle-construction.md).
 
-**The cost of owning is not performance, it is a compile-time guarantee.**
-`close` takes `self`, checkpoints a WAL, resets the journal mode to `DELETE` and
-drops the connection, so a handed-over file is a single file with no sidecars.
-Today the borrow *encodes* that contract: a live `Layer` makes `gpkg.close()` a
-compile error, because `close` consumes what the layer borrows. If `Layer` holds
-an `Arc<GeoPackage>`, consuming the `GeoPackage` no longer implies dropping the
-connection, and that compile error becomes either a runtime error or a silently
-broken guarantee. Trading a static guarantee for a dynamic one runs against what
-D12 and the `unsafe_code = "forbid"` policy are for, so it is the thing to weigh,
-not the nanoseconds.
+These figures bear on the C ABI only because of the scope decision above. Under
+the earlier narrow sketch, `get_tile` and `features_in` did not cross the
+boundary at all, and the only exposed data-plane path was the streaming one that
+amortises a rebuild over a whole scan; on that reading the performance argument
+was close to moot. Widening the surface to mirror the Rust API is what makes the
+per-call figures the deciding ones.
 
-The options, to be decided before the crate is written:
+**Owning costs `GeoPackage` its `Send`.** `Arc<T>` is `Send` only when `T` is
+`Sync`, and `Connection` is `Send` but not `Sync`, so a `GeoPackage` built as
+`Arc<Inner>` is neither. `GeoPackage` is `Send` today (verified by compiling the
+assertion), and D1 records the intended async story as "a `spawn_blocking`
+wrapper crate", which requires it. This applies to options 1, 2 and 3 alike and
+is the strongest argument against all three. `Layer` itself loses nothing, since
+`&GeoPackage` is already not `Send`, but the container is what async and
+thread-handoff callers hold.
+
+**The remaining cost of owning is a compile-time guarantee.** `close` takes
+`self`, and for a handle that opted into WAL it checkpoints, resets the journal
+mode to `DELETE` and drops the connection, so a handed-over file is a single
+file with no sidecars. Today the borrow *encodes* that contract: a live `Layer`
+makes `gpkg.close()` a compile error, because `close` consumes what the layer
+borrows. Under an owned handle that becomes a runtime error or a silent
+breakage. Weigh this at its real size, though: `Drop` already does the same work
+best-effort, `into_connection` already opts out of it deliberately, and
+`mem::forget` already defeats it with no compile error. What the borrow buys is
+the observable error and the determinism of when, not the guarantee itself.
+
+The options:
 
 1. **Owned handles, close fails when handles are outstanding.** `GeoPackage`
    becomes a thin handle over `Arc<Inner>`; `close` checks the strong count and
-   returns an error naming the count if it is not one. Keeps the guarantee
-   honest, at the price of demoting a compile error to a runtime one. Note this
-   costs no `Send`: `Layer` is already not `Send`, because `&GeoPackage` is not
-   (`Connection` is `Send` but not `Sync`), so an `Arc<Inner>` over a non-`Sync`
-   inner is no worse.
+   returns an error naming the count if it is not one. There is no race in that
+   check: `Arc<Inner>` over a non-`Sync` inner is itself neither `Send` nor
+   `Sync`, so every clone is confined to one thread and the count is exact. The
+   residual hole is liveness rather than soundness, since a leaked handle wedges
+   `close` into erroring forever. Also breaks `into_connection`, which cannot
+   move a `Connection` out of an `Arc` with clones outstanding. Costs
+   `GeoPackage: Send`.
 2. **Owned handles, `close(&self)` marks the handle closed.** Interior
    mutability takes the connection out; surviving handles error afterwards.
    Deterministic close whatever is outstanding, but it breaks
    `GeoPackage::connection() -> &Connection`, the documented escape hatch the
    README points at for anything the API does not cover, since a guard type
-   cannot be handed out as a plain reference.
+   cannot be handed out as a plain reference. Costs `GeoPackage: Send`.
 3. **`Weak` in the handles, strong in the iteration state.** `Layer` and
    `TilePyramid` hold a `Weak<Inner>` and upgrade per call, so `close` and
    `Drop` keep their exact present semantics and outstanding handles go inert.
-   Cursors and readers, which borrow the connection for their whole scan, would
-   hold a strong reference instead, so only a scan in flight blocks a close. An
-   upgrade is two atomics against a 5.22 µs `get_tile`. The wrinkle is
-   `TilePyramid::gpkg() -> &'a GeoPackage`, which cannot be expressed over a
-   temporary upgrade and would have to return an owned handle or go.
+   The iteration state is where this fails. `FeatureCursor` owns a
+   `rusqlite::Statement<'a>` borrowing the connection, so a cursor holding both
+   an upgraded `Arc<Inner>` and a statement borrowing into it is
+   self-referential, which `forbid(unsafe_code)` rules out here. The safe shape
+   is a separate guard object the cursor borrows, turning every cursor, stream
+   and writer into a three-step construction. `TilePyramid::gpkg() -> &'a
+   GeoPackage` also cannot be expressed over a temporary upgrade. Costs
+   `GeoPackage: Send`. Not a contender.
 4. **Keep the borrow, make the rebuild cheap.** Handles stay borrowed and every
    current guarantee stands, including the compile-time one. The library grows a
    constructor that builds a `Layer` from a cached, shared schema rather than
@@ -540,13 +586,49 @@ The options, to be decided before the crate is written:
    performance objection without touching the ownership model. Requires
    `Layer`'s owned fields (`schema`, `value_columns`) to become shared for the
    rebuild to be cheap, for which `value_column_names: Arc<[String]>` is already
-   the precedent; the rebuild cost then needs measuring rather than assuming,
-   and a cached schema going stale under `ALTER TABLE` needs an answer.
+   the precedent; the rebuild cost then needs measuring rather than assuming.
+   The cache has to hold everything `build_layer` derives, not just the schema:
+   the resolved physical table name, the contents data type, the geometry
+   column, the primary key and the value columns. As public API it also has a
+   trust problem, since a caller can pass a cache built from another file and
+   the constructor must either re-validate, defeating the point, or document the
+   mismatch as the caller's fault. Staleness under `ALTER TABLE` is *not* a mark
+   against it: a long-lived `Layer` already snapshots its schema at
+   construction, and `TilePyramid` documents the same for its write block, so
+   every option here is equally stale.
+5. **Solve it inside `geopackage-ffi` with `unsafe`, leaving the library
+   alone.** The C handle owns the `GeoPackage` (boxed, so its address is stable)
+   alongside a lifetime-erased `Layer` or `TilePyramid`, and the FFI's close
+   function refuses while child handles are outstanding. No rebuild cost, no
+   library change, no `Send` regression, and the Rust API keeps its
+   compile-time close guarantee intact. The runtime check is paid only by C
+   callers, which is where a runtime check is the only kind available anyway: a
+   C caller can never be handed a compile-time lifetime, so demoting the Rust
+   API's static guarantee buys C nothing it can use. D12 exists precisely to
+   license this, and the planned `undocumented_unsafe_blocks`, sanitizer and
+   miri gating are the machinery for reviewing it.
 
-Options 1 and 4 are the serious contenders: 1 gives the FFI the natural handle
-and pays for it in the close contract, 4 keeps the contract intact and pays for
-it in an unusual constructor and a staleness question. 2 is held back by the
-escape hatch. 3 is the most elegant and the most moving parts.
+**Recommended: option 5**, with option 4 as the fallback if the lifetime erasure
+proves harder to justify than expected. Options 1 to 3 are ruled out by the
+`Send` regression alone; 2 and 3 have independent blockers on top of it.
+
+Two things support 5 beyond the reasoning above. It is the only option
+indifferent to how the C surface grows, which matters now that the scope is
+"mirror the Rust API": nothing above needs revisiting if a tile handle, a cursor
+handle or a row accessor is added later. And the FFI has equivalent lifetime
+work to do regardless, because `FFI_ArrowArrayStream::new` takes
+`Box<dyn RecordBatchReader + Send>`, meaning `Send + 'static`, while
+`ArrowBatches<'a>` is neither and stays neither under every option here. The one
+qualifier is that `ParallelBatches` is `'static` and opens its own worker
+connections, so the stream export may be expressible safely by always taking the
+parallel path; that would confine the FFI to file-backed databases, and it needs
+confirming in the prototype rather than assuming either way.
+
+If option 5 is taken, an owned tier for Rust callers stays available as a purely
+additive `GeoPackage::into_shared()` after the freeze, so it does not need
+deciding now. That also corrects the framing this section opened with: keeping
+the borrow is the status quo, and the only options the freeze forecloses are the
+breaking ones.
 
 Whichever is chosen applies to `TilePyramid` as well as `Layer`, and on the
 measurements `TilePyramid` is the more urgent of the two. The second-tier

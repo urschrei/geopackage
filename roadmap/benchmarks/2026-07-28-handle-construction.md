@@ -97,11 +97,19 @@ call.
 
 ## What this does not settle
 
-The cost of owning is not performance, it is the close contract.
-`GeoPackage::close` currently takes `self`, checkpoints a WAL to `TRUNCATE`,
-resets the journal mode to `DELETE` and drops the connection, so a handed-over
-file is a single file with no sidecars. Once a `Layer` or `TilePyramid` can hold
-a strong reference, consuming the `GeoPackage` no longer implies dropping the
-connection. The options are worked up in
-[07-m5-extensions-and-1.0.md](../07-m5-extensions-and-1.0.md) under phase 9;
-this file only establishes that performance does not decide against owning.
+Two things decide against owning that this file does not measure, both recorded
+in [07-m5-extensions-and-1.0.md](../07-m5-extensions-and-1.0.md) under phase 9.
+
+`Arc<T>` is `Send` only when `T` is `Sync`, and `Connection` is not `Sync`, so
+a `GeoPackage` built as `Arc<Inner>` loses the `Send` it has today, which D1's
+`spawn_blocking` async plan requires. That is an argument no benchmark reaches,
+and it is the strongest one against the owned options.
+
+The other is the close contract. `GeoPackage::close` takes `self`, and for a
+handle that opted into WAL it checkpoints to `TRUNCATE`, resets the journal mode
+to `DELETE` and drops the connection, so a handed-over file is a single file
+with no sidecars. Once a `Layer` or `TilePyramid` can hold a strong reference,
+consuming the `GeoPackage` no longer implies dropping the connection.
+
+So this file establishes only that performance does not decide against owning.
+It does not follow that owning wins, and on the two arguments above it does not.
