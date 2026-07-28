@@ -1,0 +1,1331 @@
+pub mod geopackage
+pub use geopackage::ColumnConstraint
+pub use geopackage::ConstraintKind
+pub use geopackage::DataColumn
+pub use geopackage::Extension
+pub use geopackage::ExtensionScope
+pub use geopackage::ExtensionSupport
+pub use geopackage::GpkgVersion
+pub use geopackage::MetadataRecord
+pub use geopackage::MetadataReference
+pub use geopackage::MetadataScope
+pub use geopackage::ReferenceScope
+pub use geopackage::Relation
+pub use geopackage::RelationName
+pub use geopackage::core
+pub mod geopackage::arrow
+pub struct geopackage::arrow::ArrowBatches<'a>
+impl arrow_array::record_batch::RecordBatchReader for geopackage::arrow::ArrowBatches<'_>
+pub fn geopackage::arrow::ArrowBatches<'_>::schema(&self) -> arrow_schema::schema::SchemaRef
+impl core::iter::traits::iterator::Iterator for geopackage::arrow::ArrowBatches<'_>
+pub type geopackage::arrow::ArrowBatches<'_>::Item = core::result::Result<arrow_array::record_batch::RecordBatch, arrow_schema::error::ArrowError>
+pub fn geopackage::arrow::ArrowBatches<'_>::next(&mut self) -> core::option::Option<Self::Item>
+impl<'a> core::marker::Freeze for geopackage::arrow::ArrowBatches<'a>
+impl<'a> !core::marker::Send for geopackage::arrow::ArrowBatches<'a>
+impl<'a> !core::marker::Sync for geopackage::arrow::ArrowBatches<'a>
+impl<'a> core::marker::Unpin for geopackage::arrow::ArrowBatches<'a>
+impl<'a> core::marker::UnsafeUnpin for geopackage::arrow::ArrowBatches<'a>
+impl<'a> !core::panic::unwind_safe::RefUnwindSafe for geopackage::arrow::ArrowBatches<'a>
+impl<'a> !core::panic::unwind_safe::UnwindSafe for geopackage::arrow::ArrowBatches<'a>
+#[non_exhaustive] pub struct geopackage::arrow::ArrowReadOptions
+pub geopackage::arrow::ArrowReadOptions::batch_size: usize
+pub geopackage::arrow::ArrowReadOptions::max_batch_bytes: usize
+pub geopackage::arrow::ArrowReadOptions::threads: usize
+impl geopackage::arrow::ArrowReadOptions
+pub fn geopackage::arrow::ArrowReadOptions::with_batch_size(usize) -> Self
+pub fn geopackage::arrow::ArrowReadOptions::with_max_batch_bytes(self, usize) -> Self
+pub fn geopackage::arrow::ArrowReadOptions::with_threads(self, usize) -> Self
+impl core::clone::Clone for geopackage::arrow::ArrowReadOptions
+pub fn geopackage::arrow::ArrowReadOptions::clone(&self) -> geopackage::arrow::ArrowReadOptions
+impl core::cmp::Eq for geopackage::arrow::ArrowReadOptions
+impl core::cmp::PartialEq for geopackage::arrow::ArrowReadOptions
+pub fn geopackage::arrow::ArrowReadOptions::eq(&self, &geopackage::arrow::ArrowReadOptions) -> bool
+impl core::default::Default for geopackage::arrow::ArrowReadOptions
+pub fn geopackage::arrow::ArrowReadOptions::default() -> Self
+impl core::fmt::Debug for geopackage::arrow::ArrowReadOptions
+pub fn geopackage::arrow::ArrowReadOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::arrow::ArrowReadOptions
+impl core::marker::StructuralPartialEq for geopackage::arrow::ArrowReadOptions
+impl core::marker::Freeze for geopackage::arrow::ArrowReadOptions
+impl core::marker::Send for geopackage::arrow::ArrowReadOptions
+impl core::marker::Sync for geopackage::arrow::ArrowReadOptions
+impl core::marker::Unpin for geopackage::arrow::ArrowReadOptions
+impl core::marker::UnsafeUnpin for geopackage::arrow::ArrowReadOptions
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::arrow::ArrowReadOptions
+impl core::panic::unwind_safe::UnwindSafe for geopackage::arrow::ArrowReadOptions
+pub const geopackage::arrow::DEFAULT_BATCH_SIZE: usize
+pub const geopackage::arrow::DEFAULT_MAX_BATCH_BYTES: usize
+pub fn geopackage::arrow::default_max_batch_bytes() -> usize
+pub mod geopackage::extensions
+pub struct geopackage::extensions::ExtensionRow
+pub geopackage::extensions::ExtensionRow::column_name: core::option::Option<alloc::string::String>
+pub geopackage::extensions::ExtensionRow::definition: alloc::string::String
+pub geopackage::extensions::ExtensionRow::name: alloc::string::String
+pub geopackage::extensions::ExtensionRow::scope: geopackage_core::extensions::ExtensionScope
+pub geopackage::extensions::ExtensionRow::table_name: core::option::Option<alloc::string::String>
+impl geopackage::extensions::ExtensionRow
+pub fn geopackage::extensions::ExtensionRow::extension(&self) -> geopackage_core::extensions::Extension
+pub fn geopackage::extensions::ExtensionRow::support(&self) -> geopackage_core::extensions::ExtensionSupport
+impl core::clone::Clone for geopackage::extensions::ExtensionRow
+pub fn geopackage::extensions::ExtensionRow::clone(&self) -> geopackage::extensions::ExtensionRow
+impl core::cmp::Eq for geopackage::extensions::ExtensionRow
+impl core::cmp::PartialEq for geopackage::extensions::ExtensionRow
+pub fn geopackage::extensions::ExtensionRow::eq(&self, &geopackage::extensions::ExtensionRow) -> bool
+impl core::fmt::Debug for geopackage::extensions::ExtensionRow
+pub fn geopackage::extensions::ExtensionRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::extensions::ExtensionRow
+impl core::marker::Freeze for geopackage::extensions::ExtensionRow
+impl core::marker::Send for geopackage::extensions::ExtensionRow
+impl core::marker::Sync for geopackage::extensions::ExtensionRow
+impl core::marker::Unpin for geopackage::extensions::ExtensionRow
+impl core::marker::UnsafeUnpin for geopackage::extensions::ExtensionRow
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::extensions::ExtensionRow
+impl core::panic::unwind_safe::UnwindSafe for geopackage::extensions::ExtensionRow
+#[non_exhaustive] pub enum geopackage::ContentsDataType
+pub geopackage::ContentsDataType::Attributes
+pub geopackage::ContentsDataType::Features
+pub geopackage::ContentsDataType::Other(alloc::string::String)
+pub geopackage::ContentsDataType::Tiles
+impl core::clone::Clone for geopackage::ContentsDataType
+pub fn geopackage::ContentsDataType::clone(&self) -> geopackage::ContentsDataType
+impl core::cmp::Eq for geopackage::ContentsDataType
+impl core::cmp::PartialEq for geopackage::ContentsDataType
+pub fn geopackage::ContentsDataType::eq(&self, &geopackage::ContentsDataType) -> bool
+impl core::fmt::Debug for geopackage::ContentsDataType
+pub fn geopackage::ContentsDataType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::ContentsDataType
+impl core::marker::Freeze for geopackage::ContentsDataType
+impl core::marker::Send for geopackage::ContentsDataType
+impl core::marker::Sync for geopackage::ContentsDataType
+impl core::marker::Unpin for geopackage::ContentsDataType
+impl core::marker::UnsafeUnpin for geopackage::ContentsDataType
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::ContentsDataType
+impl core::panic::unwind_safe::UnwindSafe for geopackage::ContentsDataType
+#[non_exhaustive] pub enum geopackage::DateTimeParsing
+pub geopackage::DateTimeParsing::Lenient
+pub geopackage::DateTimeParsing::Strict
+impl core::clone::Clone for geopackage::DateTimeParsing
+pub fn geopackage::DateTimeParsing::clone(&self) -> geopackage::DateTimeParsing
+impl core::cmp::Eq for geopackage::DateTimeParsing
+impl core::cmp::PartialEq for geopackage::DateTimeParsing
+pub fn geopackage::DateTimeParsing::eq(&self, &geopackage::DateTimeParsing) -> bool
+impl core::default::Default for geopackage::DateTimeParsing
+pub fn geopackage::DateTimeParsing::default() -> geopackage::DateTimeParsing
+impl core::fmt::Debug for geopackage::DateTimeParsing
+pub fn geopackage::DateTimeParsing::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::DateTimeParsing
+impl core::marker::StructuralPartialEq for geopackage::DateTimeParsing
+impl core::marker::Freeze for geopackage::DateTimeParsing
+impl core::marker::Send for geopackage::DateTimeParsing
+impl core::marker::Sync for geopackage::DateTimeParsing
+impl core::marker::Unpin for geopackage::DateTimeParsing
+impl core::marker::UnsafeUnpin for geopackage::DateTimeParsing
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::DateTimeParsing
+impl core::panic::unwind_safe::UnwindSafe for geopackage::DateTimeParsing
+#[non_exhaustive] pub enum geopackage::Error
+pub geopackage::Error::AlreadyExists(std::path::PathBuf)
+pub geopackage::Error::Arrow(arrow_schema::error::ArrowError)
+pub geopackage::Error::ArrowValueMismatch
+pub geopackage::Error::ArrowValueMismatch::column: alloc::string::String
+pub geopackage::Error::ArrowValueMismatch::expected: &'static str
+pub geopackage::Error::ArrowValueMismatch::found: &'static str
+pub geopackage::Error::ColumnConstraintViolation
+pub geopackage::Error::ColumnConstraintViolation::column_name: alloc::string::String
+pub geopackage::Error::ColumnConstraintViolation::constraint: alloc::string::String
+pub geopackage::Error::ColumnConstraintViolation::constraint_name: alloc::string::String
+pub geopackage::Error::ColumnConstraintViolation::table_name: alloc::string::String
+pub geopackage::Error::ColumnConstraintViolation::value: alloc::string::String
+pub geopackage::Error::Core(geopackage_core::Error)
+pub geopackage::Error::DuplicateUpdateColumn
+pub geopackage::Error::DuplicateUpdateColumn::column_name: alloc::string::String
+pub geopackage::Error::DuplicateUpdateColumn::table_name: alloc::string::String
+pub geopackage::Error::ExtentPersist
+pub geopackage::Error::ExtentPersist::extent: core::option::Option<geopackage::BoundingBox>
+pub geopackage::Error::ExtentPersist::source: alloc::boxed::Box<rusqlite::error::Error>
+pub geopackage::Error::ExtentPersist::table_name: alloc::string::String
+pub geopackage::Error::GeometryNotProjected
+pub geopackage::Error::GeometryTypeMismatch
+pub geopackage::Error::GeometryTypeMismatch::column_name: alloc::string::String
+pub geopackage::Error::GeometryTypeMismatch::declared: geopackage_core::types::GeometryType
+pub geopackage::Error::GeometryTypeMismatch::found: geopackage_core::types::GeometryType
+pub geopackage::Error::GeometryTypeMismatch::table_name: alloc::string::String
+pub geopackage::Error::GeometryValueUnsupported
+pub geopackage::Error::GeometryValueUnsupported::column: alloc::string::String
+pub geopackage::Error::InvalidColumnConstraint
+pub geopackage::Error::InvalidColumnConstraint::constraint_name: alloc::string::String
+pub geopackage::Error::InvalidColumnConstraint::reason: &'static str
+pub geopackage::Error::InvalidDateTimeValue
+pub geopackage::Error::InvalidDateTimeValue::column: alloc::string::String
+pub geopackage::Error::InvalidDateTimeValue::source: geopackage_core::datetime::DateTimeError
+pub geopackage::Error::InvalidDateTimeValue::text: alloc::string::String
+pub geopackage::Error::InvalidZmFlag
+pub geopackage::Error::InvalidZmFlag::column: &'static str
+pub geopackage::Error::InvalidZmFlag::table_name: alloc::string::String
+pub geopackage::Error::InvalidZmFlag::value: i64
+pub geopackage::Error::MetadataCycle
+pub geopackage::Error::MetadataCycle::id: i64
+pub geopackage::Error::MissingGeometrySpec
+pub geopackage::Error::MissingGeometrySpec::table_name: alloc::string::String
+pub geopackage::Error::NoGeometryColumn
+pub geopackage::Error::NoGeometryColumn::table_name: alloc::string::String
+pub geopackage::Error::NoPrimaryKey
+pub geopackage::Error::NoPrimaryKey::table_name: alloc::string::String
+pub geopackage::Error::NoSpatialIndex
+pub geopackage::Error::NoSpatialIndex::column_name: alloc::string::String
+pub geopackage::Error::NoSpatialIndex::table_name: alloc::string::String
+pub geopackage::Error::NoSuchColumn
+pub geopackage::Error::NoSuchColumn::column_name: alloc::string::String
+pub geopackage::Error::NoSuchColumn::table_name: alloc::string::String
+pub geopackage::Error::NoSuchLayer
+pub geopackage::Error::NoSuchLayer::table_name: alloc::string::String
+pub geopackage::Error::NoSuchMetadata
+pub geopackage::Error::NoSuchMetadata::id: i64
+pub geopackage::Error::NoSuchTable
+pub geopackage::Error::NoSuchTable::table_name: alloc::string::String
+pub geopackage::Error::NoTileMatrixSet
+pub geopackage::Error::NoTileMatrixSet::table_name: alloc::string::String
+pub geopackage::Error::NonBooleanInteger
+pub geopackage::Error::NonBooleanInteger::column: alloc::string::String
+pub geopackage::Error::NonBooleanInteger::value: i64
+pub geopackage::Error::NonConformantRelationName
+pub geopackage::Error::NonConformantRelationName::relation_name: alloc::string::String
+pub geopackage::Error::NotAGeoPackage
+pub geopackage::Error::NotAGeoPackage::application_id: u32
+pub geopackage::Error::NotAGeoPackage::reason: &'static str
+pub geopackage::Error::NotAGeoPackage::user_version: u32
+pub geopackage::Error::ReservedTablePrefix
+pub geopackage::Error::ReservedTablePrefix::table_name: alloc::string::String
+pub geopackage::Error::SelfParentedMetadata
+pub geopackage::Error::SelfParentedMetadata::md_file_id: i64
+pub geopackage::Error::SpatialIndexExists
+pub geopackage::Error::SpatialIndexExists::column_name: alloc::string::String
+pub geopackage::Error::SpatialIndexExists::table_name: alloc::string::String
+pub geopackage::Error::Sqlite(rusqlite::error::Error)
+pub geopackage::Error::TableAlreadyExists
+pub geopackage::Error::TableAlreadyExists::table_name: alloc::string::String
+pub geopackage::Error::Tile(geopackage_core::tiles::TileError)
+pub geopackage::Error::TileFormatNotAllowed
+pub geopackage::Error::TileFormatNotAllowed::format: geopackage_core::tiles::TileFormat
+pub geopackage::Error::TileFormatNotAllowed::table_name: alloc::string::String
+pub geopackage::Error::UnexpectedGeometrySpec
+pub geopackage::Error::UnexpectedGeometrySpec::table_name: alloc::string::String
+pub geopackage::Error::UnknownEpsgCode
+pub geopackage::Error::UnknownEpsgCode::code: i32
+pub geopackage::Error::UnknownGeometryType
+pub geopackage::Error::UnknownGeometryType::name: alloc::string::String
+pub geopackage::Error::UnknownGeometryType::table_name: alloc::string::String
+pub geopackage::Error::UnknownReferenceScope
+pub geopackage::Error::UnknownReferenceScope::scope: alloc::string::String
+pub geopackage::Error::UnknownSrs
+pub geopackage::Error::UnknownSrs::srs_id: i32
+pub geopackage::Error::UnknownZoomLevel
+pub geopackage::Error::UnknownZoomLevel::table_name: alloc::string::String
+pub geopackage::Error::UnknownZoomLevel::zoom_level: i64
+pub geopackage::Error::UnsupportedArrowType
+pub geopackage::Error::UnsupportedArrowType::data_type: alloc::string::String
+pub geopackage::Error::UnsupportedExtension
+pub geopackage::Error::UnsupportedExtension::extension_name: alloc::string::String
+pub geopackage::Error::UnsupportedExtension::scope: alloc::string::String
+pub geopackage::Error::UnsupportedExtension::table_name: alloc::string::String
+pub geopackage::Error::ValueCountMismatch
+pub geopackage::Error::ValueCountMismatch::expected: usize
+pub geopackage::Error::ValueCountMismatch::found: usize
+pub geopackage::Error::ValueCountMismatch::table_name: alloc::string::String
+pub geopackage::Error::ValueTypeMismatch
+pub geopackage::Error::ValueTypeMismatch::column: alloc::string::String
+pub geopackage::Error::ValueTypeMismatch::declared: geopackage_core::types::ColumnType
+pub geopackage::Error::ValueTypeMismatch::found: &'static str
+pub geopackage::Error::WrongDataType
+pub geopackage::Error::WrongDataType::expected: &'static str
+pub geopackage::Error::WrongDataType::found: alloc::string::String
+pub geopackage::Error::WrongDataType::table_name: alloc::string::String
+pub geopackage::Error::ZmViolation
+pub geopackage::Error::ZmViolation::column: alloc::string::String
+pub geopackage::Error::ZmViolation::constraint: geopackage_core::types::ZmFlag
+pub geopackage::Error::ZmViolation::dimension: &'static str
+pub geopackage::Error::ZmViolation::table_name: alloc::string::String
+pub geopackage::Error::ZmViolation::verb: &'static str
+pub geopackage::Error::ZoomOtherNotEnabled
+pub geopackage::Error::ZoomOtherNotEnabled::table_name: alloc::string::String
+impl core::convert::From<arrow_schema::error::ArrowError> for geopackage::Error
+pub fn geopackage::Error::from(arrow_schema::error::ArrowError) -> Self
+impl core::convert::From<geopackage_core::Error> for geopackage::Error
+pub fn geopackage::Error::from(geopackage_core::Error) -> Self
+impl core::convert::From<geopackage_core::tiles::TileError> for geopackage::Error
+pub fn geopackage::Error::from(geopackage_core::tiles::TileError) -> Self
+impl core::convert::From<rusqlite::error::Error> for geopackage::Error
+pub fn geopackage::Error::from(rusqlite::error::Error) -> Self
+impl core::error::Error for geopackage::Error
+pub fn geopackage::Error::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for geopackage::Error
+pub fn geopackage::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for geopackage::Error
+pub fn geopackage::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for geopackage::Error
+impl core::marker::Send for geopackage::Error
+impl core::marker::Sync for geopackage::Error
+impl core::marker::Unpin for geopackage::Error
+impl core::marker::UnsafeUnpin for geopackage::Error
+impl !core::panic::unwind_safe::RefUnwindSafe for geopackage::Error
+impl !core::panic::unwind_safe::UnwindSafe for geopackage::Error
+#[non_exhaustive] pub enum geopackage::Finding
+pub geopackage::Finding::DanglingMetadataReference
+pub geopackage::Finding::DanglingMetadataReference::md_id: i64
+pub geopackage::Finding::LegacyApplicationId
+pub geopackage::Finding::LegacyApplicationId::application_id: u32
+pub geopackage::Finding::LegacyApplicationId::version: geopackage_core::version::GpkgVersion
+pub geopackage::Finding::LegacySpatialIndexTriggers
+pub geopackage::Finding::LegacySpatialIndexTriggers::table_name: alloc::string::String
+pub geopackage::Finding::MissingContentsTable
+pub geopackage::Finding::MissingContentsTable::table_name: alloc::string::String
+pub geopackage::Finding::MissingMappingTable
+pub geopackage::Finding::MissingMappingTable::mapping_table_name: alloc::string::String
+pub geopackage::Finding::NoSpatialIndex
+pub geopackage::Finding::NoSpatialIndex::table_name: alloc::string::String
+pub geopackage::Finding::NonConformantRelationName
+pub geopackage::Finding::NonConformantRelationName::relation_name: alloc::string::String
+pub geopackage::Finding::RemovedExtension
+pub geopackage::Finding::RemovedExtension::extension_name: alloc::string::String
+pub geopackage::Finding::RemovedExtension::table_name: core::option::Option<alloc::string::String>
+pub geopackage::Finding::SpatialIndexOutOfStep
+pub geopackage::Finding::SpatialIndexOutOfStep::audit: geopackage::SpatialIndexAudit
+pub geopackage::Finding::SpatialIndexOutOfStep::table_name: alloc::string::String
+pub geopackage::Finding::TableNameCaseMismatch
+pub geopackage::Finding::TableNameCaseMismatch::actual: alloc::string::String
+pub geopackage::Finding::TableNameCaseMismatch::declared: alloc::string::String
+pub geopackage::Finding::TilePyramidInconsistent
+pub geopackage::Finding::TilePyramidInconsistent::detail: alloc::string::String
+pub geopackage::Finding::TilePyramidInconsistent::table_name: alloc::string::String
+pub geopackage::Finding::UnrecognisedExtension
+pub geopackage::Finding::UnrecognisedExtension::extension_name: alloc::string::String
+pub geopackage::Finding::UnrecognisedExtension::scope: geopackage_core::extensions::ExtensionScope
+pub geopackage::Finding::UnrecognisedExtension::table_name: core::option::Option<alloc::string::String>
+impl geopackage::Finding
+pub fn geopackage::Finding::repair(&self) -> core::option::Option<&'static str>
+pub fn geopackage::Finding::severity(&self) -> geopackage::Severity
+pub fn geopackage::Finding::table_name(&self) -> core::option::Option<&str>
+impl core::clone::Clone for geopackage::Finding
+pub fn geopackage::Finding::clone(&self) -> geopackage::Finding
+impl core::cmp::Eq for geopackage::Finding
+impl core::cmp::PartialEq for geopackage::Finding
+pub fn geopackage::Finding::eq(&self, &geopackage::Finding) -> bool
+impl core::fmt::Debug for geopackage::Finding
+pub fn geopackage::Finding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for geopackage::Finding
+pub fn geopackage::Finding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::Finding
+impl core::marker::Freeze for geopackage::Finding
+impl core::marker::Send for geopackage::Finding
+impl core::marker::Sync for geopackage::Finding
+impl core::marker::Unpin for geopackage::Finding
+impl core::marker::UnsafeUnpin for geopackage::Finding
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::Finding
+impl core::panic::unwind_safe::UnwindSafe for geopackage::Finding
+#[non_exhaustive] pub enum geopackage::JournalMode
+pub geopackage::JournalMode::Delete
+pub geopackage::JournalMode::Wal
+impl core::clone::Clone for geopackage::JournalMode
+pub fn geopackage::JournalMode::clone(&self) -> geopackage::JournalMode
+impl core::cmp::Eq for geopackage::JournalMode
+impl core::cmp::PartialEq for geopackage::JournalMode
+pub fn geopackage::JournalMode::eq(&self, &geopackage::JournalMode) -> bool
+impl core::fmt::Debug for geopackage::JournalMode
+pub fn geopackage::JournalMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::JournalMode
+impl core::marker::StructuralPartialEq for geopackage::JournalMode
+impl core::marker::Freeze for geopackage::JournalMode
+impl core::marker::Send for geopackage::JournalMode
+impl core::marker::Sync for geopackage::JournalMode
+impl core::marker::Unpin for geopackage::JournalMode
+impl core::marker::UnsafeUnpin for geopackage::JournalMode
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::JournalMode
+impl core::panic::unwind_safe::UnwindSafe for geopackage::JournalMode
+#[non_exhaustive] pub enum geopackage::LayerKind
+pub geopackage::LayerKind::Attributes
+pub geopackage::LayerKind::Feature
+impl geopackage::LayerKind
+pub fn geopackage::LayerKind::as_str(self) -> &'static str
+impl core::clone::Clone for geopackage::LayerKind
+pub fn geopackage::LayerKind::clone(&self) -> geopackage::LayerKind
+impl core::cmp::Eq for geopackage::LayerKind
+impl core::cmp::PartialEq for geopackage::LayerKind
+pub fn geopackage::LayerKind::eq(&self, &geopackage::LayerKind) -> bool
+impl core::fmt::Debug for geopackage::LayerKind
+pub fn geopackage::LayerKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for geopackage::LayerKind
+pub fn geopackage::LayerKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::LayerKind
+impl core::marker::StructuralPartialEq for geopackage::LayerKind
+impl core::marker::Freeze for geopackage::LayerKind
+impl core::marker::Send for geopackage::LayerKind
+impl core::marker::Sync for geopackage::LayerKind
+impl core::marker::Unpin for geopackage::LayerKind
+impl core::marker::UnsafeUnpin for geopackage::LayerKind
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::LayerKind
+impl core::panic::unwind_safe::UnwindSafe for geopackage::LayerKind
+pub enum geopackage::MetadataTarget
+pub geopackage::MetadataTarget::Cell
+pub geopackage::MetadataTarget::Cell::column_name: alloc::string::String
+pub geopackage::MetadataTarget::Cell::row_id: i64
+pub geopackage::MetadataTarget::Cell::table_name: alloc::string::String
+pub geopackage::MetadataTarget::Column
+pub geopackage::MetadataTarget::Column::column_name: alloc::string::String
+pub geopackage::MetadataTarget::Column::table_name: alloc::string::String
+pub geopackage::MetadataTarget::GeoPackage
+pub geopackage::MetadataTarget::Row
+pub geopackage::MetadataTarget::Row::row_id: i64
+pub geopackage::MetadataTarget::Row::table_name: alloc::string::String
+pub geopackage::MetadataTarget::Table
+pub geopackage::MetadataTarget::Table::table_name: alloc::string::String
+impl geopackage::MetadataTarget
+pub fn geopackage::MetadataTarget::scope(&self) -> geopackage_core::metadata::ReferenceScope
+pub fn geopackage::MetadataTarget::table_name(&self) -> core::option::Option<&str>
+impl core::clone::Clone for geopackage::MetadataTarget
+pub fn geopackage::MetadataTarget::clone(&self) -> geopackage::MetadataTarget
+impl core::cmp::Eq for geopackage::MetadataTarget
+impl core::cmp::PartialEq for geopackage::MetadataTarget
+pub fn geopackage::MetadataTarget::eq(&self, &geopackage::MetadataTarget) -> bool
+impl core::fmt::Debug for geopackage::MetadataTarget
+pub fn geopackage::MetadataTarget::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::MetadataTarget
+impl core::marker::Freeze for geopackage::MetadataTarget
+impl core::marker::Send for geopackage::MetadataTarget
+impl core::marker::Sync for geopackage::MetadataTarget
+impl core::marker::Unpin for geopackage::MetadataTarget
+impl core::marker::UnsafeUnpin for geopackage::MetadataTarget
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::MetadataTarget
+impl core::panic::unwind_safe::UnwindSafe for geopackage::MetadataTarget
+#[non_exhaustive] pub enum geopackage::OpenWarning
+pub geopackage::OpenWarning::LegacyApplicationId
+pub geopackage::OpenWarning::LegacyApplicationId::application_id: u32
+pub geopackage::OpenWarning::LegacyApplicationId::version: geopackage_core::version::GpkgVersion
+pub geopackage::OpenWarning::MissingGeometryColumns
+pub geopackage::OpenWarning::TableNameCaseMismatch
+pub geopackage::OpenWarning::TableNameCaseMismatch::actual: alloc::string::String
+pub geopackage::OpenWarning::TableNameCaseMismatch::declared: alloc::string::String
+pub geopackage::OpenWarning::UnsupportedExtension
+pub geopackage::OpenWarning::UnsupportedExtension::extension_name: alloc::string::String
+pub geopackage::OpenWarning::UnsupportedExtension::scope: geopackage_core::extensions::ExtensionScope
+pub geopackage::OpenWarning::UnsupportedExtension::table_name: core::option::Option<alloc::string::String>
+impl core::clone::Clone for geopackage::OpenWarning
+pub fn geopackage::OpenWarning::clone(&self) -> geopackage::OpenWarning
+impl core::cmp::Eq for geopackage::OpenWarning
+impl core::cmp::PartialEq for geopackage::OpenWarning
+pub fn geopackage::OpenWarning::eq(&self, &geopackage::OpenWarning) -> bool
+impl core::fmt::Debug for geopackage::OpenWarning
+pub fn geopackage::OpenWarning::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for geopackage::OpenWarning
+pub fn geopackage::OpenWarning::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::OpenWarning
+impl core::marker::Freeze for geopackage::OpenWarning
+impl core::marker::Send for geopackage::OpenWarning
+impl core::marker::Sync for geopackage::OpenWarning
+impl core::marker::Unpin for geopackage::OpenWarning
+impl core::marker::UnsafeUnpin for geopackage::OpenWarning
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::OpenWarning
+impl core::panic::unwind_safe::UnwindSafe for geopackage::OpenWarning
+pub enum geopackage::Severity
+pub geopackage::Severity::Advisory
+pub geopackage::Severity::Error
+pub geopackage::Severity::Warning
+impl geopackage::Severity
+pub fn geopackage::Severity::as_str(self) -> &'static str
+impl core::clone::Clone for geopackage::Severity
+pub fn geopackage::Severity::clone(&self) -> geopackage::Severity
+impl core::cmp::Eq for geopackage::Severity
+impl core::cmp::Ord for geopackage::Severity
+pub fn geopackage::Severity::cmp(&self, &geopackage::Severity) -> core::cmp::Ordering
+impl core::cmp::PartialEq for geopackage::Severity
+pub fn geopackage::Severity::eq(&self, &geopackage::Severity) -> bool
+impl core::cmp::PartialOrd for geopackage::Severity
+pub fn geopackage::Severity::partial_cmp(&self, &geopackage::Severity) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for geopackage::Severity
+pub fn geopackage::Severity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for geopackage::Severity
+pub fn geopackage::Severity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::Severity
+impl core::marker::StructuralPartialEq for geopackage::Severity
+impl core::marker::Freeze for geopackage::Severity
+impl core::marker::Send for geopackage::Severity
+impl core::marker::Sync for geopackage::Severity
+impl core::marker::Unpin for geopackage::Severity
+impl core::marker::UnsafeUnpin for geopackage::Severity
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::Severity
+impl core::panic::unwind_safe::UnwindSafe for geopackage::Severity
+#[non_exhaustive] pub enum geopackage::SpatialIndexStatus
+pub geopackage::SpatialIndexStatus::Absent
+pub geopackage::SpatialIndexStatus::Current
+pub geopackage::SpatialIndexStatus::Legacy
+pub geopackage::SpatialIndexStatus::Stale
+impl geopackage::SpatialIndexStatus
+pub fn geopackage::SpatialIndexStatus::as_str(self) -> &'static str
+impl core::clone::Clone for geopackage::SpatialIndexStatus
+pub fn geopackage::SpatialIndexStatus::clone(&self) -> geopackage::SpatialIndexStatus
+impl core::cmp::Eq for geopackage::SpatialIndexStatus
+impl core::cmp::PartialEq for geopackage::SpatialIndexStatus
+pub fn geopackage::SpatialIndexStatus::eq(&self, &geopackage::SpatialIndexStatus) -> bool
+impl core::fmt::Debug for geopackage::SpatialIndexStatus
+pub fn geopackage::SpatialIndexStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for geopackage::SpatialIndexStatus
+pub fn geopackage::SpatialIndexStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::SpatialIndexStatus
+impl core::marker::StructuralPartialEq for geopackage::SpatialIndexStatus
+impl core::marker::Freeze for geopackage::SpatialIndexStatus
+impl core::marker::Send for geopackage::SpatialIndexStatus
+impl core::marker::Sync for geopackage::SpatialIndexStatus
+impl core::marker::Unpin for geopackage::SpatialIndexStatus
+impl core::marker::UnsafeUnpin for geopackage::SpatialIndexStatus
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::SpatialIndexStatus
+impl core::panic::unwind_safe::UnwindSafe for geopackage::SpatialIndexStatus
+#[non_exhaustive] pub enum geopackage::StorageStrictness
+pub geopackage::StorageStrictness::Lenient
+pub geopackage::StorageStrictness::Strict
+impl core::clone::Clone for geopackage::StorageStrictness
+pub fn geopackage::StorageStrictness::clone(&self) -> geopackage::StorageStrictness
+impl core::cmp::Eq for geopackage::StorageStrictness
+impl core::cmp::PartialEq for geopackage::StorageStrictness
+pub fn geopackage::StorageStrictness::eq(&self, &geopackage::StorageStrictness) -> bool
+impl core::default::Default for geopackage::StorageStrictness
+pub fn geopackage::StorageStrictness::default() -> geopackage::StorageStrictness
+impl core::fmt::Debug for geopackage::StorageStrictness
+pub fn geopackage::StorageStrictness::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::StorageStrictness
+impl core::marker::StructuralPartialEq for geopackage::StorageStrictness
+impl core::marker::Freeze for geopackage::StorageStrictness
+impl core::marker::Send for geopackage::StorageStrictness
+impl core::marker::Sync for geopackage::StorageStrictness
+impl core::marker::Unpin for geopackage::StorageStrictness
+impl core::marker::UnsafeUnpin for geopackage::StorageStrictness
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::StorageStrictness
+impl core::panic::unwind_safe::UnwindSafe for geopackage::StorageStrictness
+#[non_exhaustive] pub enum geopackage::StructuralCheck
+pub geopackage::StructuralCheck::FullDatabase
+pub geopackage::StructuralCheck::RtreeOnly
+impl core::clone::Clone for geopackage::StructuralCheck
+pub fn geopackage::StructuralCheck::clone(&self) -> geopackage::StructuralCheck
+impl core::cmp::Eq for geopackage::StructuralCheck
+impl core::cmp::PartialEq for geopackage::StructuralCheck
+pub fn geopackage::StructuralCheck::eq(&self, &geopackage::StructuralCheck) -> bool
+impl core::default::Default for geopackage::StructuralCheck
+pub fn geopackage::StructuralCheck::default() -> geopackage::StructuralCheck
+impl core::fmt::Debug for geopackage::StructuralCheck
+pub fn geopackage::StructuralCheck::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::StructuralCheck
+impl core::marker::StructuralPartialEq for geopackage::StructuralCheck
+impl core::marker::Freeze for geopackage::StructuralCheck
+impl core::marker::Send for geopackage::StructuralCheck
+impl core::marker::Sync for geopackage::StructuralCheck
+impl core::marker::Unpin for geopackage::StructuralCheck
+impl core::marker::UnsafeUnpin for geopackage::StructuralCheck
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::StructuralCheck
+impl core::panic::unwind_safe::UnwindSafe for geopackage::StructuralCheck
+#[non_exhaustive] pub enum geopackage::Synchronous
+pub geopackage::Synchronous::Extra
+pub geopackage::Synchronous::Full
+pub geopackage::Synchronous::Normal
+pub geopackage::Synchronous::Off
+impl core::clone::Clone for geopackage::Synchronous
+pub fn geopackage::Synchronous::clone(&self) -> geopackage::Synchronous
+impl core::cmp::Eq for geopackage::Synchronous
+impl core::cmp::PartialEq for geopackage::Synchronous
+pub fn geopackage::Synchronous::eq(&self, &geopackage::Synchronous) -> bool
+impl core::fmt::Debug for geopackage::Synchronous
+pub fn geopackage::Synchronous::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::Synchronous
+impl core::marker::StructuralPartialEq for geopackage::Synchronous
+impl core::marker::Freeze for geopackage::Synchronous
+impl core::marker::Send for geopackage::Synchronous
+impl core::marker::Sync for geopackage::Synchronous
+impl core::marker::Unpin for geopackage::Synchronous
+impl core::marker::UnsafeUnpin for geopackage::Synchronous
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::Synchronous
+impl core::panic::unwind_safe::UnwindSafe for geopackage::Synchronous
+#[non_exhaustive] pub enum geopackage::Value
+pub geopackage::Value::Blob(alloc::vec::Vec<u8>)
+pub geopackage::Value::Boolean(bool)
+pub geopackage::Value::Date(geopackage_core::datetime::Date)
+pub geopackage::Value::DateTime(geopackage_core::datetime::DateTime)
+pub geopackage::Value::Float(f64)
+pub geopackage::Value::Integer(i64)
+pub geopackage::Value::Null
+pub geopackage::Value::Text(alloc::string::String)
+impl core::clone::Clone for geopackage::Value
+pub fn geopackage::Value::clone(&self) -> geopackage::Value
+impl core::cmp::PartialEq for geopackage::Value
+pub fn geopackage::Value::eq(&self, &geopackage::Value) -> bool
+impl core::cmp::PartialEq<geopackage::Value> for geopackage::ValueRef<'_>
+pub fn geopackage::ValueRef<'_>::eq(&self, &geopackage::Value) -> bool
+impl core::cmp::PartialEq<geopackage::ValueRef<'_>> for geopackage::Value
+pub fn geopackage::Value::eq(&self, &geopackage::ValueRef<'_>) -> bool
+impl core::convert::From<geopackage::ValueRef<'_>> for geopackage::Value
+pub fn geopackage::Value::from(geopackage::ValueRef<'_>) -> Self
+impl core::fmt::Debug for geopackage::Value
+pub fn geopackage::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::Value
+impl<'a> core::convert::From<&'a geopackage::Value> for geopackage::ValueRef<'a>
+pub fn geopackage::ValueRef<'a>::from(&'a geopackage::Value) -> Self
+impl core::marker::Freeze for geopackage::Value
+impl core::marker::Send for geopackage::Value
+impl core::marker::Sync for geopackage::Value
+impl core::marker::Unpin for geopackage::Value
+impl core::marker::UnsafeUnpin for geopackage::Value
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::Value
+impl core::panic::unwind_safe::UnwindSafe for geopackage::Value
+#[non_exhaustive] pub enum geopackage::ValueRef<'a>
+pub geopackage::ValueRef::Blob(&'a [u8])
+pub geopackage::ValueRef::Boolean(bool)
+pub geopackage::ValueRef::Date(geopackage_core::datetime::Date)
+pub geopackage::ValueRef::DateTime(geopackage_core::datetime::DateTime)
+pub geopackage::ValueRef::Float(f64)
+pub geopackage::ValueRef::Integer(i64)
+pub geopackage::ValueRef::Null
+pub geopackage::ValueRef::Text(&'a str)
+impl<'a> geopackage::ValueRef<'a>
+pub fn geopackage::ValueRef<'a>::as_blob(&self) -> core::option::Option<&'a [u8]>
+pub fn geopackage::ValueRef<'a>::as_bool(&self) -> core::option::Option<bool>
+pub fn geopackage::ValueRef<'a>::as_date(&self) -> core::option::Option<geopackage_core::datetime::Date>
+pub fn geopackage::ValueRef<'a>::as_datetime(&self) -> core::option::Option<geopackage_core::datetime::DateTime>
+pub fn geopackage::ValueRef<'a>::as_f64(&self) -> core::option::Option<f64>
+pub fn geopackage::ValueRef<'a>::as_i64(&self) -> core::option::Option<i64>
+pub fn geopackage::ValueRef<'a>::as_str(&self) -> core::option::Option<&'a str>
+pub fn geopackage::ValueRef<'a>::is_null(&self) -> bool
+pub fn geopackage::ValueRef<'a>::to_value(&self) -> geopackage::Value
+impl core::cmp::PartialEq<geopackage::Value> for geopackage::ValueRef<'_>
+pub fn geopackage::ValueRef<'_>::eq(&self, &geopackage::Value) -> bool
+impl core::cmp::PartialEq<geopackage::ValueRef<'_>> for geopackage::Value
+pub fn geopackage::Value::eq(&self, &geopackage::ValueRef<'_>) -> bool
+impl core::convert::From<geopackage::ValueRef<'_>> for geopackage::Value
+pub fn geopackage::Value::from(geopackage::ValueRef<'_>) -> Self
+impl<'a> core::clone::Clone for geopackage::ValueRef<'a>
+pub fn geopackage::ValueRef<'a>::clone(&self) -> geopackage::ValueRef<'a>
+impl<'a> core::cmp::PartialEq for geopackage::ValueRef<'a>
+pub fn geopackage::ValueRef<'a>::eq(&self, &geopackage::ValueRef<'a>) -> bool
+impl<'a> core::convert::From<&'a geopackage::Value> for geopackage::ValueRef<'a>
+pub fn geopackage::ValueRef<'a>::from(&'a geopackage::Value) -> Self
+impl<'a> core::fmt::Debug for geopackage::ValueRef<'a>
+pub fn geopackage::ValueRef<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for geopackage::ValueRef<'a>
+impl<'a> core::marker::StructuralPartialEq for geopackage::ValueRef<'a>
+impl<'a> core::marker::Freeze for geopackage::ValueRef<'a>
+impl<'a> core::marker::Send for geopackage::ValueRef<'a>
+impl<'a> core::marker::Sync for geopackage::ValueRef<'a>
+impl<'a> core::marker::Unpin for geopackage::ValueRef<'a>
+impl<'a> core::marker::UnsafeUnpin for geopackage::ValueRef<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for geopackage::ValueRef<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for geopackage::ValueRef<'a>
+pub struct geopackage::BoundingBox
+pub geopackage::BoundingBox::max_x: f64
+pub geopackage::BoundingBox::max_y: f64
+pub geopackage::BoundingBox::min_x: f64
+pub geopackage::BoundingBox::min_y: f64
+impl geopackage::BoundingBox
+pub fn geopackage::BoundingBox::new(f64, f64, f64, f64) -> Self
+impl core::clone::Clone for geopackage::BoundingBox
+pub fn geopackage::BoundingBox::clone(&self) -> geopackage::BoundingBox
+impl core::cmp::PartialEq for geopackage::BoundingBox
+pub fn geopackage::BoundingBox::eq(&self, &geopackage::BoundingBox) -> bool
+impl core::fmt::Debug for geopackage::BoundingBox
+pub fn geopackage::BoundingBox::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::BoundingBox
+impl core::marker::StructuralPartialEq for geopackage::BoundingBox
+impl core::marker::Freeze for geopackage::BoundingBox
+impl core::marker::Send for geopackage::BoundingBox
+impl core::marker::Sync for geopackage::BoundingBox
+impl core::marker::Unpin for geopackage::BoundingBox
+impl core::marker::UnsafeUnpin for geopackage::BoundingBox
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::BoundingBox
+impl core::panic::unwind_safe::UnwindSafe for geopackage::BoundingBox
+#[non_exhaustive] pub struct geopackage::BulkIndexOptions
+pub geopackage::BulkIndexOptions::bulk_threshold: usize
+pub geopackage::BulkIndexOptions::fill_factor: f64
+pub geopackage::BulkIndexOptions::structural_check: geopackage::StructuralCheck
+impl geopackage::BulkIndexOptions
+pub fn geopackage::BulkIndexOptions::always_bulk() -> Self
+pub fn geopackage::BulkIndexOptions::never_bulk() -> Self
+pub fn geopackage::BulkIndexOptions::with_fill_factor(self, f64) -> Self
+pub fn geopackage::BulkIndexOptions::with_structural_check(self, geopackage::StructuralCheck) -> Self
+pub fn geopackage::BulkIndexOptions::with_threshold(usize) -> Self
+impl core::clone::Clone for geopackage::BulkIndexOptions
+pub fn geopackage::BulkIndexOptions::clone(&self) -> geopackage::BulkIndexOptions
+impl core::default::Default for geopackage::BulkIndexOptions
+pub fn geopackage::BulkIndexOptions::default() -> Self
+impl core::fmt::Debug for geopackage::BulkIndexOptions
+pub fn geopackage::BulkIndexOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::BulkIndexOptions
+impl core::marker::Freeze for geopackage::BulkIndexOptions
+impl core::marker::Send for geopackage::BulkIndexOptions
+impl core::marker::Sync for geopackage::BulkIndexOptions
+impl core::marker::Unpin for geopackage::BulkIndexOptions
+impl core::marker::UnsafeUnpin for geopackage::BulkIndexOptions
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::BulkIndexOptions
+impl core::panic::unwind_safe::UnwindSafe for geopackage::BulkIndexOptions
+pub struct geopackage::Column
+pub geopackage::Column::column_type: core::option::Option<geopackage_core::types::ColumnType>
+pub geopackage::Column::data_column: core::option::Option<geopackage_core::schema::DataColumn>
+pub geopackage::Column::declared_type: alloc::string::String
+pub geopackage::Column::default_value: core::option::Option<alloc::string::String>
+pub geopackage::Column::name: alloc::string::String
+pub geopackage::Column::not_null: bool
+pub geopackage::Column::primary_key: u32
+impl geopackage::Column
+pub fn geopackage::Column::is_primary_key(&self) -> bool
+impl core::clone::Clone for geopackage::Column
+pub fn geopackage::Column::clone(&self) -> geopackage::Column
+impl core::cmp::PartialEq for geopackage::Column
+pub fn geopackage::Column::eq(&self, &geopackage::Column) -> bool
+impl core::fmt::Debug for geopackage::Column
+pub fn geopackage::Column::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::Column
+impl core::marker::Freeze for geopackage::Column
+impl core::marker::Send for geopackage::Column
+impl core::marker::Sync for geopackage::Column
+impl core::marker::Unpin for geopackage::Column
+impl core::marker::UnsafeUnpin for geopackage::Column
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::Column
+impl core::panic::unwind_safe::UnwindSafe for geopackage::Column
+pub struct geopackage::ColumnSpec
+impl geopackage::ColumnSpec
+pub fn geopackage::ColumnSpec::default_value(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::ColumnSpec::new(impl core::convert::Into<alloc::string::String>, geopackage_core::types::ColumnType) -> Self
+pub fn geopackage::ColumnSpec::not_null(self) -> Self
+pub fn geopackage::ColumnSpec::unique(self) -> Self
+impl core::clone::Clone for geopackage::ColumnSpec
+pub fn geopackage::ColumnSpec::clone(&self) -> geopackage::ColumnSpec
+impl core::fmt::Debug for geopackage::ColumnSpec
+pub fn geopackage::ColumnSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for geopackage::ColumnSpec
+impl core::marker::Send for geopackage::ColumnSpec
+impl core::marker::Sync for geopackage::ColumnSpec
+impl core::marker::Unpin for geopackage::ColumnSpec
+impl core::marker::UnsafeUnpin for geopackage::ColumnSpec
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::ColumnSpec
+impl core::panic::unwind_safe::UnwindSafe for geopackage::ColumnSpec
+pub struct geopackage::ContentsEntry
+pub geopackage::ContentsEntry::data_type: geopackage::ContentsDataType
+pub geopackage::ContentsEntry::identifier: core::option::Option<alloc::string::String>
+pub geopackage::ContentsEntry::max_x: core::option::Option<f64>
+pub geopackage::ContentsEntry::max_y: core::option::Option<f64>
+pub geopackage::ContentsEntry::min_x: core::option::Option<f64>
+pub geopackage::ContentsEntry::min_y: core::option::Option<f64>
+pub geopackage::ContentsEntry::srs_id: core::option::Option<i32>
+pub geopackage::ContentsEntry::table_name: alloc::string::String
+impl core::clone::Clone for geopackage::ContentsEntry
+pub fn geopackage::ContentsEntry::clone(&self) -> geopackage::ContentsEntry
+impl core::cmp::PartialEq for geopackage::ContentsEntry
+pub fn geopackage::ContentsEntry::eq(&self, &geopackage::ContentsEntry) -> bool
+impl core::fmt::Debug for geopackage::ContentsEntry
+pub fn geopackage::ContentsEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::ContentsEntry
+impl core::marker::Freeze for geopackage::ContentsEntry
+impl core::marker::Send for geopackage::ContentsEntry
+impl core::marker::Sync for geopackage::ContentsEntry
+impl core::marker::Unpin for geopackage::ContentsEntry
+impl core::marker::UnsafeUnpin for geopackage::ContentsEntry
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::ContentsEntry
+impl core::panic::unwind_safe::UnwindSafe for geopackage::ContentsEntry
+#[non_exhaustive] pub struct geopackage::ConversionOptions
+pub geopackage::ConversionOptions::datetime: geopackage::DateTimeParsing
+pub geopackage::ConversionOptions::storage: geopackage::StorageStrictness
+impl geopackage::ConversionOptions
+pub fn geopackage::ConversionOptions::lenient() -> Self
+pub fn geopackage::ConversionOptions::strict() -> Self
+pub fn geopackage::ConversionOptions::with_datetime(self, geopackage::DateTimeParsing) -> Self
+pub fn geopackage::ConversionOptions::with_storage(self, geopackage::StorageStrictness) -> Self
+impl core::clone::Clone for geopackage::ConversionOptions
+pub fn geopackage::ConversionOptions::clone(&self) -> geopackage::ConversionOptions
+impl core::cmp::Eq for geopackage::ConversionOptions
+impl core::cmp::PartialEq for geopackage::ConversionOptions
+pub fn geopackage::ConversionOptions::eq(&self, &geopackage::ConversionOptions) -> bool
+impl core::default::Default for geopackage::ConversionOptions
+pub fn geopackage::ConversionOptions::default() -> geopackage::ConversionOptions
+impl core::fmt::Debug for geopackage::ConversionOptions
+pub fn geopackage::ConversionOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::ConversionOptions
+impl core::marker::StructuralPartialEq for geopackage::ConversionOptions
+impl core::marker::Freeze for geopackage::ConversionOptions
+impl core::marker::Send for geopackage::ConversionOptions
+impl core::marker::Sync for geopackage::ConversionOptions
+impl core::marker::Unpin for geopackage::ConversionOptions
+impl core::marker::UnsafeUnpin for geopackage::ConversionOptions
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::ConversionOptions
+impl core::panic::unwind_safe::UnwindSafe for geopackage::ConversionOptions
+pub struct geopackage::ExtensionRow
+pub geopackage::ExtensionRow::column_name: core::option::Option<alloc::string::String>
+pub geopackage::ExtensionRow::definition: alloc::string::String
+pub geopackage::ExtensionRow::name: alloc::string::String
+pub geopackage::ExtensionRow::scope: geopackage_core::extensions::ExtensionScope
+pub geopackage::ExtensionRow::table_name: core::option::Option<alloc::string::String>
+impl geopackage::extensions::ExtensionRow
+pub fn geopackage::extensions::ExtensionRow::extension(&self) -> geopackage_core::extensions::Extension
+pub fn geopackage::extensions::ExtensionRow::support(&self) -> geopackage_core::extensions::ExtensionSupport
+impl core::clone::Clone for geopackage::extensions::ExtensionRow
+pub fn geopackage::extensions::ExtensionRow::clone(&self) -> geopackage::extensions::ExtensionRow
+impl core::cmp::Eq for geopackage::extensions::ExtensionRow
+impl core::cmp::PartialEq for geopackage::extensions::ExtensionRow
+pub fn geopackage::extensions::ExtensionRow::eq(&self, &geopackage::extensions::ExtensionRow) -> bool
+impl core::fmt::Debug for geopackage::extensions::ExtensionRow
+pub fn geopackage::extensions::ExtensionRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::extensions::ExtensionRow
+impl core::marker::Freeze for geopackage::extensions::ExtensionRow
+impl core::marker::Send for geopackage::extensions::ExtensionRow
+impl core::marker::Sync for geopackage::extensions::ExtensionRow
+impl core::marker::Unpin for geopackage::extensions::ExtensionRow
+impl core::marker::UnsafeUnpin for geopackage::extensions::ExtensionRow
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::extensions::ExtensionRow
+impl core::panic::unwind_safe::UnwindSafe for geopackage::extensions::ExtensionRow
+pub struct geopackage::Feature
+impl geopackage::Feature
+pub fn geopackage::Feature::columns(&self) -> &[alloc::string::String]
+pub fn geopackage::Feature::fid(&self) -> i64
+pub fn geopackage::Feature::geometry(&self) -> geopackage::Result<core::option::Option<geopackage_core::geometry::GpbGeometry<'_>>>
+pub fn geopackage::Feature::geometry_bytes(&self) -> core::option::Option<&[u8]>
+pub fn geopackage::Feature::get(&self, usize) -> core::option::Option<geopackage::ValueRef<'_>>
+pub fn geopackage::Feature::has_column(&self, &str) -> bool
+pub fn geopackage::Feature::has_geometry_column(&self) -> bool
+pub fn geopackage::Feature::is_empty(&self) -> bool
+pub fn geopackage::Feature::iter(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&str, geopackage::ValueRef<'_>)>
+pub fn geopackage::Feature::len(&self) -> usize
+pub fn geopackage::Feature::value(&self, &str) -> core::option::Option<geopackage::ValueRef<'_>>
+pub fn geopackage::Feature::values(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = geopackage::ValueRef<'_>>
+impl core::clone::Clone for geopackage::Feature
+pub fn geopackage::Feature::clone(&self) -> geopackage::Feature
+impl core::fmt::Debug for geopackage::Feature
+pub fn geopackage::Feature::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for geopackage::Feature
+impl core::marker::Send for geopackage::Feature
+impl core::marker::Sync for geopackage::Feature
+impl core::marker::Unpin for geopackage::Feature
+impl core::marker::UnsafeUnpin for geopackage::Feature
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::Feature
+impl core::panic::unwind_safe::UnwindSafe for geopackage::Feature
+pub struct geopackage::FeatureCursor<'a>
+impl geopackage::FeatureCursor<'_>
+pub fn geopackage::FeatureCursor<'_>::features(&mut self) -> geopackage::Result<geopackage::FeatureStream<'_>>
+impl<'a> core::fmt::Debug for geopackage::FeatureCursor<'a>
+pub fn geopackage::FeatureCursor<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> !core::marker::Freeze for geopackage::FeatureCursor<'a>
+impl<'a> !core::marker::Send for geopackage::FeatureCursor<'a>
+impl<'a> !core::marker::Sync for geopackage::FeatureCursor<'a>
+impl<'a> core::marker::Unpin for geopackage::FeatureCursor<'a>
+impl<'a> core::marker::UnsafeUnpin for geopackage::FeatureCursor<'a>
+impl<'a> !core::panic::unwind_safe::RefUnwindSafe for geopackage::FeatureCursor<'a>
+impl<'a> !core::panic::unwind_safe::UnwindSafe for geopackage::FeatureCursor<'a>
+pub struct geopackage::FeatureStream<'c>
+impl core::fmt::Debug for geopackage::FeatureStream<'_>
+pub fn geopackage::FeatureStream<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::iter::traits::iterator::Iterator for geopackage::FeatureStream<'_>
+pub type geopackage::FeatureStream<'_>::Item = core::result::Result<geopackage::Feature, geopackage::Error>
+pub fn geopackage::FeatureStream<'_>::next(&mut self) -> core::option::Option<Self::Item>
+impl<'c> core::marker::Freeze for geopackage::FeatureStream<'c>
+impl<'c> !core::marker::Send for geopackage::FeatureStream<'c>
+impl<'c> !core::marker::Sync for geopackage::FeatureStream<'c>
+impl<'c> core::marker::Unpin for geopackage::FeatureStream<'c>
+impl<'c> core::marker::UnsafeUnpin for geopackage::FeatureStream<'c>
+impl<'c> !core::panic::unwind_safe::RefUnwindSafe for geopackage::FeatureStream<'c>
+impl<'c> !core::panic::unwind_safe::UnwindSafe for geopackage::FeatureStream<'c>
+pub struct geopackage::FeatureWriter<'conn>
+impl<'conn> geopackage::FeatureWriter<'conn>
+pub fn geopackage::FeatureWriter<'conn>::commit(self) -> geopackage::Result<()>
+pub fn geopackage::FeatureWriter<'conn>::delete(&mut self, i64) -> geopackage::Result<bool>
+pub fn geopackage::FeatureWriter<'conn>::insert<G: geo_traits::geometry::GeometryTrait<T = f64>>(&mut self, core::option::Option<i64>, &G, &[geopackage::ValueRef<'_>]) -> geopackage::Result<i64>
+pub fn geopackage::FeatureWriter<'conn>::insert_row(&mut self, core::option::Option<i64>, &[geopackage::ValueRef<'_>]) -> geopackage::Result<i64>
+pub fn geopackage::FeatureWriter<'conn>::insert_wkb(&mut self, core::option::Option<i64>, &[u8], &[geopackage::ValueRef<'_>]) -> geopackage::Result<i64>
+pub fn geopackage::FeatureWriter<'conn>::update<G: geo_traits::geometry::GeometryTrait<T = f64>>(&mut self, i64, &G, &[geopackage::ValueRef<'_>]) -> geopackage::Result<bool>
+pub fn geopackage::FeatureWriter<'conn>::update_column(&mut self, i64, &str, geopackage::ValueRef<'_>) -> geopackage::Result<bool>
+pub fn geopackage::FeatureWriter<'conn>::update_columns(&mut self, i64, &[(&str, geopackage::ValueRef<'_>)]) -> geopackage::Result<bool>
+pub fn geopackage::FeatureWriter<'conn>::update_row(&mut self, i64, &[geopackage::ValueRef<'_>]) -> geopackage::Result<bool>
+impl<'conn> !core::marker::Freeze for geopackage::FeatureWriter<'conn>
+impl<'conn> !core::marker::Send for geopackage::FeatureWriter<'conn>
+impl<'conn> !core::marker::Sync for geopackage::FeatureWriter<'conn>
+impl<'conn> core::marker::Unpin for geopackage::FeatureWriter<'conn>
+impl<'conn> core::marker::UnsafeUnpin for geopackage::FeatureWriter<'conn>
+impl<'conn> !core::panic::unwind_safe::RefUnwindSafe for geopackage::FeatureWriter<'conn>
+impl<'conn> !core::panic::unwind_safe::UnwindSafe for geopackage::FeatureWriter<'conn>
+pub struct geopackage::Features
+impl core::fmt::Debug for geopackage::Features
+pub fn geopackage::Features::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::iter::traits::exact_size::ExactSizeIterator for geopackage::Features
+impl core::iter::traits::iterator::Iterator for geopackage::Features
+pub type geopackage::Features::Item = core::result::Result<geopackage::Feature, geopackage::Error>
+pub fn geopackage::Features::next(&mut self) -> core::option::Option<Self::Item>
+pub fn geopackage::Features::size_hint(&self) -> (usize, core::option::Option<usize>)
+impl core::marker::Freeze for geopackage::Features
+impl core::marker::Send for geopackage::Features
+impl core::marker::Sync for geopackage::Features
+impl core::marker::Unpin for geopackage::Features
+impl core::marker::UnsafeUnpin for geopackage::Features
+impl !core::panic::unwind_safe::RefUnwindSafe for geopackage::Features
+impl !core::panic::unwind_safe::UnwindSafe for geopackage::Features
+pub struct geopackage::GeoPackage
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::add_column_constraint(&self, &geopackage_core::schema::ColumnConstraint) -> geopackage::Result<()>
+pub fn geopackage::GeoPackage::column_constraint(&self, &str) -> geopackage::Result<core::option::Option<geopackage_core::schema::ColumnConstraint>>
+pub fn geopackage::GeoPackage::column_constraints(&self) -> geopackage::Result<alloc::vec::Vec<geopackage_core::schema::ColumnConstraint>>
+pub fn geopackage::GeoPackage::data_columns(&self, &str) -> geopackage::Result<alloc::vec::Vec<geopackage_core::schema::DataColumn>>
+pub fn geopackage::GeoPackage::enforces_column_constraints(&self) -> bool
+pub fn geopackage::GeoPackage::set_data_column(&self, &str, &geopackage_core::schema::DataColumn) -> geopackage::Result<()>
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::add_epsg_srs(&self, i32) -> geopackage::Result<bool>
+pub fn geopackage::GeoPackage::add_srs(&self, &geopackage::Srs) -> geopackage::Result<bool>
+pub fn geopackage::GeoPackage::srs(&self, i32) -> geopackage::Result<core::option::Option<geopackage::Srs>>
+pub fn geopackage::GeoPackage::srs_list(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::Srs>>
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::add_mapping(&self, &geopackage_core::related::Relation, i64, i64) -> geopackage::Result<()>
+pub fn geopackage::GeoPackage::add_relation(&self, &geopackage::NewRelation) -> geopackage::Result<i64>
+pub fn geopackage::GeoPackage::related_ids(&self, &geopackage_core::related::Relation, i64) -> geopackage::Result<alloc::vec::Vec<i64>>
+pub fn geopackage::GeoPackage::relations(&self) -> geopackage::Result<alloc::vec::Vec<geopackage_core::related::Relation>>
+pub fn geopackage::GeoPackage::relations_from(&self, &str) -> geopackage::Result<alloc::vec::Vec<geopackage_core::related::Relation>>
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::add_metadata(&self, &geopackage::NewMetadata) -> geopackage::Result<i64>
+pub fn geopackage::GeoPackage::add_metadata_reference(&self, i64, &geopackage::MetadataTarget, geopackage_core::datetime::DateTime, core::option::Option<i64>) -> geopackage::Result<()>
+pub fn geopackage::GeoPackage::metadata(&self) -> geopackage::Result<alloc::vec::Vec<geopackage_core::metadata::MetadataRecord>>
+pub fn geopackage::GeoPackage::metadata_ancestors(&self, i64) -> geopackage::Result<alloc::vec::Vec<geopackage_core::metadata::MetadataRecord>>
+pub fn geopackage::GeoPackage::metadata_for(&self, &geopackage::MetadataTarget) -> geopackage::Result<alloc::vec::Vec<geopackage_core::metadata::MetadataReference>>
+pub fn geopackage::GeoPackage::metadata_record(&self, i64) -> geopackage::Result<core::option::Option<geopackage_core::metadata::MetadataRecord>>
+pub fn geopackage::GeoPackage::metadata_references(&self) -> geopackage::Result<alloc::vec::Vec<geopackage_core::metadata::MetadataReference>>
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::attributes(&self, &str) -> geopackage::Result<geopackage::Layer<'_>>
+pub fn geopackage::GeoPackage::layer(&self, &str) -> geopackage::Result<geopackage::Layer<'_>>
+pub fn geopackage::GeoPackage::layers(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::Layer<'_>>>
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::blocking_extension(&self, &str) -> geopackage::Result<core::option::Option<geopackage::extensions::ExtensionRow>>
+pub fn geopackage::GeoPackage::extensions(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::extensions::ExtensionRow>>
+pub fn geopackage::GeoPackage::table_extensions(&self, &str) -> geopackage::Result<alloc::vec::Vec<geopackage::extensions::ExtensionRow>>
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::close(self) -> geopackage::Result<()>
+pub fn geopackage::GeoPackage::connection(&self) -> &rusqlite::Connection
+pub fn geopackage::GeoPackage::contents(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::ContentsEntry>>
+pub fn geopackage::GeoPackage::create<P: core::convert::AsRef<std::path::Path>>(P) -> geopackage::Result<Self>
+pub fn geopackage::GeoPackage::from_connection(rusqlite::Connection) -> geopackage::Result<Self>
+pub fn geopackage::GeoPackage::into_connection(self) -> rusqlite::Connection
+pub fn geopackage::GeoPackage::open<P: core::convert::AsRef<std::path::Path>>(P) -> geopackage::Result<Self>
+pub fn geopackage::GeoPackage::open_read_only<P: core::convert::AsRef<std::path::Path>>(P) -> geopackage::Result<Self>
+pub fn geopackage::GeoPackage::version(&self) -> geopackage_core::version::GpkgVersion
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::column_values(&self, &str, &str, geopackage::ConversionOptions) -> geopackage::Result<alloc::vec::Vec<geopackage::Value>>
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::create_attributes_table(&self, &geopackage::TableSchemaBuilder) -> geopackage::Result<geopackage::Layer<'_>>
+pub fn geopackage::GeoPackage::create_layer(&self, &geopackage::TableSchemaBuilder) -> geopackage::Result<geopackage::Layer<'_>>
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::create_tile_pyramid(&self, &geopackage::TilePyramidBuilder) -> geopackage::Result<geopackage::TilePyramid<'_>>
+pub fn geopackage::GeoPackage::tile_pyramids(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::TilePyramid<'_>>>
+pub fn geopackage::GeoPackage::tiles(&self, &str) -> geopackage::Result<geopackage::TilePyramid<'_>>
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::geometry_column(&self, &str) -> geopackage::Result<core::option::Option<geopackage::GeometryColumn>>
+pub fn geopackage::GeoPackage::geometry_columns(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::GeometryColumn>>
+pub fn geopackage::GeoPackage::table_schema(&self, &str) -> geopackage::Result<geopackage::TableSchema>
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::open_lenient<P: core::convert::AsRef<std::path::Path>>(P) -> geopackage::Result<Self>
+pub fn geopackage::GeoPackage::open_read_only_lenient<P: core::convert::AsRef<std::path::Path>>(P) -> geopackage::Result<Self>
+pub fn geopackage::GeoPackage::open_warnings(&self) -> &[geopackage::OpenWarning]
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::validate(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::Finding>>
+impl core::ops::drop::Drop for geopackage::GeoPackage
+pub fn geopackage::GeoPackage::drop(&mut self)
+impl !core::marker::Freeze for geopackage::GeoPackage
+impl core::marker::Send for geopackage::GeoPackage
+impl !core::marker::Sync for geopackage::GeoPackage
+impl core::marker::Unpin for geopackage::GeoPackage
+impl core::marker::UnsafeUnpin for geopackage::GeoPackage
+impl !core::panic::unwind_safe::RefUnwindSafe for geopackage::GeoPackage
+impl !core::panic::unwind_safe::UnwindSafe for geopackage::GeoPackage
+pub struct geopackage::GeometryColumn
+pub geopackage::GeometryColumn::column_name: alloc::string::String
+pub geopackage::GeometryColumn::geometry_type: geopackage_core::types::GeometryType
+pub geopackage::GeometryColumn::m: geopackage_core::types::ZmFlag
+pub geopackage::GeometryColumn::srs_id: i32
+pub geopackage::GeometryColumn::table_name: alloc::string::String
+pub geopackage::GeometryColumn::z: geopackage_core::types::ZmFlag
+impl core::clone::Clone for geopackage::GeometryColumn
+pub fn geopackage::GeometryColumn::clone(&self) -> geopackage::GeometryColumn
+impl core::cmp::PartialEq for geopackage::GeometryColumn
+pub fn geopackage::GeometryColumn::eq(&self, &geopackage::GeometryColumn) -> bool
+impl core::fmt::Debug for geopackage::GeometryColumn
+pub fn geopackage::GeometryColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::GeometryColumn
+impl core::marker::Freeze for geopackage::GeometryColumn
+impl core::marker::Send for geopackage::GeometryColumn
+impl core::marker::Sync for geopackage::GeometryColumn
+impl core::marker::Unpin for geopackage::GeometryColumn
+impl core::marker::UnsafeUnpin for geopackage::GeometryColumn
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::GeometryColumn
+impl core::panic::unwind_safe::UnwindSafe for geopackage::GeometryColumn
+pub struct geopackage::GeometrySpec
+impl geopackage::GeometrySpec
+pub fn geopackage::GeometrySpec::column_name(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::GeometrySpec::geometry_type(&self) -> geopackage_core::types::GeometryType
+pub fn geopackage::GeometrySpec::m(self, geopackage_core::types::ZmFlag) -> Self
+pub fn geopackage::GeometrySpec::new(geopackage_core::types::GeometryType, i32) -> Self
+pub fn geopackage::GeometrySpec::srs_id(&self) -> i32
+pub fn geopackage::GeometrySpec::z(self, geopackage_core::types::ZmFlag) -> Self
+impl core::clone::Clone for geopackage::GeometrySpec
+pub fn geopackage::GeometrySpec::clone(&self) -> geopackage::GeometrySpec
+impl core::fmt::Debug for geopackage::GeometrySpec
+pub fn geopackage::GeometrySpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for geopackage::GeometrySpec
+impl core::marker::Send for geopackage::GeometrySpec
+impl core::marker::Sync for geopackage::GeometrySpec
+impl core::marker::Unpin for geopackage::GeometrySpec
+impl core::marker::UnsafeUnpin for geopackage::GeometrySpec
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::GeometrySpec
+impl core::panic::unwind_safe::UnwindSafe for geopackage::GeometrySpec
+pub struct geopackage::Layer<'a>
+impl geopackage::Layer<'_>
+pub fn geopackage::Layer<'_>::arrow_schema(&self) -> geopackage::Result<arrow_schema::schema::SchemaRef>
+impl geopackage::Layer<'_>
+pub fn geopackage::Layer<'_>::audit_spatial_index(&self) -> geopackage::Result<geopackage::SpatialIndexAudit>
+pub fn geopackage::Layer<'_>::create_spatial_index(&self) -> geopackage::Result<()>
+pub fn geopackage::Layer<'_>::create_spatial_index_with(&self, geopackage::BulkIndexOptions) -> geopackage::Result<()>
+pub fn geopackage::Layer<'_>::drop_spatial_index(&self) -> geopackage::Result<()>
+pub fn geopackage::Layer<'_>::rebuild_spatial_index(&self) -> geopackage::Result<()>
+pub fn geopackage::Layer<'_>::repair_spatial_index(&self) -> geopackage::Result<()>
+impl geopackage::Layer<'_>
+pub fn geopackage::Layer<'_>::extensions(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::extensions::ExtensionRow>>
+impl geopackage::Layer<'_>
+pub fn geopackage::Layer<'_>::extent(&self) -> geopackage::Result<core::option::Option<geopackage::BoundingBox>>
+pub fn geopackage::Layer<'_>::recompute_extent(&self) -> geopackage::Result<core::option::Option<geopackage::BoundingBox>>
+impl geopackage::Layer<'_>
+pub fn geopackage::Layer<'_>::read_arrow(&self, geopackage::arrow::ArrowReadOptions) -> geopackage::Result<geopackage::arrow::ArrowBatches<'_>>
+pub fn geopackage::Layer<'_>::read_arrow_in(&self, geopackage::BoundingBox, geopackage::arrow::ArrowReadOptions) -> geopackage::Result<geopackage::arrow::ArrowBatches<'_>>
+impl geopackage::Layer<'_>
+pub fn geopackage::Layer<'_>::spatial_index_status(&self) -> geopackage::Result<geopackage::SpatialIndexStatus>
+impl geopackage::Layer<'_>
+pub fn geopackage::Layer<'_>::write_arrow<R>(&self, R, usize) -> geopackage::Result<alloc::vec::Vec<i64>> where R: core::iter::traits::collect::IntoIterator<Item = core::result::Result<arrow_array::record_batch::RecordBatch, arrow_schema::error::ArrowError>>
+pub fn geopackage::Layer<'_>::write_arrow_with<R>(&self, R, usize, geopackage::BulkIndexOptions) -> geopackage::Result<alloc::vec::Vec<i64>> where R: core::iter::traits::collect::IntoIterator<Item = core::result::Result<arrow_array::record_batch::RecordBatch, arrow_schema::error::ArrowError>>
+impl<'a> geopackage::Layer<'a>
+pub fn geopackage::Layer<'a>::conversion_options(&self) -> geopackage::ConversionOptions
+pub fn geopackage::Layer<'a>::count(&self) -> geopackage::Result<u64>
+pub fn geopackage::Layer<'a>::cursor(&self) -> geopackage::Result<geopackage::FeatureCursor<'_>>
+pub fn geopackage::Layer<'a>::cursor_in(&self, geopackage::BoundingBox) -> geopackage::Result<geopackage::FeatureCursor<'_>>
+pub fn geopackage::Layer<'a>::cursor_select(&self, &str, &[geopackage::ValueRef<'_>]) -> geopackage::Result<geopackage::FeatureCursor<'_>>
+pub fn geopackage::Layer<'a>::features(&self) -> geopackage::Result<geopackage::Features>
+pub fn geopackage::Layer<'a>::features_in(&self, geopackage::BoundingBox) -> geopackage::Result<geopackage::Features>
+pub fn geopackage::Layer<'a>::features_in_sql(&self) -> geopackage::Result<alloc::string::String>
+pub fn geopackage::Layer<'a>::geometry_column(&self) -> core::option::Option<&geopackage::GeometryColumn>
+pub fn geopackage::Layer<'a>::has_spatial_index(&self) -> geopackage::Result<bool>
+pub fn geopackage::Layer<'a>::kind(&self) -> geopackage::LayerKind
+pub fn geopackage::Layer<'a>::primary_key_column(&self) -> core::option::Option<&str>
+pub fn geopackage::Layer<'a>::schema(&self) -> &geopackage::TableSchema
+pub fn geopackage::Layer<'a>::select(&self, &str, &[geopackage::ValueRef<'_>]) -> geopackage::Result<geopackage::Features>
+pub fn geopackage::Layer<'a>::table_name(&self) -> &str
+pub fn geopackage::Layer<'a>::with_columns(self, &[&str]) -> geopackage::Result<Self>
+pub fn geopackage::Layer<'a>::with_conversion_options(self, geopackage::ConversionOptions) -> Self
+pub fn geopackage::Layer<'a>::with_geometry_type_validation(self) -> Self
+pub fn geopackage::Layer<'a>::without_geometry(self) -> Self
+impl<'a> geopackage::Layer<'a>
+pub fn geopackage::Layer<'a>::write_all<G, I>(&self, I, usize) -> geopackage::Result<alloc::vec::Vec<i64>> where G: geo_traits::geometry::GeometryTrait<T = f64>, I: core::iter::traits::collect::IntoIterator<Item = geopackage::NewFeature<G>>
+pub fn geopackage::Layer<'a>::write_all_with<G, I>(&self, I, usize, geopackage::BulkIndexOptions) -> geopackage::Result<alloc::vec::Vec<i64>> where G: geo_traits::geometry::GeometryTrait<T = f64>, I: core::iter::traits::collect::IntoIterator<Item = geopackage::NewFeature<G>>
+pub fn geopackage::Layer<'a>::writer(&self) -> geopackage::Result<geopackage::FeatureWriter<'a>>
+impl core::fmt::Debug for geopackage::Layer<'_>
+pub fn geopackage::Layer<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Freeze for geopackage::Layer<'a>
+impl<'a> !core::marker::Send for geopackage::Layer<'a>
+impl<'a> !core::marker::Sync for geopackage::Layer<'a>
+impl<'a> core::marker::Unpin for geopackage::Layer<'a>
+impl<'a> core::marker::UnsafeUnpin for geopackage::Layer<'a>
+impl<'a> !core::panic::unwind_safe::RefUnwindSafe for geopackage::Layer<'a>
+impl<'a> !core::panic::unwind_safe::UnwindSafe for geopackage::Layer<'a>
+pub struct geopackage::NewFeature<G>
+pub geopackage::NewFeature::fid: core::option::Option<i64>
+pub geopackage::NewFeature::geometry: core::option::Option<G>
+pub geopackage::NewFeature::values: alloc::vec::Vec<geopackage::Value>
+impl<G> geopackage::NewFeature<G>
+pub fn geopackage::NewFeature<G>::attributes(alloc::vec::Vec<geopackage::Value>) -> Self
+pub fn geopackage::NewFeature<G>::new(G, alloc::vec::Vec<geopackage::Value>) -> Self
+pub fn geopackage::NewFeature<G>::with_fid(self, i64) -> Self
+impl<G: core::clone::Clone> core::clone::Clone for geopackage::NewFeature<G>
+pub fn geopackage::NewFeature<G>::clone(&self) -> geopackage::NewFeature<G>
+impl<G: core::fmt::Debug> core::fmt::Debug for geopackage::NewFeature<G>
+pub fn geopackage::NewFeature<G>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<G> core::marker::Freeze for geopackage::NewFeature<G> where G: core::marker::Freeze
+impl<G> core::marker::Send for geopackage::NewFeature<G> where G: core::marker::Send
+impl<G> core::marker::Sync for geopackage::NewFeature<G> where G: core::marker::Sync
+impl<G> core::marker::Unpin for geopackage::NewFeature<G> where G: core::marker::Unpin
+impl<G> core::marker::UnsafeUnpin for geopackage::NewFeature<G> where G: core::marker::UnsafeUnpin
+impl<G> core::panic::unwind_safe::RefUnwindSafe for geopackage::NewFeature<G> where G: core::panic::unwind_safe::RefUnwindSafe
+impl<G> core::panic::unwind_safe::UnwindSafe for geopackage::NewFeature<G> where G: core::panic::unwind_safe::UnwindSafe
+pub struct geopackage::NewMetadata
+pub geopackage::NewMetadata::metadata: alloc::string::String
+pub geopackage::NewMetadata::mime_type: alloc::string::String
+pub geopackage::NewMetadata::scope: geopackage_core::metadata::MetadataScope
+pub geopackage::NewMetadata::standard_uri: alloc::string::String
+impl geopackage::NewMetadata
+pub fn geopackage::NewMetadata::mime_type(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::NewMetadata::new(geopackage_core::metadata::MetadataScope, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for geopackage::NewMetadata
+pub fn geopackage::NewMetadata::clone(&self) -> geopackage::NewMetadata
+impl core::cmp::Eq for geopackage::NewMetadata
+impl core::cmp::PartialEq for geopackage::NewMetadata
+pub fn geopackage::NewMetadata::eq(&self, &geopackage::NewMetadata) -> bool
+impl core::fmt::Debug for geopackage::NewMetadata
+pub fn geopackage::NewMetadata::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::NewMetadata
+impl core::marker::Freeze for geopackage::NewMetadata
+impl core::marker::Send for geopackage::NewMetadata
+impl core::marker::Sync for geopackage::NewMetadata
+impl core::marker::Unpin for geopackage::NewMetadata
+impl core::marker::UnsafeUnpin for geopackage::NewMetadata
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::NewMetadata
+impl core::panic::unwind_safe::UnwindSafe for geopackage::NewMetadata
+pub struct geopackage::NewRelation
+pub geopackage::NewRelation::base_primary_column: core::option::Option<alloc::string::String>
+pub geopackage::NewRelation::base_table_name: alloc::string::String
+pub geopackage::NewRelation::mapping_table_name: alloc::string::String
+pub geopackage::NewRelation::related_primary_column: core::option::Option<alloc::string::String>
+pub geopackage::NewRelation::related_table_name: alloc::string::String
+pub geopackage::NewRelation::relation_name: geopackage_core::related::RelationName
+impl geopackage::NewRelation
+pub fn geopackage::NewRelation::base_primary_column(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::NewRelation::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, geopackage_core::related::RelationName, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::NewRelation::related_primary_column(self, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for geopackage::NewRelation
+pub fn geopackage::NewRelation::clone(&self) -> geopackage::NewRelation
+impl core::cmp::Eq for geopackage::NewRelation
+impl core::cmp::PartialEq for geopackage::NewRelation
+pub fn geopackage::NewRelation::eq(&self, &geopackage::NewRelation) -> bool
+impl core::fmt::Debug for geopackage::NewRelation
+pub fn geopackage::NewRelation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::NewRelation
+impl core::marker::Freeze for geopackage::NewRelation
+impl core::marker::Send for geopackage::NewRelation
+impl core::marker::Sync for geopackage::NewRelation
+impl core::marker::Unpin for geopackage::NewRelation
+impl core::marker::UnsafeUnpin for geopackage::NewRelation
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::NewRelation
+impl core::panic::unwind_safe::UnwindSafe for geopackage::NewRelation
+pub struct geopackage::OpenOptions
+impl geopackage::OpenOptions
+pub fn geopackage::OpenOptions::allow_unsupported_extension_writes(self, bool) -> Self
+pub fn geopackage::OpenOptions::busy_timeout(self, core::time::Duration) -> Self
+pub fn geopackage::OpenOptions::create<P: core::convert::AsRef<std::path::Path>>(self, P) -> geopackage::Result<geopackage::GeoPackage>
+pub fn geopackage::OpenOptions::enforce_column_constraints(self, bool) -> Self
+pub fn geopackage::OpenOptions::from_connection(self, rusqlite::Connection) -> geopackage::Result<geopackage::GeoPackage>
+pub fn geopackage::OpenOptions::journal_mode(self, geopackage::JournalMode) -> Self
+pub fn geopackage::OpenOptions::new() -> Self
+pub fn geopackage::OpenOptions::open<P: core::convert::AsRef<std::path::Path>>(self, P) -> geopackage::Result<geopackage::GeoPackage>
+pub fn geopackage::OpenOptions::open_read_only<P: core::convert::AsRef<std::path::Path>>(self, P) -> geopackage::Result<geopackage::GeoPackage>
+pub fn geopackage::OpenOptions::synchronous(self, geopackage::Synchronous) -> Self
+impl core::clone::Clone for geopackage::OpenOptions
+pub fn geopackage::OpenOptions::clone(&self) -> geopackage::OpenOptions
+impl core::cmp::Eq for geopackage::OpenOptions
+impl core::cmp::PartialEq for geopackage::OpenOptions
+pub fn geopackage::OpenOptions::eq(&self, &geopackage::OpenOptions) -> bool
+impl core::default::Default for geopackage::OpenOptions
+pub fn geopackage::OpenOptions::default() -> geopackage::OpenOptions
+impl core::fmt::Debug for geopackage::OpenOptions
+pub fn geopackage::OpenOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::OpenOptions
+impl core::marker::StructuralPartialEq for geopackage::OpenOptions
+impl core::marker::Freeze for geopackage::OpenOptions
+impl core::marker::Send for geopackage::OpenOptions
+impl core::marker::Sync for geopackage::OpenOptions
+impl core::marker::Unpin for geopackage::OpenOptions
+impl core::marker::UnsafeUnpin for geopackage::OpenOptions
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::OpenOptions
+impl core::panic::unwind_safe::UnwindSafe for geopackage::OpenOptions
+#[non_exhaustive] pub struct geopackage::SpatialIndexAudit
+pub geopackage::SpatialIndexAudit::entries: usize
+pub geopackage::SpatialIndexAudit::extra: usize
+pub geopackage::SpatialIndexAudit::indexable: usize
+pub geopackage::SpatialIndexAudit::missing: usize
+pub geopackage::SpatialIndexAudit::not_covering: usize
+impl geopackage::SpatialIndexAudit
+pub fn geopackage::SpatialIndexAudit::is_consistent(&self) -> bool
+impl core::clone::Clone for geopackage::SpatialIndexAudit
+pub fn geopackage::SpatialIndexAudit::clone(&self) -> geopackage::SpatialIndexAudit
+impl core::cmp::Eq for geopackage::SpatialIndexAudit
+impl core::cmp::PartialEq for geopackage::SpatialIndexAudit
+pub fn geopackage::SpatialIndexAudit::eq(&self, &geopackage::SpatialIndexAudit) -> bool
+impl core::fmt::Debug for geopackage::SpatialIndexAudit
+pub fn geopackage::SpatialIndexAudit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::SpatialIndexAudit
+impl core::marker::StructuralPartialEq for geopackage::SpatialIndexAudit
+impl core::marker::Freeze for geopackage::SpatialIndexAudit
+impl core::marker::Send for geopackage::SpatialIndexAudit
+impl core::marker::Sync for geopackage::SpatialIndexAudit
+impl core::marker::Unpin for geopackage::SpatialIndexAudit
+impl core::marker::UnsafeUnpin for geopackage::SpatialIndexAudit
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::SpatialIndexAudit
+impl core::panic::unwind_safe::UnwindSafe for geopackage::SpatialIndexAudit
+pub struct geopackage::Srs
+pub geopackage::Srs::definition: alloc::string::String
+pub geopackage::Srs::definition_wkt2: core::option::Option<alloc::string::String>
+pub geopackage::Srs::description: core::option::Option<alloc::string::String>
+pub geopackage::Srs::epoch: core::option::Option<f64>
+pub geopackage::Srs::name: alloc::string::String
+pub geopackage::Srs::organization: alloc::string::String
+pub geopackage::Srs::organization_coordsys_id: i32
+pub geopackage::Srs::srs_id: i32
+impl core::clone::Clone for geopackage::Srs
+pub fn geopackage::Srs::clone(&self) -> geopackage::Srs
+impl core::cmp::PartialEq for geopackage::Srs
+pub fn geopackage::Srs::eq(&self, &geopackage::Srs) -> bool
+impl core::fmt::Debug for geopackage::Srs
+pub fn geopackage::Srs::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::Srs
+impl core::marker::Freeze for geopackage::Srs
+impl core::marker::Send for geopackage::Srs
+impl core::marker::Sync for geopackage::Srs
+impl core::marker::Unpin for geopackage::Srs
+impl core::marker::UnsafeUnpin for geopackage::Srs
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::Srs
+impl core::panic::unwind_safe::UnwindSafe for geopackage::Srs
+pub struct geopackage::TableSchema
+pub geopackage::TableSchema::columns: alloc::vec::Vec<geopackage::Column>
+pub geopackage::TableSchema::geometry_column: core::option::Option<geopackage::GeometryColumn>
+pub geopackage::TableSchema::table_name: alloc::string::String
+impl geopackage::TableSchema
+pub fn geopackage::TableSchema::column(&self, &str) -> core::option::Option<&geopackage::Column>
+pub fn geopackage::TableSchema::primary_key(&self) -> core::option::Option<&geopackage::Column>
+pub fn geopackage::TableSchema::primary_key_columns(&self) -> alloc::vec::Vec<&geopackage::Column>
+impl core::clone::Clone for geopackage::TableSchema
+pub fn geopackage::TableSchema::clone(&self) -> geopackage::TableSchema
+impl core::cmp::PartialEq for geopackage::TableSchema
+pub fn geopackage::TableSchema::eq(&self, &geopackage::TableSchema) -> bool
+impl core::fmt::Debug for geopackage::TableSchema
+pub fn geopackage::TableSchema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for geopackage::TableSchema
+impl core::marker::Freeze for geopackage::TableSchema
+impl core::marker::Send for geopackage::TableSchema
+impl core::marker::Sync for geopackage::TableSchema
+impl core::marker::Unpin for geopackage::TableSchema
+impl core::marker::UnsafeUnpin for geopackage::TableSchema
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::TableSchema
+impl core::panic::unwind_safe::UnwindSafe for geopackage::TableSchema
+pub struct geopackage::TableSchemaBuilder
+impl geopackage::TableSchemaBuilder
+pub fn geopackage::TableSchemaBuilder::column(self, geopackage::ColumnSpec) -> Self
+pub fn geopackage::TableSchemaBuilder::description(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::TableSchemaBuilder::geometry(self, geopackage::GeometrySpec) -> Self
+pub fn geopackage::TableSchemaBuilder::identifier(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::TableSchemaBuilder::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::TableSchemaBuilder::primary_key(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::TableSchemaBuilder::primary_key_name(&self) -> &str
+pub fn geopackage::TableSchemaBuilder::spatial_index(self, bool) -> Self
+pub fn geopackage::TableSchemaBuilder::table_name(&self) -> &str
+impl geopackage::TableSchemaBuilder
+pub fn geopackage::TableSchemaBuilder::from_arrow_schema(self, &arrow_schema::schema::Schema) -> geopackage::Result<Self>
+impl core::clone::Clone for geopackage::TableSchemaBuilder
+pub fn geopackage::TableSchemaBuilder::clone(&self) -> geopackage::TableSchemaBuilder
+impl core::fmt::Debug for geopackage::TableSchemaBuilder
+pub fn geopackage::TableSchemaBuilder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for geopackage::TableSchemaBuilder
+impl core::marker::Send for geopackage::TableSchemaBuilder
+impl core::marker::Sync for geopackage::TableSchemaBuilder
+impl core::marker::Unpin for geopackage::TableSchemaBuilder
+impl core::marker::UnsafeUnpin for geopackage::TableSchemaBuilder
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::TableSchemaBuilder
+impl core::panic::unwind_safe::UnwindSafe for geopackage::TableSchemaBuilder
+pub struct geopackage::Tile<'a>
+impl geopackage::Tile<'_>
+pub fn geopackage::Tile<'_>::coord(&self) -> geopackage_core::tiles::TileCoord
+pub fn geopackage::Tile<'_>::data(&self) -> &[u8]
+pub fn geopackage::Tile<'_>::probe(&self) -> geopackage::Result<geopackage_core::tiles::TilePayload>
+pub fn geopackage::Tile<'_>::to_vec(&self) -> alloc::vec::Vec<u8>
+impl<'a> core::fmt::Debug for geopackage::Tile<'a>
+pub fn geopackage::Tile<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Freeze for geopackage::Tile<'a>
+impl<'a> core::marker::Send for geopackage::Tile<'a>
+impl<'a> core::marker::Sync for geopackage::Tile<'a>
+impl<'a> core::marker::Unpin for geopackage::Tile<'a>
+impl<'a> core::marker::UnsafeUnpin for geopackage::Tile<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for geopackage::Tile<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for geopackage::Tile<'a>
+pub struct geopackage::TileCursor<'a>
+impl geopackage::TileCursor<'_>
+pub fn geopackage::TileCursor<'_>::tiles(&mut self) -> geopackage::Result<geopackage::TileStream<'_>>
+impl core::fmt::Debug for geopackage::TileCursor<'_>
+pub fn geopackage::TileCursor<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> !core::marker::Freeze for geopackage::TileCursor<'a>
+impl<'a> !core::marker::Send for geopackage::TileCursor<'a>
+impl<'a> !core::marker::Sync for geopackage::TileCursor<'a>
+impl<'a> core::marker::Unpin for geopackage::TileCursor<'a>
+impl<'a> core::marker::UnsafeUnpin for geopackage::TileCursor<'a>
+impl<'a> !core::panic::unwind_safe::RefUnwindSafe for geopackage::TileCursor<'a>
+impl<'a> !core::panic::unwind_safe::UnwindSafe for geopackage::TileCursor<'a>
+pub struct geopackage::TilePyramid<'a>
+impl geopackage::TilePyramid<'_>
+pub fn geopackage::TilePyramid<'_>::extensions(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::extensions::ExtensionRow>>
+impl<'a> geopackage::TilePyramid<'a>
+pub fn geopackage::TilePyramid<'a>::blocking_extension(&self) -> core::option::Option<&geopackage::extensions::ExtensionRow>
+pub fn geopackage::TilePyramid<'a>::cursor(&self) -> geopackage::Result<geopackage::TileCursor<'_>>
+pub fn geopackage::TilePyramid<'a>::cursor_at(&self, i64) -> geopackage::Result<geopackage::TileCursor<'_>>
+pub fn geopackage::TilePyramid<'a>::cursor_in(&self, i64, geopackage::BoundingBox) -> geopackage::Result<geopackage::TileCursor<'_>>
+pub fn geopackage::TilePyramid<'a>::delete_tile(&self, geopackage_core::tiles::TileCoord) -> geopackage::Result<bool>
+pub fn geopackage::TilePyramid<'a>::get_tile(&self, geopackage_core::tiles::TileCoord) -> geopackage::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn geopackage::TilePyramid<'a>::get_tile_into(&self, geopackage_core::tiles::TileCoord, &mut alloc::vec::Vec<u8>) -> geopackage::Result<bool>
+pub fn geopackage::TilePyramid<'a>::gpkg(&self) -> &'a geopackage::GeoPackage
+pub fn geopackage::TilePyramid<'a>::has_tile(&self, geopackage_core::tiles::TileCoord) -> geopackage::Result<bool>
+pub fn geopackage::TilePyramid<'a>::matrices(&self) -> &[geopackage_core::tiles::TileMatrix]
+pub fn geopackage::TilePyramid<'a>::matrix(&self, i64) -> core::option::Option<&geopackage_core::tiles::TileMatrix>
+pub fn geopackage::TilePyramid<'a>::matrix_set(&self) -> &geopackage_core::tiles::TileMatrixSet
+pub fn geopackage::TilePyramid<'a>::put_tile(&self, geopackage_core::tiles::TileCoord, &[u8]) -> geopackage::Result<()>
+pub fn geopackage::TilePyramid<'a>::table_name(&self) -> &str
+pub fn geopackage::TilePyramid<'a>::tile_count(&self) -> geopackage::Result<i64>
+pub fn geopackage::TilePyramid<'a>::tile_count_at(&self, i64) -> geopackage::Result<i64>
+pub fn geopackage::TilePyramid<'a>::validate(&self) -> geopackage::Result<()>
+pub fn geopackage::TilePyramid<'a>::write_all<D: core::convert::AsRef<[u8]>>(&self, impl core::iter::traits::collect::IntoIterator<Item = (geopackage_core::tiles::TileCoord, D)>, usize) -> geopackage::Result<usize>
+pub fn geopackage::TilePyramid<'a>::writer(&self) -> geopackage::Result<geopackage::TileWriter<'a>>
+pub fn geopackage::TilePyramid<'a>::zoom_levels(&self) -> alloc::vec::Vec<i64>
+impl core::fmt::Debug for geopackage::TilePyramid<'_>
+pub fn geopackage::TilePyramid<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Freeze for geopackage::TilePyramid<'a>
+impl<'a> !core::marker::Send for geopackage::TilePyramid<'a>
+impl<'a> !core::marker::Sync for geopackage::TilePyramid<'a>
+impl<'a> core::marker::Unpin for geopackage::TilePyramid<'a>
+impl<'a> core::marker::UnsafeUnpin for geopackage::TilePyramid<'a>
+impl<'a> !core::panic::unwind_safe::RefUnwindSafe for geopackage::TilePyramid<'a>
+impl<'a> !core::panic::unwind_safe::UnwindSafe for geopackage::TilePyramid<'a>
+pub struct geopackage::TilePyramidBuilder
+impl geopackage::TilePyramidBuilder
+pub fn geopackage::TilePyramidBuilder::allow_zoom_other(self, bool) -> Self
+pub fn geopackage::TilePyramidBuilder::description(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::TilePyramidBuilder::identifier(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::TilePyramidBuilder::matrices(self, impl core::iter::traits::collect::IntoIterator<Item = geopackage_core::tiles::TileMatrix>) -> Self
+pub fn geopackage::TilePyramidBuilder::matrix(self, geopackage_core::tiles::TileMatrix) -> Self
+pub fn geopackage::TilePyramidBuilder::new(impl core::convert::Into<alloc::string::String>, geopackage_core::tiles::TileMatrixSet) -> Self
+pub fn geopackage::TilePyramidBuilder::table_name(&self) -> &str
+impl core::clone::Clone for geopackage::TilePyramidBuilder
+pub fn geopackage::TilePyramidBuilder::clone(&self) -> geopackage::TilePyramidBuilder
+impl core::fmt::Debug for geopackage::TilePyramidBuilder
+pub fn geopackage::TilePyramidBuilder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for geopackage::TilePyramidBuilder
+impl core::marker::Send for geopackage::TilePyramidBuilder
+impl core::marker::Sync for geopackage::TilePyramidBuilder
+impl core::marker::Unpin for geopackage::TilePyramidBuilder
+impl core::marker::UnsafeUnpin for geopackage::TilePyramidBuilder
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::TilePyramidBuilder
+impl core::panic::unwind_safe::UnwindSafe for geopackage::TilePyramidBuilder
+pub struct geopackage::TileStream<'c>
+impl geopackage::TileStream<'_>
+pub fn geopackage::TileStream<'_>::for_each(&mut self, impl core::ops::function::FnMut(&geopackage::Tile<'_>) -> geopackage::Result<()>) -> geopackage::Result<()>
+pub fn geopackage::TileStream<'_>::next(&mut self) -> geopackage::Result<core::option::Option<geopackage::Tile<'_>>>
+impl core::fmt::Debug for geopackage::TileStream<'_>
+pub fn geopackage::TileStream<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'c> core::marker::Freeze for geopackage::TileStream<'c>
+impl<'c> !core::marker::Send for geopackage::TileStream<'c>
+impl<'c> !core::marker::Sync for geopackage::TileStream<'c>
+impl<'c> core::marker::Unpin for geopackage::TileStream<'c>
+impl<'c> core::marker::UnsafeUnpin for geopackage::TileStream<'c>
+impl<'c> !core::panic::unwind_safe::RefUnwindSafe for geopackage::TileStream<'c>
+impl<'c> !core::panic::unwind_safe::UnwindSafe for geopackage::TileStream<'c>
+pub struct geopackage::TileWriter<'conn>
+impl<'conn> geopackage::TileWriter<'conn>
+pub fn geopackage::TileWriter<'conn>::commit(self) -> geopackage::Result<()>
+pub fn geopackage::TileWriter<'conn>::delete(&mut self, geopackage_core::tiles::TileCoord) -> geopackage::Result<bool>
+pub fn geopackage::TileWriter<'conn>::put(&mut self, geopackage_core::tiles::TileCoord, &[u8]) -> geopackage::Result<()>
+impl core::fmt::Debug for geopackage::TileWriter<'_>
+pub fn geopackage::TileWriter<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'conn> !core::marker::Freeze for geopackage::TileWriter<'conn>
+impl<'conn> !core::marker::Send for geopackage::TileWriter<'conn>
+impl<'conn> !core::marker::Sync for geopackage::TileWriter<'conn>
+impl<'conn> core::marker::Unpin for geopackage::TileWriter<'conn>
+impl<'conn> core::marker::UnsafeUnpin for geopackage::TileWriter<'conn>
+impl<'conn> !core::panic::unwind_safe::RefUnwindSafe for geopackage::TileWriter<'conn>
+impl<'conn> !core::panic::unwind_safe::UnwindSafe for geopackage::TileWriter<'conn>
+pub const geopackage::DEFAULT_BULK_THRESHOLD: usize
+pub const geopackage::DEFAULT_BUSY_TIMEOUT: core::time::Duration
+pub const geopackage::DEFAULT_FILL_FACTOR: f64
+pub const geopackage::DEFAULT_GEOMETRY_COLUMN: &str
+pub const geopackage::DEFAULT_PRIMARY_KEY: &str
+pub type geopackage::Result<T, E> = core::result::Result<T, E>

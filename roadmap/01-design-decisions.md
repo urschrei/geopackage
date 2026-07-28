@@ -219,3 +219,55 @@ surface small and lets the rest of the workspace keep the hard guarantee.
 The workspace-lints mechanism (rather than per-crate attributes) makes the
 policy one declaration with one visible exception, and covers test and bench
 targets too.
+
+## D13. MSRV policy: declared, checked, and raised in a minor release
+
+**Decision.** The minimum supported Rust version is declared in
+`[workspace.package] rust-version` and checked by CI on every change. Raising
+it is a **minor** version bump, never a patch, and it is recorded in the
+changelog with the reason. It is not treated as a breaking change requiring a
+major bump.
+
+The MSRV is not a figure this workspace chooses freely. It is the maximum of
+what the code needs and what the dependency tree forces, and today the second
+of those decides it: `libsqlite3-sys` 0.38's build script uses `cfg_select!`,
+stabilised in 1.95, without declaring a `rust-version` of its own
+([02-ecosystem.md](02-ecosystem.md)). So no promise is made about supporting
+any particular number of releases back, because a dependency can move the floor
+without warning and the only alternatives would be pinning old dependencies or
+vendoring their build scripts.
+
+**Rationale.** Three positions are available and the middle one is the least
+wrong. Treating an MSRV bump as breaking is the most honest reading of semver,
+since code that compiled stops compiling, but it is out of step with the
+ecosystem and would force a major version for a change that alters no API.
+Treating it as a patch is what surprises people, because a patch bump is
+exactly what an automated update applies without review. A minor bump is
+visible in the version, appears in the changelog, and is what most of the
+ecosystem does.
+
+Making the constraint's origin explicit matters as much as the policy. A
+consumer pinned to an older toolchain needs to know the floor is set by a
+transitive build script rather than by this crate's own use of new language
+features, because that tells them where a fix would have to come from.
+
+## D14. Deprecation policy: two minor releases before removal
+
+**Decision.** A public item this workspace intends to remove is first marked
+`#[deprecated]`, with a note naming what to use instead. It stays, working, for
+at least two minor releases after the one that deprecated it. Removal is a
+major version bump once the API is frozen at 1.0.
+
+Deprecation and removal both appear in the changelog. An item deprecated
+without a replacement says so, rather than leaving a caller to guess whether
+one exists.
+
+**Rationale.** Two releases is the smallest window that lets a consumer meet
+the warning, plan, and migrate without the removal landing in the same upgrade
+cycle as the notice. A single release makes the deprecation decorative, since a
+consumer who skips one version sees the removal and never the warning. Longer
+windows accumulate items nobody may remove.
+
+Naming the replacement in the attribute rather than only in the changelog is
+what makes the warning actionable at the point it is seen, which is a compiler
+diagnostic rather than a document.

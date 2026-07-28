@@ -133,6 +133,22 @@ jobs:
       # test binary rather than only to its dependencies.
       - run: cargo +nightly test -p geopackage-ffi --target x86_64-unknown-linux-gnu
 
+  # The recorded public API surface, so a change to what a crate exports shows
+  # up as a diff in review rather than only to whoever it breaks later.
+  #
+  # Its own job because cargo-public-api drives rustdoc's JSON output and
+  # rebuilds documentation for every crate, which is far too slow to sit in the
+  # ordinary test run. Until 1.0 a diff here is a prompt to confirm the change
+  # was meant, not a refusal.
+  public-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-public-api --locked
+      - run: scripts/public_api.sh --check
+
   # Miri over the part of the boundary it can reach.
   #
   # Not the whole crate: SQLite is bundled and built from source, and miri
