@@ -85,6 +85,24 @@ pub enum SpatialIndexStatus {
     Stale,
 }
 
+impl SpatialIndexStatus {
+    /// The status as a short phrase, for reporting a layer's index.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Current => "current",
+            Self::Legacy => "legacy trigger set",
+            Self::Stale => "stale",
+        }
+    }
+}
+
+impl std::fmt::Display for SpatialIndexStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// What an [`Layer::audit_spatial_index`] found: how the index's contents
 /// compare with the geometries they are supposed to describe.
 ///

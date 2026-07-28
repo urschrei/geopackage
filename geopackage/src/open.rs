@@ -60,6 +60,50 @@ pub enum OpenWarning {
     },
 }
 
+/// One line saying what was tolerated, so a caller reporting warnings does not
+/// have to match on them itself.
+impl std::fmt::Display for OpenWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LegacyApplicationId {
+                version,
+                application_id,
+            } => {
+                // The four characters it spells, which is how the spec writes
+                // it and how a hex dump shows it.
+                let bytes = application_id.to_be_bytes();
+                let tag = String::from_utf8_lossy(&bytes);
+                write!(
+                    f,
+                    "file declares the GeoPackage {version} application_id {tag:?}, which predates the current \"GPKG\""
+                )
+            }
+            Self::MissingGeometryColumns => write!(
+                f,
+                "no gpkg_geometry_columns table: the file carries no feature layers"
+            ),
+            Self::TableNameCaseMismatch { declared, actual } => write!(
+                f,
+                "gpkg_contents says {declared:?} but the table is {actual:?}: they differ only in case"
+            ),
+            Self::UnsupportedExtension {
+                extension_name,
+                table_name,
+                scope,
+            } => {
+                let on = match table_name {
+                    Some(table) => format!(" on {table:?}"),
+                    None => String::new(),
+                };
+                write!(
+                    f,
+                    "extension {extension_name:?}{on} is not one this crate recognises (scope {scope}); writes to what it covers are refused"
+                )
+            }
+        }
+    }
+}
+
 impl GeoPackage {
     /// Open an existing GeoPackage read-write, tolerating a set of legacy and
     /// lightly non-conforming conditions that are recorded as [`OpenWarning`]s
@@ -71,6 +115,28 @@ impl GeoPackage {
     /// leniency covers presentation, not identity.
     pub fn open_lenient<P: AsRef<Path>>(path: P) -> Result<Self> {
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        Self::from_connection_lenient(conn)
+    }
+
+    /// Open an existing GeoPackage read-only, with the same leniency as
+    /// [`GeoPackage::open_lenient`].
+    ///
+    /// What an inspection tool wants: the files most worth inspecting are the
+    /// ones something is wrong with, and inspecting them should not require
+    /// write access to the file, its directory, or the medium it sits on.
+    /// [`GeoPackage::open_read_only`] is read-only but strict, and
+    /// [`GeoPackage::open_lenient`] is tolerant but demands write access; this
+    /// is the combination `gpkg info` and `gpkg validate` use.
+    ///
+    /// Warnings are retrieved with [`GeoPackage::open_warnings`], as for
+    /// `open_lenient`.
+    ///
+    /// # Errors
+    ///
+    /// As [`GeoPackage::open_lenient`]: a file that cannot be identified as a
+    /// GeoPackage, or is missing a required core table, is still an error.
+    pub fn open_read_only_lenient<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         Self::from_connection_lenient(conn)
     }
 
