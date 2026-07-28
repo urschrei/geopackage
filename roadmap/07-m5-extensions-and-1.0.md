@@ -495,15 +495,53 @@ Three consequences follow, none of them free:
   `gpkg_layer_t`, so `TilePyramid` had no C representation at all. It needs one,
   and on the measurements `get_tile` is the most call-heavy entry point in the
   crate, so it is the handle whose design costs most to get wrong.
-- **`features_in` has no Arrow counterpart.** `read_arrow` reads a whole layer;
-  there is no bounding-box-filtered columnar read (`geopackage/src/arrow.rs`).
-  So a spatial query has no columnar path today, and exposing one through C
-  needs either that counterpart built first (M3 already chose the approach: one
-  thread runs the rtree scan and hands candidate ids to workers in blocks) or
-  row-at-a-time accessors after all. Decide which before the header is frozen.
+- **`features_in` has no Arrow counterpart**, and it needs one. See the item
+  below, which is library work rather than FFI work and precedes this phase.
 - **Cursors and streams need C representations**, so `FeatureCursor`,
   `FeatureStream`, `TileCursor` and `TileStream` join the handle question rather
   than sitting outside it.
+
+### Phase 8b: a bounding-box-filtered columnar read
+
+`read_arrow` reads a whole layer; there is no columnar equivalent of
+`features_in` (`geopackage/src/arrow.rs`). Under the scope decision above a C
+consumer needs spatial queries, so the gap has to close one of two ways: build
+the counterpart, or expose row-at-a-time accessors after all.
+
+**Decided: build the counterpart.** Row accessors would reverse a deliberate
+choice, and they cost a family of C entry points (per-value accessors, type
+dispatch, string lifetimes, and the `unsafe` for each) to duplicate a data plane
+that already exists. The filtered columnar read is one C entry point instead.
+This is `geopackage` work, not `geopackage-ffi` work, and it is M3 debt that the
+FFI merely surfaces, so it sits before phase 9 rather than inside it.
+
+- [ ] `Layer::read_arrow_in(bbox, options)`. The SQL is the existing paginated
+      query plus the `rtree_select` join and its four bound parameters. Without
+      a spatial index it declines to a full scan carrying the exact filter,
+      matching what `features_in_plan` already does.
+- [ ] **The exact re-filter is required, not optional.** The rtree parameters
+      are deliberately widened (`widen_up`/`widen_down`) because the index
+      stores float32 envelopes, so its candidates are a superset.
+      `FeatureStream` re-tests each candidate's blob before converting the row;
+      the columnar path must do the same or it silently returns rows
+      `features_in` would not. A batch of N candidates therefore yields at most
+      N rows, and under-filling a batch is acceptable, as the byte ceiling
+      already cuts batches short.
+- [ ] **The aggregate and parallel paths decline to the direct loop when a
+      bounding box is set**, rather than failing, which is the idiom the
+      threaded read already uses for each of its three conditions. The
+      aggregate builds columns inside a SQLite aggregate function, so the
+      re-filter would have to move in there too. The parallel path assigns key
+      *windows* to workers on a density rule (`max - min + 1 == count`), and a
+      filter voids it: matching rows scatter, so equal key windows carry
+      unequal work.
+- [ ] **Only then decide whether a threaded filtered read pays.** M3 chose the
+      design already (one thread runs the rtree scan and hands candidate ids to
+      workers in blocks, so the scan happens once and no feature is returned
+      twice) and recorded the open question with it: whether bbox results are
+      typically large enough for any of it to pay, given that fetching an
+      arbitrary id list is index lookups rather than a rowid range scan. Answer
+      that with a measurement against the single-threaded path, not in advance.
 
 ### The handle-lifetime question, and what it costs
 
