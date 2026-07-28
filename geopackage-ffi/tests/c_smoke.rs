@@ -110,6 +110,11 @@ fn a_c_program_links_against_the_library_and_reads_a_file() {
     assert!(stdout.contains("version: 1.4"), "{stdout}");
     assert!(stdout.contains("layers: 5"), "{stdout}");
     assert!(stdout.contains("layer points: 3 rows"), "{stdout}");
+    // The C program pulls every layer through the Arrow C Data Interface and
+    // checks the streamed row count against the scalar one itself, so these
+    // lines appearing at all means the data plane worked from C.
+    assert!(stdout.contains("stream schema: 4 columns"), "{stdout}");
+    assert!(stdout.contains("streamed 3 rows"), "{stdout}");
     // The C program asserts the close refusal itself and exits non-zero if it
     // does not happen, so reaching "ok" means the handle rule held from C too.
     assert!(stdout.contains("ok"), "{stdout}");

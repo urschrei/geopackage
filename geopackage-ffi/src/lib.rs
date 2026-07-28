@@ -46,6 +46,7 @@ pub mod container;
 pub mod error;
 pub mod handle;
 pub mod layer;
+pub mod stream;
 pub mod util;
 
 pub use container::{
@@ -57,4 +58,5 @@ pub use layer::{
     gpkg_attributes_open, gpkg_layer_count, gpkg_layer_free, gpkg_layer_name, gpkg_layer_name_at,
     gpkg_layer_names_count, gpkg_layer_open, gpkg_layer_t,
 };
+pub use stream::{gpkg_layer_read_arrow, gpkg_layer_read_arrow_in};
 pub use util::gpkg_string_free;

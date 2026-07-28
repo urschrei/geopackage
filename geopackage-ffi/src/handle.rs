@@ -112,9 +112,19 @@ impl Container {
         // transmute changes only the lifetime parameter; `Layer` has no other
         // generic parameter and the same layout either way.
         let erased: Layer<'static> = unsafe { std::mem::transmute(layer) };
-        self.children.set(self.children.get() + 1);
         LayerHandle {
             layer: erased,
+            _token: self.token(),
+        }
+    }
+
+    /// Take one count against this container, released when the token drops.
+    ///
+    /// Used by anything that erases a borrow of this container: layer handles,
+    /// and the Arrow streams in [`crate::stream`].
+    pub fn token(&self) -> ChildToken {
+        self.children.set(self.children.get() + 1);
+        ChildToken {
             parent: std::ptr::from_ref(self),
         }
     }
@@ -146,14 +156,36 @@ impl Container {
     }
 }
 
+/// One count against a container's child tally, released on drop.
+///
+/// A layer handle holds one. So does an Arrow stream, which borrows the same
+/// container and needs the same protection: while a token is alive, the
+/// container refuses to close, so an erased `'static` borrow cannot outlive
+/// what it points at.
+pub struct ChildToken {
+    /// The container counted against. Raw rather than a reference, because a
+    /// reference would reintroduce the borrow this exists to erase.
+    parent: *const Container,
+}
+
+impl Drop for ChildToken {
+    fn drop(&mut self) {
+        // SAFETY: `parent` came from `std::ptr::from_ref` on a live `Container`
+        // in `Container::token`, and the container outlives every token it
+        // made, because closing refuses while any is outstanding. Tokens are
+        // not `Send`, so this runs on the container's own thread.
+        let parent = unsafe { &*self.parent };
+        parent.release_child();
+    }
+}
+
 /// A `gpkg_layer_t`: a layer, and the container it borrows.
 pub struct LayerHandle {
     /// The erased borrow. See [`Container::adopt`] for why it is sound.
     layer: Layer<'static>,
-    /// The container this borrows, so dropping the handle can decrement its
-    /// child count. Raw rather than a reference because a reference would
-    /// reintroduce exactly the borrow this type exists to erase.
-    parent: *const Container,
+    /// What keeps the container alive while this handle exists. Dropped with
+    /// the handle, which is what later permits a close.
+    _token: ChildToken,
 }
 
 impl LayerHandle {
@@ -161,17 +193,14 @@ impl LayerHandle {
     pub fn layer(&self) -> &Layer<'static> {
         &self.layer
     }
-}
 
-impl Drop for LayerHandle {
-    fn drop(&mut self) {
-        // SAFETY: `parent` came from `std::ptr::from_ref` on a live `Container`
-        // in `adopt`, and the container outlives every handle it made, because
-        // `close` refuses while any is outstanding (invariant 2) and a
-        // container is otherwise only dropped through that path. So the pointer
-        // is still valid here. Handles are not `Send`, so this runs on the
-        // thread that created the container (invariant 3).
-        let parent = unsafe { &*self.parent };
-        parent.release_child();
+    /// Take another count against this handle's container, for something that
+    /// borrows the same container independently, such as an Arrow stream.
+    pub fn token(&self) -> ChildToken {
+        // SAFETY: this handle holds a token of its own, so the container it
+        // points at is still alive; taking a second count against it is the
+        // same operation `Container::token` performs.
+        let parent = unsafe { &*self._token.parent };
+        parent.token()
     }
 }

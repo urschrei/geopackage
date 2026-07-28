@@ -80,7 +80,59 @@ int main(int argc, char **argv) {
         }
         printf("layer %s: %llu rows\n", name, (unsigned long long)rows);
 
-        /* Closing here would be refused, because this layer handle still
+        /* Pull the layer through the Arrow C Data Interface, which is the
+         * data plane. The stream is consumed exactly as the specification
+         * says: get_schema once, then get_next until it hands back a released
+         * array, then release. */
+        struct ArrowArrayStream stream;
+        memset(&stream, 0, sizeof(stream));
+        if (gpkg_layer_read_arrow(layer, &stream, &error) != GPKG_STATUS_OK) {
+            gpkg_layer_free(layer);
+            gpkg_string_free(name);
+            return fail("gpkg_layer_read_arrow", &error);
+        }
+
+        struct ArrowSchema schema;
+        memset(&schema, 0, sizeof(schema));
+        if (stream.get_schema(&stream, &schema) != 0) {
+            fprintf(stderr, "get_schema: %s\n", stream.get_last_error(&stream));
+            return 1;
+        }
+        printf("  stream schema: %lld columns\n", (long long)schema.n_children);
+        schema.release(&schema);
+
+        long long streamed = 0;
+        for (;;) {
+            struct ArrowArray array;
+            memset(&array, 0, sizeof(array));
+            if (stream.get_next(&stream, &array) != 0) {
+                fprintf(stderr, "get_next: %s\n", stream.get_last_error(&stream));
+                return 1;
+            }
+            /* A released array is how the interface spells end of stream. */
+            if (array.release == NULL) {
+                break;
+            }
+            streamed += array.length;
+            array.release(&array);
+        }
+        printf("  streamed %lld rows\n", streamed);
+        if (streamed != (long long)rows) {
+            fprintf(stderr, "stream returned %lld rows, layer has %llu\n", streamed,
+                    (unsigned long long)rows);
+            return 1;
+        }
+
+        /* The stream borrows the container too, so a close is still refused
+         * until it is released. */
+        if (gpkg_close(gpkg, &error) != GPKG_STATUS_HANDLE_IN_USE) {
+            fprintf(stderr, "expected a close with a live stream to be refused\n");
+            return 1;
+        }
+        gpkg_error_clear(&error);
+        stream.release(&stream);
+
+        /* Closing here would be refused too, because this layer handle still
          * borrows the container. Prove it, then free the handle. */
         if (gpkg_close(gpkg, &error) != GPKG_STATUS_HANDLE_IN_USE) {
             fprintf(stderr, "expected a close with a live layer handle to be refused\n");
