@@ -708,12 +708,19 @@ impl GeoPackage {
         }
         let allow_unsupported_extension_writes = options.allow_unsupported_extension_writes;
         let enforce_column_constraints = options.enforce_column_constraints;
+        // Collected before the pragmas are applied, so a warning describes the
+        // file as it was found rather than as this handle left it.
+        let warnings = if options.lenient {
+            crate::open::collect_warnings(&conn, application_id, version)?
+        } else {
+            Vec::new()
+        };
         let journal_mode = apply_open_options(&conn, options, apply_journal)?;
         functions::register(&conn)?;
         Ok(Self {
             conn: Some(conn),
             version,
-            warnings: Vec::new(),
+            warnings,
             journal_mode,
             allow_unsupported_extension_writes,
             enforce_column_constraints,

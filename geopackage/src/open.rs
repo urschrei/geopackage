@@ -9,13 +9,11 @@
 //! so callers can inspect and iterate a lightly non-conforming file instead
 //! of being turned away. Strict [`GeoPackage::open`] is unchanged.
 
-use crate::{
-    Error, GeoPackage, Result, functions, read_header_u32, resolve_table_name, table_exists,
-};
+use crate::{GeoPackage, Result, resolve_table_name, table_exists};
 use geopackage_core::GpkgVersion;
 use geopackage_core::extensions::{ExtensionScope, ExtensionSupport};
 use geopackage_core::version::{APPLICATION_ID_GP10, APPLICATION_ID_GP11};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::Connection;
 use std::path::Path;
 
 /// A non-fatal condition [`GeoPackage::open_lenient`] tolerated while opening a
@@ -114,8 +112,7 @@ impl GeoPackage {
     /// core table (`gpkg_spatial_ref_sys`, `gpkg_contents`), is still an error:
     /// leniency covers presentation, not identity.
     pub fn open_lenient<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-        Self::from_connection_lenient(conn)
+        crate::OpenOptions::new().lenient(true).open(path)
     }
 
     /// Open an existing GeoPackage read-only, with the same leniency as
@@ -136,8 +133,7 @@ impl GeoPackage {
     /// As [`GeoPackage::open_lenient`]: a file that cannot be identified as a
     /// GeoPackage, or is missing a required core table, is still an error.
     pub fn open_read_only_lenient<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        Self::from_connection_lenient(conn)
+        crate::OpenOptions::new().lenient(true).open_read_only(path)
     }
 
     /// The warnings collected by [`GeoPackage::open_lenient`] (always empty for
@@ -145,51 +141,31 @@ impl GeoPackage {
     pub fn open_warnings(&self) -> &[OpenWarning] {
         &self.warnings
     }
+}
 
-    fn from_connection_lenient(conn: Connection) -> Result<Self> {
-        let application_id = read_header_u32(&conn, "application_id")?;
-        let user_version = read_header_u32(&conn, "user_version")?;
-        let version = GpkgVersion::from_pragmas(application_id, user_version).ok_or(
-            Error::NotAGeoPackage {
-                reason: "unrecognized application_id/user_version",
-                application_id,
-                user_version,
-            },
-        )?;
-        for required in ["gpkg_spatial_ref_sys", "gpkg_contents"] {
-            if !table_exists(&conn, required)? {
-                return Err(Error::NotAGeoPackage {
-                    reason: "missing required core table",
-                    application_id,
-                    user_version,
-                });
-            }
-        }
-
-        let mut warnings = Vec::new();
-        if application_id == APPLICATION_ID_GP10 || application_id == APPLICATION_ID_GP11 {
-            warnings.push(OpenWarning::LegacyApplicationId {
-                version,
-                application_id,
-            });
-        }
-        if !table_exists(&conn, "gpkg_geometry_columns")? {
-            warnings.push(OpenWarning::MissingGeometryColumns);
-        }
-        collect_case_mismatches(&conn, &mut warnings)?;
-        collect_unsupported_extensions(&conn, &mut warnings)?;
-
-        functions::register(&conn)?;
-        Ok(Self {
-            conn: Some(conn),
+/// Everything a lenient open tolerates, as warnings.
+///
+/// Called from the one open path in `lib.rs` when `OpenOptions::lenient` is
+/// set, so leniency composes with every other setting rather than living in a
+/// parallel constructor that ignored them.
+pub(crate) fn collect_warnings(
+    conn: &Connection,
+    application_id: u32,
+    version: GpkgVersion,
+) -> Result<Vec<OpenWarning>> {
+    let mut warnings = Vec::new();
+    if application_id == APPLICATION_ID_GP10 || application_id == APPLICATION_ID_GP11 {
+        warnings.push(OpenWarning::LegacyApplicationId {
             version,
-            warnings,
-            // The lenient path leaves the file's journal mode untouched.
-            journal_mode: crate::JournalMode::Delete,
-            allow_unsupported_extension_writes: false,
-            enforce_column_constraints: false,
-        })
+            application_id,
+        });
     }
+    if !table_exists(conn, "gpkg_geometry_columns")? {
+        warnings.push(OpenWarning::MissingGeometryColumns);
+    }
+    collect_case_mismatches(conn, &mut warnings)?;
+    collect_unsupported_extensions(conn, &mut warnings)?;
+    Ok(warnings)
 }
 
 /// Push an [`OpenWarning::UnsupportedExtension`] for every `gpkg_extensions`

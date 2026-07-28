@@ -199,3 +199,60 @@ fn read_only_lenient_does_not_need_a_writable_file() {
         .execute("CREATE TABLE scratch (a INTEGER)", [])
         .expect_err("a read-only connection must refuse a write");
 }
+
+#[test]
+fn leniency_composes_with_the_other_open_options() {
+    // What the unified path buys. Before `OpenOptions::lenient` existed,
+    // leniency was reachable only through `open_lenient`, which takes no
+    // options, so a caller wanting a legacy file *and* WAL, or a legacy file
+    // *and* constraint enforcement, could have either but never both.
+    use geopackage::{JournalMode, OpenOptions};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy.gpkg");
+    legacy_file(&path, APPLICATION_ID_GP10);
+
+    let gpkg = OpenOptions::new()
+        .lenient(true)
+        .journal_mode(JournalMode::Wal)
+        .enforce_column_constraints(true)
+        .open(&path)
+        .unwrap();
+
+    // Lenient: the legacy application_id was tolerated and recorded.
+    assert!(
+        gpkg.open_warnings()
+            .contains(&OpenWarning::LegacyApplicationId {
+                version: GpkgVersion::V1_0,
+                application_id: APPLICATION_ID_GP10,
+            })
+    );
+
+    // And the other options took effect on the same handle, which is the part
+    // that was previously impossible.
+    let mode: String = gpkg
+        .connection()
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(mode.to_lowercase(), "wal");
+
+    // Closing resets the file to a single file, as it does for any WAL handle,
+    // so leniency does not opt out of the interchange guarantee either.
+    gpkg.close().unwrap();
+    assert!(!path.with_extension("gpkg-wal").exists());
+}
+
+#[test]
+fn a_strict_open_still_records_no_warnings() {
+    // The default is unchanged: `lenient` defaults to false, so an ordinary
+    // `OpenOptions` open behaves exactly as `GeoPackage::open` does.
+    use geopackage::OpenOptions;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy.gpkg");
+    legacy_file(&path, APPLICATION_ID_GP11);
+
+    let gpkg = OpenOptions::new().open(&path).unwrap();
+    assert!(gpkg.open_warnings().is_empty());
+    assert_eq!(gpkg.version(), GpkgVersion::V1_1);
+}
