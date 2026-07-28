@@ -458,8 +458,24 @@ commands.
 - [ ] `gpkg index <file> <layer>` and `gpkg repair`.
 - [ ] `gpkg tiles info` and `gpkg tiles get z/x/y --out tile.png`, deferred
       from M4 for want of this crate.
-- [ ] Ships as a bin crate, and becomes the corpus generation harness the
-      testing plan assumes from M3 onwards.
+- [ ] Ships as a bin crate.
+
+**Corpus generation is cut from this phase**, and from the CLI's remit
+generally. M3 assigned it here and
+[08-testing-conformance.md](08-testing-conformance.md) carried the assumption,
+but the role was filled meanwhile by `scripts/generate_fixtures.py`, which
+builds the committed fixtures by driving GDAL, QGIS and raw `sqlite3` and
+commits GDAL's own read beside each as the oracle. That is the right generator
+and the CLI is not: the corpus exists to test against other implementations, so
+a fixture this crate wrote and this crate reads proves nothing about interop.
+
+Two things follow. `gpkg copy` no longer needs to be faithful enough to
+reproduce arbitrary fixtures, so it can start at features and grow to tiles and
+the extension tables only if something asks for it; M3 criterion 6 asks only
+that a GDAL file copied through us comes out clean under the validators. And a
+`--json` output mode loses its test-harness justification, since the corpus
+oracle is GDAL's JSON rather than ours, leaving it an ergonomics question to
+settle later.
 
 ## Phase 9: `geopackage-ffi`
 

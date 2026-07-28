@@ -219,6 +219,13 @@ assumed about GPB bodies being usable as WKB without a parse.
       `gpkg copy <src> <dst>` (any supported read → our write; the dogfood
       command), `gpkg index <file> <layer>` / `repair`.
 - [ ] Ships as bin crate; also the corpus-generation harness for tests.
+      *(The corpus-generation half was cut on 2026-07-28. It was filled
+      meanwhile by `scripts/generate_fixtures.py`, which drives GDAL, QGIS and
+      raw `sqlite3` and commits GDAL's own read beside each fixture as the
+      oracle. A corpus exists to test against other implementations, so a
+      fixture this crate wrote and this crate reads proves nothing about
+      interop. Recorded in
+      [07-m5-extensions-and-1.0.md](07-m5-extensions-and-1.0.md) phase 8.)*
 
 ## Acceptance criteria
 
