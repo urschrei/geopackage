@@ -64,3 +64,85 @@ jobs:
       - run: cargo install cargo-fuzz --locked
       - run: cargo +nightly fuzz build
         working-directory: geopackage-core
+
+  # The C ABI: header, packaging, and a C consumer that actually links.
+  #
+  # Separate from `test` because it needs cbindgen and cargo-c, which the rest
+  # of the workspace does not. `GPKG_FFI_REQUIRE_C_TESTS` turns the tests'
+  # skip-if-missing behaviour into a failure, so a missing tool here is a red
+  # build rather than a gate that quietly stopped running.
+  c-abi:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      GPKG_FFI_REQUIRE_C_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cbindgen --locked
+      - run: cargo install cargo-c --locked
+      # The static library the C smoke tests link against. `cargo test` builds
+      # the rlib, not the staticlib, so without this the tests would find
+      # nothing to link and fail on the required-flag above.
+      - run: cargo build -p geopackage-ffi
+      # The header diff gate and both C programs.
+      - run: cargo test -p geopackage-ffi --all-features
+      # M3 acceptance criterion 7: the packaged artefacts install and link.
+      - run: cargo cbuild -p geopackage-ffi --release
+      - run: cargo cinstall -p geopackage-ffi --release --prefix=/usr/local --destdir=${{ runner.temp }}/capi
+      - name: Link a C program against the installed package
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          prefix="${{ runner.temp }}/capi/usr/local"
+          export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
+          cflags=$(pkg-config --define-variable=prefix="$prefix" --cflags geopackage)
+          # Link the archive directly, so this checks the static artefact
+          # rather than whichever the linker happens to prefer.
+          private=$(pkg-config --define-variable=prefix="$prefix" --libs-only-l --libs-only-other --static geopackage | sed 's/-lgeopackage//')
+          cc $cflags -std=c11 geopackage-ffi/examples/roundtrip.c "$prefix/lib/libgeopackage.a" $private -o roundtrip
+          ./roundtrip geopackage/tests/fixtures/gdal_multilayer_1_4.gpkg points copied.gpkg
+
+  # AddressSanitizer over the one crate with `unsafe` in it.
+  #
+  # This is what checks the lifetime erasure in `geopackage-ffi/src/handle.rs`:
+  # with the close refusal removed, ASan reports a heap-use-after-free, so this
+  # job is the thing standing between that design and a silent regression.
+  sanitizers:
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-D warnings -Zsanitizer=address"
+      # Leak detection is off for now. SQLite is bundled and keeps one-time
+      # allocations alive by design, so LeakSanitizer reports it rather than
+      # anything this crate does. Turning it on wants those suppressed first.
+      ASAN_OPTIONS: "detect_leaks=0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      # The target has to be named explicitly for the sanitizer to apply to the
+      # test binary rather than only to its dependencies.
+      - run: cargo +nightly test -p geopackage-ffi --target x86_64-unknown-linux-gnu
+
+  # Miri over the part of the boundary it can reach.
+  #
+  # Not the whole crate: SQLite is bundled and built from source, and miri
+  # cannot call foreign functions, so anything that opens a file stops at
+  # `sqlite3_threadsafe`. `tests/boundary.rs` is the carve-out that does not,
+  # covering argument validation and string ownership. The rest is the
+  # sanitizer's job above; neither tool covers the other's ground.
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +nightly miri test -p geopackage-ffi --test boundary
