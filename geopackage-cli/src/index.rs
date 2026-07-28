@@ -12,7 +12,9 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use geopackage::{GeoPackage, Layer, Result, SpatialIndexStatus};
+use geopackage::{GeoPackage, Layer, SpatialIndexStatus};
+
+use crate::error::Result;
 
 /// `gpkg index`: build an index on a layer that has none.
 pub fn build(path: &Path, layer_name: &str) -> Result<ExitCode> {
