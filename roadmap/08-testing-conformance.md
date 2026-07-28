@@ -48,7 +48,18 @@ This file is the harness plan; milestone docs reference it.
   GDAL-autotest gpkg files) pinned by sha256.
 - Every corpus file records: producer + version, spec version, feature/tile
   counts, known quirks. Generation scripts live in the repo so fixtures are
-  reproducible (`gpkg copy` becomes the generator from M3).
+  reproducible: `scripts/generate_fixtures.py`, which drives GDAL's `ogr2ogr`,
+  `ogrinfo` and `gdal_translate`, QGIS's `qgis_process`, GDAL's `osgeo`
+  bindings for the Related Tables fixture, and raw `sqlite3` for the shapes
+  GDAL cannot express. `scripts/fetch_corpus.sh` pulls the larger external soak
+  corpus against pinned sha256s.
+- **The CLI is deliberately not the generator**, reversing the earlier plan for
+  `gpkg copy` to become one from M3. The corpus exists to test against other
+  implementations, so a fixture this crate wrote and this crate reads proves
+  nothing about interop; the value is in files GDAL, QGIS and NGA wrote, with
+  GDAL's own `ogrinfo -json` read committed beside each one as the oracle. Our
+  own writes are covered instead by the round-trip tests and the external
+  validators.
 - Share fixtures with rusqlite-gpkg and geozero where useful (see
   [02-ecosystem.md](02-ecosystem.md)).
 
