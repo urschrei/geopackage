@@ -67,6 +67,12 @@ dbg_macro = "warn"
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
 
+# cargo-c enables this internally when building the C package. It gates
+# nothing: the C ABI is the whole crate, and the feature exists only because
+# `cargo cbuild` insists on passing it.
+[features]
+capi = []
+
 [dependencies]
 geopackage = { workspace = true, features = ["arrow"] }
 arrow-array = { workspace = true, features = ["ffi"] }

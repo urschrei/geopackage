@@ -12,6 +12,25 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// When set, a precondition this test would otherwise skip on is a failure
+/// instead. CI sets it, so a gate cannot go quiet because a tool or an artefact
+/// was missing; locally it is unset, so a plain `cargo test` still works
+/// without cbindgen installed.
+const REQUIRE: &str = "GPKG_FFI_REQUIRE_C_TESTS";
+
+fn required() -> bool {
+    std::env::var_os(REQUIRE).is_some()
+}
+
+/// Skip, or fail if the environment says these tests are mandatory.
+fn skip(reason: &str) {
+    assert!(
+        !required(),
+        "{REQUIRE} is set, so this may not be skipped: {reason}"
+    );
+    eprintln!("skipped: {reason}");
+}
+
 /// The libraries a static link of this crate needs, per platform.
 ///
 /// Obtained from `cargo rustc -p geopackage-ffi --crate-type staticlib --
@@ -49,16 +68,18 @@ fn manifest_dir() -> PathBuf {
 /// binary, or `None` when the environment cannot support it.
 fn build_c_example(dir: &Path, name: &str) -> Option<PathBuf> {
     if cfg!(target_os = "windows") {
+        // Genuinely not applicable rather than a missing precondition, so this
+        // one skips even under `GPKG_FFI_REQUIRE_C_TESTS`.
         eprintln!("skipped: the Windows link line wants its own handling");
         return None;
     }
     let target = target_dir()?;
     let static_lib = target.join("libgeopackage_ffi.a");
     if !static_lib.exists() {
-        eprintln!(
-            "skipped: {} has not been built; run `cargo build -p geopackage-ffi` first",
+        skip(&format!(
+            "{} has not been built; run `cargo build -p geopackage-ffi` first",
             static_lib.display()
-        );
+        ));
         return None;
     }
 
@@ -179,7 +200,7 @@ fn the_committed_header_matches_what_cbindgen_produces() {
     // The API-stability gate: an ABI change has to show up as a diff in the
     // committed header rather than reaching a consumer unannounced.
     let Ok(cbindgen) = which_cbindgen() else {
-        eprintln!("skipped: cbindgen is not installed");
+        skip("cbindgen is not installed");
         return;
     };
 
