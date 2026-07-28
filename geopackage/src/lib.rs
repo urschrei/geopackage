@@ -391,8 +391,9 @@
 //!   [`Layer::create_spatial_index_with`] and [`Layer::write_all_with`]: the
 //!   row count at which the bulk build takes over from the per-row triggers
 //!   ([`BulkIndexOptions::bulk_threshold`], default [`DEFAULT_BULK_THRESHOLD`],
-//!   10,000 rows), the self-check it then runs ([`StructuralCheck`], default
-//!   [`StructuralCheck::RtreeOnly`]), and how full each node of the tree is
+//!   10,000 rows), how much of the result it checks before trusting it
+//!   ([`BulkVerification`], default [`BulkVerification::None`]), and how full
+//!   each node of the tree is
 //!   packed ([`BulkIndexOptions::fill_factor`], default
 //!   [`DEFAULT_FILL_FACTOR`], `1.0`).
 //! - [`TilePyramidBuilder`]: a new pyramid's extent and spatial reference
@@ -530,7 +531,7 @@ mod validate;
 mod value;
 mod writer;
 
-pub use bulk::{BulkIndexOptions, DEFAULT_BULK_THRESHOLD, DEFAULT_FILL_FACTOR, StructuralCheck};
+pub use bulk::{BulkIndexOptions, BulkVerification, DEFAULT_BULK_THRESHOLD, DEFAULT_FILL_FACTOR};
 pub use create::{
     ColumnSpec, DEFAULT_GEOMETRY_COLUMN, DEFAULT_PRIMARY_KEY, GeometrySpec, TableSchemaBuilder,
 };

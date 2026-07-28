@@ -81,6 +81,29 @@ impl core::marker::Unpin for geopackage::extensions::ExtensionRow
 impl core::marker::UnsafeUnpin for geopackage::extensions::ExtensionRow
 impl core::panic::unwind_safe::RefUnwindSafe for geopackage::extensions::ExtensionRow
 impl core::panic::unwind_safe::UnwindSafe for geopackage::extensions::ExtensionRow
+#[non_exhaustive] pub enum geopackage::BulkVerification
+pub geopackage::BulkVerification::Contents
+pub geopackage::BulkVerification::Database
+pub geopackage::BulkVerification::None
+pub geopackage::BulkVerification::Structure
+impl core::clone::Clone for geopackage::BulkVerification
+pub fn geopackage::BulkVerification::clone(&self) -> geopackage::BulkVerification
+impl core::cmp::Eq for geopackage::BulkVerification
+impl core::cmp::PartialEq for geopackage::BulkVerification
+pub fn geopackage::BulkVerification::eq(&self, &geopackage::BulkVerification) -> bool
+impl core::default::Default for geopackage::BulkVerification
+pub fn geopackage::BulkVerification::default() -> geopackage::BulkVerification
+impl core::fmt::Debug for geopackage::BulkVerification
+pub fn geopackage::BulkVerification::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage::BulkVerification
+impl core::marker::StructuralPartialEq for geopackage::BulkVerification
+impl core::marker::Freeze for geopackage::BulkVerification
+impl core::marker::Send for geopackage::BulkVerification
+impl core::marker::Sync for geopackage::BulkVerification
+impl core::marker::Unpin for geopackage::BulkVerification
+impl core::marker::UnsafeUnpin for geopackage::BulkVerification
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage::BulkVerification
+impl core::panic::unwind_safe::UnwindSafe for geopackage::BulkVerification
 #[non_exhaustive] pub enum geopackage::ContentsDataType
 pub geopackage::ContentsDataType::Attributes
 pub geopackage::ContentsDataType::Features
@@ -498,27 +521,6 @@ impl core::marker::Unpin for geopackage::StorageStrictness
 impl core::marker::UnsafeUnpin for geopackage::StorageStrictness
 impl core::panic::unwind_safe::RefUnwindSafe for geopackage::StorageStrictness
 impl core::panic::unwind_safe::UnwindSafe for geopackage::StorageStrictness
-#[non_exhaustive] pub enum geopackage::StructuralCheck
-pub geopackage::StructuralCheck::FullDatabase
-pub geopackage::StructuralCheck::RtreeOnly
-impl core::clone::Clone for geopackage::StructuralCheck
-pub fn geopackage::StructuralCheck::clone(&self) -> geopackage::StructuralCheck
-impl core::cmp::Eq for geopackage::StructuralCheck
-impl core::cmp::PartialEq for geopackage::StructuralCheck
-pub fn geopackage::StructuralCheck::eq(&self, &geopackage::StructuralCheck) -> bool
-impl core::default::Default for geopackage::StructuralCheck
-pub fn geopackage::StructuralCheck::default() -> geopackage::StructuralCheck
-impl core::fmt::Debug for geopackage::StructuralCheck
-pub fn geopackage::StructuralCheck::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for geopackage::StructuralCheck
-impl core::marker::StructuralPartialEq for geopackage::StructuralCheck
-impl core::marker::Freeze for geopackage::StructuralCheck
-impl core::marker::Send for geopackage::StructuralCheck
-impl core::marker::Sync for geopackage::StructuralCheck
-impl core::marker::Unpin for geopackage::StructuralCheck
-impl core::marker::UnsafeUnpin for geopackage::StructuralCheck
-impl core::panic::unwind_safe::RefUnwindSafe for geopackage::StructuralCheck
-impl core::panic::unwind_safe::UnwindSafe for geopackage::StructuralCheck
 #[non_exhaustive] pub enum geopackage::Synchronous
 pub geopackage::Synchronous::Extra
 pub geopackage::Synchronous::Full
@@ -638,13 +640,13 @@ impl core::panic::unwind_safe::UnwindSafe for geopackage::BoundingBox
 #[non_exhaustive] pub struct geopackage::BulkIndexOptions
 pub geopackage::BulkIndexOptions::bulk_threshold: usize
 pub geopackage::BulkIndexOptions::fill_factor: f64
-pub geopackage::BulkIndexOptions::structural_check: geopackage::StructuralCheck
+pub geopackage::BulkIndexOptions::verification: geopackage::BulkVerification
 impl geopackage::BulkIndexOptions
 pub fn geopackage::BulkIndexOptions::always_bulk() -> Self
 pub fn geopackage::BulkIndexOptions::never_bulk() -> Self
 pub fn geopackage::BulkIndexOptions::with_fill_factor(self, f64) -> Self
-pub fn geopackage::BulkIndexOptions::with_structural_check(self, geopackage::StructuralCheck) -> Self
 pub fn geopackage::BulkIndexOptions::with_threshold(usize) -> Self
+pub fn geopackage::BulkIndexOptions::with_verification(self, geopackage::BulkVerification) -> Self
 impl core::clone::Clone for geopackage::BulkIndexOptions
 pub fn geopackage::BulkIndexOptions::clone(&self) -> geopackage::BulkIndexOptions
 impl core::default::Default for geopackage::BulkIndexOptions

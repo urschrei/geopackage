@@ -16,8 +16,8 @@ use geopackage::core::gpb::{Envelope, encode_header};
 use geopackage::core::triggers::{self, TriggerGeneration};
 use geopackage::core::types::{ColumnType, GeometryType};
 use geopackage::{
-    BoundingBox, BulkIndexOptions, ColumnSpec, Error, GeoPackage, GeometrySpec, NewFeature,
-    SpatialIndexStatus, StructuralCheck, TableSchemaBuilder, Value, ValueRef,
+    BoundingBox, BulkIndexOptions, BulkVerification, ColumnSpec, Error, GeoPackage, GeometrySpec,
+    NewFeature, SpatialIndexStatus, TableSchemaBuilder, Value, ValueRef,
 };
 use hegel::generators;
 use rusqlite::{Connection, OptionalExtension};
@@ -743,7 +743,7 @@ fn bulk_build_with_full_database_check_is_correct() {
     gpkg.layer("pts")
         .unwrap()
         .create_spatial_index_with(
-            BulkIndexOptions::always_bulk().with_structural_check(StructuralCheck::FullDatabase),
+            BulkIndexOptions::always_bulk().with_verification(BulkVerification::Database),
         )
         .unwrap();
 
