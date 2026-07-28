@@ -1,0 +1,6 @@
+# The generated C header is compared byte for byte against a fresh cbindgen run
+# by `geopackage-ffi/tests/c_smoke.rs`. cbindgen writes LF, so keep it LF in the
+# working tree on every platform rather than letting a Windows checkout rewrite
+# it. The test normalises line endings as well, so this is belt and braces.
+*.h text eol=lf
+*.c text eol=lf
