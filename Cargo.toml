@@ -1,5 +1,5 @@
 [workspace]
-members = ["geopackage-core", "geopackage"]
+members = ["geopackage-core", "geopackage", "geopackage-cli"]
 exclude = ["geopackage-core/fuzz"]
 resolver = "3"
 
@@ -23,6 +23,7 @@ categories = ["science::geo", "database"]
 
 [workspace.dependencies]
 geopackage-core = { version = "0.5.0", path = "geopackage-core", default-features = false }
+geopackage = { version = "0.5.0", path = "geopackage" }
 thiserror = "2"
 # `limits` is for SQLITE_LIMIT_FUNCTION_ARG: the Arrow read path passes one
 # function argument per column, so it has to know when a table is too wide.
@@ -61,6 +62,10 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # coordinate encodings land (roadmap 05-m3).
 arrow-array = "59"
 arrow-schema = "59"
+# `geopackage-cli` only. `derive` for the command tree; `wrap_help` is left off
+# because it pulls a terminal-width dependency to reflow help text, which a
+# handful of subcommands do not need.
+clap = { version = "4", features = ["derive"] }
 
 # Inherited by every member via `[lints] workspace = true`. The planned
 # `geopackage-ffi` crate (M3) is the sole intended exception: it will not
