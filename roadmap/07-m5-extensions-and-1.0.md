@@ -758,9 +758,23 @@ handle and should not change at all.
 
 - [ ] **API review.** Audit every `pub` item; `#[non_exhaustive]` where growth
       is plausible; error variants stabilised; rusqlite kept out of the public
-      API except through documented escape hatches; MSRV policy written down.
-      Mechanise it with a `cargo public-api` diff gate in CI so the freeze is
-      enforced continuously rather than asserted once.
+      API except through documented escape hatches.
+      *(Partly done. The mechanised half is in: `scripts/public_api.sh` records
+      each crate's exported surface under `public-api/`, a CI job regenerates
+      and diffs it, and the gate was checked by adding a public method and
+      confirming it appears as a diff. 3,202 items across the three crates,
+      which is the number the audit has to work through. Until 1.0 a diff is a
+      prompt to confirm the change was meant rather than a refusal.
+      The reading half, deciding which of those items should stay public and
+      which want `#[non_exhaustive]`, has not started.)*
+- [x] MSRV policy and deprecation policy written down, as
+      [D13](01-design-decisions.md) and [D14](01-design-decisions.md).
+      *(MSRV bumps are minor releases, never patches, and the policy records
+      that the floor is set by `libsqlite3-sys`'s build script rather than by
+      this workspace's own use of the language, since that tells a consumer
+      where a fix would have to come from. Deprecated items last two minor
+      releases and name their replacement in the attribute, so the warning is
+      actionable where it is seen.)*
 - [ ] **Settle #29, the lending cursor.** The recommendation from the evidence
       in #30 is to close it as work for after the freeze: column projection shipped in
       0.5.0 and captured most of the benefit on geometry-heavy layers, and a
