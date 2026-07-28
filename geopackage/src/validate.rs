@@ -19,6 +19,8 @@
 //! [`Severity::Warning`] means the file is out of step with the current spec
 //! but readable. [`Severity::Advisory`] is a remark, not a defect.
 
+use std::fmt;
+
 use geopackage_core::extensions::ExtensionSupport;
 
 use crate::index::SpatialIndexAudit;
@@ -33,6 +35,23 @@ pub enum Severity {
     Warning,
     /// A reader can get a wrong answer from this file.
     Error,
+}
+
+impl Severity {
+    /// The severity as a lowercase word: `advisory`, `warning` or `error`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Advisory => "advisory",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+}
+
+impl fmt::Display for Severity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Something [`GeoPackage::validate`] found.
@@ -187,6 +206,119 @@ impl Finding {
             | Self::DanglingMetadataReference { .. }
             | Self::MissingMappingTable { .. }
             | Self::NonConformantRelationName { .. } => None,
+        }
+    }
+}
+
+/// One line describing the finding, without its severity or repair advice.
+///
+/// Those are [`Finding::severity`] and [`Finding::repair`], kept separate so a
+/// caller decides how to arrange them. This exists so that every caller that
+/// prints a finding does not write the same match; `gpkg validate` composes all
+/// three.
+impl fmt::Display for Finding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LegacyApplicationId {
+                version,
+                application_id,
+            } => {
+                // Rendered as the four characters it spells, which is how the
+                // spec writes it and how a hex dump shows it.
+                let bytes = application_id.to_be_bytes();
+                let tag = String::from_utf8_lossy(&bytes);
+                write!(
+                    f,
+                    "file declares the GeoPackage {version} application_id {tag:?}, which predates 1.2"
+                )
+            }
+            Self::MissingContentsTable { table_name } => {
+                write!(
+                    f,
+                    "gpkg_contents names table {table_name:?}, which is not in the file"
+                )
+            }
+            Self::TableNameCaseMismatch { declared, actual } => {
+                write!(
+                    f,
+                    "gpkg_contents says {declared:?} but the table is {actual:?}: they differ only in case"
+                )
+            }
+            Self::RemovedExtension {
+                extension_name,
+                table_name,
+            } => {
+                write!(
+                    f,
+                    "extension {extension_name:?}{} was removed from the standard in 2016",
+                    On(table_name)
+                )
+            }
+            Self::UnrecognisedExtension {
+                extension_name,
+                table_name,
+                scope,
+            } => {
+                write!(
+                    f,
+                    "extension {extension_name:?}{} is not one this crate recognises (scope {})",
+                    On(table_name),
+                    scope.as_str()
+                )
+            }
+            Self::SpatialIndexOutOfStep { table_name, audit } => {
+                write!(
+                    f,
+                    "spatial index on {table_name:?} is out of step: {} indexable rows, {} entries, {} missing, {} stale, {} not covering their geometry",
+                    audit.indexable, audit.entries, audit.missing, audit.extra, audit.not_covering
+                )
+            }
+            Self::LegacySpatialIndexTriggers { table_name } => {
+                write!(
+                    f,
+                    "spatial index on {table_name:?} is maintained by a pre-1.4 or mixed trigger set"
+                )
+            }
+            Self::NoSpatialIndex { table_name } => {
+                write!(f, "feature table {table_name:?} has no spatial index")
+            }
+            Self::TilePyramidInconsistent { table_name, detail } => {
+                write!(
+                    f,
+                    "tile pyramid {table_name:?} breaks the tile matrix rules: {detail}"
+                )
+            }
+            Self::DanglingMetadataReference { md_id } => {
+                write!(
+                    f,
+                    "gpkg_metadata_reference points at metadata id {md_id}, which is not there"
+                )
+            }
+            Self::MissingMappingTable { mapping_table_name } => {
+                write!(
+                    f,
+                    "relationship names mapping table {mapping_table_name:?}, which is not in the file"
+                )
+            }
+            Self::NonConformantRelationName { relation_name } => {
+                write!(
+                    f,
+                    "relation_name {relation_name:?} is not one Requirement 8 accepts"
+                )
+            }
+        }
+    }
+}
+
+/// Renders `Some(table)` as ` on "table"` and `None` as nothing, so the two
+/// findings carrying an optional table read as sentences either way.
+struct On<'a>(&'a Option<String>);
+
+impl fmt::Display for On<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(table) => write!(f, " on {table:?}"),
+            None => Ok(()),
         }
     }
 }

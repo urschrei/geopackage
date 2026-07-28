@@ -1,5 +1,7 @@
 //! GeoPackage file identity: SQLite `application_id` and `user_version` pragmas.
 
+use std::fmt;
+
 /// `application_id` for GeoPackage 1.2+: "GPKG".
 pub const APPLICATION_ID_GPKG: u32 = 0x4750_4B47;
 /// Legacy `application_id` for GeoPackage 1.0: "GP10".
@@ -52,6 +54,27 @@ impl GpkgVersion {
             Self::V1_3 => Some(10300),
             Self::V1_4 => Some(10400),
         }
+    }
+
+    /// The version as it is written in the specification, such as `"1.4"`.
+    ///
+    /// The minor-patch part is not included because the pragmas do not carry
+    /// it: a `user_version` of 10401 and one of 10400 both classify as
+    /// [`Self::V1_4`].
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::V1_0 => "1.0",
+            Self::V1_1 => "1.1",
+            Self::V1_2 => "1.2",
+            Self::V1_3 => "1.3",
+            Self::V1_4 => "1.4",
+        }
+    }
+}
+
+impl fmt::Display for GpkgVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
