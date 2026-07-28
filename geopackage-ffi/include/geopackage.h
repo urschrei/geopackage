@@ -357,6 +357,175 @@ gpkg_status gpkg_layer_names_count(const gpkg_t *gpkg, size_t *out, gpkg_error_t
 char *gpkg_layer_name_at(const gpkg_t *gpkg, size_t index, gpkg_error_t *error);
 
 /**
+ * Whether a layer holds features or attributes, as `"features"` or
+ * `"attributes"`.
+ *
+ * Owned by the caller; release with `gpkg_string_free`.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle; `error` NULL or writable.
+ */
+char *gpkg_layer_kind(const gpkg_layer_t *layer, gpkg_error_t *error);
+
+/**
+ * How many columns the layer's table has, geometry and primary key included.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle, `out` writable, `error` NULL or writable.
+ */
+gpkg_status gpkg_layer_column_count(const gpkg_layer_t *layer, size_t *out, gpkg_error_t *error);
+
+/**
+ * The name of the `index`th column, or NULL when out of range.
+ *
+ * Owned by the caller; release with `gpkg_string_free`.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle; `error` NULL or writable.
+ */
+char *gpkg_layer_column_name(const gpkg_layer_t *layer, size_t index, gpkg_error_t *error);
+
+/**
+ * The declared SQL type of the `index`th column, exactly as the file spells
+ * it, or the empty string for a column declared without one.
+ *
+ * The declared text rather than a parsed enum, because a GeoPackage may carry
+ * a type outside the spec's vocabulary and this crate keeps such a column
+ * rather than rejecting it. A caller wanting the spec's own names can compare
+ * against them.
+ *
+ * Owned by the caller; release with `gpkg_string_free`.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle; `error` NULL or writable.
+ */
+char *gpkg_layer_column_type(const gpkg_layer_t *layer, size_t index, gpkg_error_t *error);
+
+/**
+ * Whether the `index`th column is the primary key. `false` for an index out
+ * of range, which [`gpkg_layer_column_count`] distinguishes.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle.
+ */
+bool gpkg_layer_column_is_primary_key(const gpkg_layer_t *layer, size_t index);
+
+/**
+ * The geometry column's name, or NULL for an attribute layer.
+ *
+ * A NULL return with `error` left at `GPKG_STATUS_OK` means the layer simply
+ * has no geometry, which is not a failure.
+ *
+ * Owned by the caller; release with `gpkg_string_free`.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle; `error` NULL or writable.
+ */
+char *gpkg_layer_geometry_column(const gpkg_layer_t *layer, gpkg_error_t *error);
+
+/**
+ * The geometry column's declared type, such as `"POINT"`, or NULL for an
+ * attribute layer.
+ *
+ * Owned by the caller; release with `gpkg_string_free`.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle; `error` NULL or writable.
+ */
+char *gpkg_layer_geometry_type(const gpkg_layer_t *layer, gpkg_error_t *error);
+
+/**
+ * The geometry column's spatial reference system id, written through `out`.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle, `out` writable, `error` NULL or writable.
+ */
+gpkg_status gpkg_layer_srs_id(const gpkg_layer_t *layer, int32_t *out, gpkg_error_t *error);
+
+/**
+ * The layer's extent, written through the four out-parameters.
+ *
+ * Returns `GPKG_STATUS_NOT_FOUND` when the layer has no extent to report,
+ * which is an empty layer or one with no geometry column, leaving the
+ * out-parameters untouched.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle, the four out-parameters writable, and
+ * `error` NULL or writable.
+ */
+gpkg_status gpkg_layer_extent(const gpkg_layer_t *layer,
+                              double *min_x,
+                              double *min_y,
+                              double *max_x,
+                              double *max_y,
+                              gpkg_error_t *error);
+
+/**
+ * The spatial index's state, as `"absent"`, `"current"`, `"legacy trigger
+ * set"` or `"stale"`.
+ *
+ * Owned by the caller; release with `gpkg_string_free`.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle; `error` NULL or writable.
+ */
+char *gpkg_layer_spatial_index_status(const gpkg_layer_t *layer, gpkg_error_t *error);
+
+/**
+ * Whether a bounding-box query on this layer will use the spatial index.
+ *
+ * False for a `stale` or absent index: a desynchronised index is not trusted,
+ * and the query falls back to a correct full scan.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle, `out` writable, `error` NULL or writable.
+ */
+gpkg_status gpkg_layer_has_spatial_index(const gpkg_layer_t *layer, bool *out, gpkg_error_t *error);
+
+/**
+ * Build the spatial index on a layer that has none.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle; `error` NULL or writable.
+ */
+gpkg_status gpkg_layer_create_spatial_index(const gpkg_layer_t *layer, gpkg_error_t *error);
+
+/**
+ * Drop the spatial index and its triggers.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle; `error` NULL or writable.
+ */
+gpkg_status gpkg_layer_drop_spatial_index(const gpkg_layer_t *layer, gpkg_error_t *error);
+
+/**
+ * Put a legacy or desynchronised spatial index right, rebuilding it and
+ * installing the GeoPackage 1.4 trigger set.
+ *
+ * A layer with no index is left alone: an absent index is a choice rather
+ * than a defect, and `gpkg_layer_create_spatial_index` is how one is asked
+ * for.
+ *
+ * # Safety
+ *
+ * `layer` must be a live handle; `error` NULL or writable.
+ */
+gpkg_status gpkg_layer_repair_spatial_index(const gpkg_layer_t *layer, gpkg_error_t *error);
+
+/**
  * Read a layer as an Arrow C Data Interface stream.
  *
  * `out` is filled in with a stream the caller owns and must release through

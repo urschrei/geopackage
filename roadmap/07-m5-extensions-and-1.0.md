@@ -510,8 +510,23 @@ concrete.
 - [ ] The sole crate not taking `[lints] workspace = true`: `unsafe` confined
       to the C ABI surface, `undocumented_unsafe_blocks` applied, sanitizer and
       miri gating in CI before anything outside the workspace links against it.
-- [ ] Control plane: open, create, close, list layers, schema introspection,
-      create layer, create and drop spatial index, begin and commit.
+- [x] Control plane: open, create, close, list layers, schema introspection,
+      create layer, create and drop spatial index.
+      *(Done, plus lenient read-only opening with its warnings, layer extent,
+      spatial index status and repair, EPSG registration, and creating a layer
+      from an Arrow schema, which is what lets a C consumer copy a layer with no
+      schema-description API of its own.)*
+- [ ] **`begin` and `commit` are deliberately not exposed**, and the reason is
+      measured rather than assumed: an explicit `BEGIN` on the connection makes
+      the write paths fail, because `write_all` and the bulk index build open
+      transactions of their own and SQLite does not nest them. Verified, the
+      error being "cannot start a transaction within a transaction". Exposing
+      the pair would hand C a sequence that looks reasonable and cannot work.
+      Making it work means teaching the write paths to use a savepoint when a
+      transaction is already open, which is a change to the write paths rather
+      than to the ABI, so it belongs in the phase 10 API review. Batching is
+      meanwhile reachable through the `batch_size` argument the write calls
+      already take.
 - [ ] Data plane: `gpkg_layer_read_arrow` and `gpkg_layer_write_arrow` through
       the Arrow C Data Interface.
 - [ ] cbindgen header checked in, CI failing on an undocumented header diff,
