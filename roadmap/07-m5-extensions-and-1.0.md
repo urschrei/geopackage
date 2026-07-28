@@ -522,11 +522,11 @@ concrete.
       transactions of their own and SQLite does not nest them. Verified, the
       error being "cannot start a transaction within a transaction". Exposing
       the pair would hand C a sequence that looks reasonable and cannot work.
-      Making it work means teaching the write paths to use a savepoint when a
-      transaction is already open, which is a change to the write paths rather
-      than to the ABI, so it belongs in the phase 10 API review. Batching is
-      meanwhile reachable through the `batch_size` argument the write calls
-      already take.
+      Making it work means teaching the write paths to inherit a transaction
+      that is already open, which is a change to the write paths rather than to
+      the ABI, so it belongs in phase 10 and is designed under "Inheriting an
+      open transaction" there. Batching is meanwhile reachable through the
+      `batch_size` argument the write calls already take.
 - [ ] Data plane: `gpkg_layer_read_arrow` and `gpkg_layer_write_arrow` through
       the Arrow C Data Interface.
 - [ ] cbindgen header checked in, CI failing on an undocumented header diff,
@@ -755,6 +755,44 @@ parent. `ValueRef<'a>` and `GpbGeometry<'a>` borrow row data rather than a
 handle and should not change at all.
 
 ## Phase 10: hardening and the API freeze
+
+### Inheriting an open transaction
+
+**The problem.** Every write path opens its own transaction with
+`unchecked_transaction`, and SQLite does not nest them, so a caller who has
+already begun one gets "cannot start a transaction within a transaction".
+Verified against `write_all`. That is why the C ABI does not expose `begin` and
+`commit` (phase 9), and it equally affects a Rust caller who opens a transaction
+on `GeoPackage::connection()` and then calls the ordinary API.
+
+**The approach is already in the codebase.** `Layer::extent` solves exactly
+this: it checks `conn.is_autocommit()` and, when a transaction is open, runs
+its statements directly rather than opening one, "inheriting theirs gives the
+same atomicity" (`geopackage/src/extent.rs`). Savepoints are the other
+candidate, but `rusqlite`'s `Connection::savepoint` needs `&mut Connection` and
+this crate only ever holds `&Connection`, so they would have to be driven as
+raw `SAVEPOINT`/`RELEASE` SQL. Inheriting is simpler and is what the one
+existing precedent does, so it is the design unless rollback granularity turns
+out to matter to someone.
+
+**What it touches**, which is why it is its own item rather than a patch:
+
+- `FeatureWriter` and `TileWriter` each hold a `Transaction<'conn>` outright.
+  Both would hold something optional, with every use routed through it.
+- `commit` becomes a no-op when inheriting, since committing would commit the
+  caller's transaction and not just this writer's work. A `commit` that does
+  not commit needs its contract stated precisely; there are around 99 `.commit()`
+  call sites across the crate, its tests and its documentation.
+- The twenty `unchecked_transaction` sites each want a decision about whether
+  inheriting is right for them, rather than a blanket change.
+- `write_all`'s `batch_size` stops bounding transactions while an outer one is
+  open, because everything belongs to the caller's. That is arguably the correct
+  reading of what the caller asked for, but it is a behaviour change and wants
+  saying in the documentation and the changelog.
+
+**Then**, and only then, `gpkg_begin`, `gpkg_commit` and `gpkg_rollback` can be
+added to the C ABI, since the sequence a C caller would reasonably write would
+finally work.
 
 - [ ] **API review.** Audit every `pub` item; `#[non_exhaustive]` where growth
       is plausible; error variants stabilised; rusqlite kept out of the public
