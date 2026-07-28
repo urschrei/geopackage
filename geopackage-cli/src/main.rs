@@ -11,6 +11,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod copy;
 mod error;
 mod index;
 mod info;
@@ -62,6 +63,16 @@ enum Command {
         /// Repair only this layer, rather than every layer that needs it.
         layer: Option<String>,
     },
+    /// Copy the feature and attribute layers of one file into a new one.
+    ///
+    /// Tiles and the extension tables are not carried; whatever is left behind
+    /// is named at the end.
+    Copy {
+        /// The `.gpkg` file to read.
+        src: PathBuf,
+        /// The `.gpkg` file to create. Must not already exist.
+        dst: PathBuf,
+    },
     /// Tile pyramids: what a file holds, and the bytes of one tile.
     Tiles {
         #[command(subcommand)]
@@ -107,6 +118,7 @@ fn main() -> ExitCode {
         Command::Validate { file, strict } => validate::run(&file, strict),
         Command::Index { file, layer } => index::build(&file, &layer),
         Command::Repair { file, layer } => index::repair(&file, layer.as_deref()),
+        Command::Copy { src, dst } => copy::run(&src, &dst),
         Command::Tiles { command } => match command {
             TileCommand::Info { file, pyramid } => tiles::info(&file, pyramid.as_deref()),
             TileCommand::Get {
