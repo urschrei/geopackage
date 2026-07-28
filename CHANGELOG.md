@@ -156,6 +156,62 @@ While the version is below 1.0 the API may change in any release.
   not a local one.
 
   `Error::ExtensionGeometryUnsupported` is removed, since nothing raises it.
+- **`geopackage-cli`**, a `gpkg` binary over the library. `gpkg info` summarises
+  a file: version, layers, schemas, spatial reference systems, index state, tile
+  pyramids and registered extensions with the support level this workspace has
+  for each. `gpkg validate` prints what `GeoPackage::validate` found, most
+  severe first, with the repair advice each finding carries, and exits non-zero
+  when a finding is an error, meaning a reader can get a wrong answer from the
+  file; `--strict` promotes warnings too, so the command is usable as a gate in
+  a script. `gpkg index` and `gpkg repair` build and put right spatial indexes,
+  the first refusing where an index is present but broken rather than quietly
+  repairing it, the second leaving an absent index absent. `gpkg tiles info` and
+  `gpkg tiles get` describe a pyramid and write one tile's stored bytes out.
+  `gpkg copy` copies feature and attribute layers into a new file.
+
+  `copy` carries layers only, not tiles and not the extension tables, and names
+  what it left behind rather than passing over it in silence. Geometry crosses
+  as WKB rather than through `geo-types`, so the non-linear curve types survive
+  a copy byte for byte instead of being lost to an encoding that cannot describe
+  an arc.
+- **`Layer::read_arrow_in`**, the columnar counterpart of `Layer::features_in`,
+  returning the same rows as Arrow record batches. Single-threaded: the threaded
+  reader assigns key windows to workers on the assumption that a window's span
+  implies its row count, and a spatial filter voids that, since matching rows
+  scatter through the key space.
+
+  Candidates from the index are re-tested against their true `f64` envelope
+  before being returned, because the index stores `f32` envelopes and is queried
+  with outward-widened bounds, so its candidates are a superset. Without that a
+  filtered columnar read would return rows `features_in` does not.
+- **`geopackage-ffi`**, a C ABI over the library, built as a `cdylib` and
+  `staticlib` and packaged with cargo-c, so `cargo cinstall` produces a
+  versioned soname, a header and a pkg-config file. Opaque `gpkg_t`,
+  `gpkg_layer_t` and `gpkg_tiles_t` handles; UTF-8 strings in both directions;
+  failures through a `gpkg_error_t` out-parameter carrying a category code and
+  a message. The data plane is the Arrow C Data Interface in both directions,
+  including the bounding-box read, and a layer can be created from an Arrow
+  schema, so a C consumer can copy a layer with no schema-description API of its
+  own.
+
+  Two rules a caller has to know. Handles belong to one thread, because
+  `rusqlite::Connection` is `Send` and not `Sync`. And closing a container is
+  refused while any handle taken from it is still alive, which is what makes the
+  design sound rather than a matter of caller discipline.
+
+  This is the only crate in the workspace containing `unsafe`; every other crate
+  sets `unsafe_code = "forbid"`. It is checked by AddressSanitizer, by miri over
+  the parts miri can reach, by a committed header that CI regenerates and diffs,
+  and by two C programs compiled and run in CI.
+- **`Layer::count`**, a `SELECT COUNT(*)` rather than counting by iterating,
+  which materialises every feature.
+- **`GeoPackage::open_read_only_lenient`**, read-only and tolerant at once. The
+  files most worth inspecting are the ones something is wrong with, and
+  inspecting one should not need write access to it.
+- **`Display` for `Finding`, `Severity`, `GpkgVersion`, `OpenWarning`,
+  `SpatialIndexStatus`, `LayerKind`, `ExtensionSupport` and `ExtensionScope`**,
+  so a consumer printing one does not have to match on it. Each also gains an
+  `as_str` where the rendering is a fixed word.
 
 ### Changed
 
