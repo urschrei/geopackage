@@ -45,34 +45,29 @@ fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-#[test]
-fn a_c_program_links_against_the_library_and_reads_a_file() {
+/// Compile one of `examples/*.c` against the static library, returning the
+/// binary, or `None` when the environment cannot support it.
+fn build_c_example(dir: &Path, name: &str) -> Option<PathBuf> {
     if cfg!(target_os = "windows") {
         eprintln!("skipped: the Windows link line wants its own handling");
-        return;
+        return None;
     }
-
-    let Some(target) = target_dir() else {
-        eprintln!("skipped: could not locate the target directory");
-        return;
-    };
+    let target = target_dir()?;
     let static_lib = target.join("libgeopackage_ffi.a");
     if !static_lib.exists() {
         eprintln!(
             "skipped: {} has not been built; run `cargo build -p geopackage-ffi` first",
             static_lib.display()
         );
-        return;
+        return None;
     }
 
-    let dir = tempfile::tempdir().expect("tempdir");
-    let binary = dir.path().join("smoke");
-    let source = manifest_dir().join("examples/smoke.c");
+    let binary = dir.join(name);
+    let source = manifest_dir().join(format!("examples/{name}.c"));
     let include = manifest_dir().join("include");
 
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_owned());
-    let mut compile = Command::new(&cc);
-    compile
+    let compiled = Command::new(&cc)
         .arg("-I")
         .arg(&include)
         // The header is public API; it should compile clean under a strict
@@ -82,22 +77,34 @@ fn a_c_program_links_against_the_library_and_reads_a_file() {
         .arg(&static_lib)
         .args(native_libs())
         .arg("-o")
-        .arg(&binary);
-
-    let compiled = compile.output().expect("failed to run the C compiler");
+        .arg(&binary)
+        .output()
+        .expect("failed to run the C compiler");
     assert!(
         compiled.status.success(),
-        "compiling smoke.c failed:\n{}",
+        "compiling {name}.c failed:\n{}",
         String::from_utf8_lossy(&compiled.stderr)
     );
+    Some(binary)
+}
 
-    let fixture = manifest_dir()
+fn fixture(name: &str) -> PathBuf {
+    manifest_dir()
         .parent()
         .expect("the crate directory has a parent")
-        .join("geopackage/tests/fixtures/gdal_multilayer_1_4.gpkg");
+        .join("geopackage/tests/fixtures")
+        .join(name)
+}
+
+#[test]
+fn a_c_program_links_against_the_library_and_reads_a_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Some(binary) = build_c_example(dir.path(), "smoke") else {
+        return;
+    };
 
     let run = Command::new(&binary)
-        .arg(&fixture)
+        .arg(fixture("gdal_multilayer_1_4.gpkg"))
         .output()
         .expect("failed to run the compiled C program");
     let stdout = String::from_utf8_lossy(&run.stdout);
@@ -118,6 +125,53 @@ fn a_c_program_links_against_the_library_and_reads_a_file() {
     // The C program asserts the close refusal itself and exits non-zero if it
     // does not happen, so reaching "ok" means the handle rule held from C too.
     assert!(stdout.contains("ok"), "{stdout}");
+}
+
+#[test]
+fn a_c_program_copies_a_layer_between_files_through_arrow() {
+    // The full data plane from C, in both directions, and with no
+    // schema-description API: the destination layer is created from the source
+    // stream's own Arrow schema.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Some(binary) = build_c_example(dir.path(), "roundtrip") else {
+        return;
+    };
+    let destination = dir.path().join("copied.gpkg");
+
+    let run = Command::new(&binary)
+        .arg(fixture("gdal_multilayer_1_4.gpkg"))
+        .arg("points")
+        .arg(&destination)
+        .output()
+        .expect("failed to run the compiled C program");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        run.status.success(),
+        "roundtrip.c failed:\nstdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // The C program checks the written count against the source and re-reads
+    // the destination itself, so "ok" means both agreed.
+    assert!(stdout.contains("copied 3 rows"), "{stdout}");
+    assert!(stdout.contains("ok"), "{stdout}");
+
+    // And what landed is a GeoPackage this crate is happy with, checked from
+    // Rust rather than taking the C program's word for it.
+    let written = geopackage::GeoPackage::open_read_only(&destination)
+        .expect("the C-written file should open");
+    assert_eq!(
+        written.validate().expect("validate"),
+        Vec::new(),
+        "a file written entirely from C should have nothing to report"
+    );
+    assert_eq!(
+        written
+            .layer("points")
+            .expect("the copied layer")
+            .count()
+            .expect("count"),
+        3
+    );
 }
 
 #[test]

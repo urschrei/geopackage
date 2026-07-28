@@ -74,6 +74,9 @@ arrow-schema = { workspace = true, features = ["ffi"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+# The C round-trip test re-reads what the C program wrote and validates it
+# from Rust, rather than taking the C program word for it.
+geopackage.workspace = true
 
 # `cargo cbuild` / `cargo cinstall` packaging: a pkg-config file and a versioned
 # soname, so a C consumer links against it the way it links against any other

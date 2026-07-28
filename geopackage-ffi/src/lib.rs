@@ -58,5 +58,8 @@ pub use layer::{
     gpkg_attributes_open, gpkg_layer_count, gpkg_layer_free, gpkg_layer_name, gpkg_layer_name_at,
     gpkg_layer_names_count, gpkg_layer_open, gpkg_layer_t,
 };
-pub use stream::{gpkg_layer_read_arrow, gpkg_layer_read_arrow_in};
+pub use stream::{
+    gpkg_add_epsg_srs, gpkg_create_layer_from_arrow_schema, gpkg_layer_read_arrow,
+    gpkg_layer_read_arrow_in, gpkg_layer_write_arrow,
+};
 pub use util::gpkg_string_free;

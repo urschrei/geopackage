@@ -37,13 +37,15 @@ use arrow_array::Array;
 use arrow_array::RecordBatchReader;
 use arrow_array::array::StructArray;
 use arrow_array::ffi::FFI_ArrowArray;
-use arrow_array::ffi_stream::FFI_ArrowArrayStream;
+use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use arrow_schema::Schema;
 use arrow_schema::ffi::FFI_ArrowSchema;
-use geopackage::BoundingBox;
 use geopackage::arrow::{ArrowBatches, ArrowReadOptions};
+use geopackage::{BoundingBox, TableSchemaBuilder};
 
 use crate::error::{Status, gpkg_error_t, set_error, set_library_error};
-use crate::handle::{ChildToken, LayerHandle};
+use crate::handle::{ChildToken, Container, LayerHandle};
+use crate::util::borrow_str;
 
 /// What a stream owns for as long as C holds it.
 ///
@@ -301,4 +303,164 @@ unsafe fn read_arrow_inner(
     // promise about a struct it declared on its own stack.
     unsafe { std::ptr::write_unaligned(out, export_batches(erased, token)) };
     Status::Ok
+}
+
+/// Write an Arrow C Data Interface stream into a layer.
+///
+/// Takes ownership of `stream`, as the C Data Interface specifies for a moved
+/// stream: it is released here whether the write succeeds or fails, and the
+/// caller must not release it again. `out_rows`, when non-NULL, receives the
+/// number of rows written.
+///
+/// `batch_size` is the rows per write transaction; `0` writes everything in
+/// one transaction.
+///
+/// # Safety
+///
+/// `layer` must be a live layer handle, `stream` must point at a stream the
+/// caller owns and has not released, `out_rows` must be NULL or writable, and
+/// `error` must be NULL or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_layer_write_arrow(
+    layer: *const LayerHandle,
+    stream: *mut FFI_ArrowArrayStream,
+    batch_size: usize,
+    out_rows: *mut u64,
+    error: *mut gpkg_error_t,
+) -> Status {
+    if layer.is_null() || stream.is_null() {
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::BadArgument, "layer handle or stream is NULL") };
+        return Status::BadArgument;
+    }
+
+    // SAFETY: the caller guarantees a stream they own and have not released.
+    // `from_raw` performs the interface's move: the caller's struct is left
+    // released, so releasing it again is a no-op rather than a double free.
+    let reader = match unsafe { ArrowArrayStreamReader::from_raw(stream) } {
+        Ok(reader) => reader,
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_error(error, Status::InvalidArgument, &err.to_string()) };
+            return Status::InvalidArgument;
+        }
+    };
+
+    // SAFETY: the caller guarantees a live layer handle.
+    let handle = unsafe { &*layer };
+    // The reader is an `Iterator<Item = Result<RecordBatch, ArrowError>>`,
+    // which is exactly what the write path takes. No lifetime erasure and no
+    // `Send` claim are needed here: an imported stream owns everything it
+    // reads from, which is what makes this direction the simple one.
+    match handle.layer().write_arrow(reader, batch_size) {
+        Ok(fids) => {
+            if !out_rows.is_null() {
+                // SAFETY: the caller guarantees `out_rows` is writable.
+                unsafe { *out_rows = fids.len() as u64 };
+            }
+            Status::Ok
+        }
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            Status::from(&err)
+        }
+    }
+}
+
+/// Create a layer whose columns come from an Arrow schema.
+///
+/// The schema is borrowed, not consumed: the caller still owns it and must
+/// release it. This is what lets a C consumer copy a layer without any
+/// schema-description API of its own, by taking the schema from the source
+/// stream's `get_schema` and handing it straight here.
+///
+/// The geometry column and its spatial reference system are taken from the
+/// schema's GeoArrow metadata. The referenced SRS must already exist in the
+/// destination; `gpkg_add_epsg_srs` puts one there.
+///
+/// # Safety
+///
+/// `gpkg` must be a live container handle, `name` a NUL-terminated UTF-8
+/// string, `schema` a valid `ArrowSchema` the caller owns, and `error` NULL or
+/// writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_create_layer_from_arrow_schema(
+    gpkg: *const Container,
+    name: *const c_char,
+    schema: *const FFI_ArrowSchema,
+    spatial_index: bool,
+    error: *mut gpkg_error_t,
+) -> Status {
+    if gpkg.is_null() || schema.is_null() {
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::BadArgument, "gpkg handle or schema is NULL") };
+        return Status::BadArgument;
+    }
+    // SAFETY: forwarded to the caller's guarantee on `name`.
+    let Some(name) = (unsafe { borrow_str(name, error, "layer name") }) else {
+        return Status::BadArgument;
+    };
+
+    // SAFETY: the caller guarantees a valid `ArrowSchema` they still own.
+    // Borrowed rather than moved: `TryFrom<&FFI_ArrowSchema>` copies what it
+    // needs, so the caller's schema is untouched and still theirs to release.
+    let imported = match Schema::try_from(unsafe { &*schema }) {
+        Ok(imported) => imported,
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_error(error, Status::InvalidArgument, &err.to_string()) };
+            return Status::InvalidArgument;
+        }
+    };
+
+    // SAFETY: the caller guarantees a live container handle.
+    let container = unsafe { &*gpkg };
+    let builder = match TableSchemaBuilder::new(name).from_arrow_schema(&imported) {
+        Ok(builder) => builder.spatial_index(spatial_index),
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            return Status::from(&err);
+        }
+    };
+
+    match container.gpkg().create_layer(&builder) {
+        Ok(_) => Status::Ok,
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            Status::from(&err)
+        }
+    }
+}
+
+/// Register an EPSG spatial reference system in the file.
+///
+/// A layer cannot name an SRS the file does not carry, so this is what a C
+/// consumer calls before creating one.
+///
+/// # Safety
+///
+/// `gpkg` must be a live container handle and `error` NULL or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_add_epsg_srs(
+    gpkg: *const Container,
+    code: i32,
+    error: *mut gpkg_error_t,
+) -> Status {
+    if gpkg.is_null() {
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::BadArgument, "gpkg handle is NULL") };
+        return Status::BadArgument;
+    }
+    // SAFETY: the caller guarantees a live container handle.
+    match unsafe { (*gpkg).gpkg().add_epsg_srs(code) } {
+        Ok(_) => Status::Ok,
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            Status::from(&err)
+        }
+    }
 }
