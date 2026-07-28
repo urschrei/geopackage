@@ -11,8 +11,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod error;
 mod index;
 mod info;
+mod tiles;
 mod validate;
 
 /// Read, check and convert OGC GeoPackage files.
@@ -60,6 +62,42 @@ enum Command {
         /// Repair only this layer, rather than every layer that needs it.
         layer: Option<String>,
     },
+    /// Tile pyramids: what a file holds, and the bytes of one tile.
+    Tiles {
+        #[command(subcommand)]
+        command: TileCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum TileCommand {
+    /// Describe every tile pyramid in a file, or one named one.
+    Info {
+        /// The `.gpkg` file to read.
+        file: PathBuf,
+        /// Describe only this pyramid.
+        pyramid: Option<String>,
+    },
+    /// Write one tile's stored bytes out, addressed by zoom, column and row.
+    ///
+    /// No image is decoded: the bytes come out exactly as the file holds them,
+    /// whatever `--out` is named.
+    Get {
+        /// The `.gpkg` file to read.
+        file: PathBuf,
+        /// The pyramid's table name.
+        pyramid: String,
+        /// Zoom level.
+        zoom: i64,
+        /// Tile column, counting east from the extent's west edge.
+        column: i64,
+        /// Tile row, counting south from the extent's north edge (the WMTS and
+        /// XYZ sense, not TMS).
+        row: i64,
+        /// Write to this path instead of standard output.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -69,6 +107,22 @@ fn main() -> ExitCode {
         Command::Validate { file, strict } => validate::run(&file, strict),
         Command::Index { file, layer } => index::build(&file, &layer),
         Command::Repair { file, layer } => index::repair(&file, layer.as_deref()),
+        Command::Tiles { command } => match command {
+            TileCommand::Info { file, pyramid } => tiles::info(&file, pyramid.as_deref()),
+            TileCommand::Get {
+                file,
+                pyramid,
+                zoom,
+                column,
+                row,
+                out,
+            } => tiles::get(
+                &file,
+                &pyramid,
+                geopackage::core::tiles::TileCoord::new(zoom, column, row),
+                out.as_deref(),
+            ),
+        },
     };
 
     match result {

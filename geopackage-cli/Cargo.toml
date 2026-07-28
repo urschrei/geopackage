@@ -23,6 +23,7 @@ workspace = true
 [dependencies]
 geopackage.workspace = true
 clap.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

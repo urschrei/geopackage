@@ -10,7 +10,9 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use geopackage::{GeoPackage, Result, Severity};
+use geopackage::{GeoPackage, Severity};
+
+use crate::error::Result;
 
 pub fn run(path: &Path, strict: bool) -> Result<ExitCode> {
     let gpkg = GeoPackage::open_read_only_lenient(path)?;
