@@ -93,7 +93,10 @@ jobs:
       - run: cargo test -p geopackage-ffi --all-features
       # M3 acceptance criterion 7: the packaged artefacts install and link.
       - run: cargo cbuild -p geopackage-ffi --release
-      - run: cargo cinstall -p geopackage-ffi --release --prefix=/usr/local --destdir=${{ runner.temp }}/capi
+      # `--libdir=lib` because cargo-c otherwise follows the platform's own
+      # convention, and on Linux that is a multiarch path like
+      # lib/x86_64-linux-gnu, which the pkg-config lookup below would miss.
+      - run: cargo cinstall -p geopackage-ffi --release --prefix=/usr/local --libdir=lib --destdir=${{ runner.temp }}/capi
       - name: Link a C program against the installed package
         if: runner.os != 'Windows'
         shell: bash

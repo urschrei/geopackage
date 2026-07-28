@@ -224,12 +224,17 @@ fn the_committed_header_matches_what_cbindgen_produces() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let fresh = std::fs::read_to_string(&generated).expect("read generated header");
-    let committed = std::fs::read_to_string(manifest_dir().join("include/geopackage.h"))
-        .expect("read committed header");
+    // Compared with line endings normalised. Git may check the committed
+    // header out with CRLF on Windows while cbindgen always writes LF, and a
+    // header that differs only in line endings is the same header.
+    let normalise = |text: String| text.replace("\r\n", "\n").trim_end().to_owned();
+    let fresh = normalise(std::fs::read_to_string(&generated).expect("read generated header"));
+    let committed = normalise(
+        std::fs::read_to_string(manifest_dir().join("include/geopackage.h"))
+            .expect("read committed header"),
+    );
     assert_eq!(
-        fresh.trim_end(),
-        committed.trim_end(),
+        fresh, committed,
         "geopackage-ffi/include/geopackage.h is out of date. Regenerate it:\n  \
          cbindgen --config geopackage-ffi/cbindgen.toml --crate geopackage-ffi \
          --output geopackage-ffi/include/geopackage.h"
