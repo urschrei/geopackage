@@ -46,6 +46,7 @@ pub mod container;
 pub mod error;
 pub mod handle;
 pub mod layer;
+pub mod schema;
 pub mod stream;
 pub mod util;
 
@@ -57,6 +58,13 @@ pub use error::{Status, gpkg_error_clear, gpkg_error_t};
 pub use layer::{
     gpkg_attributes_open, gpkg_layer_count, gpkg_layer_free, gpkg_layer_name, gpkg_layer_name_at,
     gpkg_layer_names_count, gpkg_layer_open, gpkg_layer_t,
+};
+pub use schema::{
+    gpkg_layer_column_count, gpkg_layer_column_is_primary_key, gpkg_layer_column_name,
+    gpkg_layer_column_type, gpkg_layer_create_spatial_index, gpkg_layer_drop_spatial_index,
+    gpkg_layer_extent, gpkg_layer_geometry_column, gpkg_layer_geometry_type,
+    gpkg_layer_has_spatial_index, gpkg_layer_kind, gpkg_layer_repair_spatial_index,
+    gpkg_layer_spatial_index_status, gpkg_layer_srs_id,
 };
 pub use stream::{
     gpkg_add_epsg_srs, gpkg_create_layer_from_arrow_schema, gpkg_layer_read_arrow,
