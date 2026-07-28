@@ -102,47 +102,73 @@ pub struct BulkIndexOptions {
     /// correspondingly large number of rows in memory. `usize::MAX` buffers
     /// nothing, because it disables the path outright.
     pub bulk_threshold: usize,
-    /// How thoroughly the gate checks database structure after the copy.
-    /// Defaults to [`StructuralCheck::RtreeOnly`].
-    pub structural_check: StructuralCheck,
+    /// How much of the written index is checked before it is trusted.
+    /// Defaults to [`BulkVerification::None`].
+    pub verification: BulkVerification,
     /// Fraction of each RTree node's capacity to fill when packing, in
     /// `(0, 1]`. Defaults to [`DEFAULT_FILL_FACTOR`].
     pub fill_factor: f64,
 }
 
-/// How much of the database the bulk-build gate checks structurally after
-/// writing the shadow tables.
+/// How much of a bulk-built RTree is checked before it is trusted.
 ///
-/// Both settings run the full content gate (the bijection between the written
-/// index and the accumulated envelope set, and the per-row containment check);
-/// this chooses only the SQLite-level structural check layered on top.
+/// Every level above [`Self::None`] also arms the automatic fallback: a build
+/// that fails its check is discarded and rebuilt through the triggered path, so
+/// the result is correct either way and only the time is lost. **With
+/// [`Self::None`] there is nothing to fail and so nothing to fall back from.**
 ///
-/// The gate as a whole is a substantial share of a bulk build, around 45% at 1M
-/// points, split roughly evenly between the content check and `rtreecheck`. It
-/// is not currently possible to switch off entirely: a bulk build writes the
-/// RTree by hand, and verifying it is what makes that defensible. Whether that
-/// remains the right default is a 1.0 question.
+/// # Why the default changed
+///
+/// Through 0.5 this defaulted to reading the whole index back and running
+/// `rtreecheck` over it, which is about **45% of the build**: roughly 745 ms of
+/// a 1593 ms build at one million points, split about evenly between the two.
+/// That was the right price while `crate::packed` was new, since it writes an
+/// RTree by hand into a format SQLite does not document as an interface, and
+/// GDAL's builder runs no equivalent.
+///
+/// The packer now has enough history for the cost to be opt-in rather than
+/// paid by everyone. A caller writing files of consequence, or bisecting a
+/// suspected index problem, turns it back on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
-pub enum StructuralCheck {
-    /// Check the RTree that was just built, with `rtreecheck()`. Its cost is
-    /// proportional to the index rather than to the whole file, and a
-    /// pre-existing problem elsewhere in the database cannot force a needless
-    /// fallback. The default.
+pub enum BulkVerification {
+    /// Trust the packer. The default, and the fastest.
+    ///
+    /// Nothing is read back, so a build cannot fail its check and cannot fall
+    /// back to the triggered path. `crate::Layer::audit_spatial_index` remains
+    /// available afterwards for a caller who wants the answer later rather than
+    /// on every write.
     #[default]
-    RtreeOnly,
-    /// Additionally run a whole-database `PRAGMA integrity_check`. This is
-    /// O(database): on a large file it dominates the gate, and a benign
-    /// pre-existing issue anywhere in the file forces the (still correct)
-    /// triggered fallback. Use when validating a file of unknown provenance.
-    FullDatabase,
+    None,
+    /// Read every entry back and check it against the envelopes accumulated
+    /// while writing: one index row per indexable row, a bijection on `id`, and
+    /// each stored bound containing the true envelope.
+    ///
+    /// The cheaper half of the pre-0.6 default, and the half that catches a
+    /// wrong or missing entry, which is what a query would notice.
+    Contents,
+    /// [`Self::Contents`], plus `rtreecheck` over the tree, which cross-checks
+    /// every entry against its parent's bounds and the `%_rowid`/`%_parent`
+    /// mappings against `%_node`.
+    ///
+    /// The pre-0.6 default. Catches a structurally malformed tree that the
+    /// content check would pass, which is the failure mode particular to
+    /// writing the shadow tables by hand.
+    Structure,
+    /// [`Self::Structure`], plus a whole-database `PRAGMA integrity_check`.
+    ///
+    /// O(database) rather than O(index), so on a large file it dominates
+    /// everything else, and a benign pre-existing problem anywhere in the file
+    /// forces the (still correct) triggered fallback. For validating a file of
+    /// unknown provenance.
+    Database,
 }
 
 impl Default for BulkIndexOptions {
     fn default() -> Self {
         Self {
             bulk_threshold: DEFAULT_BULK_THRESHOLD,
-            structural_check: StructuralCheck::RtreeOnly,
+            verification: BulkVerification::default(),
             fill_factor: DEFAULT_FILL_FACTOR,
         }
     }
@@ -174,8 +200,8 @@ impl BulkIndexOptions {
 
     /// Set the structural check the gate runs after the copy.
     #[must_use]
-    pub fn with_structural_check(mut self, structural_check: StructuralCheck) -> Self {
-        self.structural_check = structural_check;
+    pub fn with_verification(mut self, verification: BulkVerification) -> Self {
+        self.verification = verification;
         self
     }
 
@@ -415,8 +441,12 @@ fn gate(
     conn: &Connection,
     rtree: &str,
     mut expected: Vec<(i64, [f64; 4])>,
-    structural_check: StructuralCheck,
+    verification: BulkVerification,
 ) -> Result<bool> {
+    // Nothing to check, so nothing can fail and nothing falls back.
+    if verification == BulkVerification::None {
+        return Ok(true);
+    }
     let quoted = quote(rtree)?;
     let count: i64 = conn.query_row(&format!("SELECT count(*) FROM {quoted}"), [], |r| r.get(0))?;
     if usize::try_from(count).unwrap_or(usize::MAX) != expected.len() {
@@ -473,17 +503,22 @@ fn gate(
         return Ok(false);
     }
 
+    if verification == BulkVerification::Contents {
+        return Ok(true);
+    }
+
     // Structural check on top of the content gate above. `rtreecheck` walks the
     // index just built, cross-checking every entry against its parent's bounds
     // and the `%_rowid`/`%_parent` mappings against `%_node`, and reports `ok`
     // or a description of what is wrong. Its cost is proportional to the index;
-    // `PRAGMA integrity_check` is O(database), so it is opt-in (issue #16).
+    // `PRAGMA integrity_check` is O(database), so it is a level further up
+    // (issue #16).
     let rtree_report: String = conn.query_row("SELECT rtreecheck(?1)", [rtree], |r| r.get(0))?;
     if rtree_report != "ok" {
         return Ok(false);
     }
 
-    if structural_check == StructuralCheck::FullDatabase {
+    if verification == BulkVerification::Database {
         let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
         return Ok(integrity == "ok");
     }
@@ -590,7 +625,7 @@ where
     write_packed(conn, rtree, &accumulated, node_size, options.fill_factor)?;
     fault(conn, rtree)?;
 
-    let path = if gate(conn, rtree, accumulated, options.structural_check)? {
+    let path = if gate(conn, rtree, accumulated, options.verification)? {
         BuildPath::Bulk
     } else {
         // Discard the packed result and rebuild through the triggered

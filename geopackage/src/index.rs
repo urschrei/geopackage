@@ -678,10 +678,16 @@ mod tests {
         let (_dir, gpkg) = populated(&[(1, 10.0, 20.0), (2, -5.0, 7.0), (3, 100.0, 100.0)]);
         let layer = gpkg.layer("pts").unwrap();
         let path = layer
-            .create_spatial_index_impl(BulkIndexOptions::always_bulk(), corrupt_written_index)
+            .create_spatial_index_impl(
+                BulkIndexOptions::always_bulk()
+                    .with_verification(crate::BulkVerification::Structure),
+                corrupt_written_index,
+            )
             .unwrap();
         // The gate rejected the corrupted index and rebuilt it through the
-        // triggers.
+        // triggers. Verification is opt-in as of 0.6, so this asks for it:
+        // without it there is nothing to fail and nothing to fall back from,
+        // which `a_corrupt_index_is_kept_when_verification_is_off` pins.
         assert_eq!(path, BuildPath::TriggeredFallback);
         assert!(layer.has_spatial_index().unwrap());
         // The fallback still produced a correct index.
@@ -689,15 +695,37 @@ mod tests {
     }
 
     #[test]
+    fn a_corrupt_index_is_kept_when_verification_is_off() {
+        // The cost of the new default, stated as a test rather than only in the
+        // documentation: with nothing read back there is nothing to fail, so a
+        // corrupt build is kept and no fallback happens. This is what a caller
+        // buys the 45% with, and why `BulkVerification` still reaches the old
+        // behaviour.
+        let (_dir, gpkg) = populated(&[(1, 10.0, 20.0), (2, -5.0, 7.0), (3, 100.0, 100.0)]);
+        let layer = gpkg.layer("pts").unwrap();
+        let path = layer
+            .create_spatial_index_impl(BulkIndexOptions::always_bulk(), corrupt_written_index)
+            .unwrap();
+        assert_eq!(path, BuildPath::Bulk, "no gate, so no fallback");
+        // And the damage is real, which is the point: the index no longer
+        // agrees with the rows, and only an explicit audit would say so.
+        assert!(!layer.audit_spatial_index().unwrap().is_consistent());
+    }
+
+    #[test]
     fn stored_bounds_that_exclude_their_geometry_fall_back() {
         let (_dir, gpkg) = populated(&[(1, 10.0, 20.0), (2, -5.0, 7.0), (3, 100.0, 100.0)]);
         let layer = gpkg.layer("pts").unwrap();
         let path = layer
-            .create_spatial_index_impl(BulkIndexOptions::always_bulk(), shrink_one_stored_bound)
+            .create_spatial_index_impl(
+                BulkIndexOptions::always_bulk()
+                    .with_verification(crate::BulkVerification::Contents),
+                shrink_one_stored_bound,
+            )
             .unwrap();
-        // Every id is still present and the count still matches, so the gate
-        // only rejects this by comparing each row's bounds against the entry it
-        // indexes.
+        // Every id is still present and the count still matches, so only the
+        // content check rejects this, by comparing each row's bounds against
+        // the entry it indexes. `Contents` is therefore enough.
         assert_eq!(path, BuildPath::TriggeredFallback);
         assert!(rtree_matches_scan(&gpkg));
     }
