@@ -449,16 +449,38 @@ earns its place; the test turns them off to build the case.
 Closes M3's CLI item, M3 acceptance criterion 6, and M4's deferred tile
 commands.
 
-- [ ] `gpkg info <file>`: version, contents, srs, index status including
+- [x] `gpkg info <file>`: version, contents, srs, index status including
       trigger generation, extensions with their support level.
-- [ ] `gpkg validate <file>`: prints phase 7's findings and their repair
-      advice.
-- [ ] `gpkg copy <src> <dst>`: any supported read to our write. The dogfood
+      *(Done, plus tile pyramids. Opens read-only and lenient.)*
+- [x] `gpkg validate <file>`: prints phase 7's findings and their repair
+      advice. *(Done. Exits non-zero on an error, since that is the severity
+      meaning a reader can get a wrong answer; `--strict` promotes warnings.)*
+- [x] `gpkg copy <src> <dst>`: any supported read to our write. The dogfood
       command, and the full-circle test in M3 criterion 6.
-- [ ] `gpkg index <file> <layer>` and `gpkg repair`.
-- [ ] `gpkg tiles info` and `gpkg tiles get z/x/y --out tile.png`, deferred
-      from M4 for want of this crate.
-- [ ] Ships as a bin crate.
+      *(Done at feature and attribute layers, per the scope decision above.
+      Geometry crosses as WKB through `insert_wkb` rather than through
+      `geo-types`, so the non-linear curve types survive a copy byte for byte;
+      a test pins that against the curve fixture. Whatever is not carried is
+      named at the end, compared against what the destination actually ended up
+      with, since writing a curve layer registers its own `gpkg_geom_<TYPE>`.)*
+- [x] `gpkg index <file> <layer>` and `gpkg repair`.
+      *(Done. `index` refuses where an index is present but broken rather than
+      quietly repairing; `repair` leaves an absent index absent, matching
+      `validate` calling that an advisory rather than a defect.)*
+- [x] `gpkg tiles info` and `gpkg tiles get z/x/y --out tile.png`, deferred
+      from M4 for want of this crate. *(Done. `get` writes the stored bytes and
+      decodes nothing, as the library does.)*
+- [x] Ships as a bin crate. *(`geopackage-cli`, binary `gpkg`, clap.)*
+
+**Four gaps the CLI found in the library**, which is what putting this phase
+before the freeze was for: no `Display` on the types a tool prints
+(`OpenWarning`, `SpatialIndexStatus`, `LayerKind`, `ExtensionSupport`,
+`ExtensionScope`, and `Finding` itself); no `Layer::count`, so counting rows
+meant materialising them; no lenient read-only open, so an inspection tool had
+to choose between tolerant-and-writable and read-only-and-strict; and leniency
+still does not compose with `OpenOptions` at all, which is left for the phase 10
+API review rather than settled while writing a subcommand. The first three are
+fixed.
 
 **Corpus generation is cut from this phase**, and from the CLI's remit
 generally. M3 assigned it here and
