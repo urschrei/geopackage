@@ -8,7 +8,11 @@
 )]
 
 use geopackage::core::gpb::{Envelope, encode_header};
-use geopackage::{BoundingBox, ContentsDataType, Error, GeoPackage, LayerKind, ValueRef};
+use geopackage::core::types::{ColumnType, GeometryType};
+use geopackage::{
+    BoundingBox, ColumnSpec, ContentsDataType, Error, GeoPackage, GeometrySpec, LayerKind,
+    NewFeature, TableSchemaBuilder, Value, ValueRef,
+};
 use geopackage::{ConversionOptions, core::datetime::DateTime};
 
 /// A GPB point blob with an XY envelope (little-endian WKB).
@@ -415,4 +419,41 @@ fn cursor_can_be_iterated_twice() {
         .collect();
     assert_eq!(first, second);
     assert!(!first.is_empty());
+}
+
+#[test]
+fn count_matches_iteration_without_materialising_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("c.gpkg")).unwrap();
+    gpkg.add_epsg_srs(4326).unwrap();
+    gpkg.create_layer(
+        &TableSchemaBuilder::new("pts")
+            .column(ColumnSpec::new("name", ColumnType::Text(None)))
+            .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+    )
+    .unwrap();
+
+    let layer = gpkg.layer("pts").unwrap();
+    assert_eq!(layer.count().unwrap(), 0);
+
+    layer
+        .write_all(
+            (0..37)
+                .map(|i| {
+                    NewFeature::new(
+                        geo_types::Point::new(f64::from(i), f64::from(i)),
+                        vec![Value::Text("p".into())],
+                    )
+                })
+                .collect::<Vec<_>>(),
+            100,
+        )
+        .unwrap();
+
+    assert_eq!(layer.count().unwrap(), 37);
+    // The same answer the materialising path gives, which is what it replaces.
+    assert_eq!(
+        u64::try_from(layer.features().unwrap().len()).unwrap(),
+        layer.count().unwrap()
+    );
 }

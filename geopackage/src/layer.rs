@@ -96,12 +96,26 @@ pub enum LayerKind {
 }
 
 impl LayerKind {
+    /// The kind as the word `gpkg_contents` uses for it.
+    ///
+    /// The same string as the private `data_type`, exposed because reporting a
+    /// layer's kind and writing its catalogue row want the same word.
+    pub fn as_str(self) -> &'static str {
+        self.data_type()
+    }
+
     /// The `gpkg_contents.data_type` string this kind requires.
     fn data_type(self) -> &'static str {
         match self {
             Self::Feature => "features",
             Self::Attributes => "attributes",
         }
+    }
+}
+
+impl std::fmt::Display for LayerKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -433,6 +447,25 @@ impl<'a> Layer<'a> {
             Some(projection) => projection.geometry,
             None => self.geometry_column.is_some(),
         }
+    }
+
+    /// How many rows the layer holds.
+    ///
+    /// A `SELECT COUNT(*)`, so it reads no geometry and builds no [`Feature`].
+    /// Counting by iterating instead costs a full materialising scan, which on
+    /// a layer of any size is the whole file.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] if the query fails.
+    pub fn count(&self) -> Result<u64> {
+        let sql = format!("SELECT COUNT(*) FROM {}", quote(&self.table_name)?);
+        let count: i64 = self
+            .gpkg
+            .connection()
+            .query_row(&sql, [], |row| row.get(0))?;
+        // COUNT(*) is never negative, so the cast cannot wrap.
+        Ok(count.unsigned_abs())
     }
 
     /// Iterate every row of the layer as an owned [`Feature`].

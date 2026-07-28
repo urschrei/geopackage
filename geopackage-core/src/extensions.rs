@@ -16,6 +16,8 @@
 //! two extensions removed in 2016 still occupy F.2, F.4 and F.5 and everything
 //! after them is numbered around the gaps.
 
+use std::fmt;
+
 use crate::types::GeometryType;
 
 /// `gpkg_extensions.scope`: what an extension affects (Requirement 64).
@@ -277,6 +279,30 @@ pub enum ExtensionSupport {
     /// Nothing can be assumed about what such an extension requires of a
     /// writer, which is what separates it from [`ExtensionSupport::Known`].
     Unrecognised,
+}
+
+impl ExtensionSupport {
+    /// The support level as a short phrase, for reporting a catalogue row.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Implemented => "implemented",
+            Self::Known => "known, not read or written",
+            Self::Removed => "removed from the standard in 2016",
+            Self::Unrecognised => "unrecognised",
+        }
+    }
+}
+
+impl fmt::Display for ExtensionSupport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl fmt::Display for ExtensionScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[cfg(test)]

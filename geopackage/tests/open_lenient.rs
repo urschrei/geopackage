@@ -140,3 +140,62 @@ fn open_lenient_still_rejects_a_non_geopackage() {
         Err(geopackage::Error::NotAGeoPackage { .. })
     ));
 }
+
+#[test]
+fn read_only_lenient_tolerates_what_lenient_tolerates() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy.gpkg");
+    legacy_file(&path, APPLICATION_ID_GP10);
+
+    // Strict read-only refuses nothing here (the file is identifiable), but
+    // the point is that leniency and read-only compose at all: before this
+    // existed a caller had to pick tolerant-and-writable or read-only-and-
+    // strict, and an inspection tool wants neither of those pairs.
+    let gpkg = GeoPackage::open_read_only_lenient(&path).unwrap();
+    assert_eq!(gpkg.version(), GpkgVersion::V1_0);
+    // `legacy_file` writes only the two required core tables, so the absent
+    // gpkg_geometry_columns is warned about alongside the application_id.
+    assert_eq!(
+        gpkg.open_warnings(),
+        &[
+            OpenWarning::LegacyApplicationId {
+                version: GpkgVersion::V1_0,
+                application_id: APPLICATION_ID_GP10,
+            },
+            OpenWarning::MissingGeometryColumns,
+        ]
+    );
+}
+
+#[test]
+fn read_only_lenient_does_not_need_a_writable_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy.gpkg");
+    legacy_file(&path, APPLICATION_ID_GP11);
+
+    // Drop write permission, which is what an inspection tool meets on a file
+    // it does not own or on read-only media.
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&path, perms).unwrap();
+
+    let gpkg = GeoPackage::open_read_only_lenient(&path).unwrap();
+    assert_eq!(gpkg.version(), GpkgVersion::V1_1);
+    assert!(
+        gpkg.open_warnings()
+            .contains(&OpenWarning::LegacyApplicationId {
+                version: GpkgVersion::V1_1,
+                application_id: APPLICATION_ID_GP11,
+            })
+    );
+
+    // Read-only in the sense that matters: the connection refuses writes,
+    // rather than merely happening to sit on an unwritable file. Note
+    // `open_lenient` would *succeed* here, because SQLite's read-write open
+    // falls back rather than failing; what it does not give is a handle that
+    // cannot write, and a read-write connection may roll back a hot journal on
+    // open, modifying the very file being inspected.
+    gpkg.connection()
+        .execute("CREATE TABLE scratch (a INTEGER)", [])
+        .expect_err("a read-only connection must refuse a write");
+}
