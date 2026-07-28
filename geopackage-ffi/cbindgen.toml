@@ -86,6 +86,7 @@ include = ["gpkg_error_t", "Status", "Container", "LayerHandle"]
 # generated: cbindgen cannot see into arrow-rs with `parse_deps = false`, and
 # the spec's own name is what a C consumer expects to link against.
 "FFI_ArrowArrayStream" = "struct ArrowArrayStream"
+"FFI_ArrowSchema" = "struct ArrowSchema"
 
 [enum]
 prefix_with_name = true

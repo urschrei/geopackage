@@ -397,6 +397,65 @@ gpkg_status gpkg_layer_read_arrow_in(const gpkg_layer_t *layer,
                                      gpkg_error_t *error);
 
 /**
+ * Write an Arrow C Data Interface stream into a layer.
+ *
+ * Takes ownership of `stream`, as the C Data Interface specifies for a moved
+ * stream: it is released here whether the write succeeds or fails, and the
+ * caller must not release it again. `out_rows`, when non-NULL, receives the
+ * number of rows written.
+ *
+ * `batch_size` is the rows per write transaction; `0` writes everything in
+ * one transaction.
+ *
+ * # Safety
+ *
+ * `layer` must be a live layer handle, `stream` must point at a stream the
+ * caller owns and has not released, `out_rows` must be NULL or writable, and
+ * `error` must be NULL or writable.
+ */
+gpkg_status gpkg_layer_write_arrow(const gpkg_layer_t *layer,
+                                   struct ArrowArrayStream *stream,
+                                   size_t batch_size,
+                                   uint64_t *out_rows,
+                                   gpkg_error_t *error);
+
+/**
+ * Create a layer whose columns come from an Arrow schema.
+ *
+ * The schema is borrowed, not consumed: the caller still owns it and must
+ * release it. This is what lets a C consumer copy a layer without any
+ * schema-description API of its own, by taking the schema from the source
+ * stream's `get_schema` and handing it straight here.
+ *
+ * The geometry column and its spatial reference system are taken from the
+ * schema's GeoArrow metadata. The referenced SRS must already exist in the
+ * destination; `gpkg_add_epsg_srs` puts one there.
+ *
+ * # Safety
+ *
+ * `gpkg` must be a live container handle, `name` a NUL-terminated UTF-8
+ * string, `schema` a valid `ArrowSchema` the caller owns, and `error` NULL or
+ * writable.
+ */
+gpkg_status gpkg_create_layer_from_arrow_schema(const gpkg_t *gpkg,
+                                                const char *name,
+                                                const struct ArrowSchema *schema,
+                                                bool spatial_index,
+                                                gpkg_error_t *error);
+
+/**
+ * Register an EPSG spatial reference system in the file.
+ *
+ * A layer cannot name an SRS the file does not carry, so this is what a C
+ * consumer calls before creating one.
+ *
+ * # Safety
+ *
+ * `gpkg` must be a live container handle and `error` NULL or writable.
+ */
+gpkg_status gpkg_add_epsg_srs(const gpkg_t *gpkg, int32_t code, gpkg_error_t *error);
+
+/**
  * Release a string this library returned.
  *
  * Passing NULL does nothing.
