@@ -47,7 +47,7 @@
 
 use std::cell::Cell;
 
-use geopackage::{GeoPackage, Layer};
+use geopackage::{GeoPackage, Layer, TilePyramid};
 
 /// A `gpkg_t`: an open GeoPackage, and a count of the handles borrowing it.
 pub struct Container {
@@ -116,6 +116,26 @@ impl Container {
             layer: erased,
             _token: self.token(),
         }
+    }
+
+    /// Open a tile pyramid as a child handle, registering it against this
+    /// container.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`GeoPackage::tiles`] returns.
+    pub fn tiles(&self, name: &str) -> geopackage::Result<TilesHandle> {
+        let pyramid = self.gpkg.tiles(name)?;
+        // SAFETY: the same argument as `adopt`. `TilePyramid<'a>` borrows the
+        // `GeoPackage` inside `self.gpkg`, which is boxed and never moved or
+        // replaced (invariant 1), and the token taken below stops this
+        // container closing while the handle lives (invariant 2). The
+        // transmute changes only the lifetime parameter.
+        let erased: TilePyramid<'static> = unsafe { std::mem::transmute(pyramid) };
+        Ok(TilesHandle {
+            pyramid: erased,
+            _token: self.token(),
+        })
     }
 
     /// Take one count against this container, released when the token drops.
@@ -202,5 +222,21 @@ impl LayerHandle {
         // same operation `Container::token` performs.
         let parent = unsafe { &*self._token.parent };
         parent.token()
+    }
+}
+
+/// A `gpkg_tiles_t`: a tile pyramid, and the container it borrows.
+pub struct TilesHandle {
+    /// The erased borrow. See [`Container::tiles`] for why it is sound.
+    pyramid: TilePyramid<'static>,
+    /// What keeps the container alive while this handle exists. Dropped with
+    /// the handle, which is what later permits a close.
+    _token: ChildToken,
+}
+
+impl TilesHandle {
+    /// The pyramid, borrowed for as long as the caller holds the handle.
+    pub fn pyramid(&self) -> &TilePyramid<'static> {
+        &self.pyramid
     }
 }

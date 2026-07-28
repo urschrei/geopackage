@@ -48,6 +48,7 @@ pub mod handle;
 pub mod layer;
 pub mod schema;
 pub mod stream;
+pub mod tiles;
 pub mod util;
 
 pub use container::{
@@ -69,5 +70,10 @@ pub use schema::{
 pub use stream::{
     gpkg_add_epsg_srs, gpkg_create_layer_from_arrow_schema, gpkg_layer_read_arrow,
     gpkg_layer_read_arrow_in, gpkg_layer_write_arrow,
+};
+pub use tiles::{
+    gpkg_bytes_free, gpkg_tiles_count, gpkg_tiles_count_at, gpkg_tiles_delete, gpkg_tiles_extent,
+    gpkg_tiles_free, gpkg_tiles_get, gpkg_tiles_get_into, gpkg_tiles_has, gpkg_tiles_matrix_at,
+    gpkg_tiles_name, gpkg_tiles_open, gpkg_tiles_put, gpkg_tiles_t, gpkg_tiles_zoom_level_count,
 };
 pub use util::gpkg_string_free;

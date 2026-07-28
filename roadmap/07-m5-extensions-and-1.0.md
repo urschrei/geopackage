@@ -531,7 +531,20 @@ concrete.
       the Arrow C Data Interface.
 - [ ] cbindgen header checked in, CI failing on an undocumented header diff,
       and a C program in CI reading a corpus file through the stream.
-- [ ] SQLite thread model documented: handle per thread, or an external lock.
+- [x] SQLite thread model documented: handle per thread, or an external lock.
+      *(Handle per thread, and not a choice so much as a consequence:
+      `GeoPackage` is `Send` but not `Sync`, because `Connection` is, so a
+      handle may be moved between threads but never used from two at once.
+      Recorded in the crate docs, and the child-count `Cell` is deliberately not
+      an atomic on that basis, since an atomic would imply a guarantee the rest
+      of the type cannot keep.)*
+- [x] Tile pyramids over the C ABI: `gpkg_tiles_t`, the grid and extent, and
+      get, put, has and delete by address. Two readers, one returning an owned
+      buffer and one filling the caller's, because the owned one puts a length
+      in the caller's hands that AddressSanitizer will not check: freeing at the
+      wrong length was tried and reported nothing, since the macOS allocator
+      ignores the size. `gpkg_tiles_get_into` has no such contract, and is the
+      faster shape for a caller reading many tiles.
 
 ### Scope: the C API mirrors the Rust API
 
