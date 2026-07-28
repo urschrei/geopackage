@@ -225,12 +225,160 @@ Each setting is documented in full on its type in the
 [crate documentation](https://docs.rs/geopackage). Anything not covered is
 reachable as SQL through `GeoPackage::connection()`.
 
+## Command-line tool
+
+The `geopackage-cli` crate builds `gpkg`, which reads, checks and repairs files
+from a shell.
+
+| Command | What it does |
+|---|---|
+| `gpkg info <file>` | Version, layers with their schemas and row counts, spatial reference systems, spatial-index state including its trigger generation, tile pyramids, and the extension catalogue with what this crate can do with each row. |
+| `gpkg validate <file>` | The findings of `GeoPackage::validate`, most severe first, each with the repair advice that goes with it. Nothing is modified. |
+| `gpkg index <file> <layer>` | Builds a spatial index on a layer that has none. A layer whose index is present but broken is refused rather than quietly repaired. |
+| `gpkg repair <file> [layer]` | Rebuilds legacy and desynchronised indexes onto the 1.4 trigger set, for one named layer or for every layer that needs it. A layer with no index is left alone; `gpkg index` is how one is asked for. |
+| `gpkg copy <src> <dst>` | Copies the feature and attribute layers of one file into a new one. |
+| `gpkg tiles info <file> [pyramid]` | Each pyramid's extent, spatial reference system and zoom ladder, with the tiles stored at each level. |
+| `gpkg tiles get <file> <pyramid> <zoom> <column> <row>` | Writes one tile's stored bytes to `--out` or to standard output. |
+
+Every command opens the file leniently, so one with something wrong with it is
+reported or repaired rather than refused: an inspection tool that will not open
+the files worth inspecting is not much use, and the files worth repairing are by
+definition ones something is wrong with.
+
+`validate` exits non-zero when a finding is an error, the severity meaning a
+reader can get a wrong answer from the file. Warnings and advisories exit zero,
+and `--strict` promotes warnings to a failing exit as well; that is what makes
+the command usable in a script or a CI job.
+
+`copy` carries feature and attribute layers: their schemas, their spatial
+reference systems, their rows, and a spatial index wherever the source had one.
+Tiles and the extension tables are not carried, and whatever was left behind is
+named at the end, so a copy is not mistaken for the whole file. Geometry crosses
+as WKB rather than through `geo-types`, so the non-linear curve types survive a
+copy byte for byte.
+
+`tiles get` writes the bytes the file holds and decodes nothing, whatever
+`--out` is named.
+
+```console
+$ gpkg info places.gpkg
+places.gpkg
+  version: 1.2
+
+layer "points" (features)
+  rows:     3
+  geometry: geom (POINT, srs_id 4326)
+  srs:      WGS 84 geodetic (EPSG:4326)
+  index:    legacy trigger set  (repair with `gpkg repair`)
+  columns:
+    fid                  INTEGER PRIMARY KEY NOT NULL
+    geom                 POINT
+    name                 TEXT
+    pop                  MEDIUMINT
+
+extensions:
+  gpkg_rtree_index                   points.geom            implemented [write-only]
+
+$ gpkg validate --strict places.gpkg
+places.gpkg
+  warning: spatial index on "points" is maintained by a pre-1.4 or mixed trigger set
+    repair: upgrade the trigger set with Layer::repair_spatial_index
+
+  0 errors, 1 warning, 0 advisories
+$ echo $?
+1
+
+$ gpkg repair places.gpkg
+points: legacy trigger set index repaired to the 1.4 trigger set
+
+$ gpkg validate --strict places.gpkg
+places.gpkg
+  no findings (this crate's checks; the OGC ETS is the authority)
+```
+
+## C ABI
+
+The `geopackage-ffi` crate builds a `cdylib` and a `staticlib` over the same
+library, for consumers that are not Rust. It is packaged with
+[cargo-c](https://github.com/lu-zero/cargo-c), so
+
+```sh
+cargo cinstall -p geopackage-ffi --release --prefix=/usr/local
+```
+
+installs a versioned soname, the header and a pkg-config file, and a C program
+compiles and links against it through `pkg-config --cflags --libs geopackage`.
+
+The conventions:
+
+- **Handles are opaque**, each with exactly one destructor. `gpkg_t` is an open
+  file, `gpkg_layer_t` a feature or attribute layer, and `gpkg_tiles_t` a tile
+  pyramid, whose tiles are read, written, tested for and deleted by address.
+- **Strings are NUL-terminated UTF-8 in both directions.** One this library
+  returns is owned by the caller and released with `gpkg_string_free`; one the
+  caller passes in is borrowed for the duration of the call.
+- **Errors go through a `gpkg_error_t *` out-parameter**, carrying a code and a
+  message, and released with `gpkg_error_clear`. Passing NULL means the caller
+  does not want the detail. A function returning a pointer fails with NULL, and
+  one returning a status with a value other than `GPKG_STATUS_OK`.
+- **The data plane is the Arrow C Data Interface**, both ways.
+  `gpkg_layer_read_arrow` and `gpkg_layer_read_arrow_in` fill in an
+  `ArrowArrayStream` the caller owns, and `gpkg_layer_write_arrow` takes one.
+  `gpkg_create_layer_from_arrow_schema` builds a layer from a stream's own
+  schema, so a C consumer can copy a layer without describing its columns at
+  all; the geometry column comes out declared as `GEOMETRY` rather than the
+  source's specific type, because the GeoArrow WKB encoding does not carry one.
+  [`examples/roundtrip.c`](https://github.com/urschrei/geopackage/blob/main/geopackage-ffi/examples/roundtrip.c)
+  is a complete copy program on that basis.
+
+```c
+#include "geopackage.h"
+
+gpkg_error_t error = {GPKG_STATUS_OK, NULL};
+gpkg_t *gpkg = gpkg_open_read_only("places.gpkg", &error);
+gpkg_layer_t *layer = gpkg_layer_open(gpkg, "points", &error);
+
+struct ArrowArrayStream stream;
+gpkg_layer_read_arrow(layer, &stream, &error);
+/* pull batches with stream.get_next, then: */
+stream.release(&stream);
+
+gpkg_layer_free(layer);   /* before the close, which would otherwise refuse */
+gpkg_close(gpkg, &error);
+```
+
+Two rules a C caller has to know:
+
+**One handle per thread.** `GeoPackage` is `Send` but not `Sync`, because
+`rusqlite::Connection` is, so a handle may be created on one thread and used on
+another, but never used from two at once. Nothing here is internally locked: a
+caller wanting concurrent access opens the file once per thread, which is also
+what gives SQLite its own per-connection state.
+
+**Closing a container is refused while any handle taken from it is alive.**
+`gpkg_close` returns `GPKG_STATUS_HANDLE_IN_USE` and leaves the file open while
+a layer handle, a tile handle or an Arrow stream from it is unfreed. Those
+handles hold a borrow of the container that C has no way to express, so the
+count is checked at runtime rather than left to the caller to keep track of;
+the Rust API gets the same guarantee from the borrow checker, since `close`
+takes `self`.
+
+`begin` and `commit` are not exposed, deliberately: the write paths and the bulk
+index build open transactions of their own, and SQLite does not nest them, so an
+explicit transaction around them fails. Rows per transaction are set through the
+`batch_size` argument the write calls already take.
+
+`geopackage-ffi` is the only crate in the workspace containing `unsafe`. Every
+other crate sets `unsafe_code = "forbid"`.
+
 ## Workspace
 
 | Crate | Purpose |
 |---|---|
 | [`geopackage-core`](geopackage-core) | Format primitives, no IO or SQLite: GeoPackage Binary (GPB) header codec, normative table DDL, version-aware RTree trigger SQL, identifier quoting, `application_id`/`user_version` handling. |
 | [`geopackage`](geopackage) | The container: create/open over [rusqlite](https://github.com/rusqlite/rusqlite) with bundled SQLite, the feature and attribute read and write paths, columnar read and write through Apache Arrow (feature `arrow`), the RTree spatial-index lifecycle, and the `ST_*` SQL functions the index triggers require. |
+| [`geopackage-cli`](geopackage-cli) | The `gpkg` binary: inspect, validate, index, repair and copy a file from a shell, plus the tile pyramid commands. |
+| [`geopackage-ffi`](geopackage-ffi) | The C ABI: opaque handles over the same library, the Arrow C Data Interface as the data plane, and cargo-c packaging (header, pkg-config file, versioned soname). The one crate in the workspace containing `unsafe`. |
 | `geopackage-core/fuzz` | cargo-fuzz targets for the GPB parser and the tile payload probe. |
 
 ## Design
