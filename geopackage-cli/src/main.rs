@@ -11,6 +11,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod index;
 mod info;
 mod validate;
 
@@ -41,6 +42,24 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
+    /// Build a spatial index on a layer that has none.
+    Index {
+        /// The `.gpkg` file to write to.
+        file: PathBuf,
+        /// The layer to index.
+        layer: String,
+    },
+    /// Repair spatial indexes that a legacy or mixed trigger set maintains, or
+    /// that were left desynchronised.
+    ///
+    /// A layer with no index is left alone: that is a choice rather than a
+    /// defect, and `gpkg index` is how one is asked for.
+    Repair {
+        /// The `.gpkg` file to write to.
+        file: PathBuf,
+        /// Repair only this layer, rather than every layer that needs it.
+        layer: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -48,6 +67,8 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Info { file } => info::run(&file),
         Command::Validate { file, strict } => validate::run(&file, strict),
+        Command::Index { file, layer } => index::build(&file, &layer),
+        Command::Repair { file, layer } => index::repair(&file, layer.as_deref()),
     };
 
     match result {
