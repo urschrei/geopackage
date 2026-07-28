@@ -1,0 +1,90 @@
+[package]
+name = "geopackage-ffi"
+description = "C ABI for the geopackage crate: read and write OGC GeoPackage (.gpkg) files from C"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "geopackage_ffi"
+# `cdylib` for a shared library C links against, `staticlib` for a static one,
+# and `rlib` so the crate's own integration tests can call into it as Rust.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+# NOTE: this crate deliberately does **not** take `[lints] workspace = true`.
+# It is the single exception to the workspace's `unsafe_code = "forbid"`
+# (roadmap decision D12): a C ABI cannot be written without `unsafe`, so the
+# policy quarantines it here rather than weakening it everywhere. The lints
+# below replace the inherited set, keeping everything except the blanket
+# forbid, and add the ones that only matter where `unsafe` is allowed.
+[lints.rust]
+missing_docs = "warn"
+# Rust 2024 makes this deny-by-default; stated anyway, because it is the rule
+# that keeps every unsafe operation inside a block with a comment on it rather
+# than smeared across a whole `unsafe fn`.
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+# The unsafe-hygiene set, which is the point of this crate having its own.
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+unnecessary_safety_doc = "warn"
+unnecessary_safety_comment = "warn"
+missing_safety_doc = "deny"
+mem_forget = "warn"
+# The rest mirrors the workspace table.
+string_slice = "warn"
+indexing_slicing = "warn"
+unwrap_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+unreachable = "warn"
+get_unwrap = "warn"
+unwrap_in_result = "warn"
+panic_in_result_fn = "warn"
+let_underscore_future = "warn"
+let_underscore_must_use = "warn"
+unused_result_ok = "warn"
+map_err_ignore = "warn"
+assertions_on_result_states = "warn"
+float_cmp = "warn"
+float_cmp_const = "warn"
+lossy_float_literal = "warn"
+cast_sign_loss = "warn"
+invalid_upcast_comparisons = "warn"
+rc_mutex = "warn"
+debug_assert_with_mut_call = "warn"
+iter_not_returning_iterator = "warn"
+expl_impl_clone_on_copy = "warn"
+dbg_macro = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
+[dependencies]
+geopackage = { workspace = true, features = ["arrow"] }
+arrow-array = { workspace = true, features = ["ffi"] }
+arrow-schema = { workspace = true, features = ["ffi"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# `cargo cbuild` / `cargo cinstall` packaging: a pkg-config file and a versioned
+# soname, so a C consumer links against it the way it links against any other
+# system library.
+[package.metadata.capi.header]
+name = "geopackage"
+subdirectory = "geopackage"
+
+[package.metadata.capi.pkg_config]
+name = "geopackage"
+filename = "geopackage"
+
+[package.metadata.capi.library]
+name = "geopackage"

@@ -1,5 +1,5 @@
 [workspace]
-members = ["geopackage-core", "geopackage", "geopackage-cli"]
+members = ["geopackage-core", "geopackage", "geopackage-cli", "geopackage-ffi"]
 exclude = ["geopackage-core/fuzz"]
 resolver = "3"
 
