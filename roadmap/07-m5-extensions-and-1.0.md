@@ -480,6 +480,82 @@ concrete.
       and a C program in CI reading a corpus file through the stream.
 - [ ] SQLite thread model documented: handle per thread, or an external lock.
 
+### The handle-lifetime question, and what it costs
+
+`Layer<'a>` and `TilePyramid<'a>` borrow the `GeoPackage` they came from, so a C
+ABI handle cannot hold either: a C caller keeping a layer handle past its
+container handle is exactly the use-after-free the lifetime prevents. This has
+to be settled before the crate is written, and before phase 10 freezes whatever
+it settles on.
+
+Two facts, both established rather than assumed.
+
+**The performance side is decided.** Rebuilding a borrowed handle inside every
+FFI call costs a near-constant 37 to 51 µs, so the overhead is inversely
+proportional to how cheap the call is: 778% on `get_tile`, 675% on `extent`,
+131% to 150% on the small `features_in` results an interactive map issues, and
+13% only at a thousand rows. Streaming paths are unaffected, since their handle
+is built once per scan. An owned handle would add 3.77 ns per construction, and
+nothing builds a handle per row or per batch. See
+[benchmarks/2026-07-28-handle-construction.md](benchmarks/2026-07-28-handle-construction.md).
+
+**The cost of owning is not performance, it is a compile-time guarantee.**
+`close` takes `self`, checkpoints a WAL, resets the journal mode to `DELETE` and
+drops the connection, so a handed-over file is a single file with no sidecars.
+Today the borrow *encodes* that contract: a live `Layer` makes `gpkg.close()` a
+compile error, because `close` consumes what the layer borrows. If `Layer` holds
+an `Arc<GeoPackage>`, consuming the `GeoPackage` no longer implies dropping the
+connection, and that compile error becomes either a runtime error or a silently
+broken guarantee. Trading a static guarantee for a dynamic one runs against what
+D12 and the `unsafe_code = "forbid"` policy are for, so it is the thing to weigh,
+not the nanoseconds.
+
+The options, to be decided before the crate is written:
+
+1. **Owned handles, close fails when handles are outstanding.** `GeoPackage`
+   becomes a thin handle over `Arc<Inner>`; `close` checks the strong count and
+   returns an error naming the count if it is not one. Keeps the guarantee
+   honest, at the price of demoting a compile error to a runtime one. Note this
+   costs no `Send`: `Layer` is already not `Send`, because `&GeoPackage` is not
+   (`Connection` is `Send` but not `Sync`), so an `Arc<Inner>` over a non-`Sync`
+   inner is no worse.
+2. **Owned handles, `close(&self)` marks the handle closed.** Interior
+   mutability takes the connection out; surviving handles error afterwards.
+   Deterministic close whatever is outstanding, but it breaks
+   `GeoPackage::connection() -> &Connection`, the documented escape hatch the
+   README points at for anything the API does not cover, since a guard type
+   cannot be handed out as a plain reference.
+3. **`Weak` in the handles, strong in the iteration state.** `Layer` and
+   `TilePyramid` hold a `Weak<Inner>` and upgrade per call, so `close` and
+   `Drop` keep their exact present semantics and outstanding handles go inert.
+   Cursors and readers, which borrow the connection for their whole scan, would
+   hold a strong reference instead, so only a scan in flight blocks a close. An
+   upgrade is two atomics against a 5.22 µs `get_tile`. The wrinkle is
+   `TilePyramid::gpkg() -> &'a GeoPackage`, which cannot be expressed over a
+   temporary upgrade and would have to return an owned handle or go.
+4. **Keep the borrow, make the rebuild cheap.** Handles stay borrowed and every
+   current guarantee stands, including the compile-time one. The library grows a
+   constructor that builds a `Layer` from a cached, shared schema rather than
+   re-querying, and the FFI holds the cache and rebuilds per call. Removes the
+   performance objection without touching the ownership model. Requires
+   `Layer`'s owned fields (`schema`, `value_columns`) to become shared for the
+   rebuild to be cheap, for which `value_column_names: Arc<[String]>` is already
+   the precedent; the rebuild cost then needs measuring rather than assuming,
+   and a cached schema going stale under `ALTER TABLE` needs an answer.
+
+Options 1 and 4 are the serious contenders: 1 gives the FFI the natural handle
+and pays for it in the close contract, 4 keeps the contract intact and pays for
+it in an unusual constructor and a staleness question. 2 is held back by the
+escape hatch. 3 is the most elegant and the most moving parts.
+
+Whichever is chosen applies to `TilePyramid` as well as `Layer`, and on the
+measurements `TilePyramid` is the more urgent of the two. The second-tier
+borrowed types (`FeatureCursor`, `FeatureStream`, `TileCursor`, `TileStream`,
+`ArrowBatches`, `FeatureWriter`, `TileWriter`) are iteration state built once per
+scan, so they can stay borrowed as long as the FFI iterator object owns its
+parent. `ValueRef<'a>` and `GpbGeometry<'a>` borrow row data rather than a
+handle and should not change at all.
+
 ## Phase 10: hardening and the API freeze
 
 - [ ] **API review.** Audit every `pub` item; `#[non_exhaustive]` where growth
