@@ -212,8 +212,40 @@ While the version is below 1.0 the API may change in any release.
   `SpatialIndexStatus`, `LayerKind`, `ExtensionSupport` and `ExtensionScope`**,
   so a consumer printing one does not have to match on it. Each also gains an
   `as_str` where the rendering is a fixed word.
+- **`gpkg_begin`, `gpkg_commit` and `gpkg_rollback` in the C ABI**, with
+  `gpkg_in_transaction` to ask the state without provoking an error. These were
+  withheld until now because a C consumer who began a transaction and then wrote
+  anything got "cannot start a transaction within a transaction" from the write.
+  Each refuses the state it cannot honour, a second begin or an unbalanced
+  commit or rollback, with `GPKG_STATUS_INVALID_ARGUMENT` and a message saying
+  which.
 
 ### Changed
+
+- **Every write path joins a transaction the caller has already begun**, rather
+  than failing. SQLite does not nest transactions, so a caller who opened one on
+  `GeoPackage::connection()` and then used the ordinary API previously got
+  "cannot start a transaction within a transaction". `Layer::extent` has always
+  inherited instead; every write path now does, which is what makes the C
+  transaction calls above possible.
+
+  Three consequences for a caller who does open one, and none at all for a
+  caller who does not:
+
+  - **`FeatureWriter::commit` and `TileWriter::commit` stage rather than
+    commit.** They still flush `gpkg_contents` (`last_change`, and the bounding
+    box when a geometry was written), and still report success, but the durable
+    commit is the caller's to issue.
+  - **Dropping a writer without committing rolls nothing back**, so an error
+    part-way through leaves what preceded it staged for the caller to discard.
+  - **`Layer::write_all`'s `batch_size` stops bounding transactions**, because
+    every batch belongs to the caller's. An error part-way then leaves every row
+    staged rather than some of them committed, which is the same all-or-nothing
+    a `batch_size` of `0` gives.
+
+  `GeoPackage::create` is the one write path that still opens its transaction
+  outright, since it opens its own connection and no caller can hold a
+  transaction on it.
 
 - **`gpkg_zoom_other` and `gpkg_webp` are Annex F.6 and F.7**, not F.4 and
   F.5, which is what their constants' documentation claimed. Annex F numbers
