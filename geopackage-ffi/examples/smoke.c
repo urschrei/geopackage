@@ -1,9 +1,8 @@
 /* A C consumer of libgeopackage: open a file, walk its layers, and close it.
  *
- * This is the smoke test the roadmap asks for. It is compiled and run against
- * the built static library by `tests/c_smoke.rs`, so a change that breaks the
- * header or the ABI fails the ordinary test run rather than waiting for someone
- * to try it by hand.
+ * Compiled and run against the built static library by `tests/c_smoke.rs`, so a
+ * change that breaks the header or the ABI fails the ordinary test run rather
+ * than waiting for someone to try it by hand.
  *
  * Build by hand, once the library is built:
  *     cc -I geopackage-ffi/include geopackage-ffi/examples/smoke.c \
