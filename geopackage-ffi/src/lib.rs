@@ -209,12 +209,18 @@
 //!   [`gpkg_string_free`]. The other deallocator, [`gpkg_bytes_free`], sits
 //!   with [`tiles`], which is the only thing that hands out a buffer.
 //!
-//! Feature data moves only as Arrow. There is no row-at-a-time feature API on
-//! this side, so a C consumer reads a layer by pulling batches and writes one
-//! by pushing them; writing appends, and nothing updates or deletes an
-//! existing feature. Validation, metadata and the related-tables extension are
-//! not exposed at all: they stay behind the Rust API, and `gpkg validate`
-//! covers the first from the command line.
+//! - [`writer`]: changing features a row at a time. Insert, update and delete,
+//!   with geometry as WKB and values as [`gpkg_value_t`].
+//!
+//! Features are read only as Arrow: a C consumer pulls batches, and there is no
+//! row-at-a-time reader, because Arrow already returns every row and a second
+//! path to the same data would earn nothing. Writing has both, because they do
+//! different things: [`gpkg_layer_write_arrow`] appends in bulk, and a
+//! [`gpkg_writer_t`] changes or removes rows that are already there.
+//!
+//! Validation, metadata and the related-tables extension are not exposed at
+//! all: they stay behind the Rust API, and `gpkg validate` covers the first
+//! from the command line.
 //!
 //! # Threading
 //!

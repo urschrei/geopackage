@@ -465,10 +465,11 @@ unsafe fn read_arrow_inner(
 
 /// Write an Arrow C Data Interface stream into a layer.
 ///
-/// Writing appends. This is the ABI's only way to change a feature table, and
-/// there is no call that updates or deletes an existing feature; a consumer
-/// needing row-level update or delete uses the Rust crate, whose
-/// `Layer::writer` provides both.
+/// Writing appends: every batch adds rows, and nothing here changes or removes
+/// one that is already there. That is what a bulk load wants, and it is why
+/// re-writing rows that carry their own feature ids fails on the primary key
+/// rather than replacing them. To change or remove an existing feature, take a
+/// `gpkg_writer_t` with `gpkg_layer_writer`.
 ///
 /// The stream's schema must name columns the layer has. A column the layer
 /// does not have is refused rather than dropped, because discarding data a
