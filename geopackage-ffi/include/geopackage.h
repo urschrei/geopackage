@@ -782,6 +782,39 @@ gpkg_status gpkg_layer_repair_spatial_index(const gpkg_layer_t *layer, gpkg_erro
  * borrows the layer's container: the container cannot be closed until the
  * stream has been released, exactly as for a layer handle.
  *
+ * ```c
+ * struct ArrowArrayStream stream;
+ * memset(&stream, 0, sizeof(stream));
+ * if (gpkg_layer_read_arrow(layer, &stream, &error) != GPKG_STATUS_OK) {
+ *     return fail("gpkg_layer_read_arrow", &error);
+ * }
+ *
+ * for (;;) {
+ *     struct ArrowArray array;
+ *     memset(&array, 0, sizeof(array));
+ *     if (stream.get_next(&stream, &array) != 0) {
+ *         fprintf(stderr, "get_next: %s\n", stream.get_last_error(&stream));
+ *         break;
+ *     }
+ *     if (array.release == NULL) {
+ *         break;   // end of stream
+ *     }
+ *     // ... consume array.length rows ...
+ *     array.release(&array);
+ * }
+ * stream.release(&stream);
+ * ```
+ *
+ * Rows arrive in primary-key order, in batches of up to 65,536 rows. A batch
+ * whose geometry would cross a byte ceiling is emitted short of that, so a
+ * layer of very large geometries still reads. The ceiling is the smaller of
+ * 2 GB, which is as far as the geometry column's 32-bit Arrow offsets reach,
+ * and a quarter of the machine's memory.
+ *
+ * A failure part-way through is reported the interface's way: `get_next`
+ * returns non-zero and `get_last_error` has the detail. The `error`
+ * out-parameter here covers only opening the stream.
+ *
  * Batches come back on one thread. The threaded reader assigns key windows to
  * workers, which needs a second connection per worker; a stream handed to C is
  * pulled on the caller's thread instead.
@@ -799,8 +832,28 @@ gpkg_status gpkg_layer_read_arrow(const gpkg_layer_t *layer,
 /**
  * Read the rows of a layer intersecting a bounding box, as an Arrow stream.
  *
- * The columnar counterpart of a bounding-box query, returning the same rows a
- * scalar `features_in` would.
+ * The box is in the layer's own spatial reference system, and a row is
+ * returned when its geometry's envelope intersects the box, edges included.
+ * An envelope is not the geometry, so the rows are a superset of those that
+ * actually intersect: testing the geometries themselves is the caller's, on
+ * the WKB the stream carries.
+ *
+ * Served by the layer's RTree index when it has a usable one, and by a full
+ * scan with the same filter otherwise, returning the same rows either way.
+ * `gpkg_layer_has_spatial_index` says which it will be.
+ *
+ * ```c
+ * struct ArrowArrayStream stream;
+ * memset(&stream, 0, sizeof(stream));
+ * if (gpkg_layer_read_arrow_in(layer, -7.0, 53.0, -6.0, 54.0, &stream, &error)
+ *     != GPKG_STATUS_OK) {
+ *     return fail("gpkg_layer_read_arrow_in", &error);
+ * }
+ * // Pulled and released exactly as gpkg_layer_read_arrow's stream is.
+ * ```
+ *
+ * Fails with `GPKG_STATUS_NOT_FOUND` on a layer with no geometry column,
+ * which has nothing to intersect.
  *
  * # Safety
  *
@@ -817,13 +870,49 @@ gpkg_status gpkg_layer_read_arrow_in(const gpkg_layer_t *layer,
 /**
  * Write an Arrow C Data Interface stream into a layer.
  *
+ * The stream's schema must name columns the layer has. A column the layer
+ * does not have is refused rather than dropped, because discarding data a
+ * caller asked to write would be worse than declining it; a column of the
+ * layer the stream does not name is left to its default. A type the layer
+ * cannot store is `GPKG_STATUS_INVALID_ARGUMENT`. Building the layer with
+ * `gpkg_create_layer_from_arrow_schema` from the same schema is what makes
+ * the two agree by construction.
+ *
  * Takes ownership of `stream`, as the C Data Interface specifies for a moved
  * stream: it is released here whether the write succeeds or fails, and the
  * caller must not release it again. `out_rows`, when non-NULL, receives the
  * number of rows written.
  *
+ * ```c
+ * struct ArrowArrayStream data;
+ * memset(&data, 0, sizeof(data));
+ * if (gpkg_layer_read_arrow(src_layer, &data, &error) != GPKG_STATUS_OK) {
+ *     return fail("gpkg_layer_read_arrow", &error);
+ * }
+ *
+ * uint64_t written = 0;
+ * // `data` is consumed here, and must not be released afterwards.
+ * if (gpkg_layer_write_arrow(dst_layer, &data, 1000, &written, &error)
+ *     != GPKG_STATUS_OK) {
+ *     return fail("gpkg_layer_write_arrow", &error);
+ * }
+ * printf("wrote %llu rows\n", (unsigned long long)written);
+ * ```
+ *
  * `batch_size` is the rows per write transaction; `0` writes everything in
- * one transaction.
+ * one transaction. Inside a transaction the caller opened with `gpkg_begin`
+ * it bounds nothing, since every batch belongs to that one, and is then a
+ * statement about how many rows are held at once rather than about
+ * durability.
+ *
+ * A failure part-way through leaves whatever earlier batches have already
+ * committed, so `batch_size` also decides how much a failed write can leave
+ * behind: `0` leaves nothing, because there is one transaction. Inside a
+ * caller's transaction nothing is durable until their commit, and
+ * `gpkg_rollback` discards all of it.
+ *
+ * The layer's spatial index, where it has one, is brought up to date as part
+ * of the write.
  *
  * # Safety
  *
@@ -845,9 +934,39 @@ gpkg_status gpkg_layer_write_arrow(const gpkg_layer_t *layer,
  * schema-description API of its own, by taking the schema from the source
  * stream's `get_schema` and handing it straight here.
  *
+ * ```c
+ * struct ArrowArrayStream src_stream;
+ * memset(&src_stream, 0, sizeof(src_stream));
+ * gpkg_layer_read_arrow(src_layer, &src_stream, &error);
+ *
+ * struct ArrowSchema schema;
+ * memset(&schema, 0, sizeof(schema));
+ * src_stream.get_schema(&src_stream, &schema);
+ * src_stream.release(&src_stream);   // the schema outlives the stream
+ *
+ * gpkg_add_epsg_srs(dst, 4326, &error);
+ * if (gpkg_create_layer_from_arrow_schema(dst, "cities", &schema, true, &error)
+ *     != GPKG_STATUS_OK) {
+ *     schema.release(&schema);
+ *     return fail("gpkg_create_layer_from_arrow_schema", &error);
+ * }
+ * schema.release(&schema);
+ * ```
+ *
  * The geometry column and its spatial reference system are taken from the
  * schema's GeoArrow metadata. The referenced SRS must already exist in the
- * destination; `gpkg_add_epsg_srs` puts one there.
+ * destination; `gpkg_add_epsg_srs` puts one there. The geometry column is
+ * declared `GEOMETRY` rather than the source's own type, because the GeoArrow
+ * WKB encoding does not carry one.
+ *
+ * `spatial_index` asks for an RTree index over that column, which is the
+ * usual choice for a layer that will be queried by bounding box.
+ * `gpkg_layer_create_spatial_index` adds one later, and costs a pass over the
+ * rows to do it.
+ *
+ * Fails with `GPKG_STATUS_ALREADY_EXISTS` when the file already has a table
+ * of that name, and with `GPKG_STATUS_NOT_FOUND` when the schema names a
+ * spatial reference system the file does not carry.
  *
  * # Safety
  *
