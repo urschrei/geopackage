@@ -1241,16 +1241,10 @@ gpkg_status gpkg_tiles_delete(const gpkg_tiles_t *tiles,
  * `gpkg_tiles_get` is the only call that hands one over, and its `out_len` is
  * the `len` to pass here. Passing a NULL pointer does nothing.
  *
- * # A limit on what the sanitizer proves here
- *
- * Passing the wrong `len` is undefined behaviour, and **AddressSanitizer does
- * not reliably catch it**: checked by deliberately freeing at half the length,
- * which ASan on macOS reports nothing for, because the system allocator
- * ignores the size it is given. Miri would catch it and cannot reach this code
- * at all, since SQLite is built from source. So the contract here rests on the
- * caller keeping the length it was handed, and callers who would rather not
- * carry that should use [`gpkg_tiles_get_into`], where no allocation crosses
- * the boundary and there is nothing to get wrong.
+ * Passing the wrong `len` is undefined behaviour, and not one a sanitizer can
+ * be relied on to catch. A caller who would rather not carry the length
+ * should use [`gpkg_tiles_get_into`], where no allocation crosses the
+ * boundary and there is nothing to get wrong.
  *
  * # Safety
  *

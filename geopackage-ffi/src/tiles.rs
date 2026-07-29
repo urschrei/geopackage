@@ -54,10 +54,9 @@
 //!
 //! An allocation that crosses the boundary has to come back with its length,
 //! since that is what [`gpkg_bytes_free`] reconstructs it from, and a wrong
-//! length there is undefined behaviour that a sanitizer does not reliably
-//! catch. Nothing crosses in the other reader, so there is no length to keep
-//! and nothing to get wrong; it also spares an allocation per tile, which tells
-//! for a caller reading many.
+//! length there is undefined behaviour. Nothing crosses in the other reader,
+//! so there is no length to keep and nothing to get wrong; it also spares an
+//! allocation per tile, which tells for a caller reading many.
 //!
 //! ```c
 //! // One buffer, reused across every tile: the reader that owns nothing.
@@ -641,21 +640,20 @@ pub unsafe extern "C" fn gpkg_tiles_delete(
 /// `gpkg_tiles_get` is the only call that hands one over, and its `out_len` is
 /// the `len` to pass here. Passing a NULL pointer does nothing.
 ///
-/// # A limit on what the sanitizer proves here
-///
-/// Passing the wrong `len` is undefined behaviour, and **AddressSanitizer does
-/// not reliably catch it**: checked by deliberately freeing at half the length,
-/// which ASan on macOS reports nothing for, because the system allocator
-/// ignores the size it is given. Miri would catch it and cannot reach this code
-/// at all, since SQLite is built from source. So the contract here rests on the
-/// caller keeping the length it was handed, and callers who would rather not
-/// carry that should use [`gpkg_tiles_get_into`], where no allocation crosses
-/// the boundary and there is nothing to get wrong.
+/// Passing the wrong `len` is undefined behaviour, and not one a sanitizer can
+/// be relied on to catch. A caller who would rather not carry the length
+/// should use [`gpkg_tiles_get_into`], where no allocation crosses the
+/// boundary and there is nothing to get wrong.
 ///
 /// # Safety
 ///
 /// `data` must be NULL, or a buffer from `gpkg_tiles_get` that has not already
 /// been freed, and `len` must be the length that call wrote.
+// The sanitizer claim above was checked rather than assumed: deliberately
+// freeing at half the length passes ASan on macOS, because the system
+// allocator ignores the size it is given, and Miri cannot reach this code at
+// all, since SQLite is built from source. So the contract rests entirely on
+// the caller keeping the length it was handed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gpkg_bytes_free(data: *mut u8, len: usize) {
     if data.is_null() {

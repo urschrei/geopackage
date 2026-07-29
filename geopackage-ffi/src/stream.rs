@@ -131,10 +131,8 @@
 //!
 //! # Panics across the boundary
 //!
-//! The callbacks are `extern "C"`, so a Rust panic unwinding out of one aborts
-//! the process rather than crossing into C. That is the language's behaviour
-//! and it is the right one here: continuing into C with a half-torn-down stream
-//! would be worse.
+//! A panic inside one of the stream callbacks aborts the process rather than
+//! unwinding into the caller's frames.
 
 use std::ffi::{CString, c_char, c_int, c_void};
 

@@ -134,20 +134,6 @@
 //! once per thread, which is also what gives SQLite its own per-connection
 //! state. Reads across separate connections are safe and are how the library's
 //! own threaded Arrow reader works.
-//!
-//! # The unsafe carve-out
-//!
-//! The workspace sets `unsafe_code = "forbid"` and every other member inherits
-//! it. This crate is the single exception, because a C ABI cannot be written
-//! without `unsafe`; confining it to one crate is what keeps the forbid
-//! elsewhere worth stating. In exchange this crate turns on
-//! `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block` and
-//! `missing_safety_doc` as denies, so every `unsafe` block carries a written
-//! justification, does one thing, and every `unsafe fn` states its contract.
-//!
-//! The unsafe worth reading is not the pointer marshalling, which is routine,
-//! but the lifetime erasure in [`handle`], which is what lets a C caller hold a
-//! layer handle and its container as two independent pointers.
 
 pub mod container;
 pub mod error;
