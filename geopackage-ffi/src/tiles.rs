@@ -1,15 +1,117 @@
 //! `gpkg_tiles_t`: a handle onto one tile pyramid.
 //!
+//! A pyramid is pre-rendered raster tiles, addressed by zoom level, column and
+//! row. [`gpkg_tiles_open`] takes one by name, the same `gpkg_contents` table
+//! name a GeoPackage tool would show, and [`gpkg_tiles_free`] releases it. The
+//! ABI does not enumerate a file's pyramids, so the name comes from elsewhere.
+//!
+//! Rows count from the **top** of the pyramid's extent downwards, as WMTS and
+//! XYZ do and TMS does not, and both indices are relative to that extent rather
+//! than to a global grid.
+//!
 //! **No image is decoded anywhere here.** A tile goes out as the bytes the file
 //! holds and comes in as the bytes the caller supplies. Writing checks the
 //! address against the zoom level's grid and the payload's header against the
 //! declared tile size, which is a header read rather than a decode; turning
 //! tiles into pixels needs an image library on top of this one.
 //!
-//! `gpkg_tiles_get` is the call the handle design exists for. It measures about
-//! 5 microseconds, so rebuilding a borrowed pyramid handle on every call, which
-//! costs 40, would have made it eight times slower from C than from Rust. See
-//! `roadmap/benchmarks/2026-07-28-handle-construction.md`.
+//! # Walking a pyramid
+//!
+//! ```c
+//! gpkg_tiles_t *tiles = gpkg_tiles_open(gpkg, "basemap", &error);
+//! if (!tiles) {
+//!     return fail("gpkg_tiles_open", &error);
+//! }
+//!
+//! double min_x, min_y, max_x, max_y;
+//! int32_t srs_id = 0;
+//! gpkg_tiles_extent(tiles, &min_x, &min_y, &max_x, &max_y, &srs_id, &error);
+//! printf("extent %f %f %f %f in srs %d\n", min_x, min_y, max_x, max_y,
+//!        (int)srs_id);
+//!
+//! // Zoom levels are walked by position in the declared ladder, not by zoom
+//! // number, so a pyramid that starts at zoom 7 needs no guessing.
+//! size_t levels = 0;
+//! gpkg_tiles_zoom_level_count(tiles, &levels, &error);
+//! for (size_t i = 0; i < levels; i++) {
+//!     int64_t zoom = 0, width = 0, height = 0;
+//!     gpkg_tiles_matrix_at(tiles, i, &zoom, &width, &height, NULL, NULL, &error);
+//!
+//!     int64_t count = 0;
+//!     gpkg_tiles_count_at(tiles, zoom, &count, &error);
+//!     printf("zoom %lld: %lldx%lld grid, %lld tiles\n", (long long)zoom,
+//!            (long long)width, (long long)height, (long long)count);
+//! }
+//!
+//! gpkg_tiles_free(tiles);
+//! ```
+//!
+//! # Two readers
+//!
+//! [`gpkg_tiles_get`] allocates a buffer and hands it over;
+//! [`gpkg_tiles_get_into`] copies into a buffer the caller already has. They
+//! return the same bytes, and the difference is who owns the memory.
+//!
+//! An allocation that crosses the boundary has to come back with its length,
+//! since that is what [`gpkg_bytes_free`] reconstructs it from, and a wrong
+//! length there is undefined behaviour that a sanitizer does not reliably
+//! catch. Nothing crosses in the other reader, so there is no length to keep
+//! and nothing to get wrong; it also spares an allocation per tile, which tells
+//! for a caller reading many.
+//!
+//! ```c
+//! // One buffer, reused across every tile: the reader that owns nothing.
+//! unsigned char buffer[64 * 1024];
+//! size_t len = 0;
+//! gpkg_status status =
+//!     gpkg_tiles_get_into(tiles, 1, 0, 0, buffer, sizeof(buffer), &len, &error);
+//!
+//! if (status == GPKG_STATUS_INVALID_ARGUMENT) {
+//!     // Too small: `len` says how much room the tile needs, so a caller that
+//!     // cannot size its buffer in advance calls again with that much.
+//!     gpkg_error_clear(&error);
+//!     unsigned char *bigger = malloc(len);
+//!     status = gpkg_tiles_get_into(tiles, 1, 0, 0, bigger, len, &len, &error);
+//!     // ... use bigger, then free it ...
+//!     free(bigger);
+//! } else if (status == GPKG_STATUS_NOT_FOUND) {
+//!     // No tile at that address, which a sparse pyramid is entitled to. No
+//!     // message is set for it, so there is nothing to clear.
+//! } else if (status != GPKG_STATUS_OK) {
+//!     return fail("gpkg_tiles_get_into", &error);
+//! }
+//! ```
+//!
+//! ```c
+//! // The owning reader, for a caller that would rather not size a buffer.
+//! uint8_t *data = NULL;
+//! size_t len = 0;
+//! if (gpkg_tiles_get(tiles, 1, 0, 0, &data, &len, &error) == GPKG_STATUS_OK) {
+//!     fwrite(data, 1, len, out);
+//!     gpkg_bytes_free(data, len);   // the same len the call wrote
+//! }
+//! ```
+//!
+//! # Writing
+//!
+//! ```c
+//! if (gpkg_tiles_put(tiles, 1, 0, 0, png, png_len, &error) != GPKG_STATUS_OK) {
+//!     return fail("gpkg_tiles_put", &error);
+//! }
+//! ```
+//!
+//! The payload is copied into the file during the call, so the caller's buffer
+//! is its own again on return. An address outside the zoom level's grid, or a
+//! payload whose header says it is a different pixel size from the one the
+//! level declares, is refused rather than stored.
+//!
+//! # Why a pyramid handle is held rather than rebuilt
+//!
+//! [`gpkg_tiles_get`] measures about 5 microseconds. Rebuilding a borrowed
+//! pyramid handle inside every call costs about 40 on top of that, which would
+//! make a tile read from C roughly eight times slower than the same read from
+//! Rust. So the handle holds the pyramid, and [`crate::handle`] is where the
+//! borrow that implies is accounted for.
 
 use std::ffi::c_char;
 
@@ -28,6 +130,14 @@ use crate::util::{borrow_str, out_string};
 pub type gpkg_tiles_t = TilesHandle;
 
 /// Open a tile pyramid by name.
+///
+/// The name is a `gpkg_contents.table_name` whose row declares `tiles`.
+/// A name no such row declares is `GPKG_STATUS_NOT_FOUND`, and a name that
+/// declares something else is `GPKG_STATUS_INVALID_ARGUMENT`.
+///
+/// Opening reads the tile matrix set and every zoom level's matrix, so the
+/// handle answers `gpkg_tiles_extent`, `gpkg_tiles_zoom_level_count` and
+/// `gpkg_tiles_matrix_at` without going back to the file.
 ///
 /// The returned handle borrows `gpkg`, which cannot be closed until the handle
 /// is released with `gpkg_tiles_free`.
@@ -135,6 +245,10 @@ pub unsafe extern "C" fn gpkg_tiles_count(
 
 /// How many tiles the pyramid holds at one zoom level.
 ///
+/// `zoom_level` is the number a level carries, which `gpkg_tiles_matrix_at`
+/// reports, not its position in the ladder. A level the pyramid does not
+/// declare holds no tiles, so the answer is 0 rather than an error.
+///
 /// # Safety
 ///
 /// As [`gpkg_tiles_count`].
@@ -170,9 +284,12 @@ pub unsafe extern "C" fn gpkg_tiles_count_at(
 
 /// How many zoom levels the pyramid declares.
 ///
+/// The number of `gpkg_tile_matrix` rows, which bounds the `index` that
+/// `gpkg_tiles_matrix_at` takes. A declared level may hold no tiles.
+///
 /// # Safety
 ///
-/// `tiles` must be a live handle, `out` writable.
+/// `tiles` must be a live handle, `out` writable, `error` NULL or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gpkg_tiles_zoom_level_count(
     tiles: *const gpkg_tiles_t,
@@ -197,7 +314,14 @@ pub unsafe extern "C" fn gpkg_tiles_zoom_level_count(
 /// One zoom level's matrix, by position in the declared ladder rather than by
 /// zoom number, so a caller can walk them without guessing which exist.
 ///
+/// `index` runs from zero to `gpkg_tiles_zoom_level_count`, in ascending zoom
+/// order, and `zoom_level` is the number the level actually carries, which is
+/// what `gpkg_tiles_count_at`, `gpkg_tiles_get` and `gpkg_tiles_put` address
+/// tiles by. `matrix_width` and `matrix_height` are the grid in tiles;
+/// `tile_width` and `tile_height` are one tile in pixels.
+///
 /// Any out-parameter may be NULL, in which case that field is not written.
+/// An index beyond the last level is `GPKG_STATUS_NOT_FOUND`.
 ///
 /// # Safety
 ///
@@ -243,6 +367,10 @@ pub unsafe extern "C" fn gpkg_tiles_matrix_at(
 
 /// The pyramid's extent and spatial reference system.
 ///
+/// The `gpkg_tile_matrix_set` bounds: the ground area the grids are indexed
+/// against, which is what makes a tile address mean a place. It is not a
+/// statement about which tiles are present, since a pyramid may be sparse.
+///
 /// Any out-parameter may be NULL.
 ///
 /// # Safety
@@ -283,6 +411,10 @@ pub unsafe extern "C" fn gpkg_tiles_extent(
 }
 
 /// Whether a tile is stored at an address.
+///
+/// Cheaper than fetching one to find out, since no payload is read. An address
+/// no zoom level or grid contains is `false` rather than an error: it holds no
+/// tile either.
 ///
 /// # Safety
 ///
@@ -326,8 +458,25 @@ pub unsafe extern "C" fn gpkg_tiles_has(
 ///
 /// On success `out_data` receives an allocation the caller owns and must
 /// release with `gpkg_bytes_free`, and `out_len` its length. A tile that is not
-/// there is `GPKG_STATUS_NOT_FOUND` with `out_data` left NULL, which is an
-/// ordinary answer for a sparse pyramid rather than a failure to report.
+/// there is `GPKG_STATUS_NOT_FOUND` with `out_data` left NULL and `out_len`
+/// zero, which is an ordinary answer for a sparse pyramid rather than a failure
+/// to report, and no message is set for it.
+///
+/// ```c
+/// uint8_t *data = NULL;
+/// size_t len = 0;
+/// gpkg_status status = gpkg_tiles_get(tiles, 1, 0, 0, &data, &len, &error);
+/// if (status == GPKG_STATUS_OK) {
+///     fwrite(data, 1, len, out);
+///     gpkg_bytes_free(data, len);   // exactly the length this call wrote
+/// } else if (status != GPKG_STATUS_NOT_FOUND) {
+///     return fail("gpkg_tiles_get", &error);
+/// }
+/// ```
+///
+/// `gpkg_tiles_get_into` is the alternative, and the better one for a caller
+/// reading many tiles: it copies into the caller's own buffer, so no allocation
+/// crosses the boundary and there is no length to keep hold of.
 ///
 /// The bytes are what the file holds. Nothing is decoded.
 ///
@@ -394,6 +543,22 @@ pub unsafe extern "C" fn gpkg_tiles_get(
 /// decoding an image: what it catches is a tile of the wrong pixel size, or in
 /// a format the table may not hold.
 ///
+/// ```c
+/// if (gpkg_tiles_put(tiles, 1, 0, 0, png, png_len, &error) != GPKG_STATUS_OK) {
+///     return fail("gpkg_tiles_put", &error);
+/// }
+/// ```
+///
+/// The bytes are copied into the file during the call, so the caller's buffer
+/// is its own again on return. Writing where a tile is already stored replaces
+/// it.
+///
+/// A zoom level the pyramid does not declare is `GPKG_STATUS_NOT_FOUND`, and a
+/// format the table may not hold is `GPKG_STATUS_UNSUPPORTED`. A column or row
+/// outside the level's grid, and a payload whose header disagrees with the
+/// declared tile size, are `GPKG_STATUS_OTHER`, with the message saying which:
+/// these come from the tile checks, which have no category of their own.
+///
 /// # Safety
 ///
 /// `tiles` must be a live handle, `data` must point at `len` readable bytes,
@@ -429,6 +594,10 @@ pub unsafe extern "C" fn gpkg_tiles_put(
 
 /// Delete the tile at an address, reporting through `out_deleted` whether one
 /// was there. `out_deleted` may be NULL.
+///
+/// Deleting where there is no tile is success with `out_deleted` false, not an
+/// error: the address is empty either way. The zoom level's `gpkg_tile_matrix`
+/// row is left alone, so the level keeps its declared grid.
 ///
 /// # Safety
 ///
@@ -469,8 +638,8 @@ pub unsafe extern "C" fn gpkg_tiles_delete(
 
 /// Release a byte buffer this library returned.
 ///
-/// `len` must be the length the same call reported. Passing a NULL pointer does
-/// nothing.
+/// `gpkg_tiles_get` is the only call that hands one over, and its `out_len` is
+/// the `len` to pass here. Passing a NULL pointer does nothing.
 ///
 /// # A limit on what the sanitizer proves here
 ///
@@ -553,7 +722,28 @@ unsafe fn report(result: geopackage::Result<()>, error: *mut gpkg_error_t) -> St
 /// much room the tile needs, so the usual shape is to call once with whatever
 /// buffer is to hand and again if it was short.
 ///
-/// A tile that is not there is `GPKG_STATUS_NOT_FOUND` with `out_len` zero.
+/// ```c
+/// unsigned char buffer[64 * 1024];
+/// size_t len = 0;
+/// gpkg_status status =
+///     gpkg_tiles_get_into(tiles, 1, 0, 0, buffer, sizeof(buffer), &len, &error);
+///
+/// if (status == GPKG_STATUS_INVALID_ARGUMENT) {
+///     gpkg_error_clear(&error);
+///     unsigned char *bigger = malloc(len);
+///     status = gpkg_tiles_get_into(tiles, 1, 0, 0, bigger, len, &len, &error);
+///     // ... use bigger ...
+///     free(bigger);
+/// }
+/// ```
+///
+/// Passing NULL with a `capacity` of zero is allowed, and is how the length is
+/// asked for on its own: nothing is copied, `out_len` holds what the tile
+/// needs, and the return is the `GPKG_STATUS_INVALID_ARGUMENT` that any buffer
+/// too small gets.
+///
+/// A tile that is not there is `GPKG_STATUS_NOT_FOUND` with `out_len` zero, and
+/// no message.
 ///
 /// # Safety
 ///
