@@ -504,19 +504,24 @@ settle later.
 Closes M3's C ABI item and acceptance criterion 7, and makes D12's carve-out
 concrete.
 
-- [ ] New crate, `cdylib` plus `staticlib`, packaged with cargo-c
+- [x] New crate, `cdylib` plus `staticlib`, packaged with cargo-c
       (pkg-config, versioned soname). Opaque `gpkg_t` and `gpkg_layer_t`,
       UTF-8, `gpkg_error_t` out-params with code, message and a free function.
-- [ ] The sole crate not taking `[lints] workspace = true`: `unsafe` confined
+      *(Done, plus `gpkg_tiles_t`. CI runs `cargo cbuild` and `cargo cinstall`
+      and links a C program against the installed static archive through
+      pkg-config, which is M3 acceptance criterion 7.)*
+- [x] The sole crate not taking `[lints] workspace = true`: `unsafe` confined
       to the C ABI surface, `undocumented_unsafe_blocks` applied, sanitizer and
       miri gating in CI before anything outside the workspace links against it.
+      *(Done. The sanitizer job is what checks the handle lifetime erasure:
+      with the close refusal removed, ASan reports a heap-use-after-free.)*
 - [x] Control plane: open, create, close, list layers, schema introspection,
       create layer, create and drop spatial index.
       *(Done, plus lenient read-only opening with its warnings, layer extent,
       spatial index status and repair, EPSG registration, and creating a layer
       from an Arrow schema, which is what lets a C consumer copy a layer with no
       schema-description API of its own.)*
-- [ ] **`begin` and `commit` are deliberately not exposed**, and the reason is
+- [x] **`begin` and `commit` were deliberately not exposed**, and the reason was
       measured rather than assumed: an explicit `BEGIN` on the connection makes
       the write paths fail, because `write_all` and the bulk index build open
       transactions of their own and SQLite does not nest them. Verified, the
@@ -527,10 +532,22 @@ concrete.
       the ABI, so it belongs in phase 10 and is designed under "Inheriting an
       open transaction" there. Batching is meanwhile reachable through the
       `batch_size` argument the write calls already take.
-- [ ] Data plane: `gpkg_layer_read_arrow` and `gpkg_layer_write_arrow` through
-      the Arrow C Data Interface.
-- [ ] cbindgen header checked in, CI failing on an undocumented header diff,
+      *(Resolved. The write paths inherit as of phase 10's first item, so
+      `gpkg_begin`, `gpkg_commit` and `gpkg_rollback` are there, with
+      `gpkg_in_transaction` beside them so a caller can ask the state rather
+      than learn it from an error. Each refuses the state it cannot honour, a
+      second begin or an unbalanced finish, rather than attempting it.
+      `batch_size` stops bounding transactions while one is open, which is
+      documented at each call.)*
+- [x] Data plane: `gpkg_layer_read_arrow` and `gpkg_layer_write_arrow` through
+      the Arrow C Data Interface. *(Done, plus `gpkg_layer_read_arrow_in` for
+      the bounding-box-filtered read from phase 8b.)*
+- [x] cbindgen header checked in, CI failing on an undocumented header diff,
       and a C program in CI reading a corpus file through the stream.
+      *(Done. `include/geopackage.h` is committed and `c_smoke.rs` regenerates
+      and diffs it; `examples/smoke.c` reads a fixture and `examples/roundtrip.c`
+      copies a layer between files through Arrow inside a transaction, both
+      compiled and run on all three OSes.)*
 - [x] SQLite thread model documented: handle per thread, or an external lock.
       *(Handle per thread, and not a choice so much as a consequence:
       `GeoPackage` is `Send` but not `Sync`, because `Connection` is, so a
@@ -758,6 +775,28 @@ handle and should not change at all.
 
 ### Inheriting an open transaction
 
+**Done.** `geopackage/src/transaction.rs` carries `WriteTransaction`, which is
+`Layer::extent`'s branch made reusable, and every write path goes through it.
+The change was smaller than the sketch below expected, because both writers
+already held the connection alongside the transaction and prepared every
+statement against the connection, so the transaction value was close to a pure
+RAII guard: `commit` had to learn the difference and nothing else did. The 102
+`.commit()` call sites did not move, since the signature did not change.
+
+Eighteen sites inherit. Two do not: `GeoPackage::create`, which opens its own
+connection and so can have nothing to inherit, and `fill_index_in_transaction`,
+whose whole purpose is to be driven by a caller managing one. The three
+consequences (a commit that stages, a drop that rolls nothing back, a
+`batch_size` that stops bounding transactions) are documented at each API and in
+the changelog, and pinned by `geopackage/tests/inherited_transaction.rs`, whose
+eight tests each roll the caller's transaction back and require the work to
+disappear with it. Both directions were mutation-checked.
+
+`gpkg_begin`, `gpkg_commit` and `gpkg_rollback` followed, with
+`gpkg_in_transaction` beside them, which closes phase 9.
+
+The sketch that led to it, kept for the reasoning:
+
 **The problem.** Every write path opens its own transaction with
 `unchecked_transaction`, and SQLite does not nest them, so a caller who has
 already begun one gets "cannot start a transaction within a transaction".
@@ -819,7 +858,16 @@ finally work.
       borrowed cursor is purely additive API, so deferring it costs nothing at
       the freeze. Record the decision either way, since the issue has been open
       across three milestones.
-- [ ] **Revisit the D8 bulk-build gate.** Every bulk index build verifies itself
+- [x] **Revisit the D8 bulk-build gate.** *(Settled. `StructuralCheck` is
+      replaced by `BulkVerification`, which spans the range rather than two
+      points on it: `None` (the new default), `Contents`, `Structure` (the
+      pre-0.6 default) and `Database`. The cost of the new default is recorded
+      as a test rather than a doc note:
+      `a_corrupt_index_is_kept_when_verification_is_off` shows that with no
+      verification there is nothing to fail and so nothing to fall back from.
+      The original item follows.)*
+
+      Every bulk index build verifies itself
       before it is trusted: a bijection and containment check of the written
       index against the accumulated envelopes, plus `rtreecheck` over the tree,
       with a fallback to the triggered build on any anomaly. That is about **45%
