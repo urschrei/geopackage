@@ -22,6 +22,26 @@
 //! commit point. The raw connection ([`crate::GeoPackage::connection`]) remains
 //! available for callers who want to drive their own transaction.
 //!
+//! ## When the caller has already begun one
+//!
+//! SQLite does not nest transactions, so a writer opened while one is already
+//! open on the connection joins it instead
+//! ([`crate::transaction::WriteTransaction`], which carries the reasoning).
+//! Three things follow, and they apply to every write path in the crate rather
+//! than only to this one:
+//!
+//! - [`FeatureWriter::commit`] stages the `gpkg_contents` flush and returns
+//!   success without committing. The durable commit is the caller's.
+//! - Dropping a writer rolls nothing back, so an error part-way through leaves
+//!   what preceded it staged for the caller to discard.
+//! - [`Layer::write_all`]'s `batch_size` stops bounding transactions, because
+//!   every batch belongs to the caller's. It still bounds nothing else: the
+//!   rows are written in the same order and the same statements are used.
+//!
+//! None of this is detectable from a writer, and deliberately so. A caller who
+//! opened a transaction knows they did; one who did not cannot reach this
+//! behaviour.
+//!
 //! # Updating a layer while a cursor over it is stepping
 //!
 //! A writer and a [`crate::FeatureCursor`] share the connection, so a scan can
@@ -127,9 +147,10 @@ use geopackage_core::schema::{ColumnConstraint, ConstraintKind};
 use geopackage_core::triggers;
 use geopackage_core::types::ZmFlag;
 use rusqlite::types::{ToSqlOutput, Value as SqlValue, ValueRef};
-use rusqlite::{CachedStatement, Connection, Params, Transaction, params_from_iter};
+use rusqlite::{CachedStatement, Connection, Params, params_from_iter};
 
 use crate::bulk::{self, BulkIndexOptions};
+use crate::transaction::WriteTransaction;
 
 /// How large a `write_all` must be, relative to the rows already in a spatial
 /// index, before the bulk path rebuilds that index instead of adding its
@@ -276,8 +297,14 @@ impl BboxFold {
 /// without committing rolls its transaction back. The `gpkg_contents` bounding
 /// box is grown by a running fold over written geometry envelopes and
 /// `last_change` is refreshed on commit.
+///
+/// Both of those last two sentences change when the writer was opened inside a
+/// transaction the caller had already begun: see [`Self::commit`].
 pub struct FeatureWriter<'conn> {
-    tx: Transaction<'conn>,
+    /// Opened by [`Layer::writer`], or the caller's, inherited. Only the commit
+    /// distinguishes them; every statement is issued against `conn`, which is
+    /// the same connection either way.
+    tx: WriteTransaction<'conn>,
     /// The connection the transaction runs on, for preparing the statement a
     /// partial update needs, whose shape is not known until it is called.
     conn: &'conn Connection,
@@ -344,10 +371,14 @@ impl<'a> Layer<'a> {
     /// The writer owns the transaction: stage rows with its `insert`/`update`/
     /// `delete` methods, then call [`FeatureWriter::commit`]. Dropping the
     /// writer without committing rolls the transaction back.
+    ///
+    /// Unless a transaction is already open on the connection, in which case
+    /// the writer joins that one and both of those sentences belong to whoever
+    /// began it. [`FeatureWriter::commit`] says what changes.
     pub fn writer(&self) -> Result<FeatureWriter<'a>> {
         self.gpkg().check_writable(self.table_name())?;
         let conn: &Connection = self.gpkg().connection();
-        let tx = conn.unchecked_transaction()?;
+        let tx = WriteTransaction::begin(conn)?;
         let existing = self.stored_extent()?;
         // An unusable recorded box over a table that already holds rows makes
         // the fold a lower bound: it can be grown and used, but not recorded.
@@ -437,6 +468,12 @@ impl<'a> Layer<'a> {
     /// all in a single transaction). Returns the assigned feature ids in order.
     /// Batches commit independently: an error part-way leaves already-committed
     /// batches in place, so pass `0` when you need all-or-nothing.
+    ///
+    /// `batch_size` bounds nothing when a transaction is already open on the
+    /// connection: the batch commits are staged rather than durable, so every
+    /// row belongs to the caller's transaction and an error part-way leaves all
+    /// of them staged rather than some of them committed. That is what opening
+    /// a transaction asked for, and it is the same all-or-nothing `0` gives.
     ///
     /// Rows with `geometry: Some(_)` go through [`FeatureWriter::insert`]; rows
     /// with `None` through [`FeatureWriter::insert_row`].
@@ -670,7 +707,10 @@ impl<'a> Layer<'a> {
                 fids.push(fid);
             }
             // Flush the catalogue metadata but keep the transaction open, so the
-            // rows and the index commit together.
+            // rows and the index commit together. The index work below runs
+            // against `conn`, which is the connection that transaction belongs
+            // to, so it is inside it whether the transaction is ours or the
+            // caller's.
             let tx = writer.flush()?;
 
             // Reinstalling the trigger set is the last thing either branch does,
@@ -686,7 +726,7 @@ impl<'a> Layer<'a> {
             if rebuild_beats_append(entries.len(), indexed) {
                 let precomputed = table_was_empty.then_some(entries);
                 bulk::fill_index_in_transaction(
-                    &tx,
+                    conn,
                     table,
                     column,
                     pk,
@@ -697,12 +737,12 @@ impl<'a> Layer<'a> {
                     reinstall,
                 )?;
             } else {
-                append_entries(&tx, &rtree, &entries)?;
+                append_entries(conn, &rtree, &entries)?;
                 // The rebuild branch hands this to `fill_index`, which calls it
                 // at the equivalent point. Calling it here as well is what lets
                 // a test fail this branch too, once its index work is done.
-                fault(&tx, &rtree)?;
-                reinstall(&tx)?;
+                fault(conn, &rtree)?;
+                reinstall(conn)?;
             }
             tx.commit()?;
             Ok(fids)
@@ -1222,6 +1262,19 @@ impl<'conn> FeatureWriter<'conn> {
 
     /// Flush `gpkg_contents` (`last_change`, and the bounding box when a
     /// geometry was written) and commit the transaction.
+    ///
+    /// # When the transaction was the caller's
+    ///
+    /// A writer opened while a transaction was already open on the connection
+    /// joined that transaction rather than nesting inside it, because SQLite
+    /// does not nest. This call then does everything above except the commit:
+    /// the `gpkg_contents` flush is staged like every other statement, and
+    /// success means the work is in the caller's transaction, not that it is
+    /// durable. Committing is theirs to issue, and so is rolling back.
+    ///
+    /// It follows that dropping such a writer without calling this does not
+    /// roll anything back, so an error part-way through a sequence of writes
+    /// leaves what preceded it staged for the caller to discard.
     pub fn commit(self) -> Result<()> {
         self.flush()?.commit()?;
         Ok(())
@@ -1229,8 +1282,12 @@ impl<'conn> FeatureWriter<'conn> {
 
     /// The connection underlying this writer's transaction, so a caller holding
     /// the writer can run additional statements inside the same transaction.
-    pub(crate) fn connection(&self) -> &Connection {
-        &self.tx
+    ///
+    /// Borrowed for `'conn` rather than for the writer, because the connection
+    /// outlives the writer and the bulk path needs it after
+    /// [`Self::flush`] has consumed one.
+    pub(crate) fn connection(&self) -> &'conn Connection {
+        self.conn
     }
 
     /// Flush the `gpkg_contents` metadata and hand back the still-open
@@ -1239,10 +1296,15 @@ impl<'conn> FeatureWriter<'conn> {
     /// The bulk `write_all` path uses this to keep the row inserts and the
     /// index rebuild in one transaction. Dropping the returned transaction
     /// without committing rolls the whole write back, exactly as dropping the
-    /// writer would have.
-    pub(crate) fn flush(self) -> Result<Transaction<'conn>> {
+    /// writer would have, unless the transaction is the caller's.
+    ///
+    /// The two updates are issued against the connection rather than against
+    /// the returned value, which is the same connection and is what an
+    /// inherited transaction has no handle on.
+    pub(crate) fn flush(self) -> Result<WriteTransaction<'conn>> {
         let Self {
             tx,
+            conn,
             table_name,
             bbox,
             dirty,
@@ -1251,7 +1313,7 @@ impl<'conn> FeatureWriter<'conn> {
             ..
         } = self;
         if dirty {
-            tx.execute(
+            conn.execute(
                 "UPDATE gpkg_contents \
                  SET last_change = strftime('%Y-%m-%dT%H:%M:%fZ','now') \
                  WHERE table_name = ?1",
@@ -1262,7 +1324,7 @@ impl<'conn> FeatureWriter<'conn> {
             && bbox_covers_layer
             && let Some([min_x, max_x, min_y, max_y]) = bbox.bounds()
         {
-            tx.execute(
+            conn.execute(
                 "UPDATE gpkg_contents \
                  SET min_x = ?1, min_y = ?2, max_x = ?3, max_y = ?4 \
                  WHERE table_name = ?5",
@@ -1431,7 +1493,7 @@ impl<'conn> FeatureWriter<'conn> {
         fid: Option<i64>,
     ) -> Result<i64> {
         self.insert_stmt(with_fid, with_geometry).execute(binds)?;
-        Ok(fid.unwrap_or_else(|| self.tx.last_insert_rowid()))
+        Ok(fid.unwrap_or_else(|| self.conn.last_insert_rowid()))
     }
 
     fn exec_update<P: Params>(&mut self, with_geometry: bool, binds: P) -> Result<bool> {

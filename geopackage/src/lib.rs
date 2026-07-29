@@ -527,6 +527,7 @@ mod related;
 mod schema;
 mod srs;
 mod tiles;
+mod transaction;
 mod validate;
 mod value;
 mod writer;
