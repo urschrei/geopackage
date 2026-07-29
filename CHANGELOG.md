@@ -267,6 +267,23 @@ While the version is below 1.0 the API may change in any release.
   outright, since it opens its own connection and no caller can hold a
   transaction on it.
 
+- **Writing a container geometry registers its member types**, not only the
+  type its column declares. A `MULTICURVE` column holding `CIRCULARSTRING`s
+  needs a `gpkg_geom_CIRCULARSTRING` row as well as a `gpkg_geom_MULTICURVE`
+  one (Annex F.1 Requirement 67), and a member type is visible only in the
+  bytes: `create_layer` is told the column's type and nothing else. GDAL writes
+  both rows, and until now this crate wrote one, so a file it produced
+  under-declared what it contained.
+
+  The walk that computes a curve's envelope now records the non-linear types it
+  passes at every nesting depth, so a `MULTISURFACE` holding a `CURVEPOLYGON`
+  whose ring is a `CIRCULARSTRING` registers all three. `FeatureWriter`
+  accumulates them across the rows it writes and registers what is missing when
+  it flushes, so a large write costs one registration pass rather than one
+  lookup per row, and a writer dropped without committing registers nothing.
+  Only `insert_wkb` and `update_wkb` can contribute: a `GeometryTrait` has no
+  non-linear representation to offer.
+
 - **Tile failures reach C as a category rather than as
   `GPKG_STATUS_OTHER`.** `Error::Tile` carries a twelve-variant enum of its own,
   which the status mapping did not look inside, so a tile written off its grid

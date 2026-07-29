@@ -91,7 +91,7 @@ pub use geometry::{GeometryError, GpbGeometry};
 pub use gpb::{Envelope, GpbError, GpbHeader};
 pub use srs::SrsDefinition;
 pub use tiles::{TileCoord, TileError, TileFormat, TileMatrix, TileMatrixSet};
-pub use types::{ColumnType, GeometryType, ZmFlag};
+pub use types::{ColumnType, GeometryType, GeometryTypeSet, ZmFlag};
 pub use version::GpkgVersion;
 
 /// Errors produced by this crate.

@@ -140,16 +140,18 @@
 //! anywhere, but this path no longer produces one.
 
 use geo_traits::{Dimensions, GeometryTrait};
+use geopackage_core::extensions::{Extension, GEOM_TYPE_EXTENSION_DEFINITION};
 use geopackage_core::geometry::encode_gpb;
 use geopackage_core::geometry::encode_gpb_from_wkb;
 use geopackage_core::ident::quote;
 use geopackage_core::schema::{ColumnConstraint, ConstraintKind};
 use geopackage_core::triggers;
-use geopackage_core::types::ZmFlag;
+use geopackage_core::types::{GeometryTypeSet, ZmFlag};
 use rusqlite::types::{ToSqlOutput, Value as SqlValue, ValueRef};
 use rusqlite::{CachedStatement, Connection, Params, params_from_iter};
 
 use crate::bulk::{self, BulkIndexOptions};
+use crate::extensions;
 use crate::transaction::WriteTransaction;
 
 /// How large a `write_all` must be, relative to the rows already in a spatial
@@ -363,6 +365,16 @@ pub struct FeatureWriter<'conn> {
     /// already held rows, which makes the fold a lower bound rather than the
     /// extent.
     bbox_covers_layer: bool,
+    /// The non-linear geometry types written through this writer, which the
+    /// flush registers as `gpkg_geom_<TYPE>` rows.
+    ///
+    /// Only the WKB entry points can add to this: a `GeometryTrait` has no
+    /// non-linear representation to offer. Accumulated rather than registered
+    /// per row so that a write of a million curves issues one registration
+    /// rather than a million lookups, and registered at the flush so that a
+    /// writer dropped without committing registers nothing, matching the rows
+    /// it also did not write.
+    geometry_types: GeometryTypeSet,
 }
 
 impl<'a> Layer<'a> {
@@ -458,6 +470,7 @@ impl<'a> Layer<'a> {
             bbox_dirty: false,
             bbox_covers_layer,
             constraints,
+            geometry_types: GeometryTypeSet::new(),
         })
     }
 
@@ -907,6 +920,9 @@ impl<'conn> FeatureWriter<'conn> {
             self.bbox.add(envelope);
             self.bbox_dirty = true;
         }
+        // After the row is in, so a rejected insert does not register a type
+        // the table does not hold.
+        self.geometry_types.extend(encoded.extension_types);
         self.dirty = true;
         Ok(assigned)
     }
@@ -1027,6 +1043,8 @@ impl<'conn> FeatureWriter<'conn> {
             self.bbox.add(envelope);
             self.bbox_dirty = true;
         }
+        // As in `insert_wkb`: recorded once the row is in.
+        self.geometry_types.extend(encoded.extension_types);
         self.dirty = true;
         Ok((assigned, encoded.xy_envelope))
     }
@@ -1183,6 +1201,9 @@ impl<'conn> FeatureWriter<'conn> {
                 self.bbox.add(envelope);
                 self.bbox_dirty = true;
             }
+            // Only when a row matched: an update that changed nothing put no
+            // new type in the table.
+            self.geometry_types.extend(encoded.extension_types);
             self.dirty = true;
         }
         Ok(matched)
@@ -1361,12 +1382,31 @@ impl<'conn> FeatureWriter<'conn> {
             tx,
             conn,
             table_name,
+            geometry,
             bbox,
             dirty,
             bbox_dirty,
             bbox_covers_layer,
+            geometry_types,
             ..
         } = self;
+        // Annex F.1 Requirement 67, for the types that were written rather than
+        // the one the column declares. `create_layer` registers the declared
+        // type, so what is new here is a container's members: a MULTICURVE
+        // layer holding CIRCULARSTRINGs needs a row for those too, which is
+        // what GDAL writes and what a reader checks the file against.
+        if let Some(geom) = geometry.as_ref() {
+            for ty in geometry_types.iter() {
+                extensions::register_if_absent(
+                    conn,
+                    Some(&table_name),
+                    Some(&geom.name),
+                    &Extension::GeometryType(ty).name(),
+                    GEOM_TYPE_EXTENSION_DEFINITION,
+                    "read-write",
+                )?;
+            }
+        }
         if dirty {
             conn.execute(
                 "UPDATE gpkg_contents \

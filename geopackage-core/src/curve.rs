@@ -41,6 +41,7 @@
 
 use crate::geometry::{GeometryError, XyBounds, XyzBounds};
 use crate::gpb;
+use crate::types::{GeometryType, GeometryTypeSet};
 
 use geo_traits::Dimensions;
 
@@ -103,6 +104,15 @@ pub struct BodyScan {
     /// body into a blob should copy only this much, so trailing bytes beyond
     /// the geometry are not carried along.
     pub len: usize,
+    /// The non-linear types the body contains, at every nesting depth and
+    /// including the body's own.
+    ///
+    /// Each of these needs a `gpkg_geom_<TYPE>` row for the column the body is
+    /// written to (Annex F.1 Requirement 67), and a container's members are not
+    /// implied by its own type: a `MULTICURVE` holding `CIRCULARSTRING`s needs
+    /// a row for each. Registering them is the caller's, since this function
+    /// sees a body and not a table.
+    pub extension_types: GeometryTypeSet,
 }
 
 /// Walk an ISO WKB body once, returning everything the read and write paths
@@ -116,7 +126,8 @@ pub struct BodyScan {
 pub fn scan(wkb_body: &[u8]) -> Result<BodyScan, GeometryError> {
     let mut cursor = Cursor::new(wkb_body);
     let mut bounds = XyzBounds::new();
-    let dimensions = read_geometry(&mut cursor, &mut bounds, 0)?;
+    let mut extension_types = GeometryTypeSet::new();
+    let dimensions = read_geometry(&mut cursor, &mut bounds, &mut extension_types, 0)?;
     let len = cursor.offset;
 
     let Some([min_x, max_x, min_y, max_y]) = bounds.xy_bounds() else {
@@ -126,6 +137,7 @@ pub fn scan(wkb_body: &[u8]) -> Result<BodyScan, GeometryError> {
             empty: true,
             dimensions,
             len,
+            extension_types,
         });
     };
     let envelope = match bounds.z_bounds() {
@@ -138,6 +150,7 @@ pub fn scan(wkb_body: &[u8]) -> Result<BodyScan, GeometryError> {
         empty: false,
         dimensions,
         len,
+        extension_types,
     })
 }
 
@@ -283,6 +296,7 @@ fn chord_side(a: [f64; 2], b: [f64; 2], q: [f64; 2]) -> i8 {
 fn read_geometry(
     cursor: &mut Cursor<'_>,
     bounds: &mut XyzBounds,
+    extension_types: &mut GeometryTypeSet,
     depth: u32,
 ) -> Result<Dimensions, GeometryError> {
     if depth > MAX_DEPTH {
@@ -292,6 +306,13 @@ fn read_geometry(
     let little_endian = cursor.read_byte_order()?;
     let code = cursor.read_u32(little_endian)?;
     let (base, coord) = decode_type(code)?;
+
+    // Recorded at every depth, so a container reports the types of its members
+    // as well as its own. A body that turns out to be malformed is rejected
+    // below and the set goes with it.
+    if let Some(ty) = GeometryType::from_wkb_base(base).filter(|ty| ty.is_extension()) {
+        extension_types.insert(ty);
+    }
 
     match base {
         // Point: one coordinate, with no count in front of it.
@@ -319,7 +340,7 @@ fn read_geometry(
             let count = cursor.read_u32(little_endian)?;
             for _ in 0..count {
                 // A child's own dimensions do not override the container's.
-                read_geometry(cursor, bounds, depth + 1)?;
+                read_geometry(cursor, bounds, extension_types, depth + 1)?;
             }
         }
         // Geometry, Curve and Surface are abstract supertypes: a conformant
