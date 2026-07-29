@@ -1,17 +1,58 @@
-//! `gpkg_status_t` and `gpkg_error_t`: how a failure crosses the boundary.
+//! `gpkg_status` and `gpkg_error_t`: how a failure crosses the boundary.
 //!
 //! Every fallible entry point takes an optional `gpkg_error_t *` out-parameter.
 //! On failure it is filled in with a code and an owned, NUL-terminated UTF-8
 //! message, which the caller releases with [`gpkg_error_clear`]. Passing NULL
 //! is allowed and means the caller wants only the return value.
 //!
+//! # Using it
+//!
+//! Declare one error variable, pass its address, and report and clear on the
+//! way out. A call that succeeds does not touch it, so the same variable serves
+//! every call in a program.
+//!
+//! ```c
+//! // Report and clear, so each call site is two lines.
+//! static int fail(const char *what, gpkg_error_t *error) {
+//!     fprintf(stderr, "%s: code=%d message=%s\n", what, (int)error->code,
+//!             error->message ? error->message : "(none)");
+//!     gpkg_error_clear(error);
+//!     return 1;
+//! }
+//!
+//! gpkg_error_t error = {GPKG_STATUS_OK, NULL};
+//!
+//! uint64_t rows = 0;
+//! if (gpkg_layer_count(layer, &rows, &error) != GPKG_STATUS_OK) {
+//!     return fail("gpkg_layer_count", &error);
+//! }
+//! ```
+//!
+//! Clearing before reuse is what keeps the message owned by exactly one place:
+//! a second failure writes a new pointer into the same field, and the first
+//! message can then no longer be released. A caller that wants only the status
+//! passes NULL instead, and has nothing to release:
+//!
+//! ```c
+//! if (gpkg_layer_count(layer, &rows, NULL) != GPKG_STATUS_OK) {
+//!     return 1;
+//! }
+//! ```
+//!
+//! Some codes are ordinary answers rather than faults.
+//! `gpkg_tiles_get` and `gpkg_tiles_get_into` return `GPKG_STATUS_NOT_FOUND`
+//! for an address a sparse pyramid holds no tile at, and `gpkg_layer_extent`
+//! returns it for a layer with nothing to measure. Branch on the code before
+//! treating a call as failed.
+//!
 //! # Why the codes are categories
 //!
-//! `geopackage::Error` has 46 variants and will grow. Mapping each to its own C
-//! constant would put a header-breaking change behind every new variant, so the
-//! codes here are a small closed set of categories a caller can branch on, and
-//! the message carries the detail. A new library variant classifies into an
-//! existing category or into [`Status::Other`]; neither changes the header.
+//! `geopackage::Error` has 46 variants and gains more as the library grows.
+//! Mapping each to its own C constant would put a header-breaking change behind
+//! every new variant, so the codes here are a small closed set of categories a
+//! caller can branch on, and the message carries the detail. A new library
+//! variant classifies into an existing category or into [`Status::Other`];
+//! neither changes the header.
 
 use std::ffi::{CString, c_char};
 
@@ -19,8 +60,11 @@ use geopackage::Error;
 
 /// What kind of failure occurred.
 ///
-/// `#[repr(i32)]` so cbindgen emits a plain C enum with stable values. Values
-/// are assigned explicitly and must never be reused for another meaning.
+/// A small set of categories rather than one constant per library error, so
+/// that a caller can branch on the code and read the message for the detail.
+/// The values are assigned explicitly and are never reused for another meaning,
+/// so a comparison written against this header keeps its meaning.
+// `#[repr(i32)]` is what makes cbindgen emit a plain C enum with those values.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -95,10 +139,10 @@ impl From<&Error> for Status {
             | Error::UnexpectedGeometrySpec { .. }
             | Error::WrongDataType { .. }
             | Error::GeometryNotProjected => Self::InvalidArgument,
-            // `Error` is not `#[non_exhaustive]`, but it grows every milestone,
-            // and a new variant should classify rather than fail to compile a
-            // downstream crate. Anything unclassified is `Other`, whose message
-            // still says exactly what happened.
+            // `Error` is not `#[non_exhaustive]`, but it gains variants as the
+            // library grows, and a new one should classify rather than fail to
+            // compile a downstream crate. Anything unclassified is `Other`,
+            // whose message still says exactly what happened.
             _ => Self::Other,
         }
     }
@@ -106,9 +150,10 @@ impl From<&Error> for Status {
 
 /// A failure, as C sees it.
 ///
-/// `code` is [`Status::Ok`] and `message` NULL when nothing went wrong. A
-/// non-NULL `message` is an owned NUL-terminated UTF-8 string that the caller
-/// must release with [`gpkg_error_clear`].
+/// Initialise one as `{GPKG_STATUS_OK, NULL}` and pass its address to any call
+/// that takes a `gpkg_error_t *`. A successful call leaves it alone. A failing
+/// one sets `code` and stores an owned, NUL-terminated UTF-8 `message`, which
+/// the caller releases with `gpkg_error_clear` before reusing the variable.
 #[repr(C)]
 pub struct gpkg_error_t {
     /// What kind of failure occurred.
@@ -152,10 +197,20 @@ pub(crate) unsafe fn set_library_error(slot: *mut gpkg_error_t, error: &Error) {
     unsafe { set_error(slot, Status::from(error), &error.to_string()) }
 }
 
-/// Release the message an error holds, and reset it to [`Status::Ok`].
+/// Release the message an error holds, and reset its code to `GPKG_STATUS_OK`.
 ///
 /// Safe to call on an error that was never filled in, and safe to call twice:
 /// the message pointer is cleared as it is freed. Passing NULL does nothing.
+///
+/// ```c
+/// gpkg_error_t error = {GPKG_STATUS_OK, NULL};
+/// gpkg_t *gpkg = gpkg_open("places.gpkg", &error);
+/// if (!gpkg) {
+///     fprintf(stderr, "%s\n", error.message ? error.message : "(no message)");
+///     gpkg_error_clear(&error);   // the message is freed here
+/// }
+/// // `error` is now back to {GPKG_STATUS_OK, NULL} and ready for reuse.
+/// ```
 ///
 /// # Safety
 ///

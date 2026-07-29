@@ -85,14 +85,14 @@
 //! memset(&stream, 0, sizeof(stream));
 //! gpkg_layer_read_arrow(layer, &stream, &error);
 //!
-//! /* Refused while either child is alive, and nothing is torn down. */
+//! // Refused while either child is alive, and nothing is torn down.
 //! if (gpkg_close(gpkg, &error) == GPKG_STATUS_HANDLE_IN_USE) {
 //!     gpkg_error_clear(&error);
 //! }
 //!
 //! stream.release(&stream);
 //! gpkg_layer_free(layer);
-//! gpkg_close(gpkg, &error);  /* now it succeeds */
+//! gpkg_close(gpkg, &error);  // now it succeeds
 //! ```
 //!
 //! The refusal is a runtime check because C has no other kind. It stands for

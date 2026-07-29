@@ -1,4 +1,24 @@
 //! Marshalling helpers: strings in, strings out.
+//!
+//! Strings are NUL-terminated UTF-8 in both directions, and ownership follows
+//! the direction of travel. A string the caller passes in is borrowed for the
+//! duration of the call, so it may be a literal or a buffer the caller reuses
+//! afterwards. A string this library returns is a fresh allocation the caller
+//! owns and releases with [`gpkg_string_free`].
+//!
+//! ```c
+//! char *name = gpkg_layer_name_at(gpkg, 0, &error);
+//! if (!name) {
+//!     return fail("gpkg_layer_name_at", &error);
+//! }
+//! gpkg_layer_t *layer = gpkg_layer_open(gpkg, name, &error);  // borrowed
+//! gpkg_string_free(name);                                     // owned
+//! ```
+//!
+//! A returning call can also fail because the text it would hand back holds an
+//! interior NUL and so cannot be a C string at all. That is only reachable for
+//! a name a file itself supplies, and it is reported as
+//! `GPKG_STATUS_INVALID_ARGUMENT` rather than passed on truncated.
 
 use std::ffi::{CStr, CString, c_char};
 
@@ -70,7 +90,17 @@ pub(crate) unsafe fn out_string(text: &str, error: *mut gpkg_error_t) -> *mut c_
 
 /// Release a string this library returned.
 ///
-/// Passing NULL does nothing.
+/// Every call that returns a `char *` returns an allocation the caller owns,
+/// so each one is paired with this. Passing NULL does nothing, which is what
+/// makes the pairing safe to write before the failure has been checked:
+///
+/// ```c
+/// char *kind = gpkg_layer_kind(layer, &error);
+/// if (kind) {
+///     printf("%s\n", kind);
+/// }
+/// gpkg_string_free(kind);
+/// ```
 ///
 /// # Safety
 ///
