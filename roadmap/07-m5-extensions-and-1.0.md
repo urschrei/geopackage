@@ -369,12 +369,18 @@ So the escape hatch is not needed, and `gpkg_rtree_index` covers curve layers.
       need the non-default `arrow` feature.
 - [x] Index: curve layers get an rtree like any other, with entries that bound
       the arc rather than its control points.
-- [ ] Read: a GPB whose body declares a curve type still fails at
-      `GpbGeometry::parse`, so `Feature::geometry` errors and
-      `Feature::geometry_bytes` is the way to get one. Fixing this needs a
-      `geo-traits` representation for an arc, not just a reader, so it is an
-      upstream question rather than a local one. Tracked in
-      [02-ecosystem.md](02-ecosystem.md).
+- [x] Read: `Feature::geometry_bytes` is the way to read a curve, and that is
+      the answer rather than a stopgap. *(Settled 2026-07-29.* A GPB whose body
+      declares a curve type fails at `GpbGeometry::parse`, so `Feature::geometry`
+      errors. Returning one as a `geo` type needs a `geo-traits` representation
+      for an arc, which does not exist and is not expected within any horizon
+      this project can plan against, so waiting for it would leave the item open
+      indefinitely for no gain. If it ever lands, adding a curve variant to what
+      `Feature::geometry` can return is a breaking change to a public enum and
+      so belongs to a major release anyway, which means deciding now costs
+      nothing later. The bytes are exact, the envelopes are computed from them,
+      and the index is built over them: nothing about curve support depends on
+      this.*)
 - [x] Fixture: `gdal_curves.gpkg`, one GDAL-written layer per non-linear type,
       all five spatially indexed. No `.expected.json`: `ogrinfo -json` has to
       emit GeoJSON, which has no curve type, so GDAL stroke-converts each arc on
@@ -852,12 +858,16 @@ finally work.
       where a fix would have to come from. Deprecated items last two minor
       releases and name their replacement in the attribute, so the warning is
       actionable where it is seen.)*
-- [ ] **Settle #29, the lending cursor.** The recommendation from the evidence
-      in #30 is to close it as work for after the freeze: column projection shipped in
-      0.5.0 and captured most of the benefit on geometry-heavy layers, and a
-      borrowed cursor is purely additive API, so deferring it costs nothing at
-      the freeze. Record the decision either way, since the issue has been open
-      across three milestones.
+- [x] **Settle #29, the lending cursor.** *(Closed 2026-07-29 as work for after
+      1.0, on the evidence in #30. Column projection shipped in 0.5.0 and
+      captured most of the benefit on geometry-heavy layers; what remains is the
+      two allocations per row inherent to `Feature` owning its row, and nothing
+      measured so far shows that bounding a workload. The cost has not changed
+      either: a borrowed cursor cannot implement `Iterator`, so it would be a
+      second, less convenient iteration style beside the existing one. It is
+      purely additive API, so it can land in any minor release after the freeze;
+      re-open it when a profile shows the per-row allocations mattering, which is
+      the condition rather than an allocation count on its own.)*
 - [x] **Revisit the D8 bulk-build gate.** *(Settled. `StructuralCheck` is
       replaced by `BulkVerification`, which spans the range rather than two
       points on it: `None` (the new default), `Contents`, `Structure` (the

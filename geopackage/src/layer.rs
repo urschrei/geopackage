@@ -1181,6 +1181,12 @@ impl Feature {
 
     /// The raw GeoPackage Binary (GPB) geometry blob, if the geometry cell is
     /// non-NULL.
+    ///
+    /// This is the way to read a non-linear geometry: a circular string, a
+    /// compound curve, a curve polygon, a multicurve or a multisurface. The
+    /// bytes are exactly what the file holds, and this crate computes their
+    /// envelopes and indexes them, but [`Self::geometry`] cannot return one,
+    /// because `geo-traits` has no representation for an arc to return it as.
     pub fn geometry_bytes(&self) -> Option<&[u8]> {
         let end = self.geometry_end?;
         self.buf.get(..end as usize)
@@ -1189,7 +1195,9 @@ impl Feature {
     /// Parse the geometry lazily as a [`GpbGeometry`].
     ///
     /// `Ok(None)` when the geometry cell is NULL (or the layer has none);
-    /// `Err` when the blob is not a readable GPB geometry.
+    /// `Err` when the blob is not a readable GPB geometry. A body declaring a
+    /// non-linear type is one such case: use [`Self::geometry_bytes`] for
+    /// those.
     pub fn geometry(&self) -> Result<Option<GpbGeometry<'_>>> {
         if !self.geometry_projected {
             return Err(Error::GeometryNotProjected);
