@@ -18,11 +18,11 @@ name = "geopackage_ffi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 # NOTE: this crate deliberately does **not** take `[lints] workspace = true`.
-# It is the single exception to the workspace's `unsafe_code = "forbid"`
-# (roadmap decision D12): a C ABI cannot be written without `unsafe`, so the
-# policy quarantines it here rather than weakening it everywhere. The lints
-# below replace the inherited set, keeping everything except the blanket
-# forbid, and add the ones that only matter where `unsafe` is allowed.
+# It is the single exception to the workspace's `unsafe_code = "forbid"`: a C
+# ABI cannot be written without `unsafe`, and confining it to one crate is what
+# keeps the forbid elsewhere worth stating. The lints below replace the
+# inherited set, keeping everything except the blanket forbid, and add the ones
+# that only matter where `unsafe` is allowed.
 [lints.rust]
 missing_docs = "warn"
 # Rust 2024 makes this deny-by-default; stated anyway, because it is the rule
