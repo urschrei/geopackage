@@ -53,10 +53,19 @@
 //! caller can branch on, and the message carries the detail. A new library
 //! variant classifies into an existing category or into [`Status::Other`];
 //! neither changes the header.
+//!
+//! Several of those variants wrap an error enum of their own, and the
+//! classification follows the wrapping down rather than stopping at the
+//! outermost variant. A tile written off its grid and a geometry whose bytes
+//! are malformed both arrive under one library variant, and neither is
+//! `Other`.
 
 use std::ffi::{CString, c_char};
 
-use geopackage::{Error, core::TileError};
+use geopackage::{
+    Error,
+    core::{Error as CoreError, GeometryError, GpbError, TileError},
+};
 
 /// What kind of failure occurred.
 ///
@@ -140,12 +149,71 @@ impl From<&Error> for Status {
             | Error::WrongDataType { .. }
             | Error::GeometryNotProjected => Self::InvalidArgument,
             Error::Tile(tile) => tile_status(tile),
+            Error::Core(core) => core_status(core),
             // `Error` is not `#[non_exhaustive]`, but it gains variants as the
             // library grows, and a new one should classify rather than fail to
             // compile a downstream crate. Anything unclassified is `Other`,
             // whose message still says exactly what happened.
             _ => Self::Other,
         }
+    }
+}
+
+/// Classify a spec-level failure from `geopackage-core`, which `Error::Core`
+/// carries whole.
+///
+/// Four variants, three of which wrap enums of their own, so this and the two
+/// below follow the wrapping down to the variant that says what happened.
+fn core_status(error: &CoreError) -> Status {
+    match error {
+        CoreError::Gpb(gpb) => gpb_status(gpb),
+        CoreError::Geometry(geometry) => geometry_status(geometry),
+        CoreError::Tile(tile) => tile_status(tile),
+        // A table or column name that cannot be quoted safely, which is
+        // whatever the caller named.
+        CoreError::InvalidIdentifier(_) => Status::InvalidArgument,
+        // As for `Error` above: `CoreError` is `#[non_exhaustive]`, and an
+        // unclassified variant reports its message under `Other`.
+        _ => Status::Other,
+    }
+}
+
+/// Classify a GPB header failure.
+fn gpb_status(error: &GpbError) -> Status {
+    match error {
+        // Bytes that are not a well-formed GPB blob. `Status::InvalidArgument`
+        // names a malformed geometry among the things it covers, and that holds
+        // whether the bytes came from the caller or from a file being read.
+        GpbError::Truncated { .. }
+        | GpbError::BadMagic(..)
+        | GpbError::InvalidEnvelopeIndicator(_) => Status::InvalidArgument,
+        // A GPB version this library does not implement, which is a property of
+        // the file rather than a fault in it.
+        GpbError::UnsupportedVersion(_) => Status::Unsupported,
+        _ => Status::Other,
+    }
+}
+
+/// Classify a geometry failure.
+fn geometry_status(error: &GeometryError) -> Status {
+    match error {
+        GeometryError::Header(gpb) => gpb_status(gpb),
+        // A body that cannot be read as ISO WKB: truncated, misdeclared, nested
+        // past the depth cap, or carrying a type code that has no encoding.
+        GeometryError::Body(_)
+        | GeometryError::TruncatedWkb
+        | GeometryError::UnknownWkbType(_)
+        | GeometryError::AbstractWkbType(_)
+        | GeometryError::TruncatedAt { .. }
+        | GeometryError::InvalidByteOrder { .. }
+        | GeometryError::NestingTooDeep => Status::InvalidArgument,
+        // The body is well formed and this library cannot write it, which is
+        // the one geometry failure that is not a fault in the bytes.
+        GeometryError::NonLinearMember { .. } => Status::Unsupported,
+        // Serialising a geometry this library itself holds failed, so the fault
+        // is not in anything the caller passed.
+        GeometryError::EncodeWkb(_) => Status::Other,
+        _ => Status::Other,
     }
 }
 
