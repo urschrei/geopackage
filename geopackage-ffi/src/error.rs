@@ -56,7 +56,7 @@
 
 use std::ffi::{CString, c_char};
 
-use geopackage::Error;
+use geopackage::{Error, core::TileError};
 
 /// What kind of failure occurred.
 ///
@@ -139,12 +139,46 @@ impl From<&Error> for Status {
             | Error::UnexpectedGeometrySpec { .. }
             | Error::WrongDataType { .. }
             | Error::GeometryNotProjected => Self::InvalidArgument,
+            Error::Tile(tile) => tile_status(tile),
             // `Error` is not `#[non_exhaustive]`, but it gains variants as the
             // library grows, and a new one should classify rather than fail to
             // compile a downstream crate. Anything unclassified is `Other`,
             // whose message still says exactly what happened.
             _ => Self::Other,
         }
+    }
+}
+
+/// Classify a tile failure, which `Error::Tile` carries whole.
+///
+/// Split out rather than folded into the match above because `TileError` is a
+/// twelve-variant enum in its own right, and its variants divide differently:
+/// most of them describe a pyramid that does not satisfy a rule the
+/// specification states, which is a constraint rather than a bad argument.
+fn tile_status(error: &TileError) -> Status {
+    match error {
+        // A pyramid whose own description of itself breaks a rule the spec
+        // states, or a tile that does not match what its zoom level declares.
+        // Reported against the file or the ladder, not against the call.
+        TileError::InvalidExtent { .. }
+        | TileError::NegativeZoomLevel { .. }
+        | TileError::NonPositiveDimension { .. }
+        | TileError::NonPositivePixelSize { .. }
+        | TileError::PixelSizeNotDescending { .. }
+        | TileError::ExtentMismatch { .. }
+        | TileError::DuplicateZoomLevel { .. }
+        | TileError::PayloadSizeMismatch { .. } => Status::Constraint,
+        // What the call was given: an address off the grid, bytes that are not
+        // a readable image, or a zoom range that does not describe a ladder.
+        TileError::CoordOutsideMatrix { .. }
+        | TileError::UnreadablePayload { .. }
+        | TileError::InvalidZoomRange { .. } => Status::InvalidArgument,
+        // The arguments are fine; this pyramid's grid is not one XYZ indices
+        // address, which is a property of the file.
+        TileError::NotAnXyzGrid { .. } => Status::Unsupported,
+        // `TileError` is `#[non_exhaustive]`, so a new variant classifies here
+        // until it is given a category, exactly as for `Error` above.
+        _ => Status::Other,
     }
 }
 

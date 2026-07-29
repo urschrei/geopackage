@@ -397,3 +397,89 @@ fn the_caller_buffer_reader_reports_the_size_it_needs() {
     let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
     assert_eq!(closed, Status::Ok);
 }
+
+/// A PNG header declaring `width` by `height`, which is as much as the payload
+/// probe reads. Enough to test what the pyramid does with the dimensions,
+/// without carrying a second image fixture for the sake of its size.
+fn png_header(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    bytes.extend_from_slice(&13u32.to_be_bytes()); // IHDR payload length
+    bytes.extend_from_slice(b"IHDR");
+    bytes.extend_from_slice(&width.to_be_bytes());
+    bytes.extend_from_slice(&height.to_be_bytes());
+    bytes.extend_from_slice(&[8, 2, 0, 0, 0]); // depth, colour, compression, filter, interlace
+    bytes.extend_from_slice(&[0, 0, 0, 0]); // CRC, which the probe does not check
+    bytes
+}
+
+#[test]
+fn a_rejected_tile_reports_a_category_rather_than_other() {
+    // Tile failures used to reach C as GPKG_STATUS_OTHER, because the library
+    // error that carries them is one variant wrapping an enum of its own. A
+    // caller can now branch on them.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (gpkg, mut error) = open_copy(dir.path());
+    let tiles = pyramid(gpkg, &mut error);
+
+    // The fixture's grid is 1x1 at zoom 0, so column 1 is off it. The address
+    // is the caller's, so this is an argument that was rejected.
+    let payload = png_header(256, 256);
+    // SAFETY: a live pyramid handle and a readable payload.
+    let status = unsafe {
+        gpkg_tiles_put(
+            tiles,
+            0,
+            1,
+            0,
+            payload.as_ptr(),
+            payload.len(),
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::InvalidArgument, "{:?}", message(&error));
+    assert!(
+        message(&error).is_some_and(|text| text.contains("outside")),
+        "the message should still say what was wrong"
+    );
+    // SAFETY: an error slot this library filled in.
+    unsafe { gpkg_error_clear(&raw mut error) };
+
+    // Bytes that are not an image at all, at an address that is fine.
+    let junk = b"this is not an image";
+    // SAFETY: as above.
+    let status =
+        unsafe { gpkg_tiles_put(tiles, 0, 0, 0, junk.as_ptr(), junk.len(), &raw mut error) };
+    assert_eq!(status, Status::InvalidArgument, "{:?}", message(&error));
+    // SAFETY: an error slot this library filled in.
+    unsafe { gpkg_error_clear(&raw mut error) };
+
+    // A readable image whose dimensions are not the ones the zoom level
+    // declares. The argument is well formed; it violates a rule the pyramid
+    // states about itself, so this is a constraint rather than a bad argument.
+    let wrong_size = png_header(64, 64);
+    // SAFETY: as above.
+    let status = unsafe {
+        gpkg_tiles_put(
+            tiles,
+            0,
+            0,
+            0,
+            wrong_size.as_ptr(),
+            wrong_size.len(),
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Constraint, "{:?}", message(&error));
+    assert!(
+        message(&error).is_some_and(|text| text.contains("64")),
+        "the message should name the size that was offered"
+    );
+    // SAFETY: an error slot this library filled in.
+    unsafe { gpkg_error_clear(&raw mut error) };
+
+    // SAFETY: a live pyramid handle, freed exactly once.
+    unsafe { gpkg_tiles_free(tiles) };
+    // SAFETY: nothing borrows the container.
+    let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(closed, Status::Ok);
+}
