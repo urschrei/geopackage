@@ -108,9 +108,106 @@ impl GeometryType {
     }
 }
 
+impl GeometryType {
+    /// Every type, in the order this enum declares them, which is the order of
+    /// their ISO WKB base codes.
+    const ALL: [Self; 15] = [
+        Self::Geometry,
+        Self::Point,
+        Self::LineString,
+        Self::Polygon,
+        Self::MultiPoint,
+        Self::MultiLineString,
+        Self::MultiPolygon,
+        Self::GeometryCollection,
+        Self::CircularString,
+        Self::CompoundCurve,
+        Self::CurvePolygon,
+        Self::MultiCurve,
+        Self::MultiSurface,
+        Self::Curve,
+        Self::Surface,
+    ];
+
+    /// The type an ISO WKB base code names, or `None` for a code that is not a
+    /// GeoPackage geometry type.
+    ///
+    /// The base code is the type code with its dimension offset removed: ISO
+    /// WKB adds 1000 for Z, 2000 for M and 3000 for ZM.
+    pub(crate) fn from_wkb_base(base: u32) -> Option<Self> {
+        Self::ALL.get(base as usize).copied()
+    }
+
+    /// Which bit of a [`GeometryTypeSet`] stands for this type.
+    const fn bit(self) -> u16 {
+        1 << match self {
+            Self::Geometry => 0,
+            Self::Point => 1,
+            Self::LineString => 2,
+            Self::Polygon => 3,
+            Self::MultiPoint => 4,
+            Self::MultiLineString => 5,
+            Self::MultiPolygon => 6,
+            Self::GeometryCollection => 7,
+            Self::CircularString => 8,
+            Self::CompoundCurve => 9,
+            Self::CurvePolygon => 10,
+            Self::MultiCurve => 11,
+            Self::MultiSurface => 12,
+            Self::Curve => 13,
+            Self::Surface => 14,
+        }
+    }
+}
+
 impl fmt::Display for GeometryType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// A set of geometry types, held as a bitset so that walking a geometry can
+/// accumulate one without allocating.
+///
+/// This exists to report what a geometry body actually contains, which is not
+/// the same as the type its column declares: a `MULTICURVE` may hold
+/// `CIRCULARSTRING`s and a `MULTISURFACE` may hold `CURVEPOLYGON`s, and under
+/// Annex F.1 Requirement 67 each non-linear type present needs its own
+/// `gpkg_geom_<TYPE>` row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GeometryTypeSet(u16);
+
+impl GeometryTypeSet {
+    /// The empty set.
+    pub const fn new() -> Self {
+        Self(0)
+    }
+
+    /// Add one type.
+    pub fn insert(&mut self, ty: GeometryType) {
+        self.0 |= ty.bit();
+    }
+
+    /// Add everything `other` holds.
+    pub fn extend(&mut self, other: Self) {
+        self.0 |= other.0;
+    }
+
+    /// Whether `ty` is in the set.
+    pub fn contains(self, ty: GeometryType) -> bool {
+        self.0 & ty.bit() != 0
+    }
+
+    /// Whether the set holds nothing.
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// The types in the set, in the order [`GeometryType`] declares them.
+    pub fn iter(self) -> impl Iterator<Item = GeometryType> {
+        GeometryType::ALL
+            .into_iter()
+            .filter(move |ty| self.contains(*ty))
     }
 }
 

@@ -216,6 +216,43 @@ pub(crate) fn register(
     Ok(())
 }
 
+/// Register an extension unless a row for the same table, column and name is
+/// already there, returning whether one was written.
+///
+/// [`register`] is a plain `INSERT`, which the `ge_tce` unique constraint would
+/// reject on a repeat. This is for the callers that reach the same registration
+/// more than once and treat that as ordinary: the write path registering a
+/// geometry type it has just seen, which the layer's creation may already have
+/// registered, and which a second row of the same type reaches again.
+///
+/// The check is a query rather than `INSERT OR IGNORE` because a file written
+/// elsewhere need not carry the unique constraint, and `OR IGNORE` would then
+/// duplicate the row instead of ignoring it.
+pub(crate) fn register_if_absent(
+    conn: &Connection,
+    table: Option<&str>,
+    column: Option<&str>,
+    name: &str,
+    definition: &str,
+    scope: &str,
+) -> Result<bool> {
+    if table_exists(conn, "gpkg_extensions")?
+        && conn
+            .query_row(
+                "SELECT 1 FROM gpkg_extensions \
+                 WHERE table_name IS ?1 AND column_name IS ?2 AND extension_name = ?3",
+                rusqlite::params![table, column, name],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some()
+    {
+        return Ok(false);
+    }
+    register(conn, table, column, name, definition, scope)?;
+    Ok(true)
+}
+
 /// Whether `name` is registered for `table`, which is `None` for an extension
 /// scoped to the whole GeoPackage.
 ///

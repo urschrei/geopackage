@@ -6,9 +6,9 @@
     reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"
 )]
 
-use geopackage::{BoundingBox, GeoPackage, GeometrySpec, TableSchemaBuilder};
+use geopackage::{BoundingBox, Error, GeoPackage, GeometrySpec, TableSchemaBuilder};
 use geopackage_core::gpb;
-use geopackage_core::types::GeometryType;
+use geopackage_core::types::{GeometryType, ZmFlag};
 use tempfile::TempDir;
 
 /// A little-endian CIRCULARSTRING body.
@@ -19,6 +19,19 @@ fn circular_string(points: &[[f64; 2]]) -> Vec<u8> {
     for [x, y] in points {
         bytes.extend_from_slice(&x.to_le_bytes());
         bytes.extend_from_slice(&y.to_le_bytes());
+    }
+    bytes
+}
+
+/// A little-endian container body of ISO WKB type `code`, holding `members`
+/// verbatim. Each member carries its own byte order and type code, which is
+/// what makes a container's member types invisible from its own type alone.
+fn container(code: u32, members: &[Vec<u8>]) -> Vec<u8> {
+    let mut bytes = vec![1u8];
+    bytes.extend_from_slice(&code.to_le_bytes());
+    bytes.extend_from_slice(&u32::try_from(members.len()).unwrap().to_le_bytes());
+    for member in members {
+        bytes.extend_from_slice(member);
     }
     bytes
 }
@@ -450,13 +463,147 @@ fn every_extension_row_in_the_fixture_classifies() {
     }
 }
 
+/// Every extension registered against a table, sorted.
+fn table_extension_names(gpkg: &GeoPackage, table: &str) -> Vec<String> {
+    let mut names: Vec<String> = gpkg
+        .table_extensions(table)
+        .unwrap()
+        .into_iter()
+        .map(|row| row.name)
+        .collect();
+    names.sort();
+    names
+}
+
 #[test]
-fn gdal_registers_member_types_that_we_do_not() {
-    // A divergence worth pinning rather than discovering later: GDAL registers
-    // a gpkg_geom_<TYPE> row for the member types it actually wrote, so its
-    // multicurve layer carries CIRCULARSTRING alongside MULTICURVE. Our
-    // create_layer registers only the declared column type, because that is all
-    // it is given. Recorded as an open roadmap item under M5 phase 6.
+fn a_container_registers_the_types_of_its_members() {
+    // The column declares MULTICURVE, and that is all create_layer is told. The
+    // CIRCULARSTRING inside is only visible in the bytes, so the write path is
+    // what has to notice it. GDAL registers both, and
+    // `gdal_registers_the_member_types_of_a_container` reads its fixture to
+    // show that.
+    let (_dir, gpkg) = gpkg();
+    curve_layer(&gpkg, GeometryType::MultiCurve);
+
+    let layer = gpkg.layer("arcs").unwrap();
+    let mut writer = layer.writer().unwrap();
+    writer
+        .insert_wkb(None, &container(11, &[bulging_arc()]), &[])
+        .unwrap();
+    writer.commit().unwrap();
+
+    assert_eq!(
+        table_extension_names(&gpkg, "arcs"),
+        [
+            "gpkg_geom_CIRCULARSTRING",
+            "gpkg_geom_MULTICURVE",
+            "gpkg_rtree_index",
+        ]
+    );
+}
+
+#[test]
+fn nesting_is_followed_all_the_way_down() {
+    // MULTISURFACE holding a CURVEPOLYGON whose ring is a CIRCULARSTRING: three
+    // types, two of them reachable only by walking into the members.
+    let (_dir, gpkg) = gpkg();
+    curve_layer(&gpkg, GeometryType::MultiSurface);
+
+    let ring = circular_string(&[[0.0, 0.0], [1.0, 1.0], [2.0, 0.0], [1.0, -1.0], [0.0, 0.0]]);
+    let curve_polygon = container(10, &[ring]);
+
+    let layer = gpkg.layer("arcs").unwrap();
+    let mut writer = layer.writer().unwrap();
+    writer
+        .insert_wkb(None, &container(12, &[curve_polygon]), &[])
+        .unwrap();
+    writer.commit().unwrap();
+
+    assert_eq!(
+        table_extension_names(&gpkg, "arcs"),
+        [
+            "gpkg_geom_CIRCULARSTRING",
+            "gpkg_geom_CURVEPOLYGON",
+            "gpkg_geom_MULTISURFACE",
+            "gpkg_rtree_index",
+        ]
+    );
+}
+
+#[test]
+fn a_member_type_is_registered_once_however_many_rows_carry_it() {
+    let (_dir, gpkg) = gpkg();
+    curve_layer(&gpkg, GeometryType::MultiCurve);
+
+    let layer = gpkg.layer("arcs").unwrap();
+    let mut writer = layer.writer().unwrap();
+    for _ in 0..5 {
+        writer
+            .insert_wkb(None, &container(11, &[bulging_arc()]), &[])
+            .unwrap();
+    }
+    writer.commit().unwrap();
+
+    // A second writer over the same layer finds the rows already there and adds
+    // nothing, which is what the absence check is for: `gpkg_extensions` has a
+    // unique constraint, so a repeat would be an error rather than a duplicate.
+    let mut writer = layer.writer().unwrap();
+    writer
+        .insert_wkb(None, &container(11, &[bulging_arc()]), &[])
+        .unwrap();
+    writer.commit().unwrap();
+
+    assert_eq!(
+        table_extension_names(&gpkg, "arcs"),
+        [
+            "gpkg_geom_CIRCULARSTRING",
+            "gpkg_geom_MULTICURVE",
+            "gpkg_rtree_index",
+        ]
+    );
+}
+
+#[test]
+fn a_rejected_write_registers_nothing() {
+    // The registration follows the row rather than the attempt: a body that
+    // fails its column's constraints leaves no type behind.
+    let (_dir, gpkg) = gpkg();
+    gpkg.create_layer(
+        &TableSchemaBuilder::new("arcs")
+            .geometry(GeometrySpec::new(GeometryType::MultiCurve, 4326).z(ZmFlag::Prohibited)),
+    )
+    .unwrap();
+
+    let layer = gpkg.layer("arcs").unwrap();
+    let mut writer = layer.writer().unwrap();
+    // A CIRCULARSTRING Z (base 8 plus the 1000 Z offset) inside the multicurve,
+    // which the column prohibits.
+    let mut arc = vec![1u8];
+    arc.extend_from_slice(&1008u32.to_le_bytes());
+    arc.extend_from_slice(&3u32.to_le_bytes());
+    for point in [[0.0, 0.0, 1.0], [1.0, 1.0, 1.0], [2.0, 0.0, 1.0]] {
+        for value in point {
+            arc.extend_from_slice(&f64::to_le_bytes(value));
+        }
+    }
+    assert!(matches!(
+        writer.insert_wkb(None, &container(1011, &[arc]), &[]),
+        Err(Error::ZmViolation { .. })
+    ));
+    writer.commit().unwrap();
+
+    assert_eq!(
+        table_extension_names(&gpkg, "arcs"),
+        ["gpkg_geom_MULTICURVE", "gpkg_rtree_index"],
+        "only what create_layer registered"
+    );
+}
+
+#[test]
+fn gdal_registers_the_member_types_of_a_container() {
+    // The oracle for `a_container_registers_the_types_of_its_members`: GDAL
+    // registers a gpkg_geom_<TYPE> row for the member types it actually wrote,
+    // so its multicurve layer carries CIRCULARSTRING alongside MULTICURVE.
     let (_dir, gpkg) = fixture();
     let mut names: Vec<String> = gpkg
         .table_extensions("multicurve")

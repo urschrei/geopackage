@@ -18,7 +18,7 @@
 //! [`GeometryError`].
 
 use crate::gpb::{self, GpbHeader};
-use crate::types::GeometryType;
+use crate::types::{GeometryType, GeometryTypeSet};
 
 use geo_traits::{
     CoordTrait, Dimensions, GeometryTrait, LineStringTrait, LineTrait, MultiLineStringTrait,
@@ -341,25 +341,7 @@ pub fn wkb_geometry_type(wkb_body: &[u8]) -> Result<GeometryType, GeometryError>
     } else {
         code % 1000
     };
-    let ty = match base {
-        0 => GeometryType::Geometry,
-        1 => GeometryType::Point,
-        2 => GeometryType::LineString,
-        3 => GeometryType::Polygon,
-        4 => GeometryType::MultiPoint,
-        5 => GeometryType::MultiLineString,
-        6 => GeometryType::MultiPolygon,
-        7 => GeometryType::GeometryCollection,
-        8 => GeometryType::CircularString,
-        9 => GeometryType::CompoundCurve,
-        10 => GeometryType::CurvePolygon,
-        11 => GeometryType::MultiCurve,
-        12 => GeometryType::MultiSurface,
-        13 => GeometryType::Curve,
-        14 => GeometryType::Surface,
-        _ => return Err(GeometryError::UnknownWkbType(code)),
-    };
-    Ok(ty)
+    GeometryType::from_wkb_base(base).ok_or(GeometryError::UnknownWkbType(code))
 }
 
 /// The GPB envelope to write for a geometry, and whether the geometry is empty.
@@ -440,6 +422,7 @@ pub fn encode_gpb_from_wkb(wkb_body: &[u8], srs_id: i32) -> Result<EncodedGpb, G
             blob,
             xy_envelope: scan.xy_envelope,
             dimensions: scan.dimensions,
+            extension_types: scan.extension_types,
         });
     }
 
@@ -458,6 +441,9 @@ pub fn encode_gpb_from_wkb(wkb_body: &[u8], srs_id: i32) -> Result<EncodedGpb, G
         blob,
         xy_envelope,
         dimensions: geometry.dim(),
+        // Empty by construction: a body the `wkb` reader accepts holds no
+        // non-linear type, since it cannot read one.
+        extension_types: GeometryTypeSet::new(),
     })
 }
 
@@ -470,6 +456,13 @@ pub struct EncodedGpb {
     pub xy_envelope: Option<[f64; 4]>,
     /// The dimensions the WKB body declares, for checking against the column.
     pub dimensions: Dimensions,
+    /// The non-linear types the body contains, at every nesting depth, each of
+    /// which needs a `gpkg_geom_<TYPE>` row for the column it is written to.
+    ///
+    /// A container's members are not implied by its own type, so this is what a
+    /// caller registers from rather than the column's declared type. Empty for
+    /// a body carrying only the core types.
+    pub extension_types: GeometryTypeSet,
 }
 
 /// Encode a geometry as a complete GeoPackage Binary (GPB) blob: an

@@ -4,6 +4,7 @@ pub struct geopackage_core::curve::BodyScan
 pub geopackage_core::curve::BodyScan::dimensions: geo_traits::dimension::Dimensions
 pub geopackage_core::curve::BodyScan::empty: bool
 pub geopackage_core::curve::BodyScan::envelope: geopackage_core::gpb::Envelope
+pub geopackage_core::curve::BodyScan::extension_types: geopackage_core::types::GeometryTypeSet
 pub geopackage_core::curve::BodyScan::len: usize
 pub geopackage_core::curve::BodyScan::xy_envelope: core::option::Option<[f64; 4]>
 impl core::clone::Clone for geopackage_core::curve::BodyScan
@@ -244,6 +245,7 @@ impl !core::panic::unwind_safe::UnwindSafe for geopackage_core::geometry::Geomet
 pub struct geopackage_core::geometry::EncodedGpb
 pub geopackage_core::geometry::EncodedGpb::blob: alloc::vec::Vec<u8>
 pub geopackage_core::geometry::EncodedGpb::dimensions: geo_traits::dimension::Dimensions
+pub geopackage_core::geometry::EncodedGpb::extension_types: geopackage_core::types::GeometryTypeSet
 pub geopackage_core::geometry::EncodedGpb::xy_envelope: core::option::Option<[f64; 4]>
 impl core::clone::Clone for geopackage_core::geometry::EncodedGpb
 pub fn geopackage_core::geometry::EncodedGpb::clone(&self) -> geopackage_core::geometry::EncodedGpb
@@ -1098,6 +1100,32 @@ impl core::marker::Unpin for geopackage_core::types::ZmFlag
 impl core::marker::UnsafeUnpin for geopackage_core::types::ZmFlag
 impl core::panic::unwind_safe::RefUnwindSafe for geopackage_core::types::ZmFlag
 impl core::panic::unwind_safe::UnwindSafe for geopackage_core::types::ZmFlag
+pub struct geopackage_core::types::GeometryTypeSet(_)
+impl geopackage_core::types::GeometryTypeSet
+pub fn geopackage_core::types::GeometryTypeSet::contains(self, geopackage_core::types::GeometryType) -> bool
+pub fn geopackage_core::types::GeometryTypeSet::extend(&mut self, Self)
+pub fn geopackage_core::types::GeometryTypeSet::insert(&mut self, geopackage_core::types::GeometryType)
+pub fn geopackage_core::types::GeometryTypeSet::is_empty(self) -> bool
+pub fn geopackage_core::types::GeometryTypeSet::iter(self) -> impl core::iter::traits::iterator::Iterator<Item = geopackage_core::types::GeometryType>
+pub const fn geopackage_core::types::GeometryTypeSet::new() -> Self
+impl core::clone::Clone for geopackage_core::types::GeometryTypeSet
+pub fn geopackage_core::types::GeometryTypeSet::clone(&self) -> geopackage_core::types::GeometryTypeSet
+impl core::cmp::Eq for geopackage_core::types::GeometryTypeSet
+impl core::cmp::PartialEq for geopackage_core::types::GeometryTypeSet
+pub fn geopackage_core::types::GeometryTypeSet::eq(&self, &geopackage_core::types::GeometryTypeSet) -> bool
+impl core::default::Default for geopackage_core::types::GeometryTypeSet
+pub fn geopackage_core::types::GeometryTypeSet::default() -> geopackage_core::types::GeometryTypeSet
+impl core::fmt::Debug for geopackage_core::types::GeometryTypeSet
+pub fn geopackage_core::types::GeometryTypeSet::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage_core::types::GeometryTypeSet
+impl core::marker::StructuralPartialEq for geopackage_core::types::GeometryTypeSet
+impl core::marker::Freeze for geopackage_core::types::GeometryTypeSet
+impl core::marker::Send for geopackage_core::types::GeometryTypeSet
+impl core::marker::Sync for geopackage_core::types::GeometryTypeSet
+impl core::marker::Unpin for geopackage_core::types::GeometryTypeSet
+impl core::marker::UnsafeUnpin for geopackage_core::types::GeometryTypeSet
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_core::types::GeometryTypeSet
+impl core::panic::unwind_safe::UnwindSafe for geopackage_core::types::GeometryTypeSet
 pub mod geopackage_core::version
 #[non_exhaustive] pub enum geopackage_core::version::GpkgVersion
 pub geopackage_core::version::GpkgVersion::V1_0
@@ -1458,6 +1486,32 @@ impl core::marker::Unpin for geopackage_core::types::ZmFlag
 impl core::marker::UnsafeUnpin for geopackage_core::types::ZmFlag
 impl core::panic::unwind_safe::RefUnwindSafe for geopackage_core::types::ZmFlag
 impl core::panic::unwind_safe::UnwindSafe for geopackage_core::types::ZmFlag
+pub struct geopackage_core::GeometryTypeSet(_)
+impl geopackage_core::types::GeometryTypeSet
+pub fn geopackage_core::types::GeometryTypeSet::contains(self, geopackage_core::types::GeometryType) -> bool
+pub fn geopackage_core::types::GeometryTypeSet::extend(&mut self, Self)
+pub fn geopackage_core::types::GeometryTypeSet::insert(&mut self, geopackage_core::types::GeometryType)
+pub fn geopackage_core::types::GeometryTypeSet::is_empty(self) -> bool
+pub fn geopackage_core::types::GeometryTypeSet::iter(self) -> impl core::iter::traits::iterator::Iterator<Item = geopackage_core::types::GeometryType>
+pub const fn geopackage_core::types::GeometryTypeSet::new() -> Self
+impl core::clone::Clone for geopackage_core::types::GeometryTypeSet
+pub fn geopackage_core::types::GeometryTypeSet::clone(&self) -> geopackage_core::types::GeometryTypeSet
+impl core::cmp::Eq for geopackage_core::types::GeometryTypeSet
+impl core::cmp::PartialEq for geopackage_core::types::GeometryTypeSet
+pub fn geopackage_core::types::GeometryTypeSet::eq(&self, &geopackage_core::types::GeometryTypeSet) -> bool
+impl core::default::Default for geopackage_core::types::GeometryTypeSet
+pub fn geopackage_core::types::GeometryTypeSet::default() -> geopackage_core::types::GeometryTypeSet
+impl core::fmt::Debug for geopackage_core::types::GeometryTypeSet
+pub fn geopackage_core::types::GeometryTypeSet::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage_core::types::GeometryTypeSet
+impl core::marker::StructuralPartialEq for geopackage_core::types::GeometryTypeSet
+impl core::marker::Freeze for geopackage_core::types::GeometryTypeSet
+impl core::marker::Send for geopackage_core::types::GeometryTypeSet
+impl core::marker::Sync for geopackage_core::types::GeometryTypeSet
+impl core::marker::Unpin for geopackage_core::types::GeometryTypeSet
+impl core::marker::UnsafeUnpin for geopackage_core::types::GeometryTypeSet
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_core::types::GeometryTypeSet
+impl core::panic::unwind_safe::UnwindSafe for geopackage_core::types::GeometryTypeSet
 pub struct geopackage_core::GpbGeometry<'a>
 impl<'a> geopackage_core::geometry::GpbGeometry<'a>
 pub fn geopackage_core::geometry::GpbGeometry<'a>::geometry_type(&self) -> geopackage_core::types::GeometryType

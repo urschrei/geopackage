@@ -389,14 +389,24 @@ So the escape hatch is not needed, and `gpkg_rtree_index` covers curve layers.
       `geopackage/tests/curves.rs`, and they agree with ours to within a few
       ulps despite GDAL reaching them by a quadrant sweep rather than the
       chord-side test.
-- [ ] Register the member types of a container geometry, not only the declared
+- [x] Register the member types of a container geometry, not only the declared
       column type. Found by the fixture: GDAL's `multicurve` layer carries
       `gpkg_geom_CIRCULARSTRING` alongside `gpkg_geom_MULTICURVE`, and its
       `multisurface` layer carries `gpkg_geom_CURVEPOLYGON`. `create_layer`
       registers only what it is told, which is the column's declared type, so
-      ours is the thinner registration. Doing this properly means noticing
-      member types as geometries are written rather than at create time.
-      `geopackage/tests/curves.rs` pins the current divergence.
+      ours was the thinner registration.
+      *(Done 2026-07-29. The walk that computes a curve's envelope now also
+      records the non-linear types it passes, at every nesting depth, as
+      `BodyScan::extension_types`; `FeatureWriter` accumulates them across the
+      rows it writes and registers the missing ones at its flush. Accumulated
+      rather than registered per row so a large write issues one registration
+      pass, and recorded after each row rather than at encode time so a rejected
+      write registers nothing, which
+      `a_rejected_write_registers_nothing` pins. The registration is idempotent
+      through `extensions::register_if_absent`, a query rather than
+      `INSERT OR IGNORE` because a file from elsewhere need not carry the
+      `ge_tce` unique constraint. Only the WKB entry points can add to the set:
+      a `GeometryTrait` has no non-linear representation to offer.)*
 
 Fixture budget note: the five indexed layers cost 57 KB of the 256 KB corpus
 budget, because each carries the seven-trigger RTree schema. The total is now
