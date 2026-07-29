@@ -406,7 +406,17 @@ So the escape hatch is not needed, and `gpkg_rtree_index` covers curve layers.
       through `extensions::register_if_absent`, a query rather than
       `INSERT OR IGNORE` because a file from elsewhere need not carry the
       `ge_tce` unique constraint. Only the WKB entry points can add to the set:
-      a `GeometryTrait` has no non-linear representation to offer.)*
+      a `GeometryTrait` has no non-linear representation to offer.*
+
+      *Found while doing it, and left as a documented refusal rather than
+      fixed: a core-typed container holding a non-linear member, such as a
+      `GEOMETRYCOLLECTION` carrying a `CIRCULARSTRING`, cannot be written.
+      Which reader a body takes is decided from its own type code, so that body
+      reaches the `wkb` reader, which cannot read the member. Supporting it
+      would mean walking every body before choosing a reader, which is a cost on
+      the common path for a shape nothing in the corpus uses. It now reports
+      `GeometryError::NonLinearMember`, naming both types, rather than claiming
+      the body is malformed.)*
 
 Fixture budget note: the five indexed layers cost 57 KB of the 256 KB corpus
 budget, because each carries the seven-trigger RTree schema. The total is now

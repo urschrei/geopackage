@@ -41,8 +41,30 @@ pub enum GeometryError {
     /// The ISO WKB body could not be read. This includes non-linear curve
     /// types (`CIRCULARSTRING`, `CURVEPOLYGON`, …) that the `wkb` crate does
     /// not yet support, as well as structurally malformed bodies.
+    ///
+    /// [`encode_gpb_from_wkb`] separates the one case where those two are
+    /// confusable: see [`Self::NonLinearMember`].
     #[error("WKB body is unreadable (unsupported curve type or malformed geometry)")]
     Body(#[from] wkb::error::WkbError),
+    /// A body whose own type is one of the core ones but which contains a
+    /// non-linear member, such as a `GEOMETRYCOLLECTION` holding a
+    /// `CIRCULARSTRING`.
+    ///
+    /// Reading a non-linear geometry goes through [`crate::curve`] rather than
+    /// the `wkb` reader, and which reader a body gets is decided from its own
+    /// type code. A core-typed container therefore reaches the `wkb` reader,
+    /// which cannot read the member. Reported separately from [`Self::Body`]
+    /// because the body is not malformed and the distinction is not one a
+    /// caller can otherwise draw.
+    #[error(
+        "a {container} containing a {member} cannot be written: a non-linear geometry is writable only as a body's own type"
+    )]
+    NonLinearMember {
+        /// The body's own type.
+        container: GeometryType,
+        /// The first non-linear type found inside it.
+        member: GeometryType,
+    },
     /// The WKB body was too short to contain the one-byte order marker and
     /// four-byte geometry type code.
     #[error("WKB body truncated: need at least 5 bytes for the geometry type code")]
@@ -426,7 +448,13 @@ pub fn encode_gpb_from_wkb(wkb_body: &[u8], srs_id: i32) -> Result<EncodedGpb, G
         });
     }
 
-    let geometry = Wkb::try_new(wkb_body)?;
+    let geometry = match Wkb::try_new(wkb_body) {
+        Ok(geometry) => geometry,
+        // The reader reports a type code it did not expect, which for a
+        // container says nothing about where in the body it was. Naming the
+        // member costs a second walk, on a path that is already failing.
+        Err(error) => return Err(non_linear_member(wkb_body).unwrap_or_else(|| error.into())),
+    };
     let (envelope, empty) = write_envelope(&geometry);
     let xy_envelope = envelope
         .xy_bounds()
@@ -445,6 +473,23 @@ pub fn encode_gpb_from_wkb(wkb_body: &[u8], srs_id: i32) -> Result<EncodedGpb, G
         // non-linear type, since it cannot read one.
         extension_types: GeometryTypeSet::new(),
     })
+}
+
+/// Why the `wkb` reader refused a body, when the reason is a non-linear member
+/// rather than a malformed body.
+///
+/// `None` when the body fails for any other reason, in which case the reader's
+/// own error is the one to report. The curve walk reads every GeoPackage type,
+/// so a body it accepts is well formed and the only thing wrong with it is that
+/// it took the wrong reader.
+fn non_linear_member(wkb_body: &[u8]) -> Option<GeometryError> {
+    let container = wkb_geometry_type(wkb_body).ok()?;
+    let member = crate::curve::scan(wkb_body)
+        .ok()?
+        .extension_types
+        .iter()
+        .next()?;
+    Some(GeometryError::NonLinearMember { container, member })
 }
 
 /// What [`encode_gpb_from_wkb`] produced.
