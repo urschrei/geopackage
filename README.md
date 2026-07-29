@@ -13,7 +13,7 @@ through Apache Arrow. Pre-1.0: the API will change without notice.
 
 ```toml
 [dependencies]
-geopackage = "0.1"
+geopackage = "0.6"
 geo-types = "0.7"  # any geo-traits implementation works; this is the common one
 ```
 
@@ -21,7 +21,7 @@ Columnar read and write through Apache Arrow is behind an off-by-default
 feature, which adds the `arrow-array` and `arrow-schema` dependencies:
 
 ```toml
-geopackage = { version = "0.1", features = ["arrow"] }
+geopackage = { version = "0.6", features = ["arrow"] }
 ```
 
 SQLite is bundled and built from source, so a C compiler is required and there
@@ -216,7 +216,7 @@ What is settable:
 | Whether a new layer is indexed | `TableSchemaBuilder::spatial_index` | `true` |
 | Primary-key and geometry column names | `TableSchemaBuilder`, `GeometrySpec` | `fid`, `geom` |
 | Rows sharing a write transaction | the `batch_size` argument of `write_all` / `write_arrow` | caller-supplied; `0` writes all rows in one transaction |
-| Bulk index build: row threshold, structural check, RTree node fill | `BulkIndexOptions` | 10,000 rows, `RtreeOnly`, `1.0` |
+| Bulk index build: row threshold, self-verification, RTree node fill | `BulkIndexOptions` | 10,000 rows, `BulkVerification::None`, `1.0` |
 | `DATETIME` parsing, and whether a value its declared type does not strictly permit is read or rejected | `ConversionOptions` | strict, lenient |
 | Rows per Arrow batch, and threads the columnar read uses | `ArrowReadOptions` | 65,536 rows, `min(4, available parallelism)` |
 | Geometry bytes per Arrow batch; a batch that would cross it is emitted with fewer rows | `ArrowReadOptions::max_batch_bytes` | `min(INT32_MAX, RAM / 4)`; the column's Arrow offsets are 32-bit, so 2 GB is a hard ceiling |

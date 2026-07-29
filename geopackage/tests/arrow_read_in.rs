@@ -6,6 +6,7 @@
 //! would return rows the row path does not, and no amount of matching row
 //! counts on a tidy fixture would show it.
 
+#![cfg(feature = "arrow")]
 #![expect(
     clippy::unwrap_used,
     reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"

@@ -19,49 +19,50 @@ Data Interface as the bulk data plane.
 | [07-m5-extensions-and-1.0.md](07-m5-extensions-and-1.0.md) | M5: extensions, then the CLI and C ABI M3 left unbuilt, then the API freeze |
 | [08-testing-conformance.md](08-testing-conformance.md) | Cross-cutting: conformance harness, fuzzing, benchmarks, corpus |
 
-## Status snapshot (2026-07-27)
+## Status snapshot (2026-07-29)
 
 | Milestone | State |
 |---|---|
 | M0 workspace and codec | Complete |
 | M1 read path | Complete |
 | M2 write path and RTree | Complete, released as v0.1.0 |
-| M3 Arrow, C ABI, CLI | **Partial.** Arrow landed (v0.2.0); the C ABI and CLI were never built, so acceptance criteria 6 and 7 are unmet. They are now M5 phases 8 and 9. |
-| M4 tiles | Code complete, unreleased. Its one open item is a CLI subcommand pair, blocked on M3's unbuilt CLI. |
-| M5 extensions, then CLI and C ABI, then the freeze | **In progress.** Phases 0 to 3 and 6 done; 4, 5, 7 to 10 open. |
+| M3 Arrow, C ABI, CLI | Complete. Arrow landed in v0.2.0; the C ABI and CLI were built as M5 phases 8 and 9 and released in v0.6.0, which is what closes acceptance criteria 6 and 7. |
+| M4 tiles | Complete, released as v0.6.0. |
+| M5 extensions, then CLI and C ABI, then the freeze | **In progress.** Phases 0 to 9 done; phase 10, the API freeze, is what remains. |
 
 Released: v0.1.0, v0.1.1, v0.1.2 (2026-07-24), v0.2.0 (2026-07-25), v0.3.0,
-v0.4.0, v0.5.0 (2026-07-26). Workspace version is 0.5.0; M4's tile pyramids sit
-in `Unreleased` and are intended as v0.6. No release is planned for the rest of
-M5: its phases are an order of work, not a publication schedule.
+v0.4.0, v0.5.0 (2026-07-26), v0.6.0 (2026-07-29). Workspace version is 0.6.0.
+No release is planned for the rest of M5: its phases are an order of work, not a
+publication schedule.
 
-**401 tests pass** locally with all features, 360 on default features, plus 13
-doctests, with clippy clean under the strict lint set. CI runs the same across
-3 OSes at MSRV 1.95.
+**572 tests pass** locally across the workspace with all features, 433 for
+`geopackage` and `geopackage-core` on default features, plus 13 doctests, with
+clippy clean under the strict lint set. CI runs the same across 3 OSes at MSRV
+1.95.
 
 ### Current focus: M5
 
 - **Done.** Phase 0 (the Windows flake), phase 1 (the extension catalogue as
   public API, a prerequisite for the rest), phase 2 (`gpkg_crs_wkt_1_1` read
-  side), phase 3 (`gpkg_schema`), phase 6 (non-linear geometry).
+  side), phase 3 (`gpkg_schema`), phase 4 (`gpkg_metadata`), phase 5 (Related
+  Tables), phase 6 (non-linear geometry), phase 7 (`GeoPackage::validate`),
+  phase 8 (`geopackage-cli`) and phase 9 (`geopackage-ffi`).
 - **Phase 6 was revised mid-milestone.** It was planned as passthrough with no
   envelopes and no indexing. Requirement 78 says the `ST_*` functions shall work
   on these types, and PostGIS and GDAL both compute exact arc envelopes, so the
   plan changed: `geopackage-core::curve` walks WKB directly and computes arc
   extrema exactly, and curve layers index like any other. The originally
-  planned "caller supplies the envelope" escape hatch is not needed. Two items
-  remain: reading a curve back as a geometry object, which is blocked on
-  `geo-traits` having no representation for an arc, and registering member types
-  the way GDAL does.
-- **Next.** Phases 4 (`gpkg_metadata`) and 5 (Related Tables) are the last two
-  extensions, then phase 7 collects every phase's checks into
-  `GeoPackage::validate()`.
-- **The largest unblock is phases 8 and 9**, `geopackage-cli` and
-  `geopackage-ffi`. They gate more than themselves: M3 criteria 6 and 7, M4's
-  tile subcommands, M5 criteria 5 and 6, and design decision D12's `unsafe`
-  carve-out all wait on those two crates existing. Phase 10 (the API freeze) is
-  last by construction, since freezing before the CLI and FFI have exercised the
-  surface would freeze something nothing has used from outside.
+  planned "caller supplies the envelope" escape hatch is not needed. Both of its
+  trailing items are now settled: member types are registered as GDAL registers
+  them, and reading a curve back as a geometry object is closed rather than
+  deferred, since `geo-traits` has no representation for an arc and
+  `Feature::geometry_bytes` is the answer rather than a stopgap.
+- **Phase 10, the API freeze, is what remains**, and it is last by construction:
+  freezing before the CLI and FFI had exercised the surface would have frozen
+  something nothing had used from outside. Its largest item is the reading half
+  of the API review. `scripts/public_api.sh` records every exported item and CI
+  diffs it, which is the mechanised half; deciding which of those items should
+  stay public, and which want `#[non_exhaustive]`, has not started.
 
 ### Milestone history
 
