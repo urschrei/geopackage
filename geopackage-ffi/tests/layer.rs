@@ -106,7 +106,7 @@ fn closing_with_a_live_layer_handle_is_refused_and_changes_nothing() {
     let status = unsafe { gpkg_close(gpkg, &raw mut error) };
     assert_eq!(status, Status::HandleInUse);
     let text = message(&error).expect("present");
-    assert!(text.contains("1 layer handle"), "{text}");
+    assert!(text.contains("1 handle"), "{text}");
     assert!(text.contains("gpkg_layer_free"), "{text}");
     // SAFETY: an error slot this library filled in.
     unsafe { gpkg_error_clear(&raw mut error) };
@@ -141,11 +141,7 @@ fn the_refusal_counts_every_outstanding_handle() {
     // SAFETY: a live container handle; the close is refused.
     let refused = unsafe { gpkg_close(gpkg, &raw mut error) };
     assert_eq!(refused, Status::HandleInUse);
-    assert!(
-        message(&error)
-            .expect("a message")
-            .contains("2 layer handle")
-    );
+    assert!(message(&error).expect("a message").contains("2 handle"));
     // SAFETY: an error slot this library filled in.
     unsafe { gpkg_error_clear(&raw mut error) };
 
@@ -155,11 +151,7 @@ fn the_refusal_counts_every_outstanding_handle() {
     // SAFETY: a live container handle; still one child outstanding.
     let still_refused = unsafe { gpkg_close(gpkg, &raw mut error) };
     assert_eq!(still_refused, Status::HandleInUse);
-    assert!(
-        message(&error)
-            .expect("a message")
-            .contains("1 layer handle")
-    );
+    assert!(message(&error).expect("a message").contains("1 handle"));
     // SAFETY: an error slot this library filled in.
     unsafe { gpkg_error_clear(&raw mut error) };
 

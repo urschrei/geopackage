@@ -474,11 +474,12 @@ gpkg_t *gpkg_create(const char *path, gpkg_error_t *error);
  * Close a GeoPackage and release its handle.
  *
  * Refuses with `GPKG_STATUS_HANDLE_IN_USE` while anything taken from it is
- * still alive, which means a layer handle, a tile pyramid handle or an Arrow
- * stream. In that case **the handle remains valid and open**, nothing has been
- * released, and the caller should free those children and call again. On any
- * other outcome the handle is destroyed and must not be used again, including
- * when this reports a failure: the underlying file was released either way.
+ * still alive, which means a layer handle, a tile pyramid handle, a writer or
+ * an Arrow stream. In that case **the handle remains valid and open**, nothing
+ * has been released, and the caller should free those children and call again.
+ * On any other outcome the handle is destroyed and must not be used again,
+ * including when this reports a failure: the underlying file was released
+ * either way.
  *
  * An open transaction is rolled back, because that is what SQLite does when a
  * connection goes. Commit before closing if the writes are to be kept.

@@ -223,11 +223,12 @@ pub unsafe extern "C" fn gpkg_create(path: *const c_char, error: *mut gpkg_error
 /// Close a GeoPackage and release its handle.
 ///
 /// Refuses with `GPKG_STATUS_HANDLE_IN_USE` while anything taken from it is
-/// still alive, which means a layer handle, a tile pyramid handle or an Arrow
-/// stream. In that case **the handle remains valid and open**, nothing has been
-/// released, and the caller should free those children and call again. On any
-/// other outcome the handle is destroyed and must not be used again, including
-/// when this reports a failure: the underlying file was released either way.
+/// still alive, which means a layer handle, a tile pyramid handle, a writer or
+/// an Arrow stream. In that case **the handle remains valid and open**, nothing
+/// has been released, and the caller should free those children and call again.
+/// On any other outcome the handle is destroyed and must not be used again,
+/// including when this reports a failure: the underlying file was released
+/// either way.
 ///
 /// An open transaction is rolled back, because that is what SQLite does when a
 /// connection goes. Commit before closing if the writes are to be kept.
@@ -261,9 +262,13 @@ pub unsafe extern "C" fn gpkg_close(gpkg: *mut gpkg_t, error: *mut gpkg_error_t)
     // was produced by `Box::into_raw` and not yet freed.
     let outstanding = unsafe { (*gpkg).outstanding_children() };
     if outstanding != 0 {
+        // The count is a single tally and does not record what each child is,
+        // so the message names every destructor rather than guessing.
         let message = format!(
-            "cannot close: {outstanding} layer handle(s) still borrow this GeoPackage; \
-             free them with gpkg_layer_free first"
+            "cannot close: {outstanding} handle(s) taken from this GeoPackage are still \
+             alive; free them first with gpkg_layer_free, gpkg_tiles_free or \
+             gpkg_writer_free, and release any Arrow stream through its own release \
+             callback"
         );
         // SAFETY: forwarded to the caller's guarantee on `error`.
         unsafe { set_error(error, Status::HandleInUse, &message) };
