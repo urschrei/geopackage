@@ -155,6 +155,58 @@ typedef int32_t gpkg_status;
 #endif // __cplusplus
 
 /**
+ * Which case a [`gpkg_value_t`] holds.
+ *
+ * `#[repr(i32)]` so cbindgen emits a plain C enum with stable values. Values
+ * are assigned explicitly and must never be reused for another meaning.
+ */
+enum gpkg_value_kind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * SQL `NULL`. The payload is not read.
+   */
+  GPKG_VALUE_KIND_NULL = 0,
+  /**
+   * A boolean, stored as `0` or `1`.
+   */
+  GPKG_VALUE_KIND_BOOLEAN = 1,
+  /**
+   * An integer of any declared width.
+   */
+  GPKG_VALUE_KIND_INTEGER = 2,
+  /**
+   * A floating-point number.
+   */
+  GPKG_VALUE_KIND_FLOAT = 3,
+  /**
+   * Text, as a NUL-terminated UTF-8 string the caller owns.
+   */
+  GPKG_VALUE_KIND_TEXT = 4,
+  /**
+   * Binary, as a pointer and a length the caller owns.
+   */
+  GPKG_VALUE_KIND_BLOB = 5,
+  /**
+   * A calendar date.
+   */
+  GPKG_VALUE_KIND_DATE = 6,
+  /**
+   * A date and time.
+   */
+  GPKG_VALUE_KIND_DATE_TIME = 7,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum gpkg_value_kind gpkg_value_kind;
+#else
+typedef int32_t gpkg_value_kind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
  * A `gpkg_t`: an open GeoPackage, and a count of the handles borrowing it.
  */
 typedef struct gpkg_t gpkg_t;
@@ -167,7 +219,16 @@ typedef struct gpkg_layer_t gpkg_layer_t;
 /**
  * A `gpkg_tiles_t`: a tile pyramid, and the container it borrows.
  */
-typedef struct TilesHandle TilesHandle;
+typedef struct gpkg_tiles_t gpkg_tiles_t;
+
+/**
+ * A `gpkg_writer_t`: a write transaction over a layer, and the container it
+ * borrows.
+ *
+ * Held by value rather than boxed, because unlike a container nothing borrows
+ * *this*: the writer is the leaf of the handle graph.
+ */
+typedef struct gpkg_writer_t gpkg_writer_t;
 
 /**
  * An open GeoPackage. Opaque; created by `gpkg_open`, `gpkg_open_read_only` or
@@ -204,7 +265,141 @@ typedef gpkg_layer_t gpkg_layer_t;
  * A tile pyramid of an open GeoPackage. Opaque; created by `gpkg_tiles_open`
  * and destroyed by `gpkg_tiles_free`.
  */
-typedef TilesHandle gpkg_tiles_t;
+typedef gpkg_tiles_t gpkg_tiles_t;
+
+/**
+ * A write transaction over one layer. Opaque; created by
+ * `gpkg_layer_writer`, and destroyed by `gpkg_writer_commit` or
+ * `gpkg_writer_free`.
+ */
+typedef gpkg_writer_t gpkg_writer_t;
+
+/**
+ * Binary data the caller owns: a pointer and a length.
+ *
+ * A length of zero is an empty blob, for which `data` may be NULL.
+ */
+typedef struct {
+  /**
+   * The bytes, read during the call that takes them.
+   */
+  const uint8_t *data;
+  /**
+   * How many bytes.
+   */
+  size_t len;
+} gpkg_blob_t;
+
+/**
+ * A calendar date: year 0 to 9999, month 1 to 12, day 1 to the month's length.
+ *
+ * Checked when the value is read, so an impossible date is a rejected call
+ * rather than a bad row.
+ */
+typedef struct {
+  /**
+   * Year, 0 to 9999. The four-digit text form is what bounds it.
+   */
+  uint16_t year;
+  /**
+   * Month, 1 to 12.
+   */
+  uint8_t month;
+  /**
+   * Day, 1 to the length of the month.
+   */
+  uint8_t day;
+} gpkg_date_t;
+
+/**
+ * A date and time, with an optional UTC offset.
+ *
+ * `has_offset` false means the time carries no offset, which the spec permits
+ * and which is not the same as an offset of zero: zero is `Z`.
+ */
+typedef struct {
+  /**
+   * The calendar date.
+   */
+  gpkg_date_t date;
+  /**
+   * Hour, 0 to 23.
+   */
+  uint8_t hour;
+  /**
+   * Minute, 0 to 59.
+   */
+  uint8_t minute;
+  /**
+   * Second, 0 to 59.
+   */
+  uint8_t second;
+  /**
+   * Sub-second component, 0 to 999 999 999.
+   */
+  uint32_t nanosecond;
+  /**
+   * Whether `offset_minutes` is to be read.
+   */
+  bool has_offset;
+  /**
+   * UTC offset in minutes. `0` with `has_offset` set is `Z`.
+   */
+  int16_t offset_minutes;
+} gpkg_datetime_t;
+
+/**
+ * The payload of a [`gpkg_value_t`]. Which member is live is given by the
+ * accompanying [`ValueKind`].
+ */
+typedef union {
+  /**
+   * Live for [`ValueKind::Boolean`].
+   */
+  bool boolean;
+  /**
+   * Live for [`ValueKind::Integer`].
+   */
+  int64_t integer;
+  /**
+   * Live for [`ValueKind::Float`].
+   */
+  double real;
+  /**
+   * Live for [`ValueKind::Text`]: NUL-terminated UTF-8.
+   */
+  const char *text;
+  /**
+   * Live for [`ValueKind::Blob`].
+   */
+  gpkg_blob_t blob;
+  /**
+   * Live for [`ValueKind::Date`].
+   */
+  gpkg_date_t date;
+  /**
+   * Live for [`ValueKind::DateTime`].
+   */
+  gpkg_datetime_t datetime;
+} gpkg_value_payload;
+
+/**
+ * One cell of a row: a tag and a payload.
+ *
+ * Nothing here is owned by the library. Text and binary point at the caller's
+ * memory and are read during the call that takes them.
+ */
+typedef struct {
+  /**
+   * Which case `value` holds.
+   */
+  gpkg_value_kind kind;
+  /**
+   * The payload. Read according to `kind`; not read at all for
+   * [`ValueKind::Null`].
+   */
+  gpkg_value_payload value;
+} gpkg_value_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -1357,6 +1552,141 @@ gpkg_status gpkg_tiles_get_into(const gpkg_tiles_t *tiles,
  * already been freed.
  */
 void gpkg_string_free(char *text);
+
+/**
+ * Begin a write transaction over `layer`.
+ *
+ * The writer borrows the layer's container, which cannot be closed while the
+ * writer is alive. Finish with `gpkg_writer_commit`, or discard the work with
+ * `gpkg_writer_free`.
+ *
+ * Returns NULL on failure. A read-only handle fails here rather than at the
+ * first write.
+ *
+ * # Safety
+ *
+ * `layer` must be a live layer handle and `error` NULL or writable. The
+ * returned writer must be destroyed exactly once, with `gpkg_writer_commit` or
+ * `gpkg_writer_free`, on the thread that created it.
+ */
+gpkg_writer_t *gpkg_layer_writer(const gpkg_layer_t *layer, gpkg_error_t *error);
+
+/**
+ * Commit the writer's work and destroy it.
+ *
+ * The handle is destroyed whether this succeeds or fails, so it must not be
+ * used again either way. Inside a transaction the caller opened with
+ * `gpkg_begin`, this stages the work rather than committing it, and their
+ * `gpkg_commit` is what makes it durable.
+ *
+ * # Safety
+ *
+ * `writer` must be a live writer handle that has not already been committed or
+ * freed. `error` must be NULL or writable.
+ */
+gpkg_status gpkg_writer_commit(gpkg_writer_t *writer, gpkg_error_t *error);
+
+/**
+ * Discard the writer's work and destroy it.
+ *
+ * Everything staged since `gpkg_layer_writer` is rolled back. Inside a
+ * transaction the caller opened, nothing is rolled back here: the work stays
+ * staged in that transaction, and `gpkg_rollback` is what discards it.
+ *
+ * Freeing NULL does nothing.
+ *
+ * # Safety
+ *
+ * `writer` must be NULL, or a live writer handle that has not already been
+ * committed or freed.
+ */
+void gpkg_writer_free(gpkg_writer_t *writer);
+
+/**
+ * Insert a feature, with or without a geometry.
+ *
+ * `fid` is NULL to have an id assigned, or points at the id to use. The id
+ * written is reported through `out_fid` when that is non-NULL.
+ *
+ * `wkb` is the geometry, or NULL with `wkb_len` zero for a row with none.
+ * `values` covers the layer's value columns in order; `values_len` must match
+ * the layer.
+ *
+ * # Safety
+ *
+ * `writer` must be a live writer handle. `fid` must be NULL or readable.
+ * `wkb` must be NULL or readable for `wkb_len` bytes. `values` must be NULL
+ * (with `values_len` zero) or point at `values_len` readable values.
+ * `out_fid` and `error` must be NULL or writable.
+ */
+gpkg_status gpkg_writer_insert(gpkg_writer_t *writer,
+                               const int64_t *fid,
+                               const uint8_t *wkb,
+                               size_t wkb_len,
+                               const gpkg_value_t *values,
+                               size_t values_len,
+                               int64_t *out_fid,
+                               gpkg_error_t *error);
+
+/**
+ * Update the feature `fid`, replacing every value column and, when `wkb` is
+ * given, the geometry.
+ *
+ * `out_matched` reports whether a row with that id was there to update; a
+ * missing row is not an error.
+ *
+ * # Safety
+ *
+ * As [`gpkg_writer_insert`], with `out_matched` NULL or writable.
+ */
+gpkg_status gpkg_writer_update(gpkg_writer_t *writer,
+                               int64_t fid,
+                               const uint8_t *wkb,
+                               size_t wkb_len,
+                               const gpkg_value_t *values,
+                               size_t values_len,
+                               bool *out_matched,
+                               gpkg_error_t *error);
+
+/**
+ * Update one column of the feature `fid`, leaving every other value and the
+ * geometry alone.
+ *
+ * The shape a caller wants when correcting one field: nothing else has to be
+ * supplied, and nothing else is touched.
+ *
+ * # Safety
+ *
+ * `writer` must be a live writer handle, `column` a NUL-terminated UTF-8
+ * string, `value` a readable value, and `out_matched` and `error` NULL or
+ * writable.
+ */
+gpkg_status gpkg_writer_update_column(gpkg_writer_t *writer,
+                                      int64_t fid,
+                                      const char *column,
+                                      const gpkg_value_t *value,
+                                      bool *out_matched,
+                                      gpkg_error_t *error);
+
+/**
+ * Delete the feature `fid`.
+ *
+ * `out_matched` reports whether a row with that id was there to delete; a
+ * missing row is not an error.
+ *
+ * The layer's recorded bounding box is not shrunk, here or anywhere else: an
+ * over-estimate is what the specification permits, and shrinking would mean
+ * rescanning the layer.
+ *
+ * # Safety
+ *
+ * `writer` must be a live writer handle, and `out_matched` and `error` NULL or
+ * writable.
+ */
+gpkg_status gpkg_writer_delete(gpkg_writer_t *writer,
+                               int64_t fid,
+                               bool *out_matched,
+                               gpkg_error_t *error);
 
 #ifdef __cplusplus
 }  // extern "C"

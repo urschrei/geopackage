@@ -86,6 +86,7 @@ pub struct geopackage_ffi::handle::LayerHandle
 impl geopackage_ffi::handle::LayerHandle
 pub fn geopackage_ffi::handle::LayerHandle::layer(&self) -> &geopackage::layer::Layer<'static>
 pub fn geopackage_ffi::handle::LayerHandle::token(&self) -> geopackage_ffi::handle::ChildToken
+pub fn geopackage_ffi::handle::LayerHandle::writer(&self) -> geopackage::error::Result<geopackage_ffi::handle::WriterHandle>
 impl core::marker::Freeze for geopackage_ffi::handle::LayerHandle
 impl !core::marker::Send for geopackage_ffi::handle::LayerHandle
 impl !core::marker::Sync for geopackage_ffi::handle::LayerHandle
@@ -103,6 +104,17 @@ impl core::marker::Unpin for geopackage_ffi::handle::TilesHandle
 impl core::marker::UnsafeUnpin for geopackage_ffi::handle::TilesHandle
 impl !core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::handle::TilesHandle
 impl !core::panic::unwind_safe::UnwindSafe for geopackage_ffi::handle::TilesHandle
+pub struct geopackage_ffi::handle::WriterHandle
+impl geopackage_ffi::handle::WriterHandle
+pub fn geopackage_ffi::handle::WriterHandle::commit(self) -> geopackage::error::Result<()>
+pub fn geopackage_ffi::handle::WriterHandle::writer_mut(&mut self) -> &mut geopackage::writer::FeatureWriter<'static>
+impl !core::marker::Freeze for geopackage_ffi::handle::WriterHandle
+impl !core::marker::Send for geopackage_ffi::handle::WriterHandle
+impl !core::marker::Sync for geopackage_ffi::handle::WriterHandle
+impl core::marker::Unpin for geopackage_ffi::handle::WriterHandle
+impl core::marker::UnsafeUnpin for geopackage_ffi::handle::WriterHandle
+impl !core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::handle::WriterHandle
+impl !core::panic::unwind_safe::UnwindSafe for geopackage_ffi::handle::WriterHandle
 pub mod geopackage_ffi::layer
 #[no_mangle] pub unsafe c fn geopackage_ffi::layer::gpkg_attributes_open(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::layer::gpkg_layer_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::layer::gpkg_layer_count(*const geopackage_ffi::layer::gpkg_layer_t, *mut u64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
@@ -151,6 +163,123 @@ pub mod geopackage_ffi::tiles
 pub type geopackage_ffi::tiles::gpkg_tiles_t = geopackage_ffi::handle::TilesHandle
 pub mod geopackage_ffi::util
 #[no_mangle] pub unsafe c fn geopackage_ffi::util::gpkg_string_free(*mut core::ffi::primitives::c_char)
+pub mod geopackage_ffi::value
+#[repr(i32)] pub enum geopackage_ffi::value::ValueKind
+pub geopackage_ffi::value::ValueKind::Blob = 5
+pub geopackage_ffi::value::ValueKind::Boolean = 1
+pub geopackage_ffi::value::ValueKind::Date = 6
+pub geopackage_ffi::value::ValueKind::DateTime = 7
+pub geopackage_ffi::value::ValueKind::Float = 3
+pub geopackage_ffi::value::ValueKind::Integer = 2
+pub geopackage_ffi::value::ValueKind::Null = 0
+pub geopackage_ffi::value::ValueKind::Text = 4
+impl core::clone::Clone for geopackage_ffi::value::ValueKind
+pub fn geopackage_ffi::value::ValueKind::clone(&self) -> geopackage_ffi::value::ValueKind
+impl core::cmp::Eq for geopackage_ffi::value::ValueKind
+impl core::cmp::PartialEq for geopackage_ffi::value::ValueKind
+pub fn geopackage_ffi::value::ValueKind::eq(&self, &geopackage_ffi::value::ValueKind) -> bool
+impl core::fmt::Debug for geopackage_ffi::value::ValueKind
+pub fn geopackage_ffi::value::ValueKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage_ffi::value::ValueKind
+impl core::marker::StructuralPartialEq for geopackage_ffi::value::ValueKind
+impl core::marker::Freeze for geopackage_ffi::value::ValueKind
+impl core::marker::Send for geopackage_ffi::value::ValueKind
+impl core::marker::Sync for geopackage_ffi::value::ValueKind
+impl core::marker::Unpin for geopackage_ffi::value::ValueKind
+impl core::marker::UnsafeUnpin for geopackage_ffi::value::ValueKind
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::value::ValueKind
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::ValueKind
+#[repr(C)] pub union geopackage_ffi::value::gpkg_value_payload
+pub geopackage_ffi::value::gpkg_value_payload::blob: geopackage_ffi::value::gpkg_blob_t
+pub geopackage_ffi::value::gpkg_value_payload::boolean: bool
+pub geopackage_ffi::value::gpkg_value_payload::date: geopackage_ffi::value::gpkg_date_t
+pub geopackage_ffi::value::gpkg_value_payload::datetime: geopackage_ffi::value::gpkg_datetime_t
+pub geopackage_ffi::value::gpkg_value_payload::integer: i64
+pub geopackage_ffi::value::gpkg_value_payload::real: f64
+pub geopackage_ffi::value::gpkg_value_payload::text: *const core::ffi::primitives::c_char
+impl core::clone::Clone for geopackage_ffi::value::gpkg_value_payload
+pub fn geopackage_ffi::value::gpkg_value_payload::clone(&self) -> geopackage_ffi::value::gpkg_value_payload
+impl core::marker::Copy for geopackage_ffi::value::gpkg_value_payload
+impl core::marker::Freeze for geopackage_ffi::value::gpkg_value_payload
+impl !core::marker::Send for geopackage_ffi::value::gpkg_value_payload
+impl !core::marker::Sync for geopackage_ffi::value::gpkg_value_payload
+impl core::marker::Unpin for geopackage_ffi::value::gpkg_value_payload
+impl core::marker::UnsafeUnpin for geopackage_ffi::value::gpkg_value_payload
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::value::gpkg_value_payload
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_value_payload
+#[repr(C)] pub struct geopackage_ffi::value::gpkg_blob_t
+pub geopackage_ffi::value::gpkg_blob_t::data: *const u8
+pub geopackage_ffi::value::gpkg_blob_t::len: usize
+impl core::clone::Clone for geopackage_ffi::value::gpkg_blob_t
+pub fn geopackage_ffi::value::gpkg_blob_t::clone(&self) -> geopackage_ffi::value::gpkg_blob_t
+impl core::fmt::Debug for geopackage_ffi::value::gpkg_blob_t
+pub fn geopackage_ffi::value::gpkg_blob_t::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage_ffi::value::gpkg_blob_t
+impl core::marker::Freeze for geopackage_ffi::value::gpkg_blob_t
+impl !core::marker::Send for geopackage_ffi::value::gpkg_blob_t
+impl !core::marker::Sync for geopackage_ffi::value::gpkg_blob_t
+impl core::marker::Unpin for geopackage_ffi::value::gpkg_blob_t
+impl core::marker::UnsafeUnpin for geopackage_ffi::value::gpkg_blob_t
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::value::gpkg_blob_t
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_blob_t
+#[repr(C)] pub struct geopackage_ffi::value::gpkg_date_t
+pub geopackage_ffi::value::gpkg_date_t::day: u8
+pub geopackage_ffi::value::gpkg_date_t::month: u8
+pub geopackage_ffi::value::gpkg_date_t::year: u16
+impl core::clone::Clone for geopackage_ffi::value::gpkg_date_t
+pub fn geopackage_ffi::value::gpkg_date_t::clone(&self) -> geopackage_ffi::value::gpkg_date_t
+impl core::fmt::Debug for geopackage_ffi::value::gpkg_date_t
+pub fn geopackage_ffi::value::gpkg_date_t::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage_ffi::value::gpkg_date_t
+impl core::marker::Freeze for geopackage_ffi::value::gpkg_date_t
+impl core::marker::Send for geopackage_ffi::value::gpkg_date_t
+impl core::marker::Sync for geopackage_ffi::value::gpkg_date_t
+impl core::marker::Unpin for geopackage_ffi::value::gpkg_date_t
+impl core::marker::UnsafeUnpin for geopackage_ffi::value::gpkg_date_t
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::value::gpkg_date_t
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_date_t
+#[repr(C)] pub struct geopackage_ffi::value::gpkg_datetime_t
+pub geopackage_ffi::value::gpkg_datetime_t::date: geopackage_ffi::value::gpkg_date_t
+pub geopackage_ffi::value::gpkg_datetime_t::has_offset: bool
+pub geopackage_ffi::value::gpkg_datetime_t::hour: u8
+pub geopackage_ffi::value::gpkg_datetime_t::minute: u8
+pub geopackage_ffi::value::gpkg_datetime_t::nanosecond: u32
+pub geopackage_ffi::value::gpkg_datetime_t::offset_minutes: i16
+pub geopackage_ffi::value::gpkg_datetime_t::second: u8
+impl core::clone::Clone for geopackage_ffi::value::gpkg_datetime_t
+pub fn geopackage_ffi::value::gpkg_datetime_t::clone(&self) -> geopackage_ffi::value::gpkg_datetime_t
+impl core::fmt::Debug for geopackage_ffi::value::gpkg_datetime_t
+pub fn geopackage_ffi::value::gpkg_datetime_t::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage_ffi::value::gpkg_datetime_t
+impl core::marker::Freeze for geopackage_ffi::value::gpkg_datetime_t
+impl core::marker::Send for geopackage_ffi::value::gpkg_datetime_t
+impl core::marker::Sync for geopackage_ffi::value::gpkg_datetime_t
+impl core::marker::Unpin for geopackage_ffi::value::gpkg_datetime_t
+impl core::marker::UnsafeUnpin for geopackage_ffi::value::gpkg_datetime_t
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::value::gpkg_datetime_t
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_datetime_t
+#[repr(C)] pub struct geopackage_ffi::value::gpkg_value_t
+pub geopackage_ffi::value::gpkg_value_t::kind: geopackage_ffi::value::ValueKind
+pub geopackage_ffi::value::gpkg_value_t::value: geopackage_ffi::value::gpkg_value_payload
+impl core::clone::Clone for geopackage_ffi::value::gpkg_value_t
+pub fn geopackage_ffi::value::gpkg_value_t::clone(&self) -> geopackage_ffi::value::gpkg_value_t
+impl core::marker::Copy for geopackage_ffi::value::gpkg_value_t
+impl core::marker::Freeze for geopackage_ffi::value::gpkg_value_t
+impl !core::marker::Send for geopackage_ffi::value::gpkg_value_t
+impl !core::marker::Sync for geopackage_ffi::value::gpkg_value_t
+impl core::marker::Unpin for geopackage_ffi::value::gpkg_value_t
+impl core::marker::UnsafeUnpin for geopackage_ffi::value::gpkg_value_t
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::value::gpkg_value_t
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_value_t
+pub mod geopackage_ffi::writer
+#[no_mangle] pub unsafe c fn geopackage_ffi::writer::gpkg_layer_writer(*const geopackage_ffi::handle::LayerHandle, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::writer::gpkg_writer_t
+#[no_mangle] pub unsafe c fn geopackage_ffi::writer::gpkg_writer_commit(*mut geopackage_ffi::writer::gpkg_writer_t, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::writer::gpkg_writer_delete(*mut geopackage_ffi::writer::gpkg_writer_t, i64, *mut bool, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::writer::gpkg_writer_free(*mut geopackage_ffi::writer::gpkg_writer_t)
+#[no_mangle] pub unsafe c fn geopackage_ffi::writer::gpkg_writer_insert(*mut geopackage_ffi::writer::gpkg_writer_t, *const i64, *const u8, usize, *const geopackage_ffi::value::gpkg_value_t, usize, *mut i64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::writer::gpkg_writer_update(*mut geopackage_ffi::writer::gpkg_writer_t, i64, *const u8, usize, *const geopackage_ffi::value::gpkg_value_t, usize, *mut bool, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::writer::gpkg_writer_update_column(*mut geopackage_ffi::writer::gpkg_writer_t, i64, *const core::ffi::primitives::c_char, *const geopackage_ffi::value::gpkg_value_t, *mut bool, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+pub type geopackage_ffi::writer::gpkg_writer_t = geopackage_ffi::handle::WriterHandle
 #[repr(i32)] pub enum geopackage_ffi::Status
 pub geopackage_ffi::Status::AlreadyExists = 4
 pub geopackage_ffi::Status::BadArgument = 9
@@ -181,6 +310,100 @@ impl core::marker::Unpin for geopackage_ffi::error::Status
 impl core::marker::UnsafeUnpin for geopackage_ffi::error::Status
 impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::error::Status
 impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::error::Status
+#[repr(i32)] pub enum geopackage_ffi::ValueKind
+pub geopackage_ffi::ValueKind::Blob = 5
+pub geopackage_ffi::ValueKind::Boolean = 1
+pub geopackage_ffi::ValueKind::Date = 6
+pub geopackage_ffi::ValueKind::DateTime = 7
+pub geopackage_ffi::ValueKind::Float = 3
+pub geopackage_ffi::ValueKind::Integer = 2
+pub geopackage_ffi::ValueKind::Null = 0
+pub geopackage_ffi::ValueKind::Text = 4
+impl core::clone::Clone for geopackage_ffi::value::ValueKind
+pub fn geopackage_ffi::value::ValueKind::clone(&self) -> geopackage_ffi::value::ValueKind
+impl core::cmp::Eq for geopackage_ffi::value::ValueKind
+impl core::cmp::PartialEq for geopackage_ffi::value::ValueKind
+pub fn geopackage_ffi::value::ValueKind::eq(&self, &geopackage_ffi::value::ValueKind) -> bool
+impl core::fmt::Debug for geopackage_ffi::value::ValueKind
+pub fn geopackage_ffi::value::ValueKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage_ffi::value::ValueKind
+impl core::marker::StructuralPartialEq for geopackage_ffi::value::ValueKind
+impl core::marker::Freeze for geopackage_ffi::value::ValueKind
+impl core::marker::Send for geopackage_ffi::value::ValueKind
+impl core::marker::Sync for geopackage_ffi::value::ValueKind
+impl core::marker::Unpin for geopackage_ffi::value::ValueKind
+impl core::marker::UnsafeUnpin for geopackage_ffi::value::ValueKind
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::value::ValueKind
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::ValueKind
+#[repr(C)] pub union geopackage_ffi::gpkg_value_payload
+pub geopackage_ffi::gpkg_value_payload::blob: geopackage_ffi::value::gpkg_blob_t
+pub geopackage_ffi::gpkg_value_payload::boolean: bool
+pub geopackage_ffi::gpkg_value_payload::date: geopackage_ffi::value::gpkg_date_t
+pub geopackage_ffi::gpkg_value_payload::datetime: geopackage_ffi::value::gpkg_datetime_t
+pub geopackage_ffi::gpkg_value_payload::integer: i64
+pub geopackage_ffi::gpkg_value_payload::real: f64
+pub geopackage_ffi::gpkg_value_payload::text: *const core::ffi::primitives::c_char
+impl core::clone::Clone for geopackage_ffi::value::gpkg_value_payload
+pub fn geopackage_ffi::value::gpkg_value_payload::clone(&self) -> geopackage_ffi::value::gpkg_value_payload
+impl core::marker::Copy for geopackage_ffi::value::gpkg_value_payload
+impl core::marker::Freeze for geopackage_ffi::value::gpkg_value_payload
+impl !core::marker::Send for geopackage_ffi::value::gpkg_value_payload
+impl !core::marker::Sync for geopackage_ffi::value::gpkg_value_payload
+impl core::marker::Unpin for geopackage_ffi::value::gpkg_value_payload
+impl core::marker::UnsafeUnpin for geopackage_ffi::value::gpkg_value_payload
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::value::gpkg_value_payload
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_value_payload
+#[repr(C)] pub struct geopackage_ffi::gpkg_blob_t
+pub geopackage_ffi::gpkg_blob_t::data: *const u8
+pub geopackage_ffi::gpkg_blob_t::len: usize
+impl core::clone::Clone for geopackage_ffi::value::gpkg_blob_t
+pub fn geopackage_ffi::value::gpkg_blob_t::clone(&self) -> geopackage_ffi::value::gpkg_blob_t
+impl core::fmt::Debug for geopackage_ffi::value::gpkg_blob_t
+pub fn geopackage_ffi::value::gpkg_blob_t::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage_ffi::value::gpkg_blob_t
+impl core::marker::Freeze for geopackage_ffi::value::gpkg_blob_t
+impl !core::marker::Send for geopackage_ffi::value::gpkg_blob_t
+impl !core::marker::Sync for geopackage_ffi::value::gpkg_blob_t
+impl core::marker::Unpin for geopackage_ffi::value::gpkg_blob_t
+impl core::marker::UnsafeUnpin for geopackage_ffi::value::gpkg_blob_t
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::value::gpkg_blob_t
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_blob_t
+#[repr(C)] pub struct geopackage_ffi::gpkg_date_t
+pub geopackage_ffi::gpkg_date_t::day: u8
+pub geopackage_ffi::gpkg_date_t::month: u8
+pub geopackage_ffi::gpkg_date_t::year: u16
+impl core::clone::Clone for geopackage_ffi::value::gpkg_date_t
+pub fn geopackage_ffi::value::gpkg_date_t::clone(&self) -> geopackage_ffi::value::gpkg_date_t
+impl core::fmt::Debug for geopackage_ffi::value::gpkg_date_t
+pub fn geopackage_ffi::value::gpkg_date_t::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage_ffi::value::gpkg_date_t
+impl core::marker::Freeze for geopackage_ffi::value::gpkg_date_t
+impl core::marker::Send for geopackage_ffi::value::gpkg_date_t
+impl core::marker::Sync for geopackage_ffi::value::gpkg_date_t
+impl core::marker::Unpin for geopackage_ffi::value::gpkg_date_t
+impl core::marker::UnsafeUnpin for geopackage_ffi::value::gpkg_date_t
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::value::gpkg_date_t
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_date_t
+#[repr(C)] pub struct geopackage_ffi::gpkg_datetime_t
+pub geopackage_ffi::gpkg_datetime_t::date: geopackage_ffi::value::gpkg_date_t
+pub geopackage_ffi::gpkg_datetime_t::has_offset: bool
+pub geopackage_ffi::gpkg_datetime_t::hour: u8
+pub geopackage_ffi::gpkg_datetime_t::minute: u8
+pub geopackage_ffi::gpkg_datetime_t::nanosecond: u32
+pub geopackage_ffi::gpkg_datetime_t::offset_minutes: i16
+pub geopackage_ffi::gpkg_datetime_t::second: u8
+impl core::clone::Clone for geopackage_ffi::value::gpkg_datetime_t
+pub fn geopackage_ffi::value::gpkg_datetime_t::clone(&self) -> geopackage_ffi::value::gpkg_datetime_t
+impl core::fmt::Debug for geopackage_ffi::value::gpkg_datetime_t
+pub fn geopackage_ffi::value::gpkg_datetime_t::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for geopackage_ffi::value::gpkg_datetime_t
+impl core::marker::Freeze for geopackage_ffi::value::gpkg_datetime_t
+impl core::marker::Send for geopackage_ffi::value::gpkg_datetime_t
+impl core::marker::Sync for geopackage_ffi::value::gpkg_datetime_t
+impl core::marker::Unpin for geopackage_ffi::value::gpkg_datetime_t
+impl core::marker::UnsafeUnpin for geopackage_ffi::value::gpkg_datetime_t
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::value::gpkg_datetime_t
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_datetime_t
 #[repr(C)] pub struct geopackage_ffi::gpkg_error_t
 pub geopackage_ffi::gpkg_error_t::code: geopackage_ffi::error::Status
 pub geopackage_ffi::gpkg_error_t::message: *mut core::ffi::primitives::c_char
@@ -191,6 +414,19 @@ impl core::marker::Unpin for geopackage_ffi::error::gpkg_error_t
 impl core::marker::UnsafeUnpin for geopackage_ffi::error::gpkg_error_t
 impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::error::gpkg_error_t
 impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::error::gpkg_error_t
+#[repr(C)] pub struct geopackage_ffi::gpkg_value_t
+pub geopackage_ffi::gpkg_value_t::kind: geopackage_ffi::value::ValueKind
+pub geopackage_ffi::gpkg_value_t::value: geopackage_ffi::value::gpkg_value_payload
+impl core::clone::Clone for geopackage_ffi::value::gpkg_value_t
+pub fn geopackage_ffi::value::gpkg_value_t::clone(&self) -> geopackage_ffi::value::gpkg_value_t
+impl core::marker::Copy for geopackage_ffi::value::gpkg_value_t
+impl core::marker::Freeze for geopackage_ffi::value::gpkg_value_t
+impl !core::marker::Send for geopackage_ffi::value::gpkg_value_t
+impl !core::marker::Sync for geopackage_ffi::value::gpkg_value_t
+impl core::marker::Unpin for geopackage_ffi::value::gpkg_value_t
+impl core::marker::UnsafeUnpin for geopackage_ffi::value::gpkg_value_t
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::value::gpkg_value_t
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_value_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_add_epsg_srs(*const geopackage_ffi::handle::Container, i32, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_attributes_open(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::layer::gpkg_layer_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_begin(*mut geopackage_ffi::container::gpkg_t, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
@@ -224,6 +460,7 @@ impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::error::gpkg_error_
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_layer_spatial_index_status(*const geopackage_ffi::handle::LayerHandle, *mut geopackage_ffi::error::gpkg_error_t) -> *mut core::ffi::primitives::c_char
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_layer_srs_id(*const geopackage_ffi::handle::LayerHandle, *mut i32, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_layer_write_arrow(*const geopackage_ffi::handle::LayerHandle, *mut arrow_array::ffi_stream::FFI_ArrowArrayStream, usize, *mut u64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_layer_writer(*const geopackage_ffi::handle::LayerHandle, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::writer::gpkg_writer_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_open(*const core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::container::gpkg_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_open_read_only(*const core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::container::gpkg_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_open_warning(*const geopackage_ffi::container::gpkg_t, usize, *mut geopackage_ffi::error::gpkg_error_t) -> *mut core::ffi::primitives::c_char
@@ -244,6 +481,13 @@ impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::error::gpkg_error_
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_put(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, i64, i64, *const u8, usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_zoom_level_count(*const geopackage_ffi::tiles::gpkg_tiles_t, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_version(*const geopackage_ffi::container::gpkg_t, *mut geopackage_ffi::error::gpkg_error_t) -> *mut core::ffi::primitives::c_char
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_writer_commit(*mut geopackage_ffi::writer::gpkg_writer_t, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_writer_delete(*mut geopackage_ffi::writer::gpkg_writer_t, i64, *mut bool, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_writer_free(*mut geopackage_ffi::writer::gpkg_writer_t)
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_writer_insert(*mut geopackage_ffi::writer::gpkg_writer_t, *const i64, *const u8, usize, *const geopackage_ffi::value::gpkg_value_t, usize, *mut i64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_writer_update(*mut geopackage_ffi::writer::gpkg_writer_t, i64, *const u8, usize, *const geopackage_ffi::value::gpkg_value_t, usize, *mut bool, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_writer_update_column(*mut geopackage_ffi::writer::gpkg_writer_t, i64, *const core::ffi::primitives::c_char, *const geopackage_ffi::value::gpkg_value_t, *mut bool, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 pub type geopackage_ffi::gpkg_layer_t = geopackage_ffi::handle::LayerHandle
 pub type geopackage_ffi::gpkg_t = geopackage_ffi::handle::Container
 pub type geopackage_ffi::gpkg_tiles_t = geopackage_ffi::handle::TilesHandle
+pub type geopackage_ffi::gpkg_writer_t = geopackage_ffi::handle::WriterHandle

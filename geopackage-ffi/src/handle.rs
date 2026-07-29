@@ -79,7 +79,7 @@
 
 use std::cell::Cell;
 
-use geopackage::{GeoPackage, Layer, TilePyramid};
+use geopackage::{FeatureWriter, GeoPackage, Layer, TilePyramid};
 
 /// A `gpkg_t`: an open GeoPackage, and a count of the handles borrowing it.
 pub struct Container {
@@ -247,6 +247,28 @@ impl LayerHandle {
         &self.layer
     }
 
+    /// Begin a write transaction over this layer as a child handle.
+    ///
+    /// No borrow is erased here, unlike the layer and pyramid handles.
+    /// `Layer::writer`
+    /// returns a `FeatureWriter` carrying the layer's own lifetime parameter
+    /// rather than a borrow of `&self`, and this layer's parameter is already
+    /// `'static`, so the writer arrives erased. What it still needs is the
+    /// count: the writer points into the same container, so the container must
+    /// not close while it lives.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`geopackage::Layer::writer`] returns, which for a read-only
+    /// container is a refusal.
+    pub fn writer(&self) -> geopackage::Result<WriterHandle> {
+        let writer = self.layer.writer()?;
+        Ok(WriterHandle {
+            writer,
+            _token: self.token(),
+        })
+    }
+
     /// Take another count against this handle's container, for something that
     /// borrows the same container independently, such as an Arrow stream.
     pub fn token(&self) -> ChildToken {
@@ -255,6 +277,39 @@ impl LayerHandle {
         // same operation `Container::token` performs.
         let parent = unsafe { &*self._token.parent };
         parent.token()
+    }
+}
+
+/// A `gpkg_writer_t`: a write transaction over a layer, and the container it
+/// borrows.
+///
+/// Held by value rather than boxed, because unlike a container nothing borrows
+/// *this*: the writer is the leaf of the handle graph.
+pub struct WriterHandle {
+    /// Already `'static` when it arrives, since it carries its layer's lifetime
+    /// parameter rather than a borrow of the layer handle. See
+    /// [`LayerHandle::writer`].
+    writer: FeatureWriter<'static>,
+    /// What keeps the container alive while this handle exists.
+    _token: ChildToken,
+}
+
+impl WriterHandle {
+    /// The writer, mutably, which is what every staging call needs.
+    pub fn writer_mut(&mut self) -> &mut FeatureWriter<'static> {
+        &mut self.writer
+    }
+
+    /// Commit the transaction, consuming the handle.
+    ///
+    /// The token drops with `self` whatever the outcome, so a failed commit
+    /// still releases the container rather than leaving it uncloseable.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`geopackage::FeatureWriter::commit`] returns.
+    pub fn commit(self) -> geopackage::Result<()> {
+        self.writer.commit()
     }
 }
 
