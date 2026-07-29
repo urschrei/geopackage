@@ -267,6 +267,22 @@ While the version is below 1.0 the API may change in any release.
   outright, since it opens its own connection and no caller can hold a
   transaction on it.
 
+- **Tile failures reach C as a category rather than as
+  `GPKG_STATUS_OTHER`.** `Error::Tile` carries a twelve-variant enum of its own,
+  which the status mapping did not look inside, so a tile written off its grid
+  or in the wrong pixel size arrived uncategorised. An address outside the grid,
+  bytes that are not a readable image and an unusable zoom range are now
+  `GPKG_STATUS_INVALID_ARGUMENT`; a pyramid that breaks one of the spec's
+  consistency rules, and a payload whose dimensions are not the ones its zoom
+  level declares, are `GPKG_STATUS_CONSTRAINT`; and an XYZ conversion asked for
+  on a grid that is not the web mercator quad is `GPKG_STATUS_UNSUPPORTED`. The
+  messages are unchanged.
+
+- **`gpkg_close`'s refusal names every kind of handle that can hold it open.**
+  It counted layers, tile pyramids, writers and Arrow streams alike but said
+  "layer handle(s)" and named only `gpkg_layer_free`, which left a caller
+  holding a pyramid looking for a layer they had already freed. Message only.
+
 - **`gpkg_zoom_other` and `gpkg_webp` are Annex F.6 and F.7**, not F.4 and
   F.5, which is what their constants' documentation claimed. Annex F numbers
   the extensions in the order the annex includes them, and the two removed in
