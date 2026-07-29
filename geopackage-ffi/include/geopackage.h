@@ -68,8 +68,10 @@ struct ArrowArrayStream {
 /**
  * What kind of failure occurred.
  *
- * `#[repr(i32)]` so cbindgen emits a plain C enum with stable values. Values
- * are assigned explicitly and must never be reused for another meaning.
+ * A small set of categories rather than one constant per library error, so
+ * that a caller can branch on the code and read the message for the detail.
+ * The values are assigned explicitly and are never reused for another meaning,
+ * so a comparison written against this header keeps its meaning.
  */
 enum gpkg_status
 #if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
@@ -155,9 +157,10 @@ typedef gpkg_t gpkg_t;
 /**
  * A failure, as C sees it.
  *
- * `code` is [`Status::Ok`] and `message` NULL when nothing went wrong. A
- * non-NULL `message` is an owned NUL-terminated UTF-8 string that the caller
- * must release with [`gpkg_error_clear`].
+ * Initialise one as `{GPKG_STATUS_OK, NULL}` and pass its address to any call
+ * that takes a `gpkg_error_t *`. A successful call leaves it alone. A failing
+ * one sets `code` and stores an owned, NUL-terminated UTF-8 `message`, which
+ * the caller releases with `gpkg_error_clear` before reusing the variable.
  */
 typedef struct {
   /**
@@ -348,10 +351,20 @@ gpkg_status gpkg_commit(gpkg_t *gpkg, gpkg_error_t *error);
 gpkg_status gpkg_rollback(gpkg_t *gpkg, gpkg_error_t *error);
 
 /**
- * Release the message an error holds, and reset it to [`Status::Ok`].
+ * Release the message an error holds, and reset its code to `GPKG_STATUS_OK`.
  *
  * Safe to call on an error that was never filled in, and safe to call twice:
  * the message pointer is cleared as it is freed. Passing NULL does nothing.
+ *
+ * ```c
+ * gpkg_error_t error = {GPKG_STATUS_OK, NULL};
+ * gpkg_t *gpkg = gpkg_open("places.gpkg", &error);
+ * if (!gpkg) {
+ *     fprintf(stderr, "%s\n", error.message ? error.message : "(no message)");
+ *     gpkg_error_clear(&error);   // the message is freed here
+ * }
+ * // `error` is now back to {GPKG_STATUS_OK, NULL} and ready for reuse.
+ * ```
  *
  * # Safety
  *
@@ -942,7 +955,17 @@ gpkg_status gpkg_tiles_get_into(const gpkg_tiles_t *tiles,
 /**
  * Release a string this library returned.
  *
- * Passing NULL does nothing.
+ * Every call that returns a `char *` returns an allocation the caller owns,
+ * so each one is paired with this. Passing NULL does nothing, which is what
+ * makes the pairing safe to write before the failure has been checked:
+ *
+ * ```c
+ * char *kind = gpkg_layer_kind(layer, &error);
+ * if (kind) {
+ *     printf("%s\n", kind);
+ * }
+ * gpkg_string_free(kind);
+ * ```
  *
  * # Safety
  *
