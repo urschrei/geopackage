@@ -23,8 +23,9 @@ use geopackage_core::tiles::{
     WEBP_EXTENSION_NAME, ZOOM_OTHER_EXTENSION_DEFINITION, ZOOM_OTHER_EXTENSION_NAME,
 };
 use rusqlite::types::ValueRef;
-use rusqlite::{CachedStatement, Connection, OptionalExtension, Transaction};
+use rusqlite::{CachedStatement, Connection, OptionalExtension};
 
+use crate::transaction::WriteTransaction;
 use crate::{
     BoundingBox, Error, ExtensionRow, GeoPackage, Result, resolve_table_name, table_exists,
 };
@@ -746,13 +747,18 @@ impl<'a> TilePyramid<'a> {
 /// writer owns; [`Self::commit`] refreshes `gpkg_contents.last_change` and
 /// commits. Dropping a writer without committing rolls it back.
 ///
+/// Unless a transaction was already open on the connection, in which case the
+/// writer joins it and both of those sentences belong to whoever began it. See
+/// [`Self::commit`], and [`crate::FeatureWriter::commit`] for the reasoning in
+/// full.
+///
 /// The statements come from the connection rather than from the transaction, so
 /// they borrow what it borrows instead of borrowing it, exactly as
 /// [`crate::FeatureWriter`]'s do. They still run inside it: a SQLite
 /// transaction belongs to the connection, not to the statements prepared
 /// against it.
 pub struct TileWriter<'conn> {
-    tx: Transaction<'conn>,
+    tx: WriteTransaction<'conn>,
     conn: &'conn Connection,
     table_name: String,
     /// The pyramid's zoom levels, ascending. Copied in rather than borrowed so
@@ -778,7 +784,7 @@ impl<'conn> TileWriter<'conn> {
         // included, so this is the one place the check belongs.
         pyramid.check_writable()?;
         let conn = pyramid.gpkg.connection();
-        let tx = conn.unchecked_transaction()?;
+        let tx = WriteTransaction::begin(conn)?;
         let put_stmt = conn.prepare_cached(&pyramid.sql.put)?;
         let delete_stmt = conn.prepare_cached(&pyramid.sql.delete)?;
         Ok(Self {
@@ -849,9 +855,17 @@ impl<'conn> TileWriter<'conn> {
     ///
     /// A writer that wrote nothing commits an empty transaction and leaves
     /// `last_change` alone.
+    ///
+    /// # When the transaction was the caller's
+    ///
+    /// As [`crate::FeatureWriter::commit`]: a writer opened while a transaction
+    /// was already open joined it, so this stages the `last_change` refresh and
+    /// returns success without committing, and dropping such a writer rolls
+    /// nothing back.
     pub fn commit(self) -> Result<()> {
         let Self {
             tx,
+            conn,
             table_name,
             dirty,
             put_stmt,
@@ -863,7 +877,7 @@ impl<'conn> TileWriter<'conn> {
         drop(put_stmt);
         drop(delete_stmt);
         if dirty {
-            tx.execute(
+            conn.execute(
                 "UPDATE gpkg_contents \
                  SET last_change = strftime('%Y-%m-%dT%H:%M:%fZ','now') \
                  WHERE table_name = ?1",
@@ -885,7 +899,7 @@ impl<'conn> TileWriter<'conn> {
         }
         if self.webp_registered == Some(false) {
             crate::extensions::register(
-                &self.tx,
+                self.conn,
                 Some(&self.table_name),
                 Some(tiles::TILE_DATA_COLUMN),
                 WEBP_EXTENSION_NAME,
