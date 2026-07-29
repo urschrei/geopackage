@@ -21,6 +21,7 @@ use geopackage_core::types::{ColumnType, GeometryType, ZmFlag};
 use rusqlite::Connection;
 
 use crate::extensions;
+use crate::transaction::WriteTransaction;
 use crate::{Error, GeoPackage, Layer, Result, table_exists};
 
 /// The conventional primary-key column name for a GeoPackage feature or
@@ -318,11 +319,12 @@ impl GeoPackage {
         // The table and its index are one transaction: a failure building the
         // index must not leave a table behind without one, which is the state a
         // caller would have to notice and clean up.
-        let tx = self.connection().unchecked_transaction()?;
-        self.create_table_in(&tx, builder, Some(geometry))?;
+        let conn = self.connection();
+        let tx = WriteTransaction::begin(conn)?;
+        self.create_table_in(conn, builder, Some(geometry))?;
         if builder.spatial_index {
             crate::index::create_index_in_transaction(
-                &tx,
+                conn,
                 &builder.table_name,
                 &geometry.column_name,
                 &builder.primary_key,
@@ -358,8 +360,9 @@ impl GeoPackage {
         builder: &TableSchemaBuilder,
         geometry: Option<&GeometrySpec>,
     ) -> Result<()> {
-        let tx = self.connection().unchecked_transaction()?;
-        self.create_table_in(&tx, builder, geometry)?;
+        let conn = self.connection();
+        let tx = WriteTransaction::begin(conn)?;
+        self.create_table_in(conn, builder, geometry)?;
         tx.commit()?;
         Ok(())
     }

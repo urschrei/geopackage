@@ -647,6 +647,10 @@ impl GeoPackage {
         )?;
         conn.pragma_update(None, "foreign_keys", true)?;
         let journal_mode = apply_open_options(&conn, options, true)?;
+        // The one write path that opens its transaction outright rather than
+        // through `WriteTransaction`. The connection was opened a few lines
+        // above and has not left this function, so no caller can have a
+        // transaction on it and there is nothing to inherit.
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(&format!(
             "{};\n{};",

@@ -309,25 +309,25 @@ impl GeoPackage {
         let description = builder.description.clone().unwrap_or_default();
         let set = &builder.matrix_set;
 
-        let tx = conn.unchecked_transaction()?;
+        let tx = WriteTransaction::begin(conn)?;
         for (exists, sql) in [
             (
-                table_exists(&tx, "gpkg_tile_matrix_set")?,
+                table_exists(conn, "gpkg_tile_matrix_set")?,
                 ddl::CREATE_GPKG_TILE_MATRIX_SET,
             ),
             (
-                table_exists(&tx, "gpkg_tile_matrix")?,
+                table_exists(conn, "gpkg_tile_matrix")?,
                 ddl::CREATE_GPKG_TILE_MATRIX,
             ),
         ] {
             if !exists {
-                tx.execute_batch(sql)?;
+                conn.execute_batch(sql)?;
             }
         }
-        tx.execute_batch(&tiles::create_tile_table_sql(name)?)?;
+        conn.execute_batch(&tiles::create_tile_table_sql(name)?)?;
         // The extent is the matrix set's, not a measurement: for tiles it is
         // exact by Requirement 144, and gpkg_contents holds the same box.
-        tx.execute(
+        conn.execute(
             "INSERT INTO gpkg_contents \
              (table_name, data_type, identifier, description, min_x, min_y, max_x, max_y, srs_id) \
              VALUES (?1, 'tiles', ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -342,13 +342,13 @@ impl GeoPackage {
                 set.srs_id,
             ],
         )?;
-        tx.execute(
+        conn.execute(
             "INSERT INTO gpkg_tile_matrix_set (table_name, srs_id, min_x, min_y, max_x, max_y) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![name, set.srs_id, set.min_x, set.min_y, set.max_x, set.max_y],
         )?;
         {
-            let mut stmt = tx.prepare(
+            let mut stmt = conn.prepare(
                 "INSERT INTO gpkg_tile_matrix \
                  (table_name, zoom_level, matrix_width, matrix_height, tile_width, tile_height, \
                   pixel_x_size, pixel_y_size) \
@@ -369,7 +369,7 @@ impl GeoPackage {
         }
         if zoom_other {
             crate::extensions::register(
-                &tx,
+                conn,
                 Some(name),
                 Some(tiles::TILE_DATA_COLUMN),
                 ZOOM_OTHER_EXTENSION_NAME,

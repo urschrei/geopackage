@@ -26,6 +26,7 @@ use geopackage_core::metadata::{
 };
 use rusqlite::{Connection, OptionalExtension};
 
+use crate::transaction::WriteTransaction;
 use crate::{Error, GeoPackage, Result, table_exists};
 
 const METADATA_TABLE: &str = "gpkg_metadata";
@@ -246,9 +247,9 @@ impl GeoPackage {
     /// [`Error`] if the tables cannot be created or the row cannot be written.
     pub fn add_metadata(&self, metadata: &NewMetadata) -> Result<i64> {
         let conn = self.connection();
-        let tx = conn.unchecked_transaction()?;
-        ensure_tables(&tx)?;
-        tx.execute(
+        let tx = WriteTransaction::begin(conn)?;
+        ensure_tables(conn)?;
+        conn.execute(
             "INSERT INTO gpkg_metadata (md_scope, md_standard_uri, mime_type, metadata) \
              VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![
@@ -258,7 +259,7 @@ impl GeoPackage {
                 metadata.metadata,
             ],
         )?;
-        let id = tx.last_insert_rowid();
+        let id = conn.last_insert_rowid();
         tx.commit()?;
         Ok(id)
     }
@@ -290,11 +291,11 @@ impl GeoPackage {
             return Err(Error::SelfParentedMetadata { md_file_id });
         }
         let conn = self.connection();
-        let tx = conn.unchecked_transaction()?;
-        ensure_tables(&tx)?;
+        let tx = WriteTransaction::begin(conn)?;
+        ensure_tables(conn)?;
 
         for id in std::iter::once(md_file_id).chain(parent_id) {
-            let exists: Option<i64> = tx
+            let exists: Option<i64> = conn
                 .query_row("SELECT id FROM gpkg_metadata WHERE id = ?1", [id], |row| {
                     row.get(0)
                 })
@@ -307,7 +308,7 @@ impl GeoPackage {
         // Requirement 97: every scope but `geopackage` names a table that is in
         // gpkg_contents.
         if let Some(table_name) = target.table_name() {
-            let known: Option<String> = tx
+            let known: Option<String> = conn
                 .query_row(
                     "SELECT table_name FROM gpkg_contents WHERE table_name = ?1",
                     [table_name],
@@ -321,7 +322,7 @@ impl GeoPackage {
             }
         }
 
-        tx.execute(
+        conn.execute(
             "INSERT INTO gpkg_metadata_reference \
              (reference_scope, table_name, column_name, row_id_value, timestamp, \
               md_file_id, md_parent_id) \
