@@ -292,13 +292,14 @@ While the version is below 1.0 the API may change in any release.
   Only `insert_wkb` and `update_wkb` can contribute: a `GeometryTrait` has no
   non-linear representation to offer.
 
-- **Tile and geometry failures reach C as a category rather than as
-  `GPKG_STATUS_OTHER`.** `Error::Tile` and `Error::Core` each carry an error
-  enum of their own, and the status mapping stopped at the outermost variant, so
-  everything underneath arrived uncategorised: a tile written off its grid, a
-  malformed geometry, a bad GPB header. The classification now follows the
-  wrapping down to the variant that says what happened. The messages are
-  unchanged.
+- **Tile, geometry and Arrow failures reach C as a category rather than as
+  `GPKG_STATUS_OTHER`.** `Error::Tile`, `Error::Core` and `Error::Arrow` each
+  carry an error enum of their own, and the status mapping stopped at the
+  outermost variant, so everything underneath arrived uncategorised: a tile
+  written off its grid, a malformed geometry, a bad GPB header, a stream that
+  failed part-way. The classification now follows the wrapping down to the
+  variant that says what happened, and every variant of `geopackage::Error` is
+  now classified. The messages are unchanged.
 
   For tiles: an address outside the grid, bytes that are not a readable image
   and an unusable zoom range are `GPKG_STATUS_INVALID_ARGUMENT`; a pyramid that
@@ -315,6 +316,16 @@ While the version is below 1.0 the API may change in any release.
   `GEOMETRYCOLLECTION` holding a `CIRCULARSTRING` is refused for what it is
   rather than for anything wrong with its bytes, and reporting that as an
   invalid argument would send a caller looking for a fault that is not there.
+
+  For Arrow: a schema that does not fit, a value that will not convert and a
+  batch that does not survive the C Data Interface are
+  `GPKG_STATUS_INVALID_ARGUMENT`. An `ArrowError` wrapping one of this library's
+  own errors, which is how one survives a stream boundary, is classified by the
+  error inside it, so piping a stream from this library into
+  `gpkg_layer_write_arrow` does not flatten a category that was already known.
+  `ArrowError` is not `#[non_exhaustive]`, so the match names only the variants
+  these paths produce and leaves the rest to `GPKG_STATUS_OTHER` rather than
+  breaking on an `arrow-rs` bump.
 
 - **`gpkg_close`'s refusal names every kind of handle that can hold it open.**
   It counted layers, tile pyramids, writers and Arrow streams alike but said
