@@ -2,9 +2,8 @@
 //!
 //! Strings are NUL-terminated UTF-8 in both directions, and ownership follows
 //! the direction of travel. A string the caller passes in is borrowed for the
-//! duration of the call, so it may be a literal or a buffer the caller reuses
-//! afterwards. A string this library returns is a fresh allocation the caller
-//! owns and releases with [`gpkg_string_free`].
+//! duration of the call only. A string this library returns is a fresh
+//! allocation the caller owns and releases with [`gpkg_string_free`].
 //!
 //! ```c
 //! char *name = gpkg_layer_name_at(gpkg, 0, &error);
