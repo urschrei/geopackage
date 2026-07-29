@@ -73,7 +73,9 @@
 //!
 //! # Writing a layer
 //!
-//! A layer is created from a schema and then filled from a stream. The schema
+//! A layer is created from a schema and then filled from a stream, and filling
+//! is appending: nothing on this side updates or deletes a row that is already
+//! there. The schema
 //! can come from anywhere that produces one; taking it from a source layer's
 //! own stream is what makes a copy possible without describing any columns:
 //!
@@ -463,6 +465,11 @@ unsafe fn read_arrow_inner(
 
 /// Write an Arrow C Data Interface stream into a layer.
 ///
+/// Writing appends. This is the ABI's only way to change a feature table, and
+/// there is no call that updates or deletes an existing feature; a consumer
+/// needing row-level update or delete uses the Rust crate, whose
+/// `Layer::writer` provides both.
+///
 /// The stream's schema must name columns the layer has. A column the layer
 /// does not have is refused rather than dropped, because discarding data a
 /// caller asked to write would be worse than declining it; a column of the
@@ -470,6 +477,11 @@ unsafe fn read_arrow_inner(
 /// cannot store is `GPKG_STATUS_INVALID_ARGUMENT`. Building the layer with
 /// `gpkg_create_layer_from_arrow_schema` from the same schema is what makes
 /// the two agree by construction.
+///
+/// A stream column matching the layer's primary key supplies each row's fid,
+/// and a NULL there has one assigned. A stream appending to a layer that
+/// already holds rows should therefore omit that column, or carry NULLs in
+/// it: a fid the table already holds fails the write.
 ///
 /// Takes ownership of `stream`, as the C Data Interface specifies for a moved
 /// stream: it is released here whether the write succeeds or fails, and the
