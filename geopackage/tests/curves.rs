@@ -600,6 +600,38 @@ fn a_rejected_write_registers_nothing() {
 }
 
 #[test]
+fn a_core_container_holding_a_curve_says_why_it_is_refused() {
+    // A GEOMETRYCOLLECTION is a core type, so the body takes the `wkb` reader,
+    // which cannot read the CIRCULARSTRING inside it. Which reader a body gets
+    // is decided from its own type code, so this is not writable. What it must
+    // not do is report that as a malformed geometry, since the body is fine.
+    let (_dir, gpkg) = gpkg();
+    curve_layer(&gpkg, GeometryType::GeometryCollection);
+
+    let layer = gpkg.layer("arcs").unwrap();
+    let mut writer = layer.writer().unwrap();
+    let arc = circular_string(&[[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]]);
+    let error = writer
+        .insert_wkb(None, &container(7, &[arc]), &[])
+        .unwrap_err();
+
+    let text = error.to_string();
+    assert!(text.contains("GEOMETRYCOLLECTION"), "{text}");
+    assert!(text.contains("CIRCULARSTRING"), "{text}");
+
+    // A body that is actually malformed still reports as one: the specific
+    // message is not allowed to swallow the general case. Here the member
+    // count claims two geometries and only one follows.
+    let arc = circular_string(&[[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]]);
+    let mut truncated = vec![1u8];
+    truncated.extend_from_slice(&7u32.to_le_bytes());
+    truncated.extend_from_slice(&2u32.to_le_bytes());
+    truncated.extend_from_slice(&arc);
+    let error = writer.insert_wkb(None, &truncated, &[]).unwrap_err();
+    assert!(!error.to_string().contains("CIRCULARSTRING"), "{error}");
+}
+
+#[test]
 fn gdal_registers_the_member_types_of_a_container() {
     // The oracle for `a_container_registers_the_types_of_its_members`: GDAL
     // registers a gpkg_geom_<TYPE> row for the member types it actually wrote,

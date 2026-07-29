@@ -219,6 +219,9 @@ pub geopackage_core::geometry::GeometryError::Header(geopackage_core::gpb::GpbEr
 pub geopackage_core::geometry::GeometryError::InvalidByteOrder
 pub geopackage_core::geometry::GeometryError::InvalidByteOrder::offset: usize
 pub geopackage_core::geometry::GeometryError::NestingTooDeep
+pub geopackage_core::geometry::GeometryError::NonLinearMember
+pub geopackage_core::geometry::GeometryError::NonLinearMember::container: geopackage_core::types::GeometryType
+pub geopackage_core::geometry::GeometryError::NonLinearMember::member: geopackage_core::types::GeometryType
 pub geopackage_core::geometry::GeometryError::TruncatedAt
 pub geopackage_core::geometry::GeometryError::TruncatedAt::offset: usize
 pub geopackage_core::geometry::GeometryError::TruncatedWkb
@@ -1252,6 +1255,9 @@ pub geopackage_core::GeometryError::Header(geopackage_core::gpb::GpbError)
 pub geopackage_core::GeometryError::InvalidByteOrder
 pub geopackage_core::GeometryError::InvalidByteOrder::offset: usize
 pub geopackage_core::GeometryError::NestingTooDeep
+pub geopackage_core::GeometryError::NonLinearMember
+pub geopackage_core::GeometryError::NonLinearMember::container: geopackage_core::types::GeometryType
+pub geopackage_core::GeometryError::NonLinearMember::member: geopackage_core::types::GeometryType
 pub geopackage_core::GeometryError::TruncatedAt
 pub geopackage_core::GeometryError::TruncatedAt::offset: usize
 pub geopackage_core::GeometryError::TruncatedWkb

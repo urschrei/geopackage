@@ -267,6 +267,14 @@ While the version is below 1.0 the API may change in any release.
   outright, since it opens its own connection and no caller can hold a
   transaction on it.
 
+- **A core-typed container holding a non-linear member says so**, rather than
+  reporting a malformed geometry. A `GEOMETRYCOLLECTION` carrying a
+  `CIRCULARSTRING` cannot be written: which reader a body takes is decided from
+  its own type code, so a core-typed container reaches the `wkb` reader, which
+  cannot read the member. The body is well formed, and the message used to say
+  it was not. `GeometryError::NonLinearMember` now names both types. A body
+  that is genuinely malformed still reports as one.
+
 - **Writing a container geometry registers its member types**, not only the
   type its column declares. A `MULTICURVE` column holding `CIRCULARSTRING`s
   needs a `gpkg_geom_CIRCULARSTRING` row as well as a `gpkg_geom_MULTICURVE`
