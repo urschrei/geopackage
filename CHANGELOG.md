@@ -212,6 +212,26 @@ While the version is below 1.0 the API may change in any release.
   `SpatialIndexStatus`, `LayerKind`, `ExtensionSupport` and `ExtensionScope`**,
   so a consumer printing one does not have to match on it. Each also gains an
   `as_str` where the rendering is a fixed word.
+- **Row-at-a-time writes in the C ABI**: `gpkg_layer_writer` returns a
+  `gpkg_writer_t` with `gpkg_writer_insert`, `gpkg_writer_update`,
+  `gpkg_writer_update_column` and `gpkg_writer_delete`, finished by
+  `gpkg_writer_commit` or discarded by `gpkg_writer_free`. Until now features
+  crossed only as Arrow, which appends, so a C consumer could load a file but
+  never edit one.
+
+  Values cross as `gpkg_value_t`, a tag and a union mirroring `ValueRef`, with
+  text and binary borrowed from the caller for the duration of the call. Dates
+  cross as `gpkg_date_t` and `gpkg_datetime_t` rather than as text, so that an
+  impossible date is refused at the boundary rather than binding as text and
+  skipping the check the crate makes before writing one. Geometry crosses as
+  WKB and is stored as it arrives, so a curve survives a write.
+
+  A feature id is passed as a pointer, NULL to have one assigned, because every
+  `int64_t` is a legal id and no sentinel would do.
+- **`FeatureWriter::update_wkb`**, the counterpart of `insert_wkb`. `update`
+  takes a `GeometryTrait`, which a curve has no representation for, so
+  replacing a circular string previously meant deleting the row and inserting
+  it again. This is also what the C ABI's update is built on.
 - **`gpkg_begin`, `gpkg_commit` and `gpkg_rollback` in the C ABI**, with
   `gpkg_in_transaction` to ask the state without provoking an error. These were
   withheld until now because a C consumer who began a transaction and then wrote
