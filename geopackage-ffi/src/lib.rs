@@ -121,7 +121,9 @@
 //!
 //! Feature data moves only as Arrow. There is no row-at-a-time feature API on
 //! this side, so a C consumer reads a layer by pulling batches and writes one
-//! by pushing them.
+//! by pushing them. Validation, metadata and the related-tables extension are
+//! not exposed at all: they stay behind the Rust API, and `gpkg validate`
+//! covers the first from the command line.
 //!
 //! # Threading
 //!
