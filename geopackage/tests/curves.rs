@@ -105,6 +105,63 @@ fn a_written_curve_carries_a_header_envelope_that_bounds_the_arc() {
     assert_eq!(blob.get(offset..), Some(bulging_arc().as_slice()));
 }
 
+/// `update_wkb` is `insert_wkb`'s counterpart, and exists for the same reason:
+/// a curve has no `geo-types` representation, so an update that went through
+/// one could not carry a curve at all. The replacement body has to arrive byte
+/// for byte, and the recorded envelope has to follow it.
+#[test]
+fn a_curve_can_be_replaced_by_another_curve_byte_for_byte() {
+    let (_dir, gpkg) = gpkg();
+    curve_layer(&gpkg, GeometryType::CircularString);
+
+    // A quarter turn near the origin, well inside the bulging arc's box, so a
+    // failure to re-measure would leave the recorded envelope visibly wrong.
+    let replacement = circular_string(&[[0.0, 0.0], [0.25, 0.25], [0.5, 0.0]]);
+
+    let layer = gpkg.layer("arcs").unwrap();
+    let mut writer = layer.writer().unwrap();
+    let fid = writer.insert_wkb(None, &bulging_arc(), &[]).unwrap();
+    let matched = writer.update_wkb(fid, &replacement, &[]).unwrap();
+    assert!(matched, "the row written a moment ago was not found");
+    writer.commit().unwrap();
+
+    let blob: Vec<u8> = gpkg
+        .connection()
+        .query_row("SELECT geom FROM arcs WHERE fid = ?1", [fid], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let (header, offset) = gpb::parse_header(&blob).unwrap();
+    assert_eq!(
+        blob.get(offset..),
+        Some(replacement.as_slice()),
+        "the replacement body did not survive the update"
+    );
+
+    // The header envelope describes the replacement, not what was there before.
+    let (min_x, max_x, min_y, max_y) = header.envelope.xy_bounds().expect("an envelope");
+    assert!((min_x - 0.0).abs() < 1e-12);
+    assert!((max_x - 0.5).abs() < 1e-12);
+    assert!((min_y - 0.0).abs() < 1e-12);
+    assert!(
+        max_y < 0.3,
+        "envelope still covers the old arc, got max_y {max_y}"
+    );
+}
+
+/// An id that is not there is not an error, the same answer `update_row` and
+/// `delete` give.
+#[test]
+fn replacing_a_curve_that_is_not_there_reports_no_match() {
+    let (_dir, gpkg) = gpkg();
+    curve_layer(&gpkg, GeometryType::CircularString);
+
+    let layer = gpkg.layer("arcs").unwrap();
+    let mut writer = layer.writer().unwrap();
+    assert!(!writer.update_wkb(99, &bulging_arc(), &[]).unwrap());
+    writer.commit().unwrap();
+}
+
 #[test]
 fn a_query_window_only_the_arc_reaches_still_finds_it() {
     let (_dir, gpkg) = gpkg();

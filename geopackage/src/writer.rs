@@ -1133,6 +1133,61 @@ impl<'conn> FeatureWriter<'conn> {
         Ok(matched)
     }
 
+    /// [`Self::update`] with the geometry as WKB rather than as a
+    /// [`GeometryTrait`], the counterpart of [`Self::insert_wkb`].
+    ///
+    /// The bytes are wrapped in a GPB header and stored as they arrive, so a
+    /// geometry this crate cannot represent as a `geo-types` value, a curve
+    /// above all, survives an update the way it survives an insert. That is
+    /// also what a consumer moving geometry between files wants: no decode, no
+    /// re-encode, and nothing lost in between.
+    ///
+    /// Returns whether a row matched.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NoGeometryColumn`] if the layer has no geometry column (use
+    ///   [`Self::update_row`]).
+    /// - [`Error::ZmViolation`] if the geometry's `z`/`m` presence breaks the
+    ///   column's constraint.
+    /// - [`Error::ValueCountMismatch`] if `values` has the wrong length.
+    /// - [`Error::Core`] if the bytes are not WKB this crate can read far
+    ///   enough to header.
+    pub fn update_wkb(&mut self, fid: i64, wkb: &[u8], values: &[CellRef<'_>]) -> Result<bool> {
+        self.check_value_count(values.len())?;
+        self.check_constraints(values)?;
+        let geom = self
+            .geometry
+            .as_ref()
+            .ok_or_else(|| Error::NoGeometryColumn {
+                table_name: self.table_name.clone(),
+            })?;
+        let encoded = encode_gpb_from_wkb(wkb, geom.srs_id).map_err(|e| Error::Core(e.into()))?;
+        let has_z = matches!(encoded.dimensions, Dimensions::Xyz | Dimensions::Xyzm);
+        let has_m = matches!(encoded.dimensions, Dimensions::Xym | Dimensions::Xyzm);
+        self.check_zm("z", geom.z, has_z, &geom.name)?;
+        self.check_zm("m", geom.m, has_m, &geom.name)?;
+
+        let matched = self.exec_update(
+            true,
+            params_from_iter(values.iter().copied().map(value_ref_to_bind).chain([
+                ToSqlOutput::Owned(SqlValue::Blob(encoded.blob)),
+                ToSqlOutput::Borrowed(ValueRef::Integer(fid)),
+            ])),
+        )?;
+        if matched {
+            // As everywhere else, the fold only grows: an update that shrinks a
+            // geometry leaves the recorded box an over-estimate, which the spec
+            // permits and which shrinking would need a rescan to correct.
+            if let Some(envelope) = encoded.xy_envelope {
+                self.bbox.add(envelope);
+                self.bbox_dirty = true;
+            }
+            self.dirty = true;
+        }
+        Ok(matched)
+    }
+
     /// Update the feature `fid`'s non-geometry values, leaving the geometry
     /// untouched. Returns whether a row matched.
     ///

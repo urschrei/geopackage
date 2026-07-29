@@ -836,6 +836,7 @@ pub fn geopackage::FeatureWriter<'conn>::update<G: geo_traits::geometry::Geometr
 pub fn geopackage::FeatureWriter<'conn>::update_column(&mut self, i64, &str, geopackage::ValueRef<'_>) -> geopackage::Result<bool>
 pub fn geopackage::FeatureWriter<'conn>::update_columns(&mut self, i64, &[(&str, geopackage::ValueRef<'_>)]) -> geopackage::Result<bool>
 pub fn geopackage::FeatureWriter<'conn>::update_row(&mut self, i64, &[geopackage::ValueRef<'_>]) -> geopackage::Result<bool>
+pub fn geopackage::FeatureWriter<'conn>::update_wkb(&mut self, i64, &[u8], &[geopackage::ValueRef<'_>]) -> geopackage::Result<bool>
 impl<'conn> !core::marker::Freeze for geopackage::FeatureWriter<'conn>
 impl<'conn> !core::marker::Send for geopackage::FeatureWriter<'conn>
 impl<'conn> !core::marker::Sync for geopackage::FeatureWriter<'conn>
