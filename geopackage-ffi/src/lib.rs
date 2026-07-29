@@ -48,6 +48,96 @@
 //! }
 //! ```
 //!
+//! # The edit cycle
+//!
+//! The usual thing to do with a GeoPackage is to open a file that already
+//! exists, look at what it holds, add to it, and close it. This program is
+//! that cycle. The rows to append arrive as an Arrow stream, here from a
+//! function left undefined: another layer's [`gpkg_layer_read_arrow`] produces
+//! one, and so does any library that exports the Arrow C Data Interface.
+//!
+//! ```c
+//! #include <stdio.h>
+//! #include <string.h>
+//! #include "geopackage.h"
+//!
+//! // The rows to append, from any Arrow C Data Interface producer.
+//! extern void rows_to_append(struct ArrowArrayStream *out);
+//!
+//! static int fail(const char *what, gpkg_error_t *error) {
+//!     fprintf(stderr, "%s: code=%d message=%s\n", what, (int)error->code,
+//!             error->message ? error->message : "(none)");
+//!     gpkg_error_clear(error);
+//!     return 1;
+//! }
+//!
+//! int main(void) {
+//!     gpkg_error_t error = {GPKG_STATUS_OK, NULL};
+//!
+//!     gpkg_t *gpkg = gpkg_open("places.gpkg", &error);   // read-write
+//!     if (!gpkg) {
+//!         return fail("gpkg_open", &error);
+//!     }
+//!     gpkg_layer_t *layer = gpkg_layer_open(gpkg, "points", &error);
+//!     if (!layer) {
+//!         return fail("gpkg_layer_open", &error);
+//!     }
+//!
+//!     uint64_t rows = 0;
+//!     if (gpkg_layer_count(layer, &rows, &error) != GPKG_STATUS_OK) {
+//!         return fail("gpkg_layer_count", &error);
+//!     }
+//!     printf("points: %llu rows\n", (unsigned long long)rows);
+//!
+//!     // The file came from elsewhere, so the state of its spatial index is a
+//!     // question rather than an assumption. Repair puts right a stale or
+//!     // legacy index and leaves a current or absent one alone.
+//!     char *index_state = gpkg_layer_spatial_index_status(layer, &error);
+//!     if (!index_state) {
+//!         return fail("gpkg_layer_spatial_index_status", &error);
+//!     }
+//!     printf("spatial index: %s\n", index_state);
+//!     gpkg_string_free(index_state);
+//!     if (gpkg_layer_repair_spatial_index(layer, &error) != GPKG_STATUS_OK) {
+//!         return fail("gpkg_layer_repair_spatial_index", &error);
+//!     }
+//!
+//!     struct ArrowArrayStream new_rows;
+//!     memset(&new_rows, 0, sizeof(new_rows));
+//!     rows_to_append(&new_rows);
+//!
+//!     if (gpkg_begin(gpkg, &error) != GPKG_STATUS_OK) {
+//!         return fail("gpkg_begin", &error);
+//!     }
+//!     uint64_t written = 0;
+//!     if (gpkg_layer_write_arrow(layer, &new_rows, 0, &written, &error)
+//!         != GPKG_STATUS_OK) {
+//!         gpkg_rollback(gpkg, NULL);
+//!         return fail("gpkg_layer_write_arrow", &error);
+//!     }
+//!     if (gpkg_commit(gpkg, &error) != GPKG_STATUS_OK) {
+//!         return fail("gpkg_commit", &error);
+//!     }
+//!     printf("appended %llu rows\n", (unsigned long long)written);
+//!
+//!     gpkg_layer_free(layer);   // children before the container
+//!     if (gpkg_close(gpkg, &error) != GPKG_STATUS_OK) {
+//!         return fail("gpkg_close", &error);
+//!     }
+//!     return 0;
+//! }
+//! ```
+//!
+//! Three things about the shape. The index check is there because the file is
+//! not necessarily one this library wrote; a write made through this library
+//! brings the index up to date itself, so the check belongs at arrival, not in
+//! a loop. There is no save call to look for: SQLite commits, so
+//! [`gpkg_commit`] is the save, and a program that never calls [`gpkg_begin`]
+//! has each write durable when its call returns. And the append is the whole
+//! of feature mutation from C: nothing in this ABI updates or deletes an
+//! existing feature. A consumer needing that uses the Rust crate, where
+//! [`geopackage::Layer::writer`] gives per-row insert, update and delete.
+//!
 //! # Conventions
 //!
 //! - **Strings** are NUL-terminated UTF-8 in both directions. A string this
@@ -121,7 +211,8 @@
 //!
 //! Feature data moves only as Arrow. There is no row-at-a-time feature API on
 //! this side, so a C consumer reads a layer by pulling batches and writes one
-//! by pushing them. Validation, metadata and the related-tables extension are
+//! by pushing them; writing appends, and nothing updates or deletes an
+//! existing feature. Validation, metadata and the related-tables extension are
 //! not exposed at all: they stay behind the Rust API, and `gpkg validate`
 //! covers the first from the command line.
 //!
