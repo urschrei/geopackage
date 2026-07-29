@@ -275,6 +275,79 @@ size_t gpkg_open_warning_count(const gpkg_t *gpkg);
 char *gpkg_open_warning(const gpkg_t *gpkg, size_t index, gpkg_error_t *error);
 
 /**
+ * Whether a transaction is open on this handle.
+ *
+ * The way to ask before calling `gpkg_begin`, `gpkg_commit` or
+ * `gpkg_rollback`, each of which refuses when the state is not what it needs.
+ * `false` for a NULL handle, which has no transaction either.
+ *
+ * # Safety
+ *
+ * `gpkg` must be a live handle.
+ */
+bool gpkg_in_transaction(const gpkg_t *gpkg);
+
+/**
+ * Begin a transaction, so that several writes commit or fail together.
+ *
+ * Every write made through this handle until `gpkg_commit` or
+ * `gpkg_rollback` joins this transaction, including the ones that would
+ * otherwise manage their own: `gpkg_layer_write_arrow`,
+ * `gpkg_layer_create_spatial_index`, `gpkg_tiles_put` and the rest. Nothing
+ * they write is durable until the commit.
+ *
+ * One consequence is worth stating: the `batch_size` argument the write calls
+ * take stops bounding transactions while this is open, because every batch
+ * belongs to this one. Passing a batch size is then a statement about memory
+ * rather than about durability.
+ *
+ * A deferred transaction, matching what this library opens for itself, so
+ * SQLite takes the write lock at the first write rather than here.
+ *
+ * Refuses with `GPKG_STATUS_INVALID_ARGUMENT` when a transaction is already
+ * open, since SQLite does not nest them. `gpkg_in_transaction` asks without
+ * provoking the error.
+ *
+ * Closing a handle with a transaction still open rolls it back, because that
+ * is what SQLite does when the connection goes.
+ *
+ * # Safety
+ *
+ * `gpkg` must be a live handle from one of the open functions. `error` must be
+ * NULL or point at a writable `gpkg_error_t`.
+ */
+gpkg_status gpkg_begin(gpkg_t *gpkg, gpkg_error_t *error);
+
+/**
+ * Commit the open transaction, making everything written since `gpkg_begin`
+ * durable.
+ *
+ * Refuses with `GPKG_STATUS_INVALID_ARGUMENT` when no transaction is open,
+ * rather than succeeding silently, so an unbalanced pair is reported where it
+ * happens.
+ *
+ * # Safety
+ *
+ * As `gpkg_begin`.
+ */
+gpkg_status gpkg_commit(gpkg_t *gpkg, gpkg_error_t *error);
+
+/**
+ * Discard everything written since `gpkg_begin`.
+ *
+ * This is how a partly-failed sequence is undone: a write that fails part-way
+ * through leaves what preceded it in the transaction, for the caller to keep
+ * or discard.
+ *
+ * Refuses with `GPKG_STATUS_INVALID_ARGUMENT` when no transaction is open.
+ *
+ * # Safety
+ *
+ * As `gpkg_begin`.
+ */
+gpkg_status gpkg_rollback(gpkg_t *gpkg, gpkg_error_t *error);
+
+/**
  * Release the message an error holds, and reset it to [`Status::Ok`].
  *
  * Safe to call on an error that was never filled in, and safe to call twice:
