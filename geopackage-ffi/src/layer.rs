@@ -1,7 +1,48 @@
 //! `gpkg_layer_t`: a handle onto one layer of an open GeoPackage.
 //!
+//! A layer is opened by name, either as a feature layer with
+//! [`gpkg_layer_open`] or as a non-spatial attribute table with
+//! [`gpkg_attributes_open`], and released with [`gpkg_layer_free`]. The handle
+//! is what everything about a layer hangs off: the schema calls in
+//! [`crate::schema`], and the Arrow reads and writes in [`crate::stream`].
+//!
+//! [`gpkg_layer_names_count`] and [`gpkg_layer_name_at`] enumerate the file's
+//! feature layers, in table-name order. Attribute tables are not in that list,
+//! so a caller wanting one opens it by a name it already knows.
+//!
+//! ```c
+//! size_t layers = 0;
+//! if (gpkg_layer_names_count(gpkg, &layers, &error) != GPKG_STATUS_OK) {
+//!     return fail("gpkg_layer_names_count", &error);
+//! }
+//!
+//! for (size_t i = 0; i < layers; i++) {
+//!     char *name = gpkg_layer_name_at(gpkg, i, &error);
+//!     if (!name) {
+//!         return fail("gpkg_layer_name_at", &error);
+//!     }
+//!
+//!     gpkg_layer_t *layer = gpkg_layer_open(gpkg, name, &error);
+//!     if (!layer) {
+//!         gpkg_string_free(name);
+//!         return fail("gpkg_layer_open", &error);
+//!     }
+//!
+//!     uint64_t rows = 0;
+//!     if (gpkg_layer_count(layer, &rows, &error) != GPKG_STATUS_OK) {
+//!         gpkg_layer_free(layer);
+//!         gpkg_string_free(name);
+//!         return fail("gpkg_layer_count", &error);
+//!     }
+//!     printf("%s: %llu rows\n", name, (unsigned long long)rows);
+//!
+//!     gpkg_layer_free(layer);
+//!     gpkg_string_free(name);
+//! }
+//! ```
+//!
 //! A layer handle borrows its container. That borrow is erased to `'static` in
-//! [`crate::handle`], and what keeps the erasure honest is the rule enforced
+//! [`crate::handle`], and what makes the erasure sound is the rule enforced
 //! here and in `gpkg_close`: a container refuses to close while any layer
 //! handle it produced is still alive. Free the layer first.
 
@@ -20,6 +61,16 @@ use crate::util::{borrow_str, out_string};
 pub type gpkg_layer_t = LayerHandle;
 
 /// Open a feature layer by name.
+///
+/// The name is a `gpkg_contents.table_name`, matched without regard to case,
+/// as SQLite resolves table names. A name no row declares is
+/// `GPKG_STATUS_NOT_FOUND`; a name that declares something other than a feature
+/// layer, an attribute table or a tile pyramid, is
+/// `GPKG_STATUS_INVALID_ARGUMENT`, with the message naming what was found.
+///
+/// Opening reads the table's schema, so it is the expensive part of working
+/// with a layer. Hold the handle for as long as the work lasts rather than
+/// reopening per call.
 ///
 /// The returned handle borrows `gpkg`, which cannot be closed until the handle
 /// is released with `gpkg_layer_free`.
@@ -41,6 +92,12 @@ pub unsafe extern "C" fn gpkg_layer_open(
 }
 
 /// Open an attribute (non-spatial) layer by name.
+///
+/// The same call as `gpkg_layer_open` for a table `gpkg_contents` declares as
+/// `attributes` rather than `features`. Such a table has no geometry column, so
+/// `gpkg_layer_geometry_column` returns NULL for it and the bounding-box read
+/// does not apply; everything else, including the Arrow read and write, works
+/// the same way.
 ///
 /// # Safety
 ///
@@ -96,7 +153,13 @@ unsafe fn open_layer(
 /// Release a layer handle.
 ///
 /// The container it came from can be closed once every handle taken from it has
-/// been freed. Passing NULL does nothing.
+/// been freed, so this is what a `GPKG_STATUS_HANDLE_IN_USE` from `gpkg_close`
+/// is asking for. Passing NULL does nothing, which lets a cleanup path free a
+/// handle it may never have opened.
+///
+/// An Arrow stream taken from this layer counts against the container in its
+/// own right, so freeing the layer is not on its own enough to permit a close:
+/// the stream has to be released too.
 ///
 /// # Safety
 ///
@@ -140,6 +203,9 @@ pub unsafe extern "C" fn gpkg_layer_name(
 
 /// The number of rows in the layer, written through `out`.
 ///
+/// A `SELECT count(*)` over the table, so it reads the table rather than a
+/// stored figure and costs what that costs.
+///
 /// # Safety
 ///
 /// `layer` must be a live handle, `out` must point at a writable `uint64_t`,
@@ -172,6 +238,11 @@ pub unsafe extern "C" fn gpkg_layer_count(
 
 /// How many feature layers the file declares.
 ///
+/// Feature layers only: a table `gpkg_contents` declares as `attributes` or
+/// `tiles` is not counted, and neither is a `features` row with no matching
+/// `gpkg_geometry_columns` entry. `gpkg_layer_name_at` walks the same list,
+/// which is ordered by table name.
+///
 /// # Safety
 ///
 /// `gpkg` must be a live container handle; `error` NULL or writable.
@@ -202,6 +273,10 @@ pub unsafe extern "C" fn gpkg_layer_names_count(
 }
 
 /// The name of the `index`th feature layer, or NULL when out of range.
+///
+/// The list is the one `gpkg_layer_names_count` counts, ordered by table name,
+/// so the pair walks a file's layers. An index at or beyond the count is
+/// `GPKG_STATUS_NOT_FOUND` rather than a failure to read.
 ///
 /// Owned by the caller; release with `gpkg_string_free`.
 ///

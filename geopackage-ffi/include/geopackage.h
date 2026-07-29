@@ -467,6 +467,16 @@ void gpkg_error_clear(gpkg_error_t *error);
 /**
  * Open a feature layer by name.
  *
+ * The name is a `gpkg_contents.table_name`, matched without regard to case,
+ * as SQLite resolves table names. A name no row declares is
+ * `GPKG_STATUS_NOT_FOUND`; a name that declares something other than a feature
+ * layer, an attribute table or a tile pyramid, is
+ * `GPKG_STATUS_INVALID_ARGUMENT`, with the message naming what was found.
+ *
+ * Opening reads the table's schema, so it is the expensive part of working
+ * with a layer. Hold the handle for as long as the work lasts rather than
+ * reopening per call.
+ *
  * The returned handle borrows `gpkg`, which cannot be closed until the handle
  * is released with `gpkg_layer_free`.
  *
@@ -482,6 +492,12 @@ gpkg_layer_t *gpkg_layer_open(const gpkg_t *gpkg, const char *name, gpkg_error_t
 /**
  * Open an attribute (non-spatial) layer by name.
  *
+ * The same call as `gpkg_layer_open` for a table `gpkg_contents` declares as
+ * `attributes` rather than `features`. Such a table has no geometry column, so
+ * `gpkg_layer_geometry_column` returns NULL for it and the bounding-box read
+ * does not apply; everything else, including the Arrow read and write, works
+ * the same way.
+ *
  * # Safety
  *
  * As [`gpkg_layer_open`].
@@ -492,7 +508,13 @@ gpkg_layer_t *gpkg_attributes_open(const gpkg_t *gpkg, const char *name, gpkg_er
  * Release a layer handle.
  *
  * The container it came from can be closed once every handle taken from it has
- * been freed. Passing NULL does nothing.
+ * been freed, so this is what a `GPKG_STATUS_HANDLE_IN_USE` from `gpkg_close`
+ * is asking for. Passing NULL does nothing, which lets a cleanup path free a
+ * handle it may never have opened.
+ *
+ * An Arrow stream taken from this layer counts against the container in its
+ * own right, so freeing the layer is not on its own enough to permit a close:
+ * the stream has to be released too.
  *
  * # Safety
  *
@@ -517,6 +539,9 @@ char *gpkg_layer_name(const gpkg_layer_t *layer, gpkg_error_t *error);
 /**
  * The number of rows in the layer, written through `out`.
  *
+ * A `SELECT count(*)` over the table, so it reads the table rather than a
+ * stored figure and costs what that costs.
+ *
  * # Safety
  *
  * `layer` must be a live handle, `out` must point at a writable `uint64_t`,
@@ -527,6 +552,11 @@ gpkg_status gpkg_layer_count(const gpkg_layer_t *layer, uint64_t *out, gpkg_erro
 /**
  * How many feature layers the file declares.
  *
+ * Feature layers only: a table `gpkg_contents` declares as `attributes` or
+ * `tiles` is not counted, and neither is a `features` row with no matching
+ * `gpkg_geometry_columns` entry. `gpkg_layer_name_at` walks the same list,
+ * which is ordered by table name.
+ *
  * # Safety
  *
  * `gpkg` must be a live container handle; `error` NULL or writable.
@@ -535,6 +565,10 @@ gpkg_status gpkg_layer_names_count(const gpkg_t *gpkg, size_t *out, gpkg_error_t
 
 /**
  * The name of the `index`th feature layer, or NULL when out of range.
+ *
+ * The list is the one `gpkg_layer_names_count` counts, ordered by table name,
+ * so the pair walks a file's layers. An index at or beyond the count is
+ * `GPKG_STATUS_NOT_FOUND` rather than a failure to read.
  *
  * Owned by the caller; release with `gpkg_string_free`.
  *
@@ -632,6 +666,10 @@ char *gpkg_layer_geometry_type(const gpkg_layer_t *layer, gpkg_error_t *error);
 /**
  * The geometry column's spatial reference system id, written through `out`.
  *
+ * The id is a `gpkg_spatial_ref_sys.srs_id`, which for a file written by this
+ * library is the EPSG code. Returns `GPKG_STATUS_NOT_FOUND` for a layer with
+ * no geometry column, leaving `out` untouched.
+ *
  * # Safety
  *
  * `layer` must be a live handle, `out` writable, `error` NULL or writable.
@@ -640,6 +678,11 @@ gpkg_status gpkg_layer_srs_id(const gpkg_layer_t *layer, int32_t *out, gpkg_erro
 
 /**
  * The layer's extent, written through the four out-parameters.
+ *
+ * The bounds recorded in `gpkg_contents`, in the layer's own spatial reference
+ * system. Where those bounds are unusable, they are measured from the
+ * geometries and recorded, so this call can write to the file; on a read-only
+ * handle it measures, returns the answer, and records nothing.
  *
  * Returns `GPKG_STATUS_NOT_FOUND` when the layer has no extent to report,
  * which is an empty layer or one with no geometry column, leaving the
@@ -661,6 +704,11 @@ gpkg_status gpkg_layer_extent(const gpkg_layer_t *layer,
  * The spatial index's state, as `"absent"`, `"current"`, `"legacy trigger
  * set"` or `"stale"`.
  *
+ * `"legacy trigger set"` is an index kept by the pre-1.4 triggers, which
+ * corrupt an index under `UPSERT`; `"stale"` is a virtual table without its
+ * triggers, or triggers without their table, which is what an interrupted
+ * build leaves. `gpkg_layer_repair_spatial_index` puts either right.
+ *
  * Owned by the caller; release with `gpkg_string_free`.
  *
  * # Safety
@@ -673,7 +721,9 @@ char *gpkg_layer_spatial_index_status(const gpkg_layer_t *layer, gpkg_error_t *e
  * Whether a bounding-box query on this layer will use the spatial index.
  *
  * False for a `stale` or absent index: a desynchronised index is not trusted,
- * and the query falls back to a correct full scan.
+ * and the query falls back to a correct full scan. So this answers how a
+ * bounding-box read will be served, not whether the file contains an RTree
+ * table; `gpkg_layer_spatial_index_status` answers that.
  *
  * # Safety
  *
@@ -684,6 +734,12 @@ gpkg_status gpkg_layer_has_spatial_index(const gpkg_layer_t *layer, bool *out, g
 /**
  * Build the spatial index on a layer that has none.
  *
+ * Creates the RTree virtual table, installs the GeoPackage 1.4 trigger set,
+ * populates it from the rows already there, and registers the extension, all
+ * in one transaction. Refuses with `GPKG_STATUS_ALREADY_EXISTS` when the
+ * layer has an index, and with `GPKG_STATUS_NOT_FOUND` when it has no
+ * geometry column or no single-column primary key to key the index on.
+ *
  * # Safety
  *
  * `layer` must be a live handle; `error` NULL or writable.
@@ -692,6 +748,11 @@ gpkg_status gpkg_layer_create_spatial_index(const gpkg_layer_t *layer, gpkg_erro
 
 /**
  * Drop the spatial index and its triggers.
+ *
+ * Removes the RTree virtual table, its triggers and its `gpkg_extensions`
+ * row, in one transaction. A feature layer with no index is not an error:
+ * there is nothing to remove and the call succeeds. Bounding-box reads still
+ * work afterwards, as a full scan returning the same rows.
  *
  * # Safety
  *
