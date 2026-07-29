@@ -230,3 +230,131 @@ pub unsafe extern "C" fn gpkg_open_warning(
     // SAFETY: forwarded to the caller's guarantee on `error`.
     unsafe { out_string(&warning.to_string(), error) }
 }
+
+/// Run one statement on the handle's connection, reporting through `error`.
+///
+/// The three transaction calls differ only in their statement, the state they
+/// require, and the message they give when that state is wrong.
+///
+/// # Safety
+///
+/// `gpkg` must be a live handle and `error` NULL or writable.
+unsafe fn transaction_statement(
+    gpkg: *mut gpkg_t,
+    error: *mut gpkg_error_t,
+    name: &str,
+    sql: &str,
+    want_open: bool,
+) -> Status {
+    if gpkg.is_null() {
+        let message = format!("{name}: handle is NULL");
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::BadArgument, &message) };
+        return Status::BadArgument;
+    }
+    // SAFETY: the caller guarantees a live handle.
+    let conn = unsafe { (*gpkg).gpkg().connection() };
+    if conn.is_autocommit() == want_open {
+        let message = if want_open {
+            format!("{name}: no transaction is open")
+        } else {
+            format!("{name}: a transaction is already open; SQLite does not nest them")
+        };
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::InvalidArgument, &message) };
+        return Status::InvalidArgument;
+    }
+    match conn.execute_batch(sql) {
+        Ok(()) => Status::Ok,
+        Err(source) => {
+            let err = geopackage::Error::from(source);
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            Status::from(&err)
+        }
+    }
+}
+
+/// Whether a transaction is open on this handle.
+///
+/// The way to ask before calling `gpkg_begin`, `gpkg_commit` or
+/// `gpkg_rollback`, each of which refuses when the state is not what it needs.
+/// `false` for a NULL handle, which has no transaction either.
+///
+/// # Safety
+///
+/// `gpkg` must be a live handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_in_transaction(gpkg: *const gpkg_t) -> bool {
+    if gpkg.is_null() {
+        return false;
+    }
+    // SAFETY: the caller guarantees a live handle.
+    !unsafe { (*gpkg).gpkg().connection() }.is_autocommit()
+}
+
+/// Begin a transaction, so that several writes commit or fail together.
+///
+/// Every write made through this handle until `gpkg_commit` or
+/// `gpkg_rollback` joins this transaction, including the ones that would
+/// otherwise manage their own: `gpkg_layer_write_arrow`,
+/// `gpkg_layer_create_spatial_index`, `gpkg_tiles_put` and the rest. Nothing
+/// they write is durable until the commit.
+///
+/// One consequence is worth stating: the `batch_size` argument the write calls
+/// take stops bounding transactions while this is open, because every batch
+/// belongs to this one. Passing a batch size is then a statement about memory
+/// rather than about durability.
+///
+/// A deferred transaction, matching what this library opens for itself, so
+/// SQLite takes the write lock at the first write rather than here.
+///
+/// Refuses with `GPKG_STATUS_INVALID_ARGUMENT` when a transaction is already
+/// open, since SQLite does not nest them. `gpkg_in_transaction` asks without
+/// provoking the error.
+///
+/// Closing a handle with a transaction still open rolls it back, because that
+/// is what SQLite does when the connection goes.
+///
+/// # Safety
+///
+/// `gpkg` must be a live handle from one of the open functions. `error` must be
+/// NULL or point at a writable `gpkg_error_t`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_begin(gpkg: *mut gpkg_t, error: *mut gpkg_error_t) -> Status {
+    // SAFETY: forwarded to this function's own contract.
+    unsafe { transaction_statement(gpkg, error, "gpkg_begin", "BEGIN", false) }
+}
+
+/// Commit the open transaction, making everything written since `gpkg_begin`
+/// durable.
+///
+/// Refuses with `GPKG_STATUS_INVALID_ARGUMENT` when no transaction is open,
+/// rather than succeeding silently, so an unbalanced pair is reported where it
+/// happens.
+///
+/// # Safety
+///
+/// As `gpkg_begin`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_commit(gpkg: *mut gpkg_t, error: *mut gpkg_error_t) -> Status {
+    // SAFETY: forwarded to this function's own contract.
+    unsafe { transaction_statement(gpkg, error, "gpkg_commit", "COMMIT", true) }
+}
+
+/// Discard everything written since `gpkg_begin`.
+///
+/// This is how a partly-failed sequence is undone: a write that fails part-way
+/// through leaves what preceded it in the transaction, for the caller to keep
+/// or discard.
+///
+/// Refuses with `GPKG_STATUS_INVALID_ARGUMENT` when no transaction is open.
+///
+/// # Safety
+///
+/// As `gpkg_begin`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_rollback(gpkg: *mut gpkg_t, error: *mut gpkg_error_t) -> Status {
+    // SAFETY: forwarded to this function's own contract.
+    unsafe { transaction_statement(gpkg, error, "gpkg_rollback", "ROLLBACK", true) }
+}

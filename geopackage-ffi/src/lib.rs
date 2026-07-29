@@ -52,8 +52,9 @@ pub mod tiles;
 pub mod util;
 
 pub use container::{
-    gpkg_close, gpkg_create, gpkg_open, gpkg_open_read_only, gpkg_open_warning,
-    gpkg_open_warning_count, gpkg_t, gpkg_version,
+    gpkg_begin, gpkg_close, gpkg_commit, gpkg_create, gpkg_in_transaction, gpkg_open,
+    gpkg_open_read_only, gpkg_open_warning, gpkg_open_warning_count, gpkg_rollback, gpkg_t,
+    gpkg_version,
 };
 pub use error::{Status, gpkg_error_clear, gpkg_error_t};
 pub use layer::{
