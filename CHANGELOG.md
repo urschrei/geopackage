@@ -292,16 +292,29 @@ While the version is below 1.0 the API may change in any release.
   Only `insert_wkb` and `update_wkb` can contribute: a `GeometryTrait` has no
   non-linear representation to offer.
 
-- **Tile failures reach C as a category rather than as
-  `GPKG_STATUS_OTHER`.** `Error::Tile` carries a twelve-variant enum of its own,
-  which the status mapping did not look inside, so a tile written off its grid
-  or in the wrong pixel size arrived uncategorised. An address outside the grid,
-  bytes that are not a readable image and an unusable zoom range are now
-  `GPKG_STATUS_INVALID_ARGUMENT`; a pyramid that breaks one of the spec's
-  consistency rules, and a payload whose dimensions are not the ones its zoom
-  level declares, are `GPKG_STATUS_CONSTRAINT`; and an XYZ conversion asked for
-  on a grid that is not the web mercator quad is `GPKG_STATUS_UNSUPPORTED`. The
-  messages are unchanged.
+- **Tile and geometry failures reach C as a category rather than as
+  `GPKG_STATUS_OTHER`.** `Error::Tile` and `Error::Core` each carry an error
+  enum of their own, and the status mapping stopped at the outermost variant, so
+  everything underneath arrived uncategorised: a tile written off its grid, a
+  malformed geometry, a bad GPB header. The classification now follows the
+  wrapping down to the variant that says what happened. The messages are
+  unchanged.
+
+  For tiles: an address outside the grid, bytes that are not a readable image
+  and an unusable zoom range are `GPKG_STATUS_INVALID_ARGUMENT`; a pyramid that
+  breaks one of the spec's consistency rules, and a payload whose dimensions are
+  not the ones its zoom level declares, are `GPKG_STATUS_CONSTRAINT`; an XYZ
+  conversion asked for on a grid that is not the web mercator quad is
+  `GPKG_STATUS_UNSUPPORTED`.
+
+  For geometries: a body that cannot be read as ISO WKB, a GPB blob that is
+  truncated or carries the wrong magic, and an identifier that cannot be quoted
+  are `GPKG_STATUS_INVALID_ARGUMENT`; a GPB version this library does not
+  implement, and a well-formed body this library cannot write, are
+  `GPKG_STATUS_UNSUPPORTED`. The distinction that matters is the last one: a
+  `GEOMETRYCOLLECTION` holding a `CIRCULARSTRING` is refused for what it is
+  rather than for anything wrong with its bytes, and reporting that as an
+  invalid argument would send a caller looking for a fault that is not there.
 
 - **`gpkg_close`'s refusal names every kind of handle that can hold it open.**
   It counted layers, tile pyramids, writers and Arrow streams alike but said
