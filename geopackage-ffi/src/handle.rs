@@ -73,10 +73,9 @@
 //!    below is a plain `Cell` on that basis rather than an atomic, which would
 //!    imply a guarantee this crate does not make.
 //!
-//! Invariant 2 is the one a C caller can feel, as the refusal in the example
-//! above. It is a runtime check because C has no other kind; the Rust API keeps
-//! its compile-time version, since `close` there takes `self` and a live
-//! `Layer` borrows it.
+//! Invariant 2 is the one a C caller sees, as the refusal in the example
+//! above. The Rust API keeps its compile-time version, since `close` there
+//! takes `self` and a live `Layer` borrows it.
 
 use std::cell::Cell;
 

@@ -3,8 +3,7 @@
 //!
 //! This crate exists to be linked against from C, not to be used from Rust: a
 //! Rust caller should use [`geopackage`] directly, which is safe and has a
-//! wider surface. Everything exported here is `unsafe extern "C"`, and every
-//! example in these pages is C for the same reason.
+//! wider surface. Everything exported here is `unsafe extern "C"`.
 //!
 //! The header is `include/geopackage.h`. It is generated from this crate with
 //! cbindgen and checked in, so the comments below are the comments a C consumer
@@ -67,7 +66,7 @@
 //!   [`gpkg_close`]; `gpkg_layer_t` from [`gpkg_layer_open`] or
 //!   [`gpkg_attributes_open`] by [`gpkg_layer_free`]; `gpkg_tiles_t` from
 //!   [`gpkg_tiles_open`] by [`gpkg_tiles_free`]. Using a handle after its
-//!   destructor is undefined behaviour, as it is in C generally.
+//!   destructor is undefined behaviour.
 //!
 //! # Handle lifetime
 //!
@@ -95,11 +94,10 @@
 //! gpkg_close(gpkg, &error);  // now it succeeds
 //! ```
 //!
-//! The refusal is a runtime check because C has no other kind. It stands for
-//! the rule the Rust API states in its types, where `close` takes `self` and a
-//! live `Layer` borrows it, so the compiler rejects the same program instead.
-//! [`handle`] describes how the borrow is erased and what keeps the erasure
-//! sound.
+//! The refusal is the runtime form of the rule the Rust API states in its
+//! types, where `close` takes `self` and a live `Layer` borrows it, so the
+//! compiler rejects the same program instead. [`handle`] describes how the
+//! borrow is erased and what keeps the erasure sound.
 //!
 //! # What the ABI covers
 //!
