@@ -16,6 +16,7 @@ use geopackage_core::schema::{
 };
 use rusqlite::Connection;
 
+use crate::transaction::WriteTransaction;
 use crate::{Error, GeoPackage, Result, table_exists};
 
 const DATA_COLUMNS_TABLE: &str = "gpkg_data_columns";
@@ -170,9 +171,9 @@ impl GeoPackage {
             });
         }
         let conn = self.connection();
-        let tx = conn.unchecked_transaction()?;
-        ensure_tables(&tx)?;
-        tx.execute(
+        let tx = WriteTransaction::begin(conn)?;
+        ensure_tables(conn)?;
+        conn.execute(
             &format!(
                 "INSERT INTO {DATA_COLUMNS_TABLE} \
                  (table_name, column_name, name, title, description, mime_type, constraint_name) \
@@ -209,13 +210,13 @@ impl GeoPackage {
     /// could express.
     pub fn add_column_constraint(&self, constraint: &ColumnConstraint) -> Result<()> {
         let conn = self.connection();
-        let tx = conn.unchecked_transaction()?;
-        ensure_tables(&tx)?;
-        tx.execute(
+        let tx = WriteTransaction::begin(conn)?;
+        ensure_tables(conn)?;
+        conn.execute(
             &format!("DELETE FROM {CONSTRAINTS_TABLE} WHERE constraint_name = ?1"),
             [&constraint.name],
         )?;
-        let inclusive = InclusiveColumns::read(&tx)?;
+        let inclusive = InclusiveColumns::read(conn)?;
         let insert = format!(
             "INSERT INTO {CONSTRAINTS_TABLE} \
              (constraint_name, constraint_type, value, min, {}, max, {}, description) \
@@ -235,7 +236,7 @@ impl GeoPackage {
                         reason: "a range needs min below max (Requirement 111)",
                     });
                 }
-                tx.execute(
+                conn.execute(
                     &insert,
                     rusqlite::params![
                         constraint.name,
@@ -257,7 +258,7 @@ impl GeoPackage {
                     });
                 }
                 for member in members {
-                    tx.execute(
+                    conn.execute(
                         &insert,
                         rusqlite::params![
                             constraint.name,
@@ -273,7 +274,7 @@ impl GeoPackage {
                 }
             }
             ConstraintKind::Glob(pattern) => {
-                tx.execute(
+                conn.execute(
                     &insert,
                     rusqlite::params![
                         constraint.name,

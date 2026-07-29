@@ -85,6 +85,7 @@
 use geopackage_core::ident::quote;
 use rusqlite::OptionalExtension;
 
+use crate::transaction::WriteTransaction;
 use crate::{BoundingBox, Error, Layer, Result};
 
 impl Layer<'_> {
@@ -159,16 +160,15 @@ impl Layer<'_> {
         }
         // Measuring and recording share a transaction, so the box recorded
         // cannot exclude a row committed between the two. When the caller
-        // already has one open, that one is used: `unchecked_transaction`
-        // cannot nest, and inheriting theirs gives the same atomicity.
-        if !conn.is_autocommit() {
-            let measured = self.measure_extent(conn)?;
-            let recorded = self.record_extent(conn, measured);
-            return self.finish_recording(measured, recorded);
-        }
-        let tx = conn.unchecked_transaction()?;
-        let measured = self.measure_extent(&tx)?;
-        let recorded = self.record_extent(&tx, measured).and_then(|()| tx.commit());
+        // already has one open, that one is used: SQLite cannot nest, and
+        // inheriting theirs gives the same atomicity. This branch is where that
+        // reasoning was first written down; `WriteTransaction` is it made
+        // reusable, and every write path in the crate now works this way.
+        let tx = WriteTransaction::begin(conn)?;
+        let measured = self.measure_extent(conn)?;
+        let recorded = self
+            .record_extent(conn, measured)
+            .and_then(|()| tx.commit());
         self.finish_recording(measured, recorded)
     }
 
@@ -256,8 +256,9 @@ impl Layer<'_> {
     ///
     /// [`Error::NoGeometryColumn`] if the layer has no geometry column.
     pub fn recompute_extent(&self) -> Result<Option<BoundingBox>> {
-        let conn = self.gpkg().connection().unchecked_transaction()?;
-        let measured = self.measure_extent(&conn)?;
+        let conn = self.gpkg().connection();
+        let tx = WriteTransaction::begin(conn)?;
+        let measured = self.measure_extent(conn)?;
         match measured {
             Some(bbox) => conn.execute(
                 "UPDATE gpkg_contents SET min_x = ?1, min_y = ?2, max_x = ?3, max_y = ?4 \
@@ -277,7 +278,7 @@ impl Layer<'_> {
                 [self.table_name()],
             )?,
         };
-        conn.commit()?;
+        tx.commit()?;
         Ok(measured)
     }
 

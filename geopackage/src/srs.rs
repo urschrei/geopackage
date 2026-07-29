@@ -1,5 +1,6 @@
 //! `gpkg_spatial_ref_sys` access: lookup and registration of SRS rows.
 
+use crate::transaction::WriteTransaction;
 use crate::{Error, GeoPackage, Result};
 use geopackage_core::ident::quote;
 use geopackage_core::srs::epsg_definition;
@@ -201,15 +202,15 @@ impl GeoPackage {
             return Ok(false);
         }
         let conn = self.connection();
-        let tx = conn.unchecked_transaction()?;
+        let tx = WriteTransaction::begin(conn)?;
         if srs.definition_wkt2.is_some() || srs.epoch.is_some() {
-            enable_crs_wkt_extension(&tx)?;
+            enable_crs_wkt_extension(conn)?;
         }
         // Whether the extension columns can be bound at all depends on the
         // file, not on this row: a file that already carries them takes the
         // values, one that does not cannot be given them without the ALTER
         // above, which only a caller supplying one of the two asks for.
-        let columns = CrsWktColumns::read(&tx)?;
+        let columns = CrsWktColumns::read(conn)?;
         let mut names = BASE_COLUMNS.to_owned();
         let mut placeholders = "?1, ?2, ?3, ?4, ?5, ?6".to_owned();
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![
@@ -240,7 +241,7 @@ impl GeoPackage {
             });
             params.push(Box::new(srs.epoch));
         }
-        tx.execute(
+        conn.execute(
             &format!("INSERT INTO gpkg_spatial_ref_sys ({names}) VALUES ({placeholders})"),
             rusqlite::params_from_iter(params.iter()),
         )?;

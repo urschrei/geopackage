@@ -62,6 +62,7 @@ use rusqlite::types::ValueRef;
 
 use crate::Result;
 use crate::packed::{self, NodeSink};
+use crate::transaction::WriteTransaction;
 
 /// Default candidate-row count at or above which
 /// [`crate::Layer::create_spatial_index`] and [`crate::Layer::write_all`] choose
@@ -545,9 +546,11 @@ fn gate(
 ///
 /// `fault` is [`no_fault`] outside tests.
 ///
-/// This opens and commits its own transaction. A caller that already holds one,
-/// and wants the build to be part of it, calls [`fill_index_in_transaction`]
-/// instead.
+/// This opens and commits its own transaction, or joins one already open on
+/// `conn` and leaves the commit to whoever began it. A caller that holds a
+/// transaction it wants to keep managing itself calls
+/// [`fill_index_in_transaction`] instead, which does no transaction management
+/// at all.
 #[expect(
     clippy::too_many_arguments,
     reason = "internal build entry point threading the whole build context; a parameter struct would be used by these two call sites alone"
@@ -569,9 +572,9 @@ where
     // Nothing in the build needs autocommit: the tree is constructed in memory
     // by `packed::pack` and written as ordinary rows, so unlike the previous
     // `ATTACH`ed scratch database this can all sit inside one transaction.
-    let tx = conn.unchecked_transaction()?;
+    let tx = WriteTransaction::begin(conn)?;
     let path = fill_index_in_transaction(
-        &tx,
+        conn,
         table,
         geom,
         pk,

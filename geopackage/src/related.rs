@@ -18,6 +18,7 @@ use geopackage_core::related::{
 };
 use rusqlite::OptionalExtension;
 
+use crate::transaction::WriteTransaction;
 use crate::{Error, GeoPackage, Result, table_exists};
 
 /// A relationship to create.
@@ -170,11 +171,11 @@ impl GeoPackage {
         }
 
         let conn = self.connection();
-        let tx = conn.unchecked_transaction()?;
+        let tx = WriteTransaction::begin(conn)?;
 
         // Requirements 5 and 6: both ends are in gpkg_contents.
         for table in [&relation.base_table_name, &relation.related_table_name] {
-            let known: Option<String> = tx
+            let known: Option<String> = conn
                 .query_row(
                     "SELECT table_name FROM gpkg_contents WHERE table_name = ?1",
                     [table],
@@ -187,16 +188,16 @@ impl GeoPackage {
                 });
             }
         }
-        if table_exists(&tx, &relation.mapping_table_name)? {
+        if table_exists(conn, &relation.mapping_table_name)? {
             return Err(Error::TableAlreadyExists {
                 table_name: relation.mapping_table_name.clone(),
             });
         }
 
-        if !table_exists(&tx, RELATIONS_TABLE)? {
-            tx.execute_batch(CREATE_GPKGEXT_RELATIONS)?;
+        if !table_exists(conn, RELATIONS_TABLE)? {
+            conn.execute_batch(CREATE_GPKGEXT_RELATIONS)?;
             crate::extensions::register(
-                &tx,
+                conn,
                 Some(RELATIONS_TABLE),
                 None,
                 EXTENSION_NAME,
@@ -205,12 +206,12 @@ impl GeoPackage {
             )?;
         }
 
-        tx.execute_batch(
+        conn.execute_batch(
             &create_mapping_table_sql(&relation.mapping_table_name).map_err(Error::Core)?,
         )?;
         // Requirement 3: the mapping table gets its own gpkg_extensions row.
         crate::extensions::register(
-            &tx,
+            conn,
             Some(&relation.mapping_table_name),
             None,
             EXTENSION_NAME,
@@ -218,7 +219,7 @@ impl GeoPackage {
             EXTENSION_SCOPE,
         )?;
 
-        tx.execute(
+        conn.execute(
             "INSERT INTO gpkgext_relations \
              (base_table_name, base_primary_column, related_table_name, \
               related_primary_column, relation_name, mapping_table_name) \
@@ -232,7 +233,7 @@ impl GeoPackage {
                 relation.mapping_table_name,
             ],
         )?;
-        let id = tx.last_insert_rowid();
+        let id = conn.last_insert_rowid();
         tx.commit()?;
         Ok(id)
     }

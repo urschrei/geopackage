@@ -49,6 +49,7 @@ use geopackage_core::triggers::{self, TriggerGeneration};
 use rusqlite::Connection;
 
 use crate::bulk::{self, BuildPath, BulkIndexOptions, TestFault};
+use crate::transaction::WriteTransaction;
 use crate::{Error, GeometryColumn, Layer, Result, table_exists};
 
 /// The health of a layer's RTree spatial index, from
@@ -238,8 +239,8 @@ impl Layer<'_> {
         }
 
         if bulk::table_row_count(conn, table)? < options.bulk_threshold {
-            let tx = conn.unchecked_transaction()?;
-            create_index_in_transaction(&tx, table, column, pk)?;
+            let tx = WriteTransaction::begin(conn)?;
+            create_index_in_transaction(conn, table, column, pk)?;
             tx.commit()?;
             return Ok(BuildPath::Triggered);
         }
@@ -286,11 +287,11 @@ impl Layer<'_> {
         let conn = self.gpkg().connection();
         let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
 
-        let tx = conn.unchecked_transaction()?;
-        drop_all_rtree_triggers(&tx, self.table_name(), &geom.column_name)?;
-        tx.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote(&rtree)?))?;
+        let tx = WriteTransaction::begin(conn)?;
+        drop_all_rtree_triggers(conn, self.table_name(), &geom.column_name)?;
+        conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote(&rtree)?))?;
         crate::extensions::unregister(
-            &tx,
+            conn,
             self.table_name(),
             &geom.column_name,
             triggers::EXTENSION_NAME,
@@ -397,22 +398,22 @@ impl Layer<'_> {
     fn rebuild_index_impl(&self, geom: &GeometryColumn, pk: &str) -> Result<()> {
         let conn = self.gpkg().connection();
         let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
-        let tx = conn.unchecked_transaction()?;
-        drop_all_rtree_triggers(&tx, self.table_name(), &geom.column_name)?;
+        let tx = WriteTransaction::begin(conn)?;
+        drop_all_rtree_triggers(conn, self.table_name(), &geom.column_name)?;
         for sql in triggers::create_triggers_sql(self.table_name(), &geom.column_name, pk)? {
-            tx.execute_batch(&sql)?;
+            conn.execute_batch(&sql)?;
         }
         // Ensure the virtual table exists and is empty before repopulating: it
         // is normally present, but a stale/corrupt file may have lost it.
-        if table_exists(&tx, &rtree)? {
-            tx.execute_batch(&format!("DELETE FROM {}", quote(&rtree)?))?;
+        if table_exists(conn, &rtree)? {
+            conn.execute_batch(&format!("DELETE FROM {}", quote(&rtree)?))?;
         } else {
-            tx.execute_batch(&triggers::create_rtree_table_sql(
+            conn.execute_batch(&triggers::create_rtree_table_sql(
                 self.table_name(),
                 &geom.column_name,
             )?)?;
         }
-        tx.execute_batch(&triggers::populate_rtree_sql(
+        conn.execute_batch(&triggers::populate_rtree_sql(
             self.table_name(),
             &geom.column_name,
             pk,
