@@ -234,6 +234,8 @@ pub mod schema;
 pub mod stream;
 pub mod tiles;
 pub mod util;
+pub mod value;
+pub mod writer;
 
 pub use container::{
     gpkg_begin, gpkg_close, gpkg_commit, gpkg_create, gpkg_in_transaction, gpkg_open,
@@ -262,3 +264,10 @@ pub use tiles::{
     gpkg_tiles_name, gpkg_tiles_open, gpkg_tiles_put, gpkg_tiles_t, gpkg_tiles_zoom_level_count,
 };
 pub use util::gpkg_string_free;
+pub use value::{
+    ValueKind, gpkg_blob_t, gpkg_date_t, gpkg_datetime_t, gpkg_value_payload, gpkg_value_t,
+};
+pub use writer::{
+    gpkg_layer_writer, gpkg_writer_commit, gpkg_writer_delete, gpkg_writer_free,
+    gpkg_writer_insert, gpkg_writer_t, gpkg_writer_update, gpkg_writer_update_column,
+};
