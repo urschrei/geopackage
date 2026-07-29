@@ -1,24 +1,58 @@
 //! The handle representation, and the one piece of lifetime erasure the crate
 //! rests on.
 //!
-//! # The problem
+//! # What a C caller sees
+//!
+//! Three opaque pointers, each with one destructor, and one rule between them:
+//! a container cannot be closed while anything taken from it is still alive.
+//! The attempt returns `GPKG_STATUS_HANDLE_IN_USE`, changes nothing, and leaves
+//! the container open, so the caller can free the children and try again.
+//!
+//! ```c
+//! gpkg_error_t error = {GPKG_STATUS_OK, NULL};
+//! gpkg_t *gpkg = gpkg_open_read_only("places.gpkg", &error);
+//! gpkg_layer_t *layer = gpkg_layer_open(gpkg, "points", &error);
+//! gpkg_tiles_t *tiles = gpkg_tiles_open(gpkg, "basemap", &error);
+//!
+//! if (gpkg_close(gpkg, &error) == GPKG_STATUS_HANDLE_IN_USE) {
+//!     // The message counts the outstanding children. Nothing was torn down:
+//!     // every handle above, gpkg included, is still usable.
+//!     gpkg_error_clear(&error);
+//! }
+//!
+//! gpkg_tiles_free(tiles);
+//! gpkg_layer_free(layer);
+//! gpkg_close(gpkg, &error);
+//! ```
+//!
+//! An Arrow stream from `gpkg_layer_read_arrow` counts as a child in the same
+//! way, and is freed through its own `release` callback rather than by a
+//! `gpkg_*_free` call. Freeing a child twice, or using one after it has been
+//! freed, is undefined behaviour: the rule protects the container from its
+//! children, not each handle from its own caller.
+//!
+//! # The problem it solves
 //!
 //! `geopackage::Layer<'a>` borrows the `GeoPackage` it came from, and so do
 //! `TilePyramid<'a>` and the cursors. A C caller holds independent pointers and
 //! frees them in whatever order it likes, so a borrow cannot be expressed
-//! across the boundary. The measurements in
-//! `roadmap/benchmarks/2026-07-28-handle-construction.md` rule out the obvious
-//! alternative, which is for each call to rebuild the borrowed handle from its
-//! parent: that costs a near-constant 37 to 51 microseconds, which is +778% on
-//! `get_tile` and +131% to +150% on a small bounding-box query.
+//! across the boundary.
+//!
+//! The alternative to erasing it is for each call to rebuild the borrowed
+//! handle from its parent, which was measured rather than assumed. Building one
+//! costs a near-constant 37 to 51 microseconds, since it is a fixed set of
+//! catalogue queries, and it is constant whatever the call it precedes costs:
+//! +778% on `get_tile`, and +131% to +150% on a small bounding-box query. So
+//! the borrow is erased once, when the handle is made, and the cost of a call
+//! from C is the cost of the call.
 //!
 //! # The shape
 //!
 //! A container handle owns its `GeoPackage` behind a `Box`, so the address of
 //! the `GeoPackage` is fixed for as long as the handle lives, whatever happens
 //! to the handle itself. A child handle stores a `Layer<'static>` produced by
-//! erasing the real borrow, plus a pointer back to its parent so it can
-//! announce its own death.
+//! erasing the borrow, plus a pointer back to its parent so it can announce its
+//! own death.
 //!
 //! # Why that is sound
 //!
@@ -35,15 +69,14 @@
 //!    used.
 //! 3. **Nothing crosses a thread.** `geopackage::GeoPackage` is `Send` but not
 //!    `Sync`, because `rusqlite::Connection` is, so a handle belongs to the
-//!    thread that made it. The header documents handle-per-thread, and the
-//!    counter below is a plain `Cell` on that basis rather than an atomic,
-//!    which would imply a guarantee this crate does not make.
+//!    thread that made it. The ABI documents handle-per-thread, and the counter
+//!    below is a plain `Cell` on that basis rather than an atomic, which would
+//!    imply a guarantee this crate does not make.
 //!
-//! Invariant 2 is the one a C caller can feel: closing a container while a
-//! layer handle from it is alive fails rather than corrupting anything. That is
-//! a runtime check because C has no other kind; the Rust API keeps its
-//! compile-time version, since `close` there still takes `self` and a live
-//! `Layer` still borrows it.
+//! Invariant 2 is the one a C caller can feel, as the refusal in the example
+//! above. It is a runtime check because C has no other kind; the Rust API keeps
+//! its compile-time version, since `close` there takes `self` and a live
+//! `Layer` borrows it.
 
 use std::cell::Cell;
 
@@ -100,9 +133,10 @@ impl Container {
     ///
     /// The lifetime `'_` on the way in is a borrow of `*self.gpkg`, which lives
     /// as long as `self` and does not move. On the way out it is `'static`,
-    /// which is a lie the module's invariants make safe: the layer is only
-    /// reachable through a [`LayerHandle`], and dropping that handle is what
-    /// decrements the counter that keeps `self` alive.
+    /// which claims more than the borrow can support on its own; what supports
+    /// it is the module's invariants. The layer is only reachable through a
+    /// [`LayerHandle`], and dropping that handle is what decrements the counter
+    /// that keeps `self` alive.
     fn adopt(&self, layer: Layer<'_>) -> LayerHandle {
         // SAFETY: `Layer<'a>` borrows the `GeoPackage` inside `self.gpkg`,
         // which is boxed and never moved or replaced (invariant 1), and this
