@@ -35,6 +35,14 @@ While the version is below 1.0 the API may change in any release.
   level this library claims for each, which is what lets a C consumer fail
   fast instead of meeting an `UnsupportedExtension` refusal mid-write.
 
+- **`geopackage-ffi`: a stored-tile cursor.** `gpkg_tiles_cursor`, `_at` and
+  `_in` open a `gpkg_tile_cursor_t` that walks what a pyramid stores rather
+  than probing the declared grid, O(stored) against O(grid) on a sparse
+  pyramid. `gpkg_tile_cursor_next` lends each payload, valid until the next
+  call, so nothing is allocated or copied per tile; the cursor counts
+  against the container like an Arrow stream, and outlives the tiles handle
+  it came from.
+
 - **`geopackage-ffi`: `gpkg_validate`.** The library's file checks from C:
   an owned `gpkg_findings_t` holding the findings most severe first, walked
   with `gpkg_findings_count` and `gpkg_finding_at` (severity, description,

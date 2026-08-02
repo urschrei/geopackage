@@ -79,7 +79,9 @@
 
 use std::cell::Cell;
 
-use geopackage::{FeatureWriter, GeoPackage, Layer, TilePyramid};
+use geopackage::{
+    BoundingBox, FeatureWriter, GeoPackage, Layer, Tile, TileCursor, TilePyramid, TileStream,
+};
 
 /// A `gpkg_t`: an open GeoPackage, and a count of the handles borrowing it.
 pub struct Container {
@@ -345,9 +347,105 @@ pub struct TilesHandle {
     _token: ChildToken,
 }
 
+/// Which stored-tile scan a cursor runs.
+pub enum CursorScan {
+    /// Every stored tile, in matrix order.
+    All,
+    /// One zoom level.
+    At(i64),
+    /// One zoom level, within a bounding box in the pyramid's own SRS.
+    In(i64, BoundingBox),
+}
+
 impl TilesHandle {
     /// The pyramid, borrowed for as long as the caller holds the handle.
     pub fn pyramid(&self) -> &TilePyramid<'static> {
         &self.pyramid
+    }
+
+    /// Take another count against this handle's container, for something that
+    /// borrows the same container independently, such as a tile cursor.
+    pub fn token(&self) -> ChildToken {
+        // SAFETY: this handle holds a token of its own, so the container it
+        // points at is still alive; taking a second count against it is the
+        // same operation `Container::token` performs.
+        let parent = unsafe { &*self._token.parent };
+        parent.token()
+    }
+
+    /// Begin a stored-tile scan as a child handle.
+    ///
+    /// The cursor visits what the pyramid stores rather than probing the
+    /// declared grid, which on a sparse pyramid is the difference between
+    /// O(stored) and O(grid). It counts against the *container*, not against
+    /// this handle: the statement underneath borrows the container's
+    /// connection, so the tiles handle itself may be freed while the cursor
+    /// lives, and the container still refuses to close until the cursor is
+    /// freed.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the corresponding [`TilePyramid`] cursor constructor returns.
+    pub fn cursor(&self, scan: &CursorScan) -> geopackage::Result<TileCursorHandle> {
+        let cursor = match scan {
+            CursorScan::All => self.pyramid.cursor()?,
+            CursorScan::At(zoom) => self.pyramid.cursor_at(*zoom)?,
+            CursorScan::In(zoom, bbox) => self.pyramid.cursor_in(*zoom, *bbox)?,
+        };
+        // SAFETY: the cursor's borrow is a prepared statement against the
+        // container's connection, which is boxed and never moved or replaced
+        // (invariant 1), and the container cannot close while the token below
+        // is alive (invariant 2). So the erased-to-`'static` borrow never
+        // outlives what it points at; the transmute changes only the lifetime
+        // parameter.
+        let erased: TileCursor<'static> = unsafe { std::mem::transmute(cursor) };
+        let mut cursor = Box::new(erased);
+        let stream = cursor.tiles()?;
+        // SAFETY: the stream borrows the boxed cursor's statement. The box
+        // gives that statement a stable address, the struct below owns both
+        // and declares the stream first, so it drops before the cursor, and
+        // nothing hands out a second borrow of the cursor while the stream
+        // lives. The transmute changes only the lifetime parameter.
+        let stream: TileStream<'static> = unsafe { std::mem::transmute(stream) };
+        Ok(TileCursorHandle {
+            stream,
+            _cursor: cursor,
+            _token: self.token(),
+        })
+    }
+}
+
+/// A `gpkg_tile_cursor_t`: one scan over a pyramid's stored tiles.
+///
+/// Owns the whole borrow chain: the stream borrows the boxed cursor, the
+/// cursor's statement borrows the container's connection, and the token is
+/// what stops the container closing underneath both. Field order matters:
+/// the stream is declared first so it drops before the cursor it borrows.
+pub struct TileCursorHandle {
+    /// The scan in progress. Erased; borrows `_cursor`.
+    stream: TileStream<'static>,
+    /// The prepared statement the stream walks. Boxed so its address is
+    /// stable while the stream borrows it; never touched again directly.
+    _cursor: Box<TileCursor<'static>>,
+    /// What keeps the container alive while this handle exists.
+    _token: ChildToken,
+}
+
+impl TileCursorHandle {
+    /// The next stored tile, or `None` at the end of the scan.
+    ///
+    /// The returned [`Tile`] lends the row's payload: it is valid until the
+    /// next call on this handle, exactly as the Rust lending cursor's borrow
+    /// rules state, and the C contract repeats.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`TileStream::next`] returns.
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "a lending cursor cannot implement Iterator: its item borrows the iterator. The name matches TileStream::next, whose expectation records the same reasoning"
+    )]
+    pub fn next(&mut self) -> geopackage::Result<Option<Tile<'_>>> {
+        self.stream.next()
     }
 }
