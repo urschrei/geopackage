@@ -133,10 +133,11 @@
 //! brings the index up to date itself, so the check belongs at arrival, not in
 //! a loop. There is no save call to look for: SQLite commits, so
 //! [`gpkg_commit`] is the save, and a program that never calls [`gpkg_begin`]
-//! has each write durable when its call returns. And the append is the whole
-//! of feature mutation from C: nothing in this ABI updates or deletes an
-//! existing feature. A consumer needing that uses the Rust crate, where
-//! [`geopackage::Layer::writer`] gives per-row insert, update and delete.
+//! has each write durable when its call returns. And the Arrow write is an
+//! append: to change or remove features that are already there, take a
+//! [`gpkg_writer_t`] with [`gpkg_layer_writer`], whose insert, update and
+//! delete work a row at a time and land together at
+//! [`gpkg_writer_commit`].
 //!
 //! # Conventions
 //!
@@ -153,18 +154,27 @@
 //!   small set of categories to branch on, and the message carries the detail.
 //! - **Handles** are opaque, and each has exactly one destructor: `gpkg_t` from
 //!   [`gpkg_open`], [`gpkg_open_read_only`] or [`gpkg_create`] is destroyed by
-//!   [`gpkg_close`]; `gpkg_layer_t` from [`gpkg_layer_open`] or
-//!   [`gpkg_attributes_open`] by [`gpkg_layer_free`]; `gpkg_tiles_t` from
-//!   [`gpkg_tiles_open`] by [`gpkg_tiles_free`]; `gpkg_findings_t` from
-//!   [`gpkg_validate`] by [`gpkg_findings_free`]. Using a handle after its
-//!   destructor is undefined behaviour.
+//!   [`gpkg_close`]; `gpkg_layer_t` from [`gpkg_layer_open`],
+//!   [`gpkg_attributes_open`] or their projected variants by
+//!   [`gpkg_layer_free`]; `gpkg_tiles_t` from [`gpkg_tiles_open`],
+//!   [`gpkg_tiles_create`] or [`gpkg_tiles_create_web_mercator`] by
+//!   [`gpkg_tiles_free`]; `gpkg_tile_cursor_t` from the cursor constructors by
+//!   [`gpkg_tile_cursor_free`]; `gpkg_findings_t` from [`gpkg_validate`] by
+//!   [`gpkg_findings_free`]. `gpkg_writer_t` alone has two ends, because they
+//!   mean different things: [`gpkg_writer_commit`] keeps its work,
+//!   [`gpkg_writer_free`] discards it. Using a handle after its destructor is
+//!   undefined behaviour.
 //!
 //! # Handle lifetime
 //!
-//! A layer handle, a tiles handle and an Arrow stream each borrow the container
-//! they were taken from. A container with any of them outstanding cannot be
-//! closed: [`gpkg_close`] returns `GPKG_STATUS_HANDLE_IN_USE`, changes nothing,
-//! and leaves the container open and usable. Free the children first.
+//! A layer handle, a tiles handle, a writer, a tile cursor and an Arrow
+//! stream each borrow the container they were taken from. A container with
+//! any of them outstanding cannot be closed: [`gpkg_close`] returns
+//! `GPKG_STATUS_HANDLE_IN_USE`, changes nothing, and leaves the container
+//! open and usable. Free the children first; a tile cursor counts on its own,
+//! so it may outlive the tiles handle it came from. The one handle outside
+//! the rule is `gpkg_findings_t`, which owns plain data and borrows nothing:
+//! it never blocks a close and stays readable after one.
 //!
 //! ```c
 //! gpkg_error_t error = {GPKG_STATUS_OK, NULL};
@@ -193,35 +203,45 @@
 //! # What the ABI covers
 //!
 //! - [`container`]: opening, closing, the version a file declares, the warnings
-//!   a lenient open collected, and the transaction calls [`gpkg_begin`],
+//!   a lenient open collected, a spatial reference system's definition
+//!   ([`gpkg_srs`]), and the transaction calls [`gpkg_begin`],
 //!   [`gpkg_commit`], [`gpkg_rollback`] and [`gpkg_in_transaction`].
-//! - [`layer`]: opening a feature or attribute layer by name, enumerating a
-//!   file's feature layers, and counting rows.
+//! - [`layer`]: opening a feature or attribute layer by name, plain or
+//!   projected to a column subset, enumerating a file's feature layers, and
+//!   counting rows.
 //! - [`schema`]: what a layer declares. Columns and their types, the geometry
 //!   column and its spatial reference system, the extent, and the spatial
 //!   index.
+//! - [`extensions`]: the `gpkg_extensions` catalogue with the support level
+//!   this library claims per row, which is how a consumer fails fast instead
+//!   of mid-write.
+//! - [`validate`]: every check the library has, as owned findings with
+//!   severity and repair advice.
 //! - [`stream`]: the data plane. Layers are read and written as Arrow record
-//!   batches through the C Data Interface, and a layer can be created from an
+//!   batches through the C Data Interface, whole, bounding-box filtered,
+//!   `WHERE`-filtered or both at once, and a layer can be created from an
 //!   Arrow schema without its columns being described in C at all.
 //! - [`tiles`]: tile pyramids, addressed by zoom level, column and row.
-//!   Payloads cross the boundary as the bytes the file holds; nothing is
-//!   decoded.
+//!   Created, enumerated, read by address or walked by cursor; payloads cross
+//!   the boundary as the bytes the file holds, and nothing is decoded.
 //! - [`error`] and [`util`]: the status codes, the error out-parameter, and
 //!   [`gpkg_string_free`]. The other deallocator, [`gpkg_bytes_free`], sits
-//!   with [`tiles`], which is the only thing that hands out a buffer.
+//!   with [`tiles`], which is the only thing that hands out an owned buffer.
 //!
 //! - [`writer`]: changing features a row at a time. Insert, update and delete,
 //!   with geometry as WKB and values as [`gpkg_value_t`].
 //!
 //! Features are read only as Arrow: a C consumer pulls batches, and there is no
 //! row-at-a-time reader, because Arrow already returns every row and a second
-//! path to the same data would earn nothing. Writing has both, because they do
+//! path to the same data would earn nothing (a single row is the clause
+//! `fid = ?1` on the filtered read). Writing has both, because they do
 //! different things: [`gpkg_layer_write_arrow`] appends in bulk, and a
 //! [`gpkg_writer_t`] changes or removes rows that are already there.
 //!
-//! Validation, metadata and the related-tables extension are not exposed at
-//! all: they stay behind the Rust API, and `gpkg validate` covers the first
-//! from the command line.
+//! Metadata and the related-tables extension are not exposed: they stay
+//! behind the Rust API until a C consumer asks. Both are ordinary tables in
+//! the file, so a consumer that needs them today reads them through SQLite
+//! directly.
 //!
 //! # Threading
 //!
