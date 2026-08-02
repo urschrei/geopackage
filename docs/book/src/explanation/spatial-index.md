@@ -89,13 +89,13 @@ nodes, and populating an index one row at a time pays that cost for every row.
 This is not a peculiar observation: GDAL reached the same conclusion in
 [gdal#7614](https://github.com/OSGeo/gdal/issues/7614).
 
-The first attempt here was to build the RTree in an `ATTACH`ed scratch
-database and copy its shadow tables into the target. Measurement showed the
-scratch build had simply become the dominant cost, because it still inserted
-every entry through the module one row at a time. The work had moved rather
-than gone away.
+The obvious alternative is to build the RTree in an `ATTACH`ed scratch
+database, through the RTree module, and copy its shadow tables into the
+target. Measured, that build is dominated by the same cost, because it still
+inserts every entry through the module one row at a time: the work moves
+rather than goes away.
 
-So the tree is now built outright. The `rtree_%_node`, `_rowid` and `_parent`
+So the tree is built outright. The `rtree_%_node`, `_rowid` and `_parent`
 contents are laid out in memory from the accumulated entry set, and written as
 ordinary rows. No RTree module logic, no `ST_*` calls, no triggers, and no
 scratch database. This is possible because the GeoPackage RTree is always
@@ -103,10 +103,10 @@ scratch database. This is possible because the GeoPackage RTree is always
 columns, so the three shadow tables have a fixed shape whatever the index is
 named.
 
-Dropping the scratch database had a second effect that matters more than the
-speed. `ATTACH` requires autocommit, which had forced the build out of the
-caller's transaction and left a window in which a crash committed the rows but
-not the index. The whole build is now one transaction: dropping the triggers,
+Avoiding the scratch database matters for a second reason more than for the
+speed. `ATTACH` requires autocommit, which would force the build out of the
+caller's transaction and leave a window in which a crash commits the rows but
+not the index. Built directly, the whole build is one transaction: dropping the triggers,
 every row insert, the `gpkg_contents` flush, the index work and reinstalling
 the triggers all commit together, so the rows can never be committed against
 an index that was not brought up to date with them.
