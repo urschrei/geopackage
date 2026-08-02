@@ -19,7 +19,7 @@ Data Interface as the bulk data plane.
 | [07-m5-extensions-and-1.0.md](07-m5-extensions-and-1.0.md) | M5: extensions, then the CLI and C ABI M3 left unbuilt, then the API freeze |
 | [08-testing-conformance.md](08-testing-conformance.md) | Cross-cutting: conformance harness, fuzzing, benchmarks, corpus |
 
-## Status snapshot (2026-07-29)
+## Status snapshot (2026-08-02)
 
 | Milestone | State |
 |---|---|
@@ -63,6 +63,12 @@ clippy clean under the strict lint set. CI runs the same across 3 OSes at MSRV
   of the API review. `scripts/public_api.sh` records every exported item and CI
   diffs it, which is the mechanised half; deciding which of those items should
   stay public, and which want `#[non_exhaustive]`, has not started.
+- **The C API sense-check precedes the API review** (added 2026-08-02): the C
+  surface was scoped by mirroring the Rust API, so it has been validated
+  against this crate's shape rather than against what C consumers of the
+  format do. It gets compared against GDAL's C API and against what QGIS
+  would need to sit on it, and any finding becomes either a C API item or a
+  Rust change, decided before the freeze while Rust changes are still cheap.
 
 ### Milestone history
 
