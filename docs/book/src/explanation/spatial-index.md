@@ -135,31 +135,16 @@ The cost is substantial and worth quoting precisely. Profiled over one million
 points, the gate is about 45% of the build: roughly 745 ms of a 1593 ms build,
 split about evenly between the bijection scan, which reads every entry back
 out of the index, and `rtreecheck`, which walks the whole tree. GDAL's builder
-runs no equivalent, and with the gate on by default this library is level with
-it rather than comfortably ahead.
+runs no equivalent; with the gate on, this library is level with it rather
+than ahead.
 
-## Why verification became opt-in
-
-Through version 0.5 the gate ran on every bulk build. From 0.6 the default is
-to run none of it, and the reasoning is about the age of the code rather than
-about the speed.
-
-Paying 45% for insurance is the right price while the packer is new, because
-the failure it guards against is a structurally malformed tree that no
-ordinary test would notice until a query returned the wrong rows. It stops
-being the right price once the packer has enough history behind it for that
-failure to be unlikely, at which point the cost is better paid by the
-callers who want it than by everyone.
-
-There is a consequence worth stating plainly: with verification off, nothing
-is read back, so a build cannot fail its check and cannot fall back to the
-triggered path. The automatic fallback exists only where a check does. A
-caller writing files of consequence, or bisecting a suspected index problem,
-turns verification back on and gets both.
-
-Removing the gate entirely is a separate question, deferred to 1.0. Until
-then it remains available at three levels: contents only, contents plus
-`rtreecheck`, and both plus a whole-database integrity check.
+Verification is therefore opt-in, at three levels: contents only, contents
+plus `rtreecheck`, and both plus a whole-database integrity check. One
+consequence is worth stating plainly: with verification off, nothing is read
+back, so a build cannot fail its check and cannot fall back to the triggered
+path. The automatic fallback exists only where a check does. A caller writing
+files of consequence, or bisecting a suspected index problem, turns
+verification on and gets both.
 
 ## Node fill
 
