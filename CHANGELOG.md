@@ -8,6 +8,13 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- **`geopackage-ffi`: tile pyramids can be enumerated.**
+  `gpkg_tiles_names_count` and `gpkg_tiles_name_at` walk a file's pyramids by
+  table name, mirroring the layer pair, so a C consumer no longer has to know
+  a pyramid's name before opening it.
+
 ## [0.6.0] - 2026-07-29
 
 ### Added
