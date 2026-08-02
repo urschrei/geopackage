@@ -115,3 +115,49 @@ pub unsafe extern "C" fn gpkg_string_free(text: *mut c_char) {
     // allocator that made it.
     drop(unsafe { CString::from_raw(text) });
 }
+
+/// Convert and write a set of optional strings to NULL-able out-parameters.
+///
+/// Everything is converted before anything is written, so a failure writes
+/// nothing and the caller has nothing partial to free. An absent value writes
+/// NULL to its slot when the slot was requested, which `gpkg_string_free`
+/// accepts harmlessly; a NULL slot is skipped.
+///
+/// # Safety
+///
+/// Every non-NULL slot must point at writable storage for a `char *`, and
+/// `error` must be NULL or writable.
+pub(crate) unsafe fn write_out_strings(
+    slots: &[(*mut *mut c_char, Option<String>)],
+    error: *mut gpkg_error_t,
+) -> bool {
+    let mut converted: Vec<*mut c_char> = Vec::with_capacity(slots.len());
+    for (out, text) in slots {
+        let wanted = match text {
+            Some(text) if !out.is_null() => Some(text.as_str()),
+            _ => None,
+        };
+        let Some(text) = wanted else {
+            converted.push(std::ptr::null_mut());
+            continue;
+        };
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        let owned = unsafe { out_string(text, error) };
+        if owned.is_null() {
+            for earlier in converted.into_iter().filter(|p| !p.is_null()) {
+                // SAFETY: `earlier` came from `CString::into_raw` inside
+                // `out_string` and has not been handed to the caller.
+                drop(unsafe { CString::from_raw(earlier) });
+            }
+            return false;
+        }
+        converted.push(owned);
+    }
+    for ((out, _), owned) in slots.iter().zip(converted) {
+        if !out.is_null() {
+            // SAFETY: the caller guarantees non-NULL slots are writable.
+            unsafe { *(*out) = owned };
+        }
+    }
+    true
+}

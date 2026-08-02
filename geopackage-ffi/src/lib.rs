@@ -234,6 +234,7 @@
 
 pub mod container;
 pub mod error;
+pub mod extensions;
 pub mod handle;
 pub mod layer;
 pub mod schema;
@@ -249,6 +250,7 @@ pub use container::{
     gpkg_t, gpkg_version,
 };
 pub use error::{Status, gpkg_error_clear, gpkg_error_t};
+pub use extensions::{gpkg_extension_at, gpkg_extensions_count};
 pub use layer::{
     gpkg_attributes_open, gpkg_attributes_open_with_columns, gpkg_layer_count, gpkg_layer_free,
     gpkg_layer_name, gpkg_layer_name_at, gpkg_layer_names_count, gpkg_layer_open,

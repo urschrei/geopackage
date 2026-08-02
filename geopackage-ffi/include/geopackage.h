@@ -733,6 +733,49 @@ gpkg_status gpkg_srs(const gpkg_t *gpkg,
 void gpkg_error_clear(gpkg_error_t *error);
 
 /**
+ * How many `gpkg_extensions` rows the file carries.
+ *
+ * Zero for a file with no `gpkg_extensions` table at all, which is a file
+ * carrying no extensions. `gpkg_extension_at` walks the same list, ordered
+ * by extension name, then table, then column.
+ *
+ * # Safety
+ *
+ * `gpkg` must be a live container handle, `out` writable, `error` NULL or
+ * writable.
+ */
+gpkg_status gpkg_extensions_count(const gpkg_t *gpkg, size_t *out, gpkg_error_t *error);
+
+/**
+ * One `gpkg_extensions` row, with the support level this library claims.
+ *
+ * The list is the one `gpkg_extensions_count` counts. Every out-parameter
+ * may be NULL to skip it; each string written is owned by the caller and
+ * released with `gpkg_string_free`. `out_table` and `out_column` are NULL
+ * when the row applies to the whole file or the whole table, which is what
+ * their NULLs mean in the catalogue itself. `out_scope` is the row's
+ * declared scope, `read-write` or `write-only`; `out_support` is this
+ * library's support level for the extension, in the module documentation's
+ * vocabulary.
+ *
+ * An index at or beyond the count is `GPKG_STATUS_NOT_FOUND` rather than a
+ * failure to read. On any failure nothing is written.
+ *
+ * # Safety
+ *
+ * `gpkg` must be a live container handle; every out-parameter NULL or
+ * writable; `error` NULL or writable.
+ */
+gpkg_status gpkg_extension_at(const gpkg_t *gpkg,
+                              size_t index,
+                              char **out_name,
+                              char **out_table,
+                              char **out_column,
+                              char **out_scope,
+                              char **out_support,
+                              gpkg_error_t *error);
+
+/**
  * Open a feature layer by name.
  *
  * The name is a `gpkg_contents.table_name`, matched without regard to case,
