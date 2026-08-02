@@ -311,7 +311,7 @@ impl Layer<'_> {
     /// This is **never** invoked automatically: a rebuild is expensive, and an
     /// index this crate will not trust is one it works around rather than one
     /// that gives a wrong answer. Contrast [`Layer::extent`], which does record
-    /// what it measures, for the reasons given in the module documentation.
+    /// what it measures; that method's documentation gives the reasons.
     ///
     /// Repairs every state except a healthy or an absent index (see
     /// [`SpatialIndexStatus`]):

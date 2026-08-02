@@ -108,6 +108,16 @@ impl Layer<'_> {
     /// the file's contents and modification time**. The point is that the file
     /// stops being wrong, for every later reader rather than only this one.
     ///
+    /// The recorded extent deserves this caution because the format gives it
+    /// none: the spec calls the bounds informative, sets no requirement on
+    /// their values, and a reader can only check that they are present and
+    /// well ordered. A well-ordered wrong box is therefore believed
+    /// indefinitely (GDAL returns one verbatim and never recomputes it, even
+    /// under `bForce`; QGIS behaves the same way), while NULL bounds make a
+    /// reader compute the real extent. That asymmetry is why this crate
+    /// records NULL rather than anything invented, and never records a box it
+    /// cannot guarantee covers the layer.
+    ///
     /// Nothing is written when the recorded bounds are already usable, which is
     /// the ordinary case, nor on a read-only connection, nor when there is
     /// nothing to measure and the bounds are already NULL. To read the recorded

@@ -143,6 +143,12 @@ impl TilePyramidBuilder {
 /// once at construction and kept sorted by zoom level, so addressing a tile
 /// costs a binary search rather than a query, and the handle borrows the
 /// [`GeoPackage`] for its lifetime.
+///
+/// Creation validates a pyramid against the spec's consistency rules; reading
+/// never does, so a pyramid another implementation wrote opens on whatever
+/// its `gpkg_tile_matrix` rows say. [`TilePyramid::validate`] checks one on
+/// request. Payloads are opaque throughout: stored, indexed and checked by
+/// their headers, never decoded.
 pub struct TilePyramid<'a> {
     gpkg: &'a GeoPackage,
     table_name: String,

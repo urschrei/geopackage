@@ -25,6 +25,30 @@ use super::write_all::{BboxFold, GeomTarget};
 ///
 /// Both of those last two sentences change when the writer was opened inside a
 /// transaction the caller had already begun: see [`Self::commit`].
+///
+/// # The bounding box
+///
+/// The fold is seeded from the recorded `gpkg_contents` box and grows with
+/// each written geometry; deletes do not shrink it, since an over-estimate is
+/// spec-legal and shrinking would need a rescan. It is written back only when
+/// it is guaranteed to cover the layer: a writer that started with no usable
+/// recorded box over a table that already contained rows leaves the extent
+/// alone, because recording a box covering only its own writes would replace
+/// an accurate "unknown" with one that excludes every pre-existing row.
+/// [`crate::Layer::recompute_extent`] records the true extent on request.
+///
+/// # Writing while a cursor over the same layer is stepping
+///
+/// A writer and a [`crate::FeatureCursor`] share the connection, so a scan
+/// can drive its own updates. SQLite promises no isolation between a `SELECT`
+/// and writes on the same connection: the scan is stable in practice when the
+/// cursor is a plain table scan ([`crate::Layer::cursor`]), the columns
+/// written are not ones the scan's index reads, and the primary key is not
+/// written. The case to avoid is writing geometries during a
+/// [`crate::Layer::cursor_in`] scan: that scan is driven by the RTree, and a
+/// geometry write moves rows within it, which can make the scan return rows
+/// it has already returned. Recompute geometries in two passes instead:
+/// collect the feature ids, finish the scan, then write.
 pub struct FeatureWriter<'conn> {
     /// Opened by [`crate::Layer::writer`], or the caller's, inherited. Only the commit
     /// distinguishes them; every statement is issued against `conn`, which is
@@ -389,9 +413,9 @@ impl<'conn> FeatureWriter<'conn> {
     /// Updates the feature `fid`, setting its geometry and values. Returns
     /// whether a row matched.
     ///
-    /// Writing a geometry while a cursor over the same layer is stepping is the
-    /// one case the module documentation says to avoid: on an indexed layer it
-    /// moves the row within the index the scan may be reading.
+    /// Writing a geometry while a cursor over the same layer is stepping is
+    /// the one case the [`FeatureWriter`] notes say to avoid: on an indexed
+    /// layer it moves the row within the index the scan may be reading.
     ///
     /// # Errors
     ///
@@ -517,9 +541,10 @@ impl<'conn> FeatureWriter<'conn> {
     ///
     /// An empty `columns` reports whether the row exists and changes nothing.
     ///
-    /// The example below drives the update from a scan of the same layer, which
-    /// is sound for a plain [`crate::Layer::cursor`] writing non-indexed columns; see
-    /// the module documentation for where that stops holding.
+    /// The example below drives the update from a scan of the same layer,
+    /// which is sound for a plain [`crate::Layer::cursor`] writing non-indexed
+    /// columns; the notes on [`FeatureWriter`] say where that stops being
+    /// true.
     ///
     /// ```no_run
     /// # fn main() -> geopackage::Result<()> {
