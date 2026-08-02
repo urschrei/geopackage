@@ -196,6 +196,27 @@ impl Container {
         })
     }
 
+    /// Create a tile pyramid and hand it back as a child handle.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`GeoPackage::create_tile_pyramid`] returns.
+    pub fn create_tiles(
+        &self,
+        builder: &geopackage::TilePyramidBuilder,
+    ) -> geopackage::Result<TilesHandle> {
+        let pyramid = self.gpkg.create_tile_pyramid(builder)?;
+        // SAFETY: the same argument as `tiles` above: the pyramid borrows the
+        // boxed, never-moved `GeoPackage`, and the token stops this container
+        // closing while the handle lives. The transmute changes only the
+        // lifetime parameter.
+        let erased: TilePyramid<'static> = unsafe { std::mem::transmute(pyramid) };
+        Ok(TilesHandle {
+            pyramid: erased,
+            _token: self.token(),
+        })
+    }
+
     /// Take one count against this container, released when the token drops.
     ///
     /// Used by anything that erases a borrow of this container: layer handles,

@@ -271,11 +271,11 @@ pub use stream::{
 };
 pub use tiles::{
     gpkg_bytes_free, gpkg_tile_cursor_free, gpkg_tile_cursor_next, gpkg_tile_cursor_t,
-    gpkg_tiles_count, gpkg_tiles_count_at, gpkg_tiles_cursor, gpkg_tiles_cursor_at,
-    gpkg_tiles_cursor_in, gpkg_tiles_delete, gpkg_tiles_extent, gpkg_tiles_free, gpkg_tiles_get,
-    gpkg_tiles_get_into, gpkg_tiles_has, gpkg_tiles_matrix_at, gpkg_tiles_name, gpkg_tiles_name_at,
-    gpkg_tiles_names_count, gpkg_tiles_open, gpkg_tiles_put, gpkg_tiles_t,
-    gpkg_tiles_zoom_level_count,
+    gpkg_tiles_count, gpkg_tiles_count_at, gpkg_tiles_create, gpkg_tiles_create_web_mercator,
+    gpkg_tiles_cursor, gpkg_tiles_cursor_at, gpkg_tiles_cursor_in, gpkg_tiles_delete,
+    gpkg_tiles_extent, gpkg_tiles_free, gpkg_tiles_get, gpkg_tiles_get_into, gpkg_tiles_has,
+    gpkg_tiles_matrix_at, gpkg_tiles_name, gpkg_tiles_name_at, gpkg_tiles_names_count,
+    gpkg_tiles_open, gpkg_tiles_put, gpkg_tiles_t, gpkg_tiles_zoom_level_count,
 };
 pub use util::gpkg_string_free;
 pub use validate::{

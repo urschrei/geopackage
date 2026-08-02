@@ -1919,6 +1919,68 @@ gpkg_status gpkg_tile_cursor_next(gpkg_tile_cursor_t *cursor,
 void gpkg_tile_cursor_free(gpkg_tile_cursor_t *cursor);
 
 /**
+ * Create a tile pyramid, returning its handle.
+ *
+ * The pyramid is declared over the extent `min_x, min_y, max_x, max_y` in
+ * the spatial reference system `srs_id`, which must already exist in the
+ * file; `gpkg_add_epsg_srs` puts one there. Zoom levels run from `min_zoom`
+ * to `max_zoom` inclusive, each halving the tile span of the one before, on
+ * a grid of `base_columns` by `base_rows` tiles at `min_zoom` with tiles of
+ * `tile_width` by `tile_height` pixels. Zero for any of those four takes
+ * the default: a 1 by 1 base grid of 256-pixel tiles.
+ *
+ * The returned handle is `gpkg_tiles_open`'s, ready to fill with
+ * `gpkg_tiles_put`, and released with `gpkg_tiles_free`. Creating the
+ * pyramid registers its `gpkg_contents` and `gpkg_tile_matrix` rows; it
+ * stores no tiles.
+ *
+ * For the web mercator tiling every XYZ basemap uses, prefer
+ * `gpkg_tiles_create_web_mercator`, which fixes the extent and grid so the
+ * two cannot disagree.
+ *
+ * Fails with `GPKG_STATUS_ALREADY_EXISTS` when the file already has a table
+ * of that name, and `GPKG_STATUS_NOT_FOUND` when the SRS is not in the
+ * file. Returns NULL on failure.
+ *
+ * # Safety
+ *
+ * `gpkg` must be a live container handle, `name` a NUL-terminated UTF-8
+ * string, and `error` NULL or writable.
+ */
+gpkg_tiles_t *gpkg_tiles_create(const gpkg_t *gpkg,
+                                const char *name,
+                                int32_t srs_id,
+                                double min_x,
+                                double min_y,
+                                double max_x,
+                                double max_y,
+                                int64_t min_zoom,
+                                int64_t max_zoom,
+                                int64_t base_columns,
+                                int64_t base_rows,
+                                int64_t tile_width,
+                                int64_t tile_height,
+                                gpkg_error_t *error);
+
+/**
+ * Create a tile pyramid on the web mercator quad, returning its handle.
+ *
+ * The tiling every XYZ basemap uses: `EPSG:3857`, the full quad extent, one
+ * 256-pixel tile at zoom 0, doubling per level. `gpkg_add_epsg_srs(gpkg,
+ * 3857, ...)` must have run first, since a pyramid cannot name an SRS the
+ * file does not carry. Everything else is as `gpkg_tiles_create`.
+ *
+ * # Safety
+ *
+ * As [`gpkg_tiles_create`].
+ */
+gpkg_tiles_t *gpkg_tiles_create_web_mercator(const gpkg_t *gpkg,
+                                             const char *name,
+                                             int64_t min_zoom,
+                                             int64_t max_zoom,
+                                             gpkg_error_t *error);
+
+/**
  * Release a string this library returned.
  *
  * Every call that returns a `char *` returns an allocation the caller owns,
