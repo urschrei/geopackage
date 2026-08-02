@@ -115,8 +115,8 @@
 
 use std::ffi::c_char;
 
-use geopackage::BoundingBox;
-use geopackage::core::tiles::TileCoord;
+use geopackage::core::tiles::{TileCoord, TileMatrixSet, ZoomLadder};
+use geopackage::{BoundingBox, TilePyramidBuilder};
 
 use crate::error::{Status, gpkg_error_t, set_error, set_library_error};
 use crate::handle::{Container, CursorScan, TileCursorHandle, TilesHandle};
@@ -1121,4 +1121,142 @@ pub unsafe extern "C" fn gpkg_tile_cursor_free(cursor: *mut gpkg_tile_cursor_t) 
     // `open_cursor` and has not been freed. Dropping it decrements the
     // container's child count, which is what later permits a close.
     drop(unsafe { Box::from_raw(cursor) });
+}
+
+/// Create a tile pyramid, returning its handle.
+///
+/// The pyramid is declared over the extent `min_x, min_y, max_x, max_y` in
+/// the spatial reference system `srs_id`, which must already exist in the
+/// file; `gpkg_add_epsg_srs` puts one there. Zoom levels run from `min_zoom`
+/// to `max_zoom` inclusive, each halving the tile span of the one before, on
+/// a grid of `base_columns` by `base_rows` tiles at `min_zoom` with tiles of
+/// `tile_width` by `tile_height` pixels. Zero for any of those four takes
+/// the default: a 1 by 1 base grid of 256-pixel tiles.
+///
+/// The returned handle is `gpkg_tiles_open`'s, ready to fill with
+/// `gpkg_tiles_put`, and released with `gpkg_tiles_free`. Creating the
+/// pyramid registers its `gpkg_contents` and `gpkg_tile_matrix` rows; it
+/// stores no tiles.
+///
+/// For the web mercator tiling every XYZ basemap uses, prefer
+/// `gpkg_tiles_create_web_mercator`, which fixes the extent and grid so the
+/// two cannot disagree.
+///
+/// Fails with `GPKG_STATUS_ALREADY_EXISTS` when the file already has a table
+/// of that name, and `GPKG_STATUS_NOT_FOUND` when the SRS is not in the
+/// file. Returns NULL on failure.
+///
+/// # Safety
+///
+/// `gpkg` must be a live container handle, `name` a NUL-terminated UTF-8
+/// string, and `error` NULL or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_tiles_create(
+    gpkg: *const Container,
+    name: *const c_char,
+    srs_id: i32,
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+    min_zoom: i64,
+    max_zoom: i64,
+    base_columns: i64,
+    base_rows: i64,
+    tile_width: i64,
+    tile_height: i64,
+    error: *mut gpkg_error_t,
+) -> *mut gpkg_tiles_t {
+    let set = TileMatrixSet::new(srs_id, min_x, min_y, max_x, max_y);
+    // SAFETY: forwarded to this function's contract.
+    unsafe {
+        create_pyramid(
+            gpkg,
+            name,
+            set,
+            min_zoom,
+            max_zoom,
+            (base_columns, base_rows),
+            (tile_width, tile_height),
+            error,
+        )
+    }
+}
+
+/// Create a tile pyramid on the web mercator quad, returning its handle.
+///
+/// The tiling every XYZ basemap uses: `EPSG:3857`, the full quad extent, one
+/// 256-pixel tile at zoom 0, doubling per level. `gpkg_add_epsg_srs(gpkg,
+/// 3857, ...)` must have run first, since a pyramid cannot name an SRS the
+/// file does not carry. Everything else is as `gpkg_tiles_create`.
+///
+/// # Safety
+///
+/// As [`gpkg_tiles_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_tiles_create_web_mercator(
+    gpkg: *const Container,
+    name: *const c_char,
+    min_zoom: i64,
+    max_zoom: i64,
+    error: *mut gpkg_error_t,
+) -> *mut gpkg_tiles_t {
+    let set = TileMatrixSet::web_mercator_quad();
+    // SAFETY: forwarded to this function's contract.
+    unsafe { create_pyramid(gpkg, name, set, min_zoom, max_zoom, (0, 0), (0, 0), error) }
+}
+
+/// The body of both creators.
+///
+/// # Safety
+///
+/// As [`gpkg_tiles_create`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a private body shared by two C entry points whose parameters are the C signature"
+)]
+unsafe fn create_pyramid(
+    gpkg: *const Container,
+    name: *const c_char,
+    set: TileMatrixSet,
+    min_zoom: i64,
+    max_zoom: i64,
+    base_grid: (i64, i64),
+    tile_size: (i64, i64),
+    error: *mut gpkg_error_t,
+) -> *mut gpkg_tiles_t {
+    if gpkg.is_null() {
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::BadArgument, "gpkg handle is NULL") };
+        return std::ptr::null_mut();
+    }
+    // SAFETY: forwarded to the caller's guarantee on `name`.
+    let Some(name) = (unsafe { borrow_str(name, error, "pyramid name") }) else {
+        return std::ptr::null_mut();
+    };
+    let mut ladder = ZoomLadder::new(min_zoom, max_zoom);
+    if base_grid != (0, 0) {
+        ladder = ladder.base_grid(base_grid.0, base_grid.1);
+    }
+    if tile_size != (0, 0) {
+        ladder = ladder.tile_size(tile_size.0, tile_size.1);
+    }
+    let matrices = match set.ladder(ladder) {
+        Ok(matrices) => matrices,
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_error(error, Status::InvalidArgument, &err.to_string()) };
+            return std::ptr::null_mut();
+        }
+    };
+    let builder = TilePyramidBuilder::new(name, set).matrices(matrices);
+    // SAFETY: the caller guarantees a live container handle.
+    match unsafe { (*gpkg).create_tiles(&builder) } {
+        Ok(handle) => Box::into_raw(Box::new(handle)),
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            std::ptr::null_mut()
+        }
+    }
 }

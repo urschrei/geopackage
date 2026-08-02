@@ -6,11 +6,11 @@ use std::path::PathBuf;
 use geopackage_ffi::{
     Status, gpkg_bytes_free, gpkg_close, gpkg_error_clear, gpkg_error_t, gpkg_open,
     gpkg_open_read_only, gpkg_string_free, gpkg_t, gpkg_tile_cursor_free, gpkg_tile_cursor_next,
-    gpkg_tiles_count, gpkg_tiles_count_at, gpkg_tiles_cursor, gpkg_tiles_cursor_at,
-    gpkg_tiles_cursor_in, gpkg_tiles_delete, gpkg_tiles_extent, gpkg_tiles_free, gpkg_tiles_get,
-    gpkg_tiles_has, gpkg_tiles_matrix_at, gpkg_tiles_name, gpkg_tiles_name_at,
-    gpkg_tiles_names_count, gpkg_tiles_open, gpkg_tiles_put, gpkg_tiles_t,
-    gpkg_tiles_zoom_level_count,
+    gpkg_tiles_count, gpkg_tiles_count_at, gpkg_tiles_create, gpkg_tiles_create_web_mercator,
+    gpkg_tiles_cursor, gpkg_tiles_cursor_at, gpkg_tiles_cursor_in, gpkg_tiles_delete,
+    gpkg_tiles_extent, gpkg_tiles_free, gpkg_tiles_get, gpkg_tiles_has, gpkg_tiles_matrix_at,
+    gpkg_tiles_name, gpkg_tiles_name_at, gpkg_tiles_names_count, gpkg_tiles_open, gpkg_tiles_put,
+    gpkg_tiles_t, gpkg_tiles_zoom_level_count,
 };
 
 fn error_slot() -> gpkg_error_t {
@@ -719,6 +719,151 @@ fn a_cursor_over_an_unknown_zoom_level_is_refused() {
     unsafe { gpkg_tile_cursor_free(empty) };
     // SAFETY: a live pyramid handle, freed exactly once.
     unsafe { gpkg_tiles_free(tiles) };
+    // SAFETY: nothing borrows the container.
+    let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(closed, Status::Ok);
+}
+
+#[test]
+fn a_pyramid_can_be_created_filled_and_read_back_from_c() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("new.gpkg");
+    let c_path = CString::new(path.to_str().expect("path is UTF-8")).expect("no interior NUL");
+    let mut error = error_slot();
+    // SAFETY: a valid path and a writable error slot.
+    let gpkg = unsafe { geopackage_ffi::gpkg_create(c_path.as_ptr(), &raw mut error) };
+    assert!(!gpkg.is_null(), "{:?}", message(&error));
+
+    let name = CString::new("basemap").expect("no interior NUL");
+
+    // The SRS must exist before a pyramid can name it.
+    // SAFETY: a live container handle; the missing SRS is the case under test.
+    let premature =
+        unsafe { gpkg_tiles_create_web_mercator(gpkg, name.as_ptr(), 0, 2, &raw mut error) };
+    assert!(premature.is_null(), "creation should need the SRS first");
+    // SAFETY: an error slot this library filled in.
+    unsafe { gpkg_error_clear(&raw mut error) };
+
+    // SAFETY: a live container handle.
+    let status = unsafe { geopackage_ffi::gpkg_add_epsg_srs(gpkg, 3857, &raw mut error) };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+
+    // SAFETY: as above, now with the SRS present.
+    let tiles =
+        unsafe { gpkg_tiles_create_web_mercator(gpkg, name.as_ptr(), 0, 2, &raw mut error) };
+    assert!(!tiles.is_null(), "{:?}", message(&error));
+
+    // The declared ladder is what was asked for: three levels, doubling.
+    let mut levels = 0usize;
+    // SAFETY: a live pyramid handle and a writable out-parameter.
+    let status = unsafe { gpkg_tiles_zoom_level_count(tiles, &raw mut levels, &raw mut error) };
+    assert_eq!(status, Status::Ok);
+    assert_eq!(levels, 3);
+    let (mut zoom, mut width, mut height) = (0i64, 0i64, 0i64);
+    // SAFETY: a live pyramid handle and writable out-parameters.
+    let status = unsafe {
+        gpkg_tiles_matrix_at(
+            tiles,
+            2,
+            &raw mut zoom,
+            &raw mut width,
+            &raw mut height,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok);
+    assert_eq!((zoom, width, height), (2, 4, 4));
+
+    // Fill one tile and read it back through the cursor.
+    let png = png_header(256, 256);
+    // SAFETY: a live pyramid handle and a readable payload.
+    let status = unsafe { gpkg_tiles_put(tiles, 1, 1, 0, png.as_ptr(), png.len(), &raw mut error) };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+
+    // SAFETY: a live pyramid handle.
+    let cursor = unsafe { gpkg_tiles_cursor(tiles, &raw mut error) };
+    assert!(!cursor.is_null(), "{:?}", message(&error));
+    let (mut z, mut c, mut r) = (-1i64, -1i64, -1i64);
+    let mut data: *const u8 = std::ptr::null();
+    let mut len = 0usize;
+    // SAFETY: a live cursor handle and writable out-parameters.
+    let status = unsafe {
+        gpkg_tile_cursor_next(
+            cursor,
+            &raw mut z,
+            &raw mut c,
+            &raw mut r,
+            &raw mut data,
+            &raw mut len,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+    assert_eq!((z, c, r), (1, 1, 0));
+    assert_eq!(len, png.len());
+
+    // A general-form creation with a custom grid, on the same file.
+    let custom = CString::new("geographic").expect("no interior NUL");
+    // SAFETY: a live container handle.
+    let status = unsafe { geopackage_ffi::gpkg_add_epsg_srs(gpkg, 4326, &raw mut error) };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+    // SAFETY: a live container handle and a valid name; zeros take the tile
+    // size default.
+    let geographic = unsafe {
+        gpkg_tiles_create(
+            gpkg,
+            custom.as_ptr(),
+            4326,
+            -180.0,
+            -90.0,
+            180.0,
+            90.0,
+            0,
+            1,
+            2,
+            1,
+            0,
+            0,
+            &raw mut error,
+        )
+    };
+    assert!(!geographic.is_null(), "{:?}", message(&error));
+    let (mut zoom, mut width, mut height) = (0i64, 0i64, 0i64);
+    // SAFETY: a live pyramid handle and writable out-parameters.
+    let status = unsafe {
+        gpkg_tiles_matrix_at(
+            geographic,
+            0,
+            &raw mut zoom,
+            &raw mut width,
+            &raw mut height,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok);
+    assert_eq!(
+        (zoom, width, height),
+        (0, 2, 1),
+        "the base grid was asked for"
+    );
+
+    // Both pyramids enumerate.
+    let mut count = 0usize;
+    // SAFETY: a live container handle and a writable out-parameter.
+    let status = unsafe { gpkg_tiles_names_count(gpkg, &raw mut count, &raw mut error) };
+    assert_eq!(status, Status::Ok);
+    assert_eq!(count, 2);
+
+    // SAFETY: each handle is live and freed exactly once.
+    unsafe { gpkg_tile_cursor_free(cursor) };
+    // SAFETY: as above.
+    unsafe { gpkg_tiles_free(tiles) };
+    // SAFETY: as above.
+    unsafe { gpkg_tiles_free(geographic) };
     // SAFETY: nothing borrows the container.
     let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
     assert_eq!(closed, Status::Ok);
