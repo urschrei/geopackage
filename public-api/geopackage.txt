@@ -990,6 +990,8 @@ pub fn geopackage::Layer<'_>::recompute_extent(&self) -> geopackage::Result<core
 impl geopackage::Layer<'_>
 pub fn geopackage::Layer<'_>::read_arrow(&self, geopackage::arrow::ArrowReadOptions) -> geopackage::Result<geopackage::arrow::ArrowBatches<'_>>
 pub fn geopackage::Layer<'_>::read_arrow_in(&self, geopackage::BoundingBox, geopackage::arrow::ArrowReadOptions) -> geopackage::Result<geopackage::arrow::ArrowBatches<'_>>
+pub fn geopackage::Layer<'_>::read_arrow_in_where(&self, geopackage::BoundingBox, &str, &[geopackage::ValueRef<'_>], geopackage::arrow::ArrowReadOptions) -> geopackage::Result<geopackage::arrow::ArrowBatches<'_>>
+pub fn geopackage::Layer<'_>::read_arrow_where(&self, &str, &[geopackage::ValueRef<'_>], geopackage::arrow::ArrowReadOptions) -> geopackage::Result<geopackage::arrow::ArrowBatches<'_>>
 impl geopackage::Layer<'_>
 pub fn geopackage::Layer<'_>::spatial_index_status(&self) -> geopackage::Result<geopackage::SpatialIndexStatus>
 impl geopackage::Layer<'_>
