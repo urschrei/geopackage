@@ -32,13 +32,13 @@ Data Interface as the bulk data plane.
 | M5 extensions, then CLI and C ABI, then the freeze | **In progress.** Phases 0 to 9 done; phase 10, the API freeze, is what remains. |
 
 Released: v0.1.0, v0.1.1, v0.1.2 (2026-07-24), v0.2.0 (2026-07-25), v0.3.0,
-v0.4.0, v0.5.0 (2026-07-26), v0.6.0 (2026-07-29), v0.7.0 (2026-08-02).
-Workspace version is 0.7.0.
+v0.4.0, v0.5.0 (2026-07-26), v0.6.0 (2026-07-29), v0.7.0 and v0.7.1
+(2026-08-02). Workspace version is 0.7.1.
 No release is planned for the rest of M5: its phases are an order of work, not a
 publication schedule.
 
 **601 tests pass** locally across the workspace with all features, 433 for
-`geopackage` and `geopackage-core` on default features, plus 13 doctests, with
+`geopackage` and `geopackage-core` on default features, plus 23 doctests, with
 clippy clean under the strict lint set. CI runs the same across 3 OSes at MSRV
 1.95.
 
