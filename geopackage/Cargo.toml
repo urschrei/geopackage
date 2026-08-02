@@ -93,3 +93,8 @@ required-features = ["arrow"]
 [[example]]
 name = "dataset_bench"
 required-features = ["arrow"]
+
+[[bench]]
+name = "filtered"
+harness = false
+required-features = ["arrow"]
