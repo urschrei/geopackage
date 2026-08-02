@@ -1,0 +1,5 @@
+[book]
+title = "GeoPackage in Rust"
+authors = ["The GeoRust developers"]
+src = "src"
+language = "en"
