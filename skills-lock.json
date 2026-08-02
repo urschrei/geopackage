@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "documentation": {
+      "source": "smithery.ai",
+      "sourceType": "well-known",
+      "computedHash": "25eb5d33509fdf423acea5286bf4c0ad4e229dcd9afe50c2bea6a892359fb5b2"
+    }
+  }
+}
