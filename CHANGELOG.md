@@ -8,6 +8,27 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- **`geopackage-ffi`: three new worked C programs**, each compiled against
+  the committed header and run in CI beside the existing two, so they cannot
+  drift from the ABI: `inspect.c` (the fail-fast pattern: warnings,
+  enumeration, the extensions catalogue with support levels, validation),
+  `query.c` (the interactive-read pattern: a projected open, the CRS
+  resolved to a definition, and the filtered read's three shapes), and
+  `tilepipe.c` (a pyramid created from nothing, filled, and copied through
+  the lending cursor). The crate docs open with the five-program map.
+
+### Fixed
+
+- **`geopackage-ffi` crate docs told C consumers things that stopped being
+  true.** The claim that nothing in the ABI updates or deletes a feature
+  (false since the row writer landed), the claim that validation is not
+  exposed, a destructor list and handle-lifetime section missing the tile
+  cursor and writer, a module map missing `extensions` and `validate`, and,
+  caught by compiling `query.c`, doc examples using `GPKG_VALUE_TEXT` and
+  friends where the header's constants are `GPKG_VALUE_KIND_*`.
+
 ### Changed
 
 - **The filtered columnar reads scan the spatial index once.** The bbox

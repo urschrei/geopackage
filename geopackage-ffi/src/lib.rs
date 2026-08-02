@@ -48,6 +48,28 @@
 //! }
 //! ```
 //!
+//! # Worked programs
+//!
+//! Five complete C programs ship in `examples/`, and every one is compiled
+//! against the committed header and run by the test suite on every CI run,
+//! so unlike prose they cannot drift from the ABI. Each is one pattern:
+//!
+//! - `smoke.c`: first contact. Open a file, walk its layers, pull a layer
+//!   through the Arrow stream, watch the close refusal hold.
+//! - `inspect.c`: the fail-fast pattern. A tolerant read-only open, the
+//!   warnings it collected, layer and pyramid enumeration, the extensions
+//!   catalogue with support levels, and validation, all before any write
+//!   would be attempted.
+//! - `query.c`: the interactive-read pattern. A projected open, the CRS
+//!   resolved to a definition, and the three shapes of the filtered read:
+//!   a bounding box, the box narrowed by a `WHERE` clause with a bound
+//!   parameter, and one feature by id.
+//! - `roundtrip.c`: the copy pipeline. A destination layer created from the
+//!   source stream's own Arrow schema, filled inside one transaction.
+//! - `tilepipe.c`: the tile pipeline. A pyramid created from nothing on the
+//!   web mercator quad, filled, and copied tile by tile through the lending
+//!   cursor.
+//!
 //! # The edit cycle
 //!
 //! The usual thing to do with a GeoPackage is to open a file that already
