@@ -28,10 +28,12 @@ In that case see
 Open the file read-write and take the layer handle:
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use geopackage::GeoPackage;
 
 let gpkg = GeoPackage::open("roads.gpkg")?;
 let layer = gpkg.layer("roads")?;
+# Ok(()) }
 ```
 
 Check the status before building, because `create_spatial_index` fails with
@@ -39,6 +41,7 @@ Check the status before building, because `create_spatial_index` fails with
 already there, whatever state it is in:
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 # use geopackage::{GeoPackage, SpatialIndexStatus};
 # let gpkg = GeoPackage::open("roads.gpkg")?;
 # let layer = gpkg.layer("roads")?;
@@ -51,6 +54,7 @@ match layer.spatial_index_status()? {
     }
     _ => {}
 }
+# Ok(()) }
 ```
 
 `create_spatial_index` creates the virtual table, installs the GeoPackage 1.4
@@ -65,6 +69,7 @@ Population takes one of two paths, chosen by row count against
 choice, use `create_spatial_index_with`:
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use geopackage::{BulkIndexOptions, BulkVerification};
 
 # use geopackage::GeoPackage;
@@ -74,6 +79,7 @@ use geopackage::{BulkIndexOptions, BulkVerification};
 layer.create_spatial_index_with(
     BulkIndexOptions::always_bulk().with_verification(BulkVerification::Structure),
 )?;
+# Ok(()) }
 ```
 
 Use the verification levels when it matters that a bad build is caught rather
@@ -93,10 +99,12 @@ If the layer will be appended to heavily after the build, lower the node fill
 so the first append into a node does not split it immediately:
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 # use geopackage::{BulkIndexOptions, GeoPackage};
 # let gpkg = GeoPackage::open("roads.gpkg")?;
 # let layer = gpkg.layer("roads")?;
 layer.create_spatial_index_with(BulkIndexOptions::default().with_fill_factor(0.7))?;
+# Ok(()) }
 ```
 
 ## Index a layer as it is written

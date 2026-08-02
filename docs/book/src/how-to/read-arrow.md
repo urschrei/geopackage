@@ -18,6 +18,7 @@ $ cargo add geopackage --features arrow
 ## Read the whole layer
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use geopackage::GeoPackage;
 use geopackage::arrow::ArrowReadOptions;
 
@@ -28,6 +29,7 @@ for batch in layer.read_arrow(ArrowReadOptions::default())? {
     let batch = batch?;
     println!("{} rows", batch.num_rows());
 }
+# Ok(()) }
 ```
 
 Attribute columns follow the type mapping documented on the
@@ -43,12 +45,14 @@ Three variants take filters, and all three are single-threaded:
 - To read the rows intersecting a box, use `read_arrow_in`:
 
   ```rust,no_run
+  # fn main() -> Result<(), Box<dyn std::error::Error>> {
   # use geopackage::{BoundingBox, GeoPackage};
   # use geopackage::arrow::ArrowReadOptions;
   # let gpkg = GeoPackage::open_read_only("roads.gpkg")?;
   # let layer = gpkg.layer("roads")?;
   let bbox = BoundingBox::new(-7.0, 53.0, -6.0, 54.0);
   let batches = layer.read_arrow_in(bbox, ArrowReadOptions::default())?;
+  # Ok(()) }
   ```
 
   It uses the RTree index where the layer has one and a full scan where it
@@ -61,6 +65,7 @@ Three variants take filters, and all three are single-threaded:
   sanitised here; its placeholders are `?1` to `?N`, bound in slice order:
 
   ```rust,no_run
+  # fn main() -> Result<(), Box<dyn std::error::Error>> {
   # use geopackage::{GeoPackage, ValueRef};
   # use geopackage::arrow::ArrowReadOptions;
   # let gpkg = GeoPackage::open_read_only("roads.gpkg")?;
@@ -70,6 +75,7 @@ Three variants take filters, and all three are single-threaded:
       &[ValueRef::Text("motorway")],
       ArrowReadOptions::default(),
   )?;
+  # Ok(()) }
   ```
 
   This is also the columnar read for a single row: pass `fid = ?1` with the
@@ -82,11 +88,13 @@ Three variants take filters, and all three are single-threaded:
 `ArrowReadOptions` controls three things:
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use geopackage::arrow::ArrowReadOptions;
 
 let options = ArrowReadOptions::with_batch_size(16_384)
     .with_threads(1)
     .with_max_batch_bytes(256 * 1024 * 1024);
+# Ok(()) }
 ```
 
 `with_batch_size` starts a fresh set of options from the default; the other
@@ -111,6 +119,7 @@ anything in the Arrow ecosystem that consumes one, including a Parquet writer
 or the Arrow C Data Interface:
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 # use geopackage::GeoPackage;
 # use geopackage::arrow::ArrowReadOptions;
 use arrow_array::RecordBatchReader;
@@ -119,6 +128,7 @@ use arrow_array::RecordBatchReader;
 # let layer = gpkg.layer("roads")?;
 let batches = layer.read_arrow(ArrowReadOptions::default())?;
 let schema = batches.schema();
+# Ok(()) }
 ```
 
 ## Copy a layer through Arrow
@@ -128,6 +138,7 @@ directions of the same type mapping, so a layer can be copied without its
 schema being restated:
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use geopackage::{GeoPackage, TableSchemaBuilder};
 use geopackage::arrow::ArrowReadOptions;
 
@@ -140,6 +151,7 @@ dst.create_layer(&TableSchemaBuilder::new("roads").from_arrow_schema(&schema)?)?
 
 let batches = roads.read_arrow(ArrowReadOptions::default())?;
 dst.layer("roads")?.write_arrow(batches, 0)?;
+# Ok(()) }
 ```
 
 Note that the geometry column comes back declared as its source type here,

@@ -42,6 +42,7 @@ definition one with something wrong with it, and a strict open can fail on a
 legacy `application_id` before you reach the index.
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use geopackage::{GeoPackage, SpatialIndexStatus};
 
 let gpkg = GeoPackage::open_lenient("places.gpkg")?;
@@ -58,6 +59,7 @@ for layer in gpkg.layers()? {
         _ => {}
     }
 }
+# Ok(()) }
 ```
 
 `repair_spatial_index` drops every RTree trigger on the table, installs the
@@ -73,6 +75,7 @@ wrong, in a file where rows were written while the triggers were absent, or
 that another tool populated incompletely. To answer that, audit it:
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 # use geopackage::GeoPackage;
 # let gpkg = GeoPackage::open_lenient("places.gpkg")?;
 # let layer = gpkg.layer("points")?;
@@ -84,6 +87,7 @@ if !audit.is_consistent() {
     );
     layer.rebuild_spatial_index()?;
 }
+# Ok(()) }
 ```
 
 The audit reads every geometry in the layer, so price it as a deliberate

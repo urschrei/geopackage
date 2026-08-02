@@ -52,6 +52,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --workspace --no-deps --all-features
+      # The book's Rust blocks are compiled by `cargo test --doc` through
+      # geopackage/src/book.rs; this step checks the book itself: SUMMARY
+      # completeness and internal links.
+      - name: Install mdbook
+        run: |
+          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C "$HOME/.cargo/bin"
+      - run: mdbook build docs/book
 
   fuzz-build:
     runs-on: ubuntu-latest

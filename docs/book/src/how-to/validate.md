@@ -40,6 +40,7 @@ it is reported rather than rejected.
 ## In Rust
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use geopackage::{GeoPackage, Severity};
 
 let gpkg = GeoPackage::open_read_only_lenient("places.gpkg")?;
@@ -53,6 +54,7 @@ for finding in &findings {
 }
 
 let failed = findings.iter().any(|f| f.severity() == Severity::Error);
+# Ok(()) }
 ```
 
 Findings come back most severe first, and stably ordered within a severity, so
@@ -83,6 +85,7 @@ your behalf. To act on the findings rather than print them, match on the
 variant:
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use geopackage::{Finding, GeoPackage};
 
 let gpkg = GeoPackage::open_lenient("places.gpkg")?;
@@ -103,6 +106,7 @@ for finding in gpkg.validate()? {
         _ => {}
     }
 }
+# Ok(()) }
 ```
 
 Note that the handle has to be open read-write for any of these, and that
