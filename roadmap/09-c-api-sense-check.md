@@ -109,10 +109,16 @@ it is not its own finding.
 
 **F2: no column projection crosses the C boundary.** Rust callers project
 with `Layer::with_columns` and `without_geometry` before reading; a C caller
-always gets every column. The library work already exists, so this is one C
-entry point: open a layer with a column subset. Projection shipped in 0.5.0
-because it measured as the difference on geometry-heavy layers, and the C
-consumer is reading through the same engine.
+always gets every column. Projection shipped in 0.5.0 because it measured as
+the difference on geometry-heavy layers, and the C consumer is reading
+through the same engine.
+
+*Corrected while fixing it: the claim this finding first made, that the
+library work already exists, was true of the row path only. The Arrow path,
+which is the C data plane, ignored the projection entirely, so the C entry
+point needed library work after all: `arrow_schema()` and the Arrow reads
+now narrow to the projection, with the bbox re-test fed by a hidden column
+when the projection excludes the geometry.*
 
 **F3: the CRS stops at a number.** `gpkg_layer_srs_id` hands over an integer;
 Rust callers get `Srs` with both definitions and the epoch. A C consumer
