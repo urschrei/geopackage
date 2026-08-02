@@ -21,9 +21,10 @@ use crate::ident;
 /// Registered extension name.
 ///
 /// The spec's Extension Template gives `related_tables` and adds that "upon
-/// adoption the alias `gpkg_related_tables` MAY be used". The prefixed form is
-/// what GDAL writes, so it is what this crate writes; both are recognised on
-/// read, and the spec's own tests accept either.
+/// adoption the alias `gpkg_related_tables` MAY be used". This crate writes
+/// the prefixed form, the spelling found in files in circulation, GDAL's
+/// among them; both are recognised on read, and the spec's own tests accept
+/// either.
 pub const EXTENSION_NAME: &str = "gpkg_related_tables";
 /// `gpkg_extensions.definition` value for [`EXTENSION_NAME`].
 pub const EXTENSION_DEFINITION: &str = "http://www.geopackage.org/18-000.html";

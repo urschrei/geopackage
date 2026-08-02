@@ -51,11 +51,11 @@ impl AggregateState {
 
 /// The aggregate that fills one batch, registered as a SQL function.
 ///
-/// This is the technique GDAL's GeoPackage driver uses, and the reason for it is
-/// measured rather than assumed: fetching every value of every row costs a tenth
-/// as much through an aggregate as through the row loop, because the loop stays
-/// inside SQLite instead of returning into this crate once per row (see
-/// `roadmap/benchmarks/2026-07-25-gdal-arrow-comparison.md`).
+/// Filling a batch inside a SQL aggregate keeps the fetch loop inside SQLite
+/// instead of returning into this crate once per row, which measures at a tenth
+/// the cost of the row loop over every value of every row (see
+/// `roadmap/benchmarks/2026-07-25-gdal-arrow-comparison.md`). GDAL's GeoPackage
+/// driver uses the same technique.
 ///
 /// The builders live in the accumulator rather than here, so appending a row
 /// needs no synchronisation at all; [`Aggregate::finalize`] moves them into

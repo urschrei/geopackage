@@ -124,8 +124,7 @@ pub struct BulkIndexOptions {
 /// `rtreecheck` over it, which is about **45% of the build**: roughly 745 ms of
 /// a 1593 ms build at one million points, split about evenly between the two.
 /// That was the right price while `crate::packed` was new, since it writes an
-/// RTree by hand into a format SQLite does not document as an interface, and
-/// GDAL's builder runs no equivalent.
+/// RTree by hand into a format SQLite does not document as an interface.
 ///
 /// The packer now has enough history for the cost to be opt-in rather than
 /// paid by everyone. A caller writing files of consequence, or bisecting a
