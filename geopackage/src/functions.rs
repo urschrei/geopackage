@@ -6,7 +6,7 @@
 //! any GeoPackage, including files created by other tools.
 //!
 //! Envelope values are taken from the GPB header when present (an O(1) read;
-//! the rtree triggers call four of these per row). When the header carries no
+//! the rtree triggers call four of these per row). When the header has no
 //! envelope (as for GDAL-written points and other envelope-less blobs) the
 //! functions fall back to a full traversal of the WKB body via
 //! [`geopackage_core::geometry::GpbGeometry`], which handles every geometry
@@ -26,7 +26,7 @@ use rusqlite::Connection;
 use rusqlite::functions::{Context, FunctionFlags};
 use rusqlite::types::ValueRef;
 
-/// Register the GeoPackage SQL functions on `conn`.
+/// Registers the GeoPackage SQL functions on `conn`.
 pub fn register(conn: &Connection) -> rusqlite::Result<()> {
     let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;
 

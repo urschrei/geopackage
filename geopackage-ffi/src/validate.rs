@@ -54,11 +54,11 @@ pub struct FindingsHandle {
 )]
 pub type gpkg_findings_t = FindingsHandle;
 
-/// Validate the file, returning the findings most severe first.
+/// Validates the file, returning the findings most severe first.
 ///
 /// Runs every check the library has: the container tables, the spatial
 /// indexes and their trigger generation, the extension catalogue, and the
-/// metadata, schema and relation extensions where the file carries them. A
+/// metadata, schema and relation extensions where the file has them. A
 /// conforming file returns an empty findings list, and the call succeeding
 /// says nothing about the file being clean: ask `gpkg_findings_count`.
 ///
@@ -93,7 +93,7 @@ pub unsafe extern "C" fn gpkg_validate(
     }
 }
 
-/// Release a findings handle. Passing NULL does nothing.
+/// Releases a findings handle. Passing NULL does nothing.
 ///
 /// # Safety
 ///
@@ -109,7 +109,7 @@ pub unsafe extern "C" fn gpkg_findings_free(findings: *mut gpkg_findings_t) {
     drop(unsafe { Box::from_raw(findings) });
 }
 
-/// How many findings the run produced. Zero for a clean file, and zero for
+/// Returns the number of findings the run produced. Zero for a clean file, and zero for
 /// NULL, so a caller need not branch.
 ///
 /// # Safety
@@ -125,7 +125,7 @@ pub unsafe extern "C" fn gpkg_findings_count(findings: *const gpkg_findings_t) -
     handle.findings.len()
 }
 
-/// One finding: severity, description, and repair advice where repair exists.
+/// Returns one finding: severity, description, and repair advice where repair exists.
 ///
 /// Findings are ordered most severe first. Every out-parameter may be NULL to
 /// skip it; each string written is owned by the caller and released with

@@ -1,7 +1,7 @@
 //! The `gpkg_metadata` extension's model (Annex F.8): metadata records and
 //! what they are attached to.
 //!
-//! Two tables. `gpkg_metadata` holds a document: its scope, the URI of the
+//! Two tables. `gpkg_metadata` stores a document: its scope, the URI of the
 //! standard it follows, its MIME type, and the document itself.
 //! `gpkg_metadata_reference` attaches a record to something in the file, at one
 //! of five granularities, and optionally names a parent record so the
@@ -14,8 +14,8 @@
 //! Payloads stay strings. The spec allows any authoritative metadata encoding,
 //! naming ISO 19115, ISO 19139, Dublin Core, CSDGM, DDMS and others, and this
 //! crate interprets none of them: `mime_type` and `md_standard_uri` say what a
-//! reader would need to know, and the document is handed over as written. That
-//! is the same posture tile payloads take.
+//! reader would need to know, and the document is returned as written. Tile
+//! payloads are treated the same way.
 
 use std::fmt;
 
@@ -123,7 +123,7 @@ pub enum MetadataScope {
 }
 
 impl MetadataScope {
-    /// Identify an `md_scope` value. Never fails: an unlisted name becomes
+    /// Identifies an `md_scope` value. Never fails: an unlisted name becomes
     /// [`MetadataScope::Other`].
     pub fn parse(value: &str) -> Self {
         match value {
@@ -151,7 +151,7 @@ impl MetadataScope {
         }
     }
 
-    /// The `md_scope` column value.
+    /// Returns the `md_scope` column value.
     pub fn as_str(&self) -> &str {
         match self {
             Self::Undefined => "undefined",
@@ -178,7 +178,7 @@ impl MetadataScope {
         }
     }
 
-    /// Whether this is one of the names Table 15 lists.
+    /// Returns `true` if this is one of the names Table 15 lists.
     pub fn is_listed(&self) -> bool {
         !matches!(self, Self::Other(_))
     }
@@ -221,8 +221,8 @@ pub struct ReferenceTargets {
 }
 
 impl ReferenceScope {
-    /// Identify a `reference_scope` value, or `None` when it is not one of the
-    /// five (Requirement 96).
+    /// Identifies a `reference_scope` value, or `None` when it is not one of
+    /// the five (Requirement 96).
     ///
     /// Matched case sensitively, because the requirement spells the values and
     /// says "in lowercase".
@@ -237,7 +237,7 @@ impl ReferenceScope {
         }
     }
 
-    /// The `reference_scope` column value.
+    /// Returns the `reference_scope` column value.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::GeoPackage => "geopackage",
@@ -248,7 +248,7 @@ impl ReferenceScope {
         }
     }
 
-    /// Which target columns a reference at this scope carries.
+    /// Returns which target columns are set for a reference at this scope.
     ///
     /// Requirement 97: `table_name` is NULL for `geopackage` and set
     /// otherwise. Requirement 98: `column_name` is NULL for `geopackage`,

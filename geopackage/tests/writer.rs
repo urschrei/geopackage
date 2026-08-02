@@ -1,9 +1,9 @@
-//! The feature write path (Group B of the M2 write path): the `FeatureWriter`
+//! The feature write path: the `FeatureWriter`
 //! insert/update/delete, `write_all` batching, `gpkg_contents` bbox and
 //! `last_change` maintenance, Z/M validation, and, the critical case, writes
-//! into a table that already carries the rtree spatial-index triggers.
+//! into a table that already has the rtree spatial-index triggers.
 //!
-//! Round-trips write with the new API and read back through the M1 read path,
+//! Round-trips write through the writer and read back through the read path,
 //! asserting equality of feature ids, geometry coordinates, and values,
 //! including Z geometries, empty geometries, NULL geometries, NULLs, and
 //! datetimes.
@@ -44,7 +44,7 @@ fn point_layer(gpkg: &GeoPackage, table: &str, geom_type: GeometryType, z: ZmFla
 }
 
 /// A little-endian ISO WKB `POINT Z` (type 1001) wrapped in a bare GPB header,
-/// parsed into a `GpbGeometry` that carries a Z dimension.
+/// parsed into a `GpbGeometry` that has a Z dimension.
 fn z_point_blob(x: f64, y: f64, z: f64) -> Vec<u8> {
     let mut blob = encode_header(4326, &Envelope::None, false, false);
     blob.push(1);
@@ -219,7 +219,7 @@ fn roundtrip_empty_and_null_geometry() {
     let layer = gpkg.layer("g").unwrap();
 
     let mut w = layer.writer().unwrap();
-    // An empty geometry: the header carries the empty flag and no envelope.
+    // An empty geometry: the header has the empty flag and no envelope.
     let empty = LineString::<f64>::new(vec![]);
     let empty_fid = w.insert(None, &empty, &[]).unwrap();
     // A NULL geometry (no geometry column value at all).
@@ -311,7 +311,7 @@ fn zm_presence_is_validated() {
             dimension, verb, ..
         }) => {
             assert_eq!(dimension, "z");
-            assert_eq!(verb, "carries");
+            assert_eq!(verb, "has");
         }
         other => panic!("expected ZmViolation, got {other:?}"),
     }
@@ -428,8 +428,8 @@ fn write_all_empty_iterator_is_noop() {
 #[test]
 fn writes_into_indexed_table_track_rtree() {
     // The critical correctness case: writes through the FeatureWriter into a
-    // table that already carries the 1.4 rtree triggers must maintain the
-    // index. The index is built here with the same trigger SQL the M1
+    // table that already has the 1.4 rtree triggers must maintain the
+    // index. The index is built here with the same trigger SQL the
     // rtree_triggers.rs test uses.
     let (_dir, gpkg) = gpkg();
     point_layer(&gpkg, "pts", GeometryType::Point, ZmFlag::Prohibited);
@@ -471,7 +471,7 @@ fn writes_into_indexed_table_track_rtree() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0, fid1);
 
-    // The bbox query path (M1) still agrees with the index.
+    // The bbox query path still agrees with the index.
     let hits: Vec<i64> = layer
         .features_in(geopackage::BoundingBox::new(90.0, 190.0, 110.0, 210.0))
         .unwrap()
@@ -648,7 +648,7 @@ fn ogrinfo_reads_written_features() {
 /// schema, with no filtering by the caller.
 ///
 /// This is the round-trip that the read and write sides have to agree on: the
-/// value columns a `Feature` carries are exactly the ones `insert` takes, so
+/// value columns a `Feature` has are exactly the ones `insert` takes, so
 /// neither the primary key nor the geometry appears among them. When the read
 /// side included the primary key, this failed at run time with a
 /// `ValueCountMismatch` and the caller had to know to strip it by name.

@@ -28,7 +28,7 @@ pub(crate) struct SequentialBatches<'a> {
     pub(crate) geometry_index: Option<usize>,
     pub(crate) names: Vec<String>,
     pub(crate) datetime: DateTimeParsing,
-    /// Ceiling on the geometry bytes one batch may carry.
+    /// Ceiling on the geometry bytes one batch may contain.
     pub(crate) max_batch_bytes: usize,
     /// Rows in the batch just produced. The parallel path reads it to tell a
     /// batch cut short by the byte ceiling from one that filled its window.
@@ -50,7 +50,7 @@ pub(crate) struct SequentialBatches<'a> {
     /// filter still needs it. Never a field, so never appended to a builder.
     pub(crate) hidden_geometry: Option<usize>,
     /// The spatial filter, set only by `read_arrow_in`. Boxed so an unfiltered
-    /// reader, which is every reader the threaded path builds, carries one
+    /// reader, which is every reader the threaded path builds, stores one
     /// pointer rather than the whole of it.
     pub(crate) filter: Option<Box<SpatialFilter>>,
     /// The aggregate function, when this reader uses it. `None` falls back to
@@ -73,7 +73,7 @@ impl Drop for SequentialBatches<'_> {
 }
 
 impl SequentialBatches<'_> {
-    /// Read up to `limit` rows starting at `key`, ignoring where the reader
+    /// Reads up to `limit` rows starting at `key`, ignoring where the reader
     /// had got to.
     ///
     /// Used by the parallel path, whose workers each read whole batches at
@@ -90,7 +90,7 @@ impl SequentialBatches<'_> {
         batch
     }
 
-    /// Read one batch, or `None` once the layer is exhausted.
+    /// Reads one batch, or `None` once the layer is exhausted.
     pub(crate) fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         if self.aggregate.is_some() {
             return self.next_batch_aggregate();
@@ -342,7 +342,7 @@ impl SequentialBatches<'_> {
     }
 }
 
-/// The exact re-filter a `read_arrow_in` carries.
+/// The exact re-filter a `read_arrow_in` applies.
 ///
 /// The index stores `f32` envelopes and is queried with outward-widened
 /// bounds, and a candidate segment additionally folds small key gaps, so the

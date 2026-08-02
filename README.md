@@ -175,7 +175,7 @@ does with it, and this crate bundles SQLite.
 with it: catalogue rows naming tables that are not there, spatial indexes that
 no longer describe their rows, pre-1.4 index triggers, extensions this crate
 cannot identify, tile pyramids that break the matrix rules, and metadata or
-relation rows pointing at things that have gone. Each finding carries a
+relation rows pointing at things that have gone. Each finding has a
 severity, and repair advice naming the method that performs it where one
 exists. Nothing is modified.
 
@@ -250,14 +250,14 @@ reader can get a wrong answer from the file. Warnings and advisories exit zero,
 and `--strict` promotes warnings to a failing exit as well; that is what makes
 the command usable in a script or a CI job.
 
-`copy` carries feature and attribute layers: their schemas, their spatial
+`copy` copies feature and attribute layers: their schemas, their spatial
 reference systems, their rows, and a spatial index wherever the source had one.
-Tiles and the extension tables are not carried, and whatever was left behind is
+Tiles and the extension tables are not copied, and whatever was left behind is
 named at the end, so a copy is not mistaken for the whole file. Geometry crosses
 as WKB rather than through `geo-types`, so the non-linear curve types survive a
 copy byte for byte.
 
-`tiles get` writes the bytes the file holds and decodes nothing, whatever
+`tiles get` writes the bytes the file contains and decodes nothing, whatever
 `--out` is named.
 
 ```console
@@ -485,7 +485,7 @@ crate wrote (24 passed, 0 failed, alongside 17 in Core). A pyramid this crate
 writes is read back by `gdalinfo`, a
 `GoogleMapsCompatible` pyramid written by `gdal_translate` is read back here,
 and the corpus sweep walks every tile of the GDAL- and NGA-written pyramids it
-holds, probing each payload against the size its zoom level declares.
+contains, probing each payload against the size its zoom level declares.
 
 ## Known limitations
 

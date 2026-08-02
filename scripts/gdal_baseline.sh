@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# GDAL write-throughput baseline for the M2 benchmark write-up.
+# GDAL write-throughput baseline for the write-path benchmark write-up.
 #
 # There is no clean way to isolate GDAL's GPKG *write* cost from the CLI, so this
 # measures the honest, reproducible thing: the wall time of `ogr2ogr` loading N

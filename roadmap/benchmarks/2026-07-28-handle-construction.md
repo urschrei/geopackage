@@ -11,9 +11,9 @@ ABI handle cannot hold one, because a C caller keeping a layer handle past its
 container handle is exactly the use-after-free the lifetime prevents. Phase 9
 therefore has to pick between two designs:
 
-- **Owned.** `Layer` and `TilePyramid` hold an `Arc<GeoPackage>`, and an FFI
-  handle holds one directly.
-- **Re-derive.** They stay borrowed, and an FFI handle holds the parent plus a
+- **Owned.** `Layer` and `TilePyramid` own an `Arc<GeoPackage>`, and an FFI
+  handle owns one directly.
+- **Re-derive.** They stay borrowed, and an FFI handle stores the parent plus a
   table name, rebuilding the handle inside every call.
 
 The choice is a performance question, so it was measured rather than argued.

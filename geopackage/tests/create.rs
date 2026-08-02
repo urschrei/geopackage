@@ -1,6 +1,6 @@
-//! Layer and attributes-table creation (Group A of the M2 write path): DDL
-//! emission plus `gpkg_contents` / `gpkg_geometry_columns` catalogue rows, and
-//! name/srs/geometry-type validation.
+//! Layer and attributes-table creation: DDL emission plus `gpkg_contents` /
+//! `gpkg_geometry_columns` catalogue rows, and name/srs/geometry-type
+//! validation.
 
 #![expect(
     clippy::unwrap_used,

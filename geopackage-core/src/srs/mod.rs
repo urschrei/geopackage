@@ -4,8 +4,8 @@
 //! module ships WKT1 definitions for a small set of EPSG codes that cover the
 //! bulk of real-world GeoPackage traffic, plus synthesised definitions for all
 //! WGS 84 UTM zones (EPSG:32601-32660 north, 32701-32760 south), which differ
-//! only in name, central meridian, false northing, and authority code. A failed
-//! lookup is not the end of the road: the container crate falls back to the
+//! only in name, central meridian, false northing, and authority code. A
+//! failed lookup here is not final: the container crate falls back to the
 //! EPSG registry in `epsg-utils` and writes WKT2 through the `gpkg_crs_wkt_1_1`
 //! extension, and only a code in neither place is a typed "supply the
 //! definition yourself" error. Nothing here ever writes a silent `undefined` in
@@ -38,7 +38,7 @@ pub struct SrsDefinition {
     pub definition: Cow<'static, str>,
 }
 
-/// Look up the vendored definition for an EPSG code.
+/// Looks up the vendored definition for an EPSG code.
 ///
 /// Returns `None` for codes outside the vendored subset; callers are then
 /// expected to supply their own [`SrsDefinition`].
@@ -58,7 +58,7 @@ pub fn epsg_definition(code: i32) -> Option<SrsDefinition> {
     utm_zone(code)
 }
 
-/// Synthesise the WKT1 definition for a WGS 84 UTM zone code.
+/// Synthesises the WKT1 definition for a WGS 84 UTM zone code.
 fn utm_zone(code: i32) -> Option<SrsDefinition> {
     let (zone, north) = match code {
         32601..=32660 => (code - 32600, true),

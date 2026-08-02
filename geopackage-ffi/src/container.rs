@@ -2,8 +2,8 @@
 //!
 //! Three ways in and one way out. [`gpkg_open`] opens an existing file
 //! read-write and validates it strictly. [`gpkg_open_read_only`] opens one
-//! read-only and tolerates legacy and lightly non-conforming files, recording
-//! what it tolerated as warnings. [`gpkg_create`] makes a new GeoPackage 1.4
+//! read-only and accepts legacy and lightly non-conforming files, recording
+//! what it accepted as warnings. [`gpkg_create`] makes a new GeoPackage 1.4
 //! file. All three return NULL on failure, and [`gpkg_close`] destroys the
 //! handle.
 //!
@@ -21,7 +21,7 @@
 //! printf("GeoPackage %s\n", version ? version : "(unknown)");
 //! gpkg_string_free(version);
 //!
-//! // A lenient open records what it forgave instead of refusing the file.
+//! // A lenient open records what it accepted instead of rejecting the file.
 //! size_t warnings = gpkg_open_warning_count(gpkg);
 //! for (size_t i = 0; i < warnings; i++) {
 //!     char *warning = gpkg_open_warning(gpkg, i, &error);
@@ -76,7 +76,7 @@
 //! }
 //! ```
 //!
-//! SQLite does not nest transactions, so each of the three refuses when the
+//! SQLite does not nest transactions, so each of the three fails when the
 //! state is not what it needs: [`gpkg_begin`] when one is already open, and
 //! [`gpkg_commit`] and [`gpkg_rollback`] when none is.
 //! [`gpkg_in_transaction`] asks without provoking the error, which is what a
@@ -147,10 +147,10 @@ unsafe fn open_with(path: *const c_char, error: *mut gpkg_error_t, how: How) -> 
     }
 }
 
-/// Open an existing GeoPackage read-write.
+/// Opens an existing GeoPackage read-write.
 ///
 /// The file is validated strictly: one that does not identify as a GeoPackage,
-/// or that is missing a core table, is refused rather than opened.
+/// or that is missing a core table, is rejected rather than opened.
 /// `gpkg_open_read_only` is the tolerant counterpart.
 ///
 /// Returns NULL on failure, with `error` filled in when it is non-NULL.
@@ -178,16 +178,16 @@ pub unsafe extern "C" fn gpkg_open(path: *const c_char, error: *mut gpkg_error_t
     unsafe { open_with(path, error, How::Open) }
 }
 
-/// Open an existing GeoPackage read-only, tolerating legacy and lightly
+/// Opens an existing GeoPackage read-only, accepting legacy and lightly
 /// non-conforming files.
 ///
 /// A reader that turned away the files worth reading would not be much use, so
-/// this accepts what it can and records each thing it tolerated;
+/// this accepts what it can and records each thing it accepted;
 /// `gpkg_open_warning_count` and `gpkg_open_warning` report them. What it will
-/// not tolerate is a file that fails to identify as a GeoPackage at all.
+/// not accept is a file that fails to identify as a GeoPackage at all.
 ///
 /// The handle is read-only, so a write through it fails with `GPKG_STATUS_IO`
-/// carrying SQLite's own message.
+/// and SQLite's own message.
 ///
 /// # Safety
 ///
@@ -201,7 +201,7 @@ pub unsafe extern "C" fn gpkg_open_read_only(
     unsafe { open_with(path, error, How::ReadOnly) }
 }
 
-/// Create a new GeoPackage 1.4 file.
+/// Creates a new GeoPackage 1.4 file.
 ///
 /// The file is seeded with the two core tables and the spatial reference
 /// systems the specification requires, and nothing else: a layer is added with
@@ -220,9 +220,9 @@ pub unsafe extern "C" fn gpkg_create(path: *const c_char, error: *mut gpkg_error
     unsafe { open_with(path, error, How::Create) }
 }
 
-/// Close a GeoPackage and release its handle.
+/// Closes a GeoPackage and releases its handle.
 ///
-/// Refuses with `GPKG_STATUS_HANDLE_IN_USE` while anything taken from it is
+/// Fails with `GPKG_STATUS_HANDLE_IN_USE` while anything taken from it is
 /// still alive, which means a layer handle, a tile pyramid handle, a writer or
 /// an Arrow stream. In that case **the handle remains valid and open**, nothing
 /// has been released, and the caller should free those children and call again.
@@ -289,7 +289,7 @@ pub unsafe extern "C" fn gpkg_close(gpkg: *mut gpkg_t, error: *mut gpkg_error_t)
     }
 }
 
-/// The GeoPackage specification version the file declares, as `"1.0"` through
+/// Returns the GeoPackage specification version the file declares, as `"1.0"` through
 /// `"1.4"`.
 ///
 /// This is what the file's `application_id` and `user_version` pragmas say
@@ -318,10 +318,10 @@ pub unsafe extern "C" fn gpkg_version(
     unsafe { out_string(version.as_str(), error) }
 }
 
-/// How many warnings a lenient open collected.
+/// Returns the number of warnings a lenient open collected.
 ///
 /// Always 0 for a handle from `gpkg_open` or `gpkg_create`, which are strict,
-/// and for a file `gpkg_open_read_only` found nothing to forgive in. Pair it
+/// and for a file `gpkg_open_read_only` found nothing to warn about. Pair it
 /// with `gpkg_open_warning`, which takes an index below this count.
 ///
 /// ```c
@@ -347,10 +347,10 @@ pub unsafe extern "C" fn gpkg_open_warning_count(gpkg: *const gpkg_t) -> usize {
     unsafe { (*gpkg).gpkg().open_warnings().len() }
 }
 
-/// One warning from a lenient open, as text, or NULL when `index` is out of
+/// Returns one warning from a lenient open, as text, or NULL when `index` is out of
 /// range.
 ///
-/// Each describes one thing the open tolerated: a legacy `application_id`, a
+/// Each describes one thing the open accepted: a legacy `application_id`, a
 /// missing `gpkg_geometry_columns` table, a catalogue name matching its table
 /// only case-insensitively, or an extension the library cannot identify.
 /// `gpkg_open_warning_count` bounds the index.
@@ -395,7 +395,7 @@ pub unsafe extern "C" fn gpkg_open_warning(
     unsafe { out_string(&warning.to_string(), error) }
 }
 
-/// Run one statement on the handle's connection, reporting through `error`.
+/// Runs one statement on the handle's connection, reporting through `error`.
 ///
 /// The three transaction calls differ only in their statement, the state they
 /// require, and the message they give when that state is wrong.
@@ -439,10 +439,10 @@ unsafe fn transaction_statement(
     }
 }
 
-/// Whether a transaction is open on this handle.
+/// Returns whether a transaction is open on this handle.
 ///
 /// The way to ask before calling `gpkg_begin`, `gpkg_commit` or
-/// `gpkg_rollback`, each of which refuses when the state is not what it needs.
+/// `gpkg_rollback`, each of which fails when the state is not what it needs.
 /// `false` for a NULL handle, which has no transaction either.
 ///
 /// ```c
@@ -464,7 +464,7 @@ pub unsafe extern "C" fn gpkg_in_transaction(gpkg: *const gpkg_t) -> bool {
     !unsafe { (*gpkg).gpkg().connection() }.is_autocommit()
 }
 
-/// Begin a transaction, so that several writes commit or fail together.
+/// Begins a transaction, so that several writes commit or fail together.
 ///
 /// Every write made through this handle until `gpkg_commit` or
 /// `gpkg_rollback` joins this transaction, including the ones that would
@@ -494,7 +494,7 @@ pub unsafe extern "C" fn gpkg_in_transaction(gpkg: *const gpkg_t) -> bool {
 /// SQLite takes the write lock at the first write rather than here. Until then
 /// another connection can still write to the file.
 ///
-/// Refuses with `GPKG_STATUS_INVALID_ARGUMENT` when a transaction is already
+/// Fails with `GPKG_STATUS_INVALID_ARGUMENT` when a transaction is already
 /// open, since SQLite does not nest them. `gpkg_in_transaction` asks without
 /// provoking the error.
 ///
@@ -511,10 +511,10 @@ pub unsafe extern "C" fn gpkg_begin(gpkg: *mut gpkg_t, error: *mut gpkg_error_t)
     unsafe { transaction_statement(gpkg, error, "gpkg_begin", "BEGIN", false) }
 }
 
-/// Commit the open transaction, making everything written since `gpkg_begin`
+/// Commits the open transaction, making everything written since `gpkg_begin`
 /// durable.
 ///
-/// Refuses with `GPKG_STATUS_INVALID_ARGUMENT` when no transaction is open,
+/// Fails with `GPKG_STATUS_INVALID_ARGUMENT` when no transaction is open,
 /// rather than succeeding silently, so an unbalanced pair is reported where it
 /// happens.
 ///
@@ -527,7 +527,7 @@ pub unsafe extern "C" fn gpkg_commit(gpkg: *mut gpkg_t, error: *mut gpkg_error_t
     unsafe { transaction_statement(gpkg, error, "gpkg_commit", "COMMIT", true) }
 }
 
-/// Discard everything written since `gpkg_begin`.
+/// Discards everything written since `gpkg_begin`.
 ///
 /// This is how a partly-failed sequence is undone: a write that fails part-way
 /// through leaves what preceded it in the transaction, for the caller to keep
@@ -535,7 +535,7 @@ pub unsafe extern "C" fn gpkg_commit(gpkg: *mut gpkg_t, error: *mut gpkg_error_t
 /// a spatial index dropped inside the transaction, along with its triggers and
 /// its `gpkg_extensions` row, comes back.
 ///
-/// Refuses with `GPKG_STATUS_INVALID_ARGUMENT` when no transaction is open.
+/// Fails with `GPKG_STATUS_INVALID_ARGUMENT` when no transaction is open.
 /// A cleanup path that cannot know either way should ask `gpkg_in_transaction`
 /// first, or pass NULL for `error` and ignore the status.
 ///
@@ -548,21 +548,21 @@ pub unsafe extern "C" fn gpkg_rollback(gpkg: *mut gpkg_t, error: *mut gpkg_error
     unsafe { transaction_statement(gpkg, error, "gpkg_rollback", "ROLLBACK", true) }
 }
 
-/// Read a spatial reference system's definition and identity.
+/// Reads a spatial reference system's definition and identity.
 ///
-/// What the file's `gpkg_spatial_ref_sys` row carries for `srs_id`, which is
-/// the id `gpkg_layer_srs_id` reports. Every out-parameter may be NULL to
+/// Reports what the file's `gpkg_spatial_ref_sys` row records for `srs_id`,
+/// which is the id `gpkg_layer_srs_id` reports. Every out-parameter may be NULL to
 /// skip it; each string written is owned by the caller and released with
 /// `gpkg_string_free`.
 ///
-/// - `out_definition` is the WKT definition every GeoPackage carries. The
+/// - `out_definition` is the WKT definition every GeoPackage records. The
 ///   spec's value for a definition that could not be produced, `undefined`,
 ///   is returned as the string it is.
 /// - `out_definition_wkt2` is the WKT2 definition, present only in a file
-///   carrying the CRS WKT extension and populated for this row; NULL
+///   with the CRS WKT extension and populated for this row; NULL
 ///   otherwise.
 /// - `out_epoch` receives the coordinate epoch as a decimal year, or NaN when
-///   the row carries none, which is the common case.
+///   the row records none, which is the common case.
 /// - `out_organization` and `out_organization_coordsys_id` are the authority
 ///   and its code, such as `EPSG` and `4326`; `out_name` is the row's own
 ///   name.

@@ -1,5 +1,5 @@
 //! The `gpkg_schema` extension's two tables: `gpkg_data_columns`, which
-//! describes a column, and `gpkg_data_column_constraints`, which holds the
+//! describes a column, and `gpkg_data_column_constraints`, which stores the
 //! constraints those descriptions point at.
 //!
 //! Both are read here and written here. A constraint is assembled from the
@@ -57,15 +57,15 @@ impl InclusiveColumns {
 }
 
 impl GeoPackage {
-    /// Whether written values are checked against the constraints their
-    /// columns declare. See
+    /// Returns `true` if written values are checked against the constraints
+    /// their columns declare. See
     /// [`OpenOptions::enforce_column_constraints`](crate::OpenOptions::enforce_column_constraints).
     pub fn enforces_column_constraints(&self) -> bool {
         self.enforce_column_constraints
     }
 
-    /// The `gpkg_data_columns` rows describing one table's columns, in column
-    /// order as the file stores them.
+    /// Returns the `gpkg_data_columns` rows describing one table's columns,
+    /// in column order as the file stores them.
     ///
     /// Empty for a file without the `gpkg_schema` extension, which is the
     /// common case rather than an error. Table names are compared
@@ -92,8 +92,8 @@ impl GeoPackage {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// The constraint of the given name, assembled from every row that carries
-    /// it.
+    /// Returns the constraint of the given name, assembled from every row
+    /// that uses it.
     ///
     /// `None` for a file without the extension, or a name no row uses.
     ///
@@ -103,7 +103,7 @@ impl GeoPackage {
     /// the spec's own rules rule out: a `constraint_type` outside the three of
     /// Requirement 108, or a `range` without the bounds Requirement 111 makes
     /// mandatory. Reading such a file is not an error until something asks
-    /// what the constraint allows, at which point there is no honest answer.
+    /// what the constraint allows, which such a row cannot answer.
     pub fn column_constraint(&self, name: &str) -> Result<Option<ColumnConstraint>> {
         let conn = self.connection();
         if !table_exists(conn, CONSTRAINTS_TABLE)? {
@@ -132,7 +132,7 @@ impl GeoPackage {
         assemble(name, rows)
     }
 
-    /// Every constraint in the file, by name.
+    /// Returns every constraint in the file, by name.
     pub fn column_constraints(&self) -> Result<Vec<ColumnConstraint>> {
         let conn = self.connection();
         if !table_exists(conn, CONSTRAINTS_TABLE)? {
@@ -151,7 +151,7 @@ impl GeoPackage {
             .collect()
     }
 
-    /// Describe a column, replacing any description it already has.
+    /// Describes a column, replacing any description it already has.
     ///
     /// Creates the extension's tables and registers `gpkg_schema` on first
     /// use. The primary key is the table and column pair, so this is an upsert
@@ -197,7 +197,7 @@ impl GeoPackage {
         Ok(())
     }
 
-    /// Add a constraint, replacing any of the same name.
+    /// Adds a constraint, replacing any of the same name.
     ///
     /// Creates the extension's tables and registers `gpkg_schema` on first
     /// use. An `enum` becomes one row per member and a `range` or `glob` one
@@ -354,7 +354,7 @@ fn assemble(name: &str, rows: Vec<ConstraintRow>) -> Result<Option<ColumnConstra
     }))
 }
 
-/// Create both tables and register the extension, once.
+/// Creates both tables and registers the extension, once.
 ///
 /// Requirement 141 asks for a row per table, so both are registered together
 /// even though only one of them may be about to gain rows: the tables are

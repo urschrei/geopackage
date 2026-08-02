@@ -4,7 +4,7 @@
 //!
 //! A tile payload is the one part of a GeoPackage this crate reads without
 //! having written it and without a schema to constrain it: whatever bytes a
-//! `tile_data` column holds are handed to `probe` as they are.
+//! `tile_data` column contains are handed to `probe` as they are.
 
 #![no_main]
 

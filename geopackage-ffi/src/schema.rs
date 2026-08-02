@@ -2,7 +2,7 @@
 //!
 //! What a layer declares: its columns and their types, its geometry column and
 //! that column's spatial reference system, its extent, and the state of its
-//! spatial index. The column calls read a schema the handle already holds, so
+//! spatial index. The column calls read a schema the handle already stores, so
 //! they cost nothing beyond copying a string; the extent and the index calls
 //! query the file.
 //!
@@ -54,12 +54,12 @@
 //!
 //! # The spatial index
 //!
-//! A feature layer may carry an RTree index over its geometry column.
+//! A feature layer may have an RTree index over its geometry column.
 //! [`gpkg_layer_has_spatial_index`] answers the question a caller usually has,
 //! which is whether a bounding-box read will be served by an index or by a full
 //! scan; [`gpkg_layer_spatial_index_status`] says more, distinguishing an index
-//! that is absent, current, carrying the pre-1.4 trigger set, or out of step
-//! with its table. [`gpkg_layer_create_spatial_index`],
+//! that is absent, current, maintained by the pre-1.4 trigger set, or out of
+//! step with its table. [`gpkg_layer_create_spatial_index`],
 //! [`gpkg_layer_drop_spatial_index`] and [`gpkg_layer_repair_spatial_index`]
 //! change it, and each writes, so each fails on a read-only handle.
 //!
@@ -85,7 +85,7 @@ use crate::error::{Status, gpkg_error_t, set_error, set_library_error};
 use crate::handle::LayerHandle;
 use crate::util::out_string;
 
-/// Whether a layer holds features or attributes, as `"features"` or
+/// Returns whether a layer contains features or attributes, as `"features"` or
 /// `"attributes"`.
 ///
 /// Owned by the caller; release with `gpkg_string_free`.
@@ -107,7 +107,7 @@ pub unsafe extern "C" fn gpkg_layer_kind(
     unsafe { out_string(kind, error) }
 }
 
-/// How many columns the layer's table has, geometry and primary key included.
+/// Returns the number of columns in the layer's table, geometry and primary key included.
 ///
 /// # Safety
 ///
@@ -133,7 +133,7 @@ pub unsafe extern "C" fn gpkg_layer_column_count(
     Status::Ok
 }
 
-/// The name of the `index`th column, or NULL when out of range.
+/// Returns the name of the `index`th column, or NULL when out of range.
 ///
 /// Owned by the caller; release with `gpkg_string_free`.
 ///
@@ -160,12 +160,12 @@ pub unsafe extern "C" fn gpkg_layer_column_name(
     unsafe { out_string(&name, error) }
 }
 
-/// The declared SQL type of the `index`th column, exactly as the file spells
+/// Returns the declared SQL type of the `index`th column, exactly as the file spells
 /// it, or the empty string for a column declared without one.
 ///
-/// The declared text rather than a parsed enum, because a GeoPackage may carry
-/// a type outside the spec's vocabulary and this crate keeps such a column
-/// rather than rejecting it. A caller wanting the spec's own names can compare
+/// The declared text rather than a parsed enum, because a GeoPackage may
+/// declare a type outside the spec's vocabulary and this crate keeps such a
+/// column rather than rejecting it. A caller wanting the spec's own names can compare
 /// against them.
 ///
 /// Owned by the caller; release with `gpkg_string_free`.
@@ -193,7 +193,7 @@ pub unsafe extern "C" fn gpkg_layer_column_type(
     unsafe { out_string(&declared, error) }
 }
 
-/// Whether the `index`th column is the primary key. `false` for an index out
+/// Returns whether the `index`th column is the primary key. `false` for an index out
 /// of range, which [`gpkg_layer_column_count`] distinguishes.
 ///
 /// # Safety
@@ -217,7 +217,7 @@ pub unsafe extern "C" fn gpkg_layer_column_is_primary_key(
         .is_some_and(geopackage::Column::is_primary_key)
 }
 
-/// The geometry column's name, or NULL for an attribute layer.
+/// Returns the geometry column's name, or NULL for an attribute layer.
 ///
 /// A NULL return with `error` left at `GPKG_STATUS_OK` means the layer simply
 /// has no geometry, which is not a failure.
@@ -244,7 +244,7 @@ pub unsafe extern "C" fn gpkg_layer_geometry_column(
     unsafe { out_string(&name, error) }
 }
 
-/// The geometry column's declared type, such as `"POINT"`, or NULL for an
+/// Returns the geometry column's declared type, such as `"POINT"`, or NULL for an
 /// attribute layer.
 ///
 /// Owned by the caller; release with `gpkg_string_free`.
@@ -269,7 +269,7 @@ pub unsafe extern "C" fn gpkg_layer_geometry_type(
     unsafe { out_string(&name, error) }
 }
 
-/// The geometry column's spatial reference system id, written through `out`.
+/// Writes the geometry column's spatial reference system id through `out`.
 ///
 /// The id is a `gpkg_spatial_ref_sys.srs_id`, which for a file written by this
 /// library is the EPSG code. Returns `GPKG_STATUS_NOT_FOUND` for a layer with
@@ -303,7 +303,7 @@ pub unsafe extern "C" fn gpkg_layer_srs_id(
     Status::Ok
 }
 
-/// The layer's extent, written through the four out-parameters.
+/// Writes the layer's extent through the four out-parameters.
 ///
 /// The bounds recorded in `gpkg_contents`, in the layer's own spatial reference
 /// system. Where those bounds are unusable, they are measured from the
@@ -374,7 +374,7 @@ pub unsafe extern "C" fn gpkg_layer_extent(
     Status::Ok
 }
 
-/// The spatial index's state, as `"absent"`, `"current"`, `"legacy trigger
+/// Returns the spatial index's state, as `"absent"`, `"current"`, `"legacy trigger
 /// set"` or `"stale"`.
 ///
 /// `"legacy trigger set"` is an index kept by the pre-1.4 triggers, which
@@ -409,7 +409,7 @@ pub unsafe extern "C" fn gpkg_layer_spatial_index_status(
     }
 }
 
-/// Whether a bounding-box query on this layer will use the spatial index.
+/// Returns whether a bounding-box query on this layer will use the spatial index.
 ///
 /// False for a `stale` or absent index: a desynchronised index is not trusted,
 /// and the query falls back to a correct full scan. So this answers how a
@@ -448,11 +448,11 @@ pub unsafe extern "C" fn gpkg_layer_has_spatial_index(
     }
 }
 
-/// Build the spatial index on a layer that has none.
+/// Builds the spatial index on a layer that has none.
 ///
 /// Creates the RTree virtual table, installs the GeoPackage 1.4 trigger set,
 /// populates it from the rows already there, and registers the extension, all
-/// in one transaction. Refuses with `GPKG_STATUS_ALREADY_EXISTS` when the
+/// in one transaction. Fails with `GPKG_STATUS_ALREADY_EXISTS` when the
 /// layer has an index, and with `GPKG_STATUS_NOT_FOUND` when it has no
 /// geometry column or no single-column primary key to key the index on.
 ///
@@ -472,7 +472,7 @@ pub unsafe extern "C" fn gpkg_layer_create_spatial_index(
     unsafe { report(handle.layer().create_spatial_index(), error) }
 }
 
-/// Drop the spatial index and its triggers.
+/// Drops the spatial index and its triggers.
 ///
 /// Removes the RTree virtual table, its triggers and its `gpkg_extensions`
 /// row, in one transaction. A feature layer with no index is not an error:
@@ -495,7 +495,7 @@ pub unsafe extern "C" fn gpkg_layer_drop_spatial_index(
     unsafe { report(handle.layer().drop_spatial_index(), error) }
 }
 
-/// Put a legacy or desynchronised spatial index right, rebuilding it and
+/// Puts a legacy or desynchronised spatial index right, rebuilding it and
 /// installing the GeoPackage 1.4 trigger set.
 ///
 /// A layer with no index is left alone: an absent index is a choice rather
@@ -532,7 +532,7 @@ pub unsafe extern "C" fn gpkg_layer_repair_spatial_index(
     }
 }
 
-/// Borrow a layer handle, reporting a NULL one.
+/// Borrows a layer handle, reporting a NULL one.
 ///
 /// # Safety
 ///
@@ -557,7 +557,7 @@ unsafe fn checked<'a>(
     Some(unsafe { &*layer })
 }
 
-/// Turn a unit-returning library call into a status, filling in `error`.
+/// Turns a unit-returning library call into a status, filling in `error`.
 ///
 /// # Safety
 ///

@@ -133,7 +133,7 @@ assumed about GPB bodies being usable as WKB without a parse.
       rejected because data clusters, so the shares come out uneven, and a
       feature straddling a boundary is returned by two workers, which needs
       dedup. Striping by `fid % n` was rejected because every worker then pays
-      the whole rtree scan. The cost the chosen approach carries is that
+      the whole rtree scan. The cost of the chosen approach is that
       fetching an arbitrary id list is index lookups rather than a rowid range
       scan, so it is worth measuring whether bbox results are typically large
       enough for any of this to pay.)*
@@ -144,7 +144,7 @@ assumed about GPB bodies being usable as WKB without a parse.
       `INT32_MAX` part of GDAL's `min(INT32_MAX, RAM / 4)`, since reading total
       system memory needs `unsafe` or a dependency, and expose the budget as
       `ArrowReadOptions::max_batch_bytes` for callers who want the rest.
-      Original note: `BinaryArray` carries int32 offsets, so
+      Original note: `BinaryArray` uses int32 offsets, so
       one batch cannot hold more than 2 GB of WKB, which large polygons reach.
       GDAL cuts the batch short against a byte budget of `min(INT32_MAX,
       RAM / 4)`; `LargeBinaryArray` avoids the ceiling instead. Check which the

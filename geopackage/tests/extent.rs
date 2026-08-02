@@ -69,8 +69,8 @@ fn set_recorded(gpkg: &GeoPackage, table: &str, bounds: Option<[f64; 4]>) {
 }
 
 /// The case this whole module exists for. A file arrives with a NULL extent,
-/// which is spec-legal, over a table that already holds features. Writing one
-/// more feature must not record a box covering only that feature: doing so
+/// which is spec-legal, over a table that already contains features. Writing
+/// one more feature must not record a box covering only that feature: doing so
 /// replaces an honest "unknown" with a confidently wrong extent that excludes
 /// every pre-existing row, and no reader would ever question it.
 #[test]
@@ -114,7 +114,7 @@ fn a_null_extent_over_an_empty_table_is_recorded() {
     );
 }
 
-/// An inverted box carries no information about where the data is, so it is
+/// An inverted box gives no information about where the data is, so it is
 /// read as absent rather than grown, which is also how GDAL reads it.
 #[test]
 fn an_inverted_extent_is_treated_as_absent() {
@@ -242,7 +242,7 @@ fn extent_writes_nothing_when_the_recorded_box_is_usable() {
 
 /// Nothing to measure over bounds that are already NULL is the common shape of
 /// an empty layer, and it must not write: a row rewritten to the values it
-/// already holds still changes the file.
+/// already has still changes the file.
 #[test]
 fn extent_writes_nothing_when_there_is_nothing_to_change() {
     let (_dir, gpkg) = layer_with_points("p", &[]);

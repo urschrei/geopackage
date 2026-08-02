@@ -24,7 +24,7 @@ fn circular_string(points: &[[f64; 2]]) -> Vec<u8> {
 }
 
 /// A little-endian container body of ISO WKB type `code`, holding `members`
-/// verbatim. Each member carries its own byte order and type code, which is
+/// verbatim. Each member has its own byte order and type code, which is
 /// what makes a container's member types invisible from its own type alone.
 fn container(code: u32, members: &[Vec<u8>]) -> Vec<u8> {
     let mut bytes = vec![1u8];
@@ -301,7 +301,7 @@ fn an_abstract_geometry_type_has_no_encoding_and_is_refused() {
 
 // --- the GDAL-written fixture -------------------------------------------------
 //
-// `gdal_curves.gpkg` holds one GDAL-written layer per non-linear type, each
+// `gdal_curves.gpkg` contains one GDAL-written layer per non-linear type, each
 // spatially indexed. GDAL computed those RTree entries with its own arc
 // mathematics (`OGRCircularString::ExtendEnvelopeWithCircular`, which sweeps
 // quadrant boundaries) rather than with the chord-side test this crate uses, so
@@ -635,7 +635,7 @@ fn a_core_container_holding_a_curve_says_why_it_is_refused() {
 fn gdal_registers_the_member_types_of_a_container() {
     // The oracle for `a_container_registers_the_types_of_its_members`: GDAL
     // registers a gpkg_geom_<TYPE> row for the member types it actually wrote,
-    // so its multicurve layer carries CIRCULARSTRING alongside MULTICURVE.
+    // so its multicurve layer declares CIRCULARSTRING alongside MULTICURVE.
     let (_dir, gpkg) = fixture();
     let mut names: Vec<String> = gpkg
         .table_extensions("multicurve")

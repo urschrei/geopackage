@@ -1,7 +1,7 @@
 //! `gpkg validate`: what this crate can see wrong with a file.
 //!
 //! Read-only and lenient, for the same reason as `gpkg info`: a file with
-//! nothing wrong with it does not need validating, so refusing to open the
+//! nothing wrong with it does not need validating, so failing to open the
 //! interesting ones would defeat the command.
 //!
 //! Nothing is modified. Where a finding has a repair, the advice names the

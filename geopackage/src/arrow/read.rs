@@ -48,14 +48,14 @@ fn segment_runs(ids: &[i64]) -> Vec<(i64, i64)> {
 }
 
 impl Layer<'_> {
-    /// Read this layer as a stream of Arrow [`RecordBatch`](arrow_array::RecordBatch)es.
+    /// Reads this layer as a stream of Arrow [`RecordBatch`](arrow_array::RecordBatch)es.
     ///
     /// Reads on several threads where it can, which is the common case and the
     /// default; see [Threading](#threading) below for the conditions and for how
     /// to ask for a single thread instead.
     ///
     /// Attribute columns follow the mapping in the [module documentation](super);
-    /// the geometry column is WKB carrying the `geoarrow.wkb` extension name.
+    /// the geometry column is WKB with the `geoarrow.wkb` extension name.
     ///
     /// This does not go through [`crate::Feature`] or [`crate::Value`]. Arrow
     /// arrays are built straight from the statement's column values, which is
@@ -122,7 +122,7 @@ impl Layer<'_> {
         })
     }
 
-    /// Read the layer's rows intersecting `bbox` as Arrow record batches.
+    /// Reads the layer's rows intersecting `bbox` as Arrow record batches.
     ///
     /// The columnar counterpart of [`Layer::features_in`], returning the same
     /// rows in the same order. Single-threaded: the parallel path assigns key
@@ -132,7 +132,7 @@ impl Layer<'_> {
     /// a separate question, to be answered by measurement against this.
     ///
     /// Uses the RTree index when the layer has one, and falls back to a full
-    /// scan carrying the same exact filter when it does not, exactly as
+    /// scan applying the same exact filter when it does not, exactly as
     /// [`Layer::features_in`] does. Either way the geometry of every candidate
     /// is re-tested against its true `f64` envelope, because the index stores
     /// `f32` envelopes and is queried with widened bounds, so its candidates
@@ -167,7 +167,8 @@ impl Layer<'_> {
         self.read_arrow_filtered(options, Some(bbox), None)
     }
 
-    /// Read the rows matching a caller-supplied `WHERE` clause as Arrow record
+    /// Reads the rows matching a caller-supplied `WHERE` clause as Arrow
+    /// record
     /// batches.
     ///
     /// The columnar counterpart of [`Layer::select`], with the same contract:
@@ -199,14 +200,14 @@ impl Layer<'_> {
         self.read_arrow_filtered(options, None, Some((where_clause, params)))
     }
 
-    /// Read the rows intersecting `bbox` **and** matching a caller-supplied
+    /// Reads the rows intersecting `bbox` **and** matching a caller-supplied
     /// `WHERE` clause, as Arrow record batches.
     ///
     /// The two filters compose: the rows are
     /// [`Layer::features_in`]'s intersected with [`Layer::select`]'s, in
     /// primary-key order. The bounding box uses the RTree index on
     /// [`Layer::read_arrow_in`]'s terms, including the exact re-test; the
-    /// clause carries [`Layer::read_arrow_where`]'s contract, including its
+    /// clause keeps [`Layer::read_arrow_where`]'s contract, including its
     /// `?1` to `?N` placeholder numbering.
     ///
     /// # Errors

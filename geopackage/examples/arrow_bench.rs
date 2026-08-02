@@ -1,5 +1,5 @@
 //! Measurement tool for comparing this crate's `read_arrow` against GDAL's
-//! Arrow read path on the same file (M3 acceptance criterion 3). Driven by
+//! Arrow read path on the same file. Driven by
 //! `scripts/compare_gdal_arrow.sh`.
 //!
 //! The counterpart of `scripts/gdal_arrow_read.c`, which does the same work
@@ -16,8 +16,8 @@
 //!   memory
 //!   (untimed), then time writing them into a fresh file. The read is outside
 //!   the measurement deliberately: timing both would produce a figure that says
-//!   nothing about either, which is the mistake the M2 GDAL comparison had to
-//!   withdraw.
+//!   nothing about either, which is the mistake an earlier GDAL comparison had
+//!   to withdraw.
 //! - `read <file> [reps] [threads]`: consume the whole Arrow stream, the timed
 //!   operation. `threads` is passed to the reader as given, so `0` means its
 //!   automatic choice and `1` pins it to this thread; the default here is `0`.

@@ -59,11 +59,11 @@
 //! Three invariants, all enforced here rather than assumed of the caller:
 //!
 //! 1. **The borrowed-from value never moves.** `Container::gpkg` is a `Box`,
-//!    and nothing in this crate takes the `GeoPackage` out of it or hands out a
+//!    and nothing in this crate takes the `GeoPackage` out of it or produces a
 //!    `&mut` to it. Moving the `Container` itself, which cannot happen anyway
 //!    once it is behind a raw pointer, would not move the `GeoPackage`.
 //! 2. **A child never outlives its parent.** The only path that destroys a
-//!    container checks [`Container::outstanding_children`] first and refuses
+//!    container checks [`Container::outstanding_children`] first and fails
 //!    while it is non-zero; freeing a child decrements it. So the `GeoPackage`
 //!    a `Layer<'static>` points into is still alive whenever that layer is
 //!    used.
@@ -73,8 +73,8 @@
 //!    below is a plain `Cell` on that basis rather than an atomic, which would
 //!    imply a guarantee this crate does not make.
 //!
-//! Invariant 2 is the one a C caller sees, as the refusal in the example
-//! above. The Rust API keeps its compile-time version, since `close` there
+//! Invariant 2 is the one a C caller sees, as the `GPKG_STATUS_HANDLE_IN_USE`
+//! failure in the example above. The Rust API keeps its compile-time version, since `close` there
 //! takes `self` and a live `Layer` borrows it.
 
 use std::cell::Cell;
@@ -97,7 +97,7 @@ pub struct Container {
 }
 
 impl Container {
-    /// Wrap an open GeoPackage as a container handle.
+    /// Wraps an open GeoPackage as a container handle.
     pub fn new(gpkg: GeoPackage) -> Self {
         Self {
             gpkg: Box::new(gpkg),
@@ -105,12 +105,14 @@ impl Container {
         }
     }
 
-    /// The GeoPackage, borrowed for as long as the caller holds the container.
+    /// Returns the GeoPackage, borrowed for as long as the caller holds the
+    /// container.
     pub fn gpkg(&self) -> &GeoPackage {
         &self.gpkg
     }
 
-    /// Open a layer as a child handle, registering it against this container.
+    /// Opens a layer as a child handle, registering it against this
+    /// container.
     ///
     /// # Errors
     ///
@@ -120,7 +122,7 @@ impl Container {
         Ok(self.adopt(layer))
     }
 
-    /// Open an attribute layer as a child handle.
+    /// Opens an attribute layer as a child handle.
     ///
     /// # Errors
     ///
@@ -130,7 +132,7 @@ impl Container {
         Ok(self.adopt(layer))
     }
 
-    /// Open a layer projected to the named columns, as a child handle.
+    /// Opens a layer projected to the named columns, as a child handle.
     ///
     /// `attributes` picks which open runs underneath, since the two entry
     /// points differ only there.
@@ -153,7 +155,7 @@ impl Container {
         Ok(self.adopt(layer.with_columns(columns)?))
     }
 
-    /// Erase a layer's borrow and count it as a child.
+    /// Erases a layer's borrow and counts it as a child.
     ///
     /// The lifetime `'_` on the way in is a borrow of `*self.gpkg`, which lives
     /// as long as `self` and does not move. On the way out it is `'static`,
@@ -176,7 +178,7 @@ impl Container {
         }
     }
 
-    /// Open a tile pyramid as a child handle, registering it against this
+    /// Opens a tile pyramid as a child handle, registering it against this
     /// container.
     ///
     /// # Errors
@@ -196,7 +198,7 @@ impl Container {
         })
     }
 
-    /// Create a tile pyramid and hand it back as a child handle.
+    /// Creates a tile pyramid and returns it as a child handle.
     ///
     /// # Errors
     ///
@@ -217,7 +219,7 @@ impl Container {
         })
     }
 
-    /// Take one count against this container, released when the token drops.
+    /// Takes one count against this container, released when the token drops.
     ///
     /// Used by anything that erases a borrow of this container: layer handles,
     /// and the Arrow streams in [`crate::stream`].
@@ -228,23 +230,23 @@ impl Container {
         }
     }
 
-    /// Record that one child handle has gone.
+    /// Records that one child handle has gone.
     fn release_child(&self) {
         self.children.set(self.children.get().saturating_sub(1));
     }
 
-    /// How many child handles still borrow this container, if any.
+    /// Returns the number of child handles still borrowing this container.
     ///
-    /// Checked before [`Self::close`] consumes anything, so a refusal leaves
-    /// the container open and usable rather than half-torn-down.
+    /// Checked before [`Self::close`] consumes anything, so a failed close
+    /// leaves the container open and usable rather than half-torn-down.
     pub fn outstanding_children(&self) -> usize {
         self.children.get()
     }
 
-    /// Close the container.
+    /// Closes the container.
     ///
     /// The caller must have checked [`Self::outstanding_children`] first: this
-    /// consumes the container, so there is nothing to hand back on refusal.
+    /// consumes the container, so there is nothing to return on failure.
     ///
     /// # Errors
     ///
@@ -257,9 +259,9 @@ impl Container {
 
 /// One count against a container's child tally, released on drop.
 ///
-/// A layer handle holds one. So does an Arrow stream, which borrows the same
+/// A layer handle owns one. So does an Arrow stream, which borrows the same
 /// container and needs the same protection: while a token is alive, the
-/// container refuses to close, so an erased `'static` borrow cannot outlive
+/// container cannot close, so an erased `'static` borrow cannot outlive
 /// what it points at.
 pub struct ChildToken {
     /// The container counted against. Raw rather than a reference, because a
@@ -288,16 +290,17 @@ pub struct LayerHandle {
 }
 
 impl LayerHandle {
-    /// The layer, borrowed for as long as the caller holds the handle.
+    /// Returns the layer, borrowed for as long as the caller holds the
+    /// handle.
     pub fn layer(&self) -> &Layer<'static> {
         &self.layer
     }
 
-    /// Begin a write transaction over this layer as a child handle.
+    /// Begins a write transaction over this layer as a child handle.
     ///
     /// No borrow is erased here, unlike the layer and pyramid handles.
     /// `Layer::writer`
-    /// returns a `FeatureWriter` carrying the layer's own lifetime parameter
+    /// returns a `FeatureWriter` with the layer's own lifetime parameter
     /// rather than a borrow of `&self`, and this layer's parameter is already
     /// `'static`, so the writer arrives erased. What it still needs is the
     /// count: the writer points into the same container, so the container must
@@ -305,8 +308,8 @@ impl LayerHandle {
     ///
     /// # Errors
     ///
-    /// Whatever [`geopackage::Layer::writer`] returns, which for a read-only
-    /// container is a refusal.
+    /// Whatever [`geopackage::Layer::writer`] returns, which fails on a
+    /// read-only container.
     pub fn writer(&self) -> geopackage::Result<WriterHandle> {
         let writer = self.layer.writer()?;
         Ok(WriterHandle {
@@ -315,10 +318,11 @@ impl LayerHandle {
         })
     }
 
-    /// Take another count against this handle's container, for something that
-    /// borrows the same container independently, such as an Arrow stream.
+    /// Takes another count against this handle's container, for something
+    /// that borrows the same container independently, such as an Arrow
+    /// stream.
     pub fn token(&self) -> ChildToken {
-        // SAFETY: this handle holds a token of its own, so the container it
+        // SAFETY: this handle owns a token of its own, so the container it
         // points at is still alive; taking a second count against it is the
         // same operation `Container::token` performs.
         let parent = unsafe { &*self._token.parent };
@@ -332,7 +336,7 @@ impl LayerHandle {
 /// Held by value rather than boxed, because unlike a container nothing borrows
 /// *this*: the writer is the leaf of the handle graph.
 pub struct WriterHandle {
-    /// Already `'static` when it arrives, since it carries its layer's lifetime
+    /// Already `'static` when it arrives, since it has its layer's lifetime
     /// parameter rather than a borrow of the layer handle. See
     /// [`LayerHandle::writer`].
     writer: FeatureWriter<'static>,
@@ -341,12 +345,12 @@ pub struct WriterHandle {
 }
 
 impl WriterHandle {
-    /// The writer, mutably, which is what every staging call needs.
+    /// Returns the writer mutably, which is what every staging call needs.
     pub fn writer_mut(&mut self) -> &mut FeatureWriter<'static> {
         &mut self.writer
     }
 
-    /// Commit the transaction, consuming the handle.
+    /// Commits the transaction, consuming the handle.
     ///
     /// The token drops with `self` whatever the outcome, so a failed commit
     /// still releases the container rather than leaving it uncloseable.
@@ -379,29 +383,30 @@ pub enum CursorScan {
 }
 
 impl TilesHandle {
-    /// The pyramid, borrowed for as long as the caller holds the handle.
+    /// Returns the pyramid, borrowed for as long as the caller holds the
+    /// handle.
     pub fn pyramid(&self) -> &TilePyramid<'static> {
         &self.pyramid
     }
 
-    /// Take another count against this handle's container, for something that
-    /// borrows the same container independently, such as a tile cursor.
+    /// Takes another count against this handle's container, for something
+    /// that borrows the same container independently, such as a tile cursor.
     pub fn token(&self) -> ChildToken {
-        // SAFETY: this handle holds a token of its own, so the container it
+        // SAFETY: this handle owns a token of its own, so the container it
         // points at is still alive; taking a second count against it is the
         // same operation `Container::token` performs.
         let parent = unsafe { &*self._token.parent };
         parent.token()
     }
 
-    /// Begin a stored-tile scan as a child handle.
+    /// Begins a stored-tile scan as a child handle.
     ///
     /// The cursor visits what the pyramid stores rather than probing the
     /// declared grid, which on a sparse pyramid is the difference between
     /// O(stored) and O(grid). It counts against the *container*, not against
     /// this handle: the statement underneath borrows the container's
     /// connection, so the tiles handle itself may be freed while the cursor
-    /// lives, and the container still refuses to close until the cursor is
+    /// lives, and the container still cannot close until the cursor is
     /// freed.
     ///
     /// # Errors
@@ -453,9 +458,9 @@ pub struct TileCursorHandle {
 }
 
 impl TileCursorHandle {
-    /// The next stored tile, or `None` at the end of the scan.
+    /// Returns the next stored tile, or `None` at the end of the scan.
     ///
-    /// The returned [`Tile`] lends the row's payload: it is valid until the
+    /// The returned [`Tile`] borrows the row's payload: it is valid until the
     /// next call on this handle, exactly as the Rust lending cursor's borrow
     /// rules state, and the C contract repeats.
     ///

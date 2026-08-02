@@ -36,7 +36,7 @@ use geopackage::core::datetime::{Date, DateTime};
 use crate::error::{Status, gpkg_error_t, set_error};
 use crate::util::borrow_str;
 
-/// Which case a [`gpkg_value_t`] holds.
+/// Which case a [`gpkg_value_t`] contains.
 ///
 /// `#[repr(i32)]` so cbindgen emits a plain C enum with stable values. Values
 /// are assigned explicitly and must never be reused for another meaning.
@@ -78,7 +78,7 @@ pub struct gpkg_date_t {
 
 /// A date and time, with an optional UTC offset.
 ///
-/// `has_offset` false means the time carries no offset, which the spec permits
+/// `has_offset` false means the time has no offset, which the spec permits
 /// and which is not the same as an offset of zero: zero is `Z`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -139,7 +139,7 @@ pub union gpkg_value_payload {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct gpkg_value_t {
-    /// Which case `value` holds.
+    /// Which case `value` contains.
     pub kind: ValueKind,
     /// The payload. Read according to `kind`; not read at all for
     /// [`ValueKind::Null`].
@@ -182,7 +182,7 @@ impl gpkg_datetime_t {
     }
 }
 
-/// Read one caller-supplied value into the borrowed form the write path takes.
+/// Reads one caller-supplied value into the borrowed form the write path takes.
 ///
 /// The returned `ValueRef` borrows `value`'s text or binary, so it lives only
 /// as long as the caller's memory does, which for these entry points is the
@@ -259,7 +259,7 @@ pub(crate) unsafe fn borrow_value<'a>(
     }
 }
 
-/// Read a caller-supplied array of values.
+/// Reads a caller-supplied array of values.
 ///
 /// # Safety
 ///

@@ -240,7 +240,7 @@ fn the_1_0_inclusivity_column_names_are_read() {
 
 // --- enforcement -------------------------------------------------------------
 
-/// A file whose `year` column carries a range and `code` a glob, returned
+/// A file whose `year` column has a range and `code` a glob, returned
 /// opened with enforcement on.
 fn constrained(dir: &tempfile::TempDir, enforce: bool) -> GeoPackage {
     let path = dir.path().join("c.gpkg");

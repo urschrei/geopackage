@@ -1,7 +1,6 @@
 /*
- * GDAL's Arrow read path over a GeoPackage, timed, for comparison against this
- * crate's `read_arrow` (M3 acceptance criterion 3). Driven by
- * scripts/compare_gdal_arrow.sh.
+ * GDAL's Arrow read path over a GeoPackage, timed, for comparison against
+ * this crate's `read_arrow`. Driven by scripts/compare_gdal_arrow.sh.
  *
  * Written in C against the OGR C API rather than driven from Python, so that
  * nothing but GDAL is in the measured loop. It consumes the Arrow C stream

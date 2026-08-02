@@ -33,8 +33,8 @@ CODES = [
     4490,  # CGCS2000
     6668,  # JGD2011
     # Geographic 3D CRSs (e.g. 4979, WGS 84 3D) are deliberately absent:
-    # they cannot be expressed in WKT1; supporting them means writing WKT2
-    # via the gpkg_crs_wkt extension (roadmap M5).
+    # they cannot be expressed in WKT1; the library registers them as WKT2
+    # through the gpkg_crs_wkt extension instead.
     # Projected, global
     3857,  # WGS 84 / Pseudo-Mercator
     3395,  # WGS 84 / World Mercator

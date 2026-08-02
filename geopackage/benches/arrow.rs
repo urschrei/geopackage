@@ -1,5 +1,4 @@
-//! Columnar against row-based reading (M3 criterion 1), over two workload
-//! shapes.
+//! Columnar against row-based reading, over two workload shapes.
 //!
 //! # Why two shapes
 //!

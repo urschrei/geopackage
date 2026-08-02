@@ -81,7 +81,8 @@ impl BboxFold {
 }
 
 impl<'a> Layer<'a> {
-    /// Begin a write transaction over this layer, returning a [`FeatureWriter`].
+    /// Begins a write transaction over this layer, returning a
+    /// [`FeatureWriter`].
     ///
     /// The writer owns the transaction: stage rows with its `insert`/`update`/
     /// `delete` methods, then call [`FeatureWriter::commit`]. Dropping the
@@ -95,8 +96,9 @@ impl<'a> Layer<'a> {
         let conn: &Connection = self.gpkg().connection();
         let tx = WriteTransaction::begin(conn)?;
         let existing = self.stored_extent()?;
-        // An unusable recorded box over a table that already holds rows makes
-        // the fold a lower bound: it can be grown and used, but not recorded.
+        // An unusable recorded box over a table that already contains rows
+        // makes the fold a lower bound: it can be grown and used, but not
+        // recorded.
         let bbox_covers_layer = existing.is_some() || !self.has_rows()?;
 
         let pk_name = self.primary_key_column();
@@ -177,8 +179,8 @@ impl<'a> Layer<'a> {
         })
     }
 
-    /// Write every item of `features` in batches, each batch its own committed
-    /// transaction.
+    /// Writes every item of `features` in batches, each batch its own
+    /// committed transaction.
     ///
     /// `batch_size` bounds how many rows share a transaction (`0` writes them
     /// all in a single transaction). Returns the assigned feature ids in order.
@@ -188,13 +190,14 @@ impl<'a> Layer<'a> {
     /// `batch_size` bounds nothing when a transaction is already open on the
     /// connection: the batch commits are staged rather than durable, so every
     /// row belongs to the caller's transaction and an error part-way leaves all
-    /// of them staged rather than some of them committed. That is what opening
-    /// a transaction asked for, and it is the same all-or-nothing `0` gives.
+    /// of them staged rather than some of them committed. This follows from
+    /// opening the transaction, and matches the all-or-nothing behaviour of
+    /// `batch_size = 0`.
     ///
     /// Rows with `geometry: Some(_)` go through [`FeatureWriter::insert`]; rows
     /// with `None` through [`FeatureWriter::insert_row`].
     ///
-    /// When the layer carries a spatial index and the write is at least
+    /// When the layer has a spatial index and the write is at least
     /// [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD) rows, it takes
     /// the bulk path instead, maintaining the index in one operation at the end
     /// rather than row by row through the triggers;
@@ -260,8 +263,8 @@ impl<'a> Layer<'a> {
         }
     }
 
-    /// Whether this write is large enough to take the bulk path, along with any
-    /// rows that had to be pulled from `features` to decide.
+    /// Returns whether this write is large enough to take the bulk path,
+    /// along with any rows that had to be pulled from `features` to decide.
     ///
     /// This is the one decision that has to be made before a row is written,
     /// because the bulk path drops the RTree triggers first and dropping them
@@ -466,9 +469,9 @@ impl<'a> Layer<'a> {
     }
 }
 
-/// Whether a bulk `write_all` that produced `new_entries` index entries against
-/// an index already holding `indexed` of them should rebuild that index rather
-/// than append the new entries to it.
+/// Returns `true` if a bulk `write_all` that produced `new_entries` index
+/// entries against an index already containing `indexed` of them should
+/// rebuild that index rather than append the new entries to it.
 ///
 /// This is decided after the rows are written rather than before, so both counts
 /// are exact. Deciding it up front meant guessing the size of the write from
@@ -493,7 +496,7 @@ pub(crate) fn rebuild_beats_append(new_entries: usize, indexed: usize) -> bool {
     new_entries >= indexed / MERGE_REBUILD_RATIO
 }
 
-/// Add one RTree entry per newly written row, leaving the existing index in
+/// Adds one RTree entry per newly written row, leaving the existing index in
 /// place.
 ///
 /// This is the work the `_insert` trigger would have done had it still been

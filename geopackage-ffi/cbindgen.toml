@@ -112,14 +112,14 @@ include = [
 
 [export.rename]
 # The Rust names on the left are internal; C sees only these. `gpkg_status`
-# carries no `_t` so its constants read `GPKG_STATUS_OK` rather than
+# has no `_t` so its constants read `GPKG_STATUS_OK` rather than
 # `GPKG_STATUS_T_OK`, which is what `prefix_with_name` would otherwise produce.
 "Status" = "gpkg_status"
 "Container" = "gpkg_t"
 "LayerHandle" = "gpkg_layer_t"
 "TilesHandle" = "gpkg_tiles_t"
 "WriterHandle" = "gpkg_writer_t"
-# The kind tag carries no `_t` so its constants read `GPKG_VALUE_KIND_TEXT`
+# The kind tag has no `_t` so its constants read `GPKG_VALUE_KIND_TEXT`
 # rather than `GPKG_VALUE_KIND_T_TEXT`, the same reason `gpkg_status` does not.
 "ValueKind" = "gpkg_value_kind"
 # Declared in `after_includes` above, from the Arrow specification, rather than

@@ -183,7 +183,7 @@ of one type, 2.4M values.
 | `text/64` | 172.3 ms |
 | `blob/64` | 163.0 ms |
 
-**Text against blob at the same payload size**, which holds row size constant
+**Text against blob at the same payload size**, which keeps row size constant
 and
 leaves only UTF-8 validation and the difference between the two array types:
 

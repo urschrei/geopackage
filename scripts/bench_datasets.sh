@@ -141,15 +141,15 @@ field() {
 # Peak resident set size of one dataset_bench invocation, in MB.
 #
 # The process is wrapped rather than instrumented: what a caller cares about is
-# what the whole process holds, and this needs no memory-profiling dependency in
+# what the whole process uses, and this needs no memory-profiling dependency in
 # the example. It is a separate invocation from the timed ones, so the timings
 # are not paying for the measurement.
 #
 # Reported for the arms whose working set is a question rather than a constant:
-# the columnar read holds whole batches (the reason the `admin` read figure
-# moves with host memory), the index build holds an entry per row, and the write
-# holds the batches it is writing. The scalar read holds one row at a time by
-# construction, so it is not measured here.
+# the columnar read keeps whole batches (the reason the `admin` read figure
+# moves with host memory), the index build stores an entry per row, and the
+# write keeps the batches it is writing. The scalar read keeps one row at a
+# time by construction, so it is not measured here.
 #
 # This needs repeating as much as the timings do, and for the same reason. The
 # threaded columnar read was measured over five runs of one dataset at 642, 900,

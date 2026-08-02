@@ -72,7 +72,7 @@ impl ColumnBuilder {
         })
     }
 
-    /// Append one stored value.
+    /// Appends one stored value.
     ///
     /// `names` and `index` locate the column for diagnostics, rather than a
     /// resolved `&str`, so the lookup happens only on the failure paths. It is
@@ -179,7 +179,7 @@ impl ColumnBuilder {
         }
     }
 
-    /// Finish the array.
+    /// Finishes the array.
     pub(crate) fn finish(mut self) -> ArrayRef {
         match &mut self {
             Self::Boolean(builder) => Arc::new(builder.finish()),

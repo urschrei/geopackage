@@ -99,7 +99,7 @@ write performance competitive with GDAL's GPKG driver.
       verify integrity + no index desync.
       *(`geopackage/tests/crash_safety.rs`: an always-on parent test re-invokes
       this test binary to run only the ignored `crash_child` entry point, which
-      commits one write, holds a second uncommitted, and signals readiness via a
+      commits one write, keeps a second uncommitted, and signals readiness via a
       marker file before blocking; the parent kills it (`SIGKILL`) and reopens,
       asserting `integrity_check` ok, committed rows intact, the uncommitted row
       absent, and the rtree in step with the table. Runs for both DELETE and WAL
@@ -174,7 +174,7 @@ write performance competitive with GDAL's GPKG driver.
       back to per-row trigger maintenance. Recorded as a refinement of D8 in
       [01-design-decisions.md](01-design-decisions.md).)*
       Not done, and not needed for either: the rstar escalation (see 02-ecosystem
-      rstar note). `write_all` also still holds one `(fid, envelope)` pair per
+      rstar note). `write_all` also still keeps one `(fid, envelope)` pair per
       written row, so it is not a streaming-memory path; that is a separate
       question from this one.
 - [x] Read-path finding (from the hegel port of the `features_in` property

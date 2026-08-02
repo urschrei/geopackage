@@ -10,7 +10,7 @@ use crate::{Layer, Result};
 /// The Arrow extension-name metadata key, from the Arrow columnar spec.
 pub(crate) const EXTENSION_NAME_KEY: &str = "ARROW:extension:name";
 
-/// The Arrow extension-metadata key, which GeoArrow uses to carry CRS and
+/// The Arrow extension-metadata key, under which GeoArrow stores CRS and
 /// related information as JSON.
 pub(crate) const EXTENSION_METADATA_KEY: &str = "ARROW:extension:metadata";
 
@@ -48,9 +48,9 @@ impl Layer<'_> {
         Ok(Arc::new(Schema::new(fields)))
     }
 
-    /// Whether a read of this handle carries `column`: the primary key always,
-    /// the geometry per the projection, a value column when the projection
-    /// keeps it.
+    /// Whether a read of this handle includes `column`: the primary key
+    /// always, the geometry per the projection, a value column when the
+    /// projection keeps it.
     fn arrow_reads_column(&self, column: &Column, geometry: Option<&GeometryColumn>) -> bool {
         if self.primary_key_column() == Some(column.name.as_str()) {
             return true;
@@ -73,7 +73,7 @@ fn field_for(column: &Column, geometry: Option<&GeometryColumn>) -> Field {
         return geometry_field(&column.name, column.not_null, srs_id);
     }
     // An `INTEGER PRIMARY KEY` is SQLite's rowid alias and can never be NULL,
-    // whether or not the column carries an explicit NOT NULL.
+    // whether or not the column declares an explicit NOT NULL.
     let nullable = !column.not_null && !column.is_primary_key();
     Field::new(&column.name, data_type_for(column), nullable)
 }
@@ -129,7 +129,7 @@ fn affinity_type(declared: &str) -> DataType {
     }
 }
 
-/// The geometry field: WKB bytes carrying the GeoArrow extension name, and the
+/// The geometry field: WKB bytes with the GeoArrow extension name, and the
 /// CRS as extension metadata.
 ///
 /// The bytes are the GPB blob's WKB body, which is why this encoding is the one
@@ -149,7 +149,7 @@ fn geometry_field(name: &str, not_null: bool, srs_id: i32) -> Field {
 /// this emits wherever the EPSG registry has a definition. A `srs_id` the
 /// registry does not know falls back to an `EPSG:<code>` authority string,
 /// which GeoArrow permits. `srs_id` 0 and -1 are the spec's undefined values
-/// and carry no CRS at all.
+/// and name no CRS at all.
 fn crs_metadata(srs_id: i32) -> String {
     if srs_id <= 0 {
         return "{}".to_owned();

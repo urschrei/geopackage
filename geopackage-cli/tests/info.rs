@@ -71,7 +71,7 @@ fn a_tile_pyramid_reports_its_zooms_and_matrix_sizes() {
     assert!(out.contains(r#"tiles "tiles""#), "{out}");
     assert!(out.contains("zooms:"), "{out}");
     assert!(out.contains("256x256 px"), "{out}");
-    // The file carries no features, and that is stated rather than left blank.
+    // The file contains no features, and that is stated rather than left blank.
     assert!(out.contains("no feature layers"), "{out}");
 }
 

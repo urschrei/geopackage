@@ -56,7 +56,7 @@ profile. That found the cause, and fixing it changed the answer:
 
 At 20k rows the same script reports ours 50 ms against GDAL's 32 ms, but at that
 size the startup floor is most of the raw measurement and the subtraction
-dominates, so it carries little weight.
+dominates, so it means little.
 
 ## Where the time actually goes
 

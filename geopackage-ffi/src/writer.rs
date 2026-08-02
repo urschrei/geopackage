@@ -4,7 +4,7 @@
 //! the other half: insert one row, change one, remove one. A consumer editing
 //! an existing file wants this; a consumer loading a million rows wants Arrow.
 //!
-//! A writer holds a transaction for its lifetime. Rows staged through it are
+//! A writer owns a transaction for its lifetime. Rows staged through it are
 //! not durable until [`gpkg_writer_commit`], and [`gpkg_writer_free`] discards
 //! them. Inside a transaction the caller opened with `gpkg_begin` the writer
 //! joins that one instead, so its commit stages rather than commits and the
@@ -56,7 +56,7 @@
 //! `values` covers the layer's value columns in the order
 //! [`crate::gpkg_layer_column_name`] reports them, excluding the primary key
 //! and the geometry, which travel as their own arguments. A count that does not
-//! match the layer is refused rather than padded.
+//! match the layer is rejected rather than padded.
 //!
 //! # Geometry
 //!
@@ -81,7 +81,7 @@ use crate::value::{borrow_values, gpkg_value_t};
 )]
 pub type gpkg_writer_t = WriterHandle;
 
-/// Borrow a live writer, or report a NULL handle.
+/// Borrows a live writer, or reports a NULL handle.
 ///
 /// # Safety
 ///
@@ -102,7 +102,7 @@ unsafe fn writer_mut<'a>(
     Some(unsafe { &mut *writer })
 }
 
-/// Read a caller-supplied geometry: `NULL` with a length of zero means none.
+/// Reads a caller-supplied geometry: `NULL` with a length of zero means none.
 ///
 /// # Safety
 ///
@@ -130,7 +130,7 @@ unsafe fn borrow_wkb<'a>(
     Some(Some(unsafe { std::slice::from_raw_parts(wkb, wkb_len) }))
 }
 
-/// Report a library error and return its status.
+/// Reports a library error and returns its status.
 ///
 /// # Safety
 ///
@@ -141,7 +141,7 @@ unsafe fn failed(err: &geopackage::Error, error: *mut gpkg_error_t) -> Status {
     Status::from(err)
 }
 
-/// Begin a write transaction over `layer`.
+/// Begins a write transaction over `layer`.
 ///
 /// The writer borrows the layer's container, which cannot be closed while the
 /// writer is alive. Finish with `gpkg_writer_commit`, or discard the work with
@@ -182,7 +182,7 @@ pub unsafe extern "C" fn gpkg_layer_writer(
     }
 }
 
-/// Commit the writer's work and destroy it.
+/// Commits the writer's work and destroys it.
 ///
 /// The handle is destroyed whether this succeeds or fails, so it must not be
 /// used again either way. Inside a transaction the caller opened with
@@ -219,7 +219,7 @@ pub unsafe extern "C" fn gpkg_writer_commit(
     }
 }
 
-/// Discard the writer's work and destroy it.
+/// Discards the writer's work and destroys it.
 ///
 /// Everything staged since `gpkg_layer_writer` is rolled back. Inside a
 /// transaction the caller opened, nothing is rolled back here: the work stays
@@ -242,7 +242,7 @@ pub unsafe extern "C" fn gpkg_writer_free(writer: *mut gpkg_writer_t) {
     drop(unsafe { Box::from_raw(writer) });
 }
 
-/// Insert a feature, with or without a geometry.
+/// Inserts a feature, with or without a geometry.
 ///
 /// `fid` is NULL to have an id assigned, or points at the id to use. The id
 /// written is reported through `out_fid` when that is non-NULL.
@@ -300,7 +300,7 @@ pub unsafe extern "C" fn gpkg_writer_insert(
     }
 }
 
-/// Update the feature `fid`, replacing every value column and, when `wkb` is
+/// Updates the feature `fid`, replacing every value column and, when `wkb` is
 /// given, the geometry.
 ///
 /// `out_matched` reports whether a row with that id was there to update; a
@@ -341,7 +341,7 @@ pub unsafe extern "C" fn gpkg_writer_update(
     unsafe { report_matched(updated, out_matched, error) }
 }
 
-/// Update one column of the feature `fid`, leaving every other value and the
+/// Updates one column of the feature `fid`, leaving every other value and the
 /// geometry alone.
 ///
 /// The shape a caller wants when correcting one field: nothing else has to be
@@ -382,7 +382,7 @@ pub unsafe extern "C" fn gpkg_writer_update_column(
     unsafe { report_matched(updated, out_matched, error) }
 }
 
-/// Delete the feature `fid`.
+/// Deletes the feature `fid`.
 ///
 /// `out_matched` reports whether a row with that id was there to delete; a
 /// missing row is not an error.
@@ -411,7 +411,7 @@ pub unsafe extern "C" fn gpkg_writer_delete(
     unsafe { report_matched(deleted, out_matched, error) }
 }
 
-/// Report the outcome of an update or delete through `out_matched`.
+/// Reports the outcome of an update or delete through `out_matched`.
 ///
 /// # Safety
 ///

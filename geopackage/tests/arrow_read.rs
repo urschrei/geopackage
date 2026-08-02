@@ -446,7 +446,7 @@ mod byte_ceiling {
     use geopackage::{GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value};
     use geopackage_core::GeometryType;
 
-    /// Each feature carries a line string of `points` vertices, so the geometry
+    /// Each feature has a line string of `points` vertices, so the geometry
     /// column has predictable, non-trivial size.
     fn layer_with_fat_geometries(rows: usize, points: usize) -> (tempfile::TempDir, GeoPackage) {
         let dir = tempfile::tempdir().unwrap();

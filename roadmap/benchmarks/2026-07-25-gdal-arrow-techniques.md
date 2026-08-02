@@ -107,7 +107,7 @@ parallel path cannot work on a `:memory:` database.
 
 The per-array memory limit is `min(INT32_MAX, usable_RAM / 4)`
 (`GetMemLimit`, `ograrrowarrayhelper.cpp` line 25). The `INT32_MAX` is not
-arbitrary caution: Arrow's `binary` type carries **int32 offsets**, so a WKB
+arbitrary caution: Arrow's `binary` type uses **int32 offsets**, so a WKB
 column cannot exceed 2 GB within a single batch. When the running batch would
 cross the limit the step callback submits early, logging "premature notification
 of N features to consumer due to too big array".
@@ -137,7 +137,7 @@ our reading of the spec. The exceptions are coordinate-precision rounding
 do parse; neither applies to us.
 
 A spatial filter, when present, is applied inside the same callback and uses the
-GPB header envelope when the header carries one, so the common case still does
+GPB header envelope when the header has one, so the common case still does
 not parse the body. That matches what `bulk::envelope_of` already does on the
 write side.
 

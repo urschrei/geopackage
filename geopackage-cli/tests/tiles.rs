@@ -93,7 +93,7 @@ fn get_writes_the_stored_bytes_unchanged() {
         stdout(&output)
     );
 
-    // Byte for byte what the pyramid holds: the payload is never decoded or
+    // Byte for byte what the pyramid contains: the payload is never decoded or
     // re-encoded on the way out.
     let written = std::fs::read(&out).unwrap();
     let stored: Vec<u8> = rusqlite::Connection::open(&path)

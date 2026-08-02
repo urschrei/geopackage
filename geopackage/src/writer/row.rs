@@ -22,7 +22,7 @@ pub struct NewFeature<G> {
 }
 
 impl<G> NewFeature<G> {
-    /// A feature with a geometry and its values (auto-assigned id).
+    /// Creates a feature with a geometry and its values (auto-assigned id).
     pub fn new(geometry: G, values: Vec<Value>) -> Self {
         Self {
             fid: None,
@@ -31,7 +31,8 @@ impl<G> NewFeature<G> {
         }
     }
 
-    /// A row with no geometry (a NULL geometry, or an attribute row).
+    /// Creates a row with no geometry (a NULL geometry, or an attribute
+    /// row).
     pub fn attributes(values: Vec<Value>) -> Self {
         Self {
             fid: None,
@@ -40,7 +41,7 @@ impl<G> NewFeature<G> {
         }
     }
 
-    /// Set an explicit feature id.
+    /// Sets an explicit feature id.
     #[must_use]
     pub fn with_fid(mut self, fid: i64) -> Self {
         self.fid = Some(fid);
@@ -56,7 +57,8 @@ impl<G> NewFeature<G> {
 /// transaction handling; they differ only in how one row reaches the database,
 /// which is what this trait names.
 pub(crate) trait WritableRow {
-    /// Write this row through `writer`, returning its assigned feature id and
+    /// Writes this row through `writer`, returning its assigned feature id
+    /// and
     /// the XY envelope of its geometry, or `None` when it has no indexable
     /// geometry.
     fn write(self, writer: &mut FeatureWriter<'_>) -> Result<(i64, Option<[f64; 4]>)>;

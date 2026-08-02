@@ -79,7 +79,7 @@ FIXED_LAST_CHANGE = "2020-01-01T00:00:00.000Z"
 # 512-byte pages beat GDAL's 4 KiB default by roughly 8x.
 PAGE_SIZE = 512
 
-# Size budgets. A GeoPackage with a spatial index carries seven verbose RTree
+# Size budgets. A GeoPackage with a spatial index has seven verbose RTree
 # triggers whose SQL text dominates the schema page, so a few tens of KiB is the
 # practical floor for an indexed feature file; these budgets guard against
 # accidental bloat, not against the inherent schema cost.
@@ -318,10 +318,11 @@ def write_geojson(path: Path, obj: dict) -> None:
 def build_multilayer_1_4(tmp: Path) -> Path:
     """Five GDAL-written layers in one 1.4 container.
 
-    ``points`` are indexed (GDAL's default) and carry no GPB envelope (GDAL's
+    ``points`` are indexed (GDAL's default) and have no GPB envelope (GDAL's
     default for points -- exercises our traversal fallback); ``lines`` are
     non-indexed and ``polygons`` indexed, both with GPB envelopes; ``points3d``
-    holds XYZ points; ``emptyline`` holds one normal and one empty linestring.
+    contains XYZ points; ``emptyline`` contains one normal and one empty
+    linestring.
     """
     out = FIXTURES / "gdal_multilayer_1_4.gpkg"
     out.unlink(missing_ok=True)
@@ -453,9 +454,9 @@ def build_attributes_spread(_tmp: Path) -> Path:
     (it writes ``MEDIUMINT``/``REAL``), so to exercise every declared type the
     table is created by hand. GDAL still reads it -- the empty
     ``gpkg_geometry_columns`` table is required for GDAL to enumerate the
-    aspatial layer. Row 1 holds representative non-NULL values (FLOAT values are
-    f32-exact so GDAL's Float32 read is lossless), row 2 the opposite signs, row
-    3 is entirely NULL.
+    aspatial layer. Row 1 contains representative non-NULL values (FLOAT values
+    are f32-exact so GDAL's Float32 read is lossless), row 2 the opposite signs,
+    row 3 is entirely NULL.
     """
     out = FIXTURES / "attributes_spread.gpkg"
     out.unlink(missing_ok=True)
@@ -638,8 +639,8 @@ def build_gdal_tiles(tmp: Path) -> Path:
     mercator quad.
 
     The raster path of the GPKG driver rather than the vector one, so this
-    fixture carries no feature layer and has no ``ogrinfo`` snapshot beside it;
-    what a reader should see is asserted directly in
+    fixture has no feature layer and no ``ogrinfo`` snapshot beside it; what a
+    reader should see is asserted directly in
     ``geopackage/tests/tiles.rs``. The shape is the one ``gdal_translate``
     produces with no tiling scheme asked for: a single zoom level whose tile
     matrix set is the raster's own extent.

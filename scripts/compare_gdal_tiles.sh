@@ -5,7 +5,7 @@
 # The two arms do different work, and the difference is a capability one rather
 # than an optimisation. GDAL's raster driver returns pixels: it decodes each
 # PNG. This crate returns the stored tile bytes and has no decoder at all,
-# which is the M4 scope decision recorded in roadmap/06-m4-tiles.md. So this is
+# which is the scope decision recorded in roadmap/06-m4-tiles.md. So this is
 # not a like-for-like comparison in the sense scripts/compare_gdal_index.sh is,
 # and no ratio derived from it says one implementation is faster at the same
 # job. What it does say is what each costs to get tiles out of a GeoPackage,

@@ -6,10 +6,11 @@
 //! table, and walking it needs nothing more. Writing is offered for the
 //! requirements classes the spec defines.
 //!
-//! Cardinality is not modelled. The spec declines to constrain it and warns
+//! Cardinality is not modelled. The spec chooses not to constrain it and warns
 //! against enforcing one-to-many with a `UNIQUE` constraint, because SQLite
 //! does not expose such constraints in an easily queryable way, so
-//! [`GeoPackage::related_ids`] returns whatever pairs the mapping table holds.
+//! [`GeoPackage::related_ids`] returns whatever pairs the mapping table
+//! contains.
 
 use geopackage_core::ident::quote;
 use geopackage_core::related::{
@@ -75,7 +76,7 @@ impl NewRelation {
 }
 
 impl GeoPackage {
-    /// Every `gpkgext_relations` row.
+    /// Returns every `gpkgext_relations` row.
     ///
     /// An empty vector for a file without the extension.
     ///
@@ -109,7 +110,7 @@ impl GeoPackage {
         Ok(rows)
     }
 
-    /// The relationships whose base table is `table_name`.
+    /// Returns the relationships whose base table is `table_name`.
     ///
     /// # Errors
     ///
@@ -124,7 +125,8 @@ impl GeoPackage {
 
     /// The `related_id` values a relationship maps `base_id` to.
     ///
-    /// The mapping table's rows as stored, in its own order, with duplicates
+    /// Returns the mapping table's rows as stored, in its own order, with
+    /// duplicates
     /// kept: the spec constrains neither the cardinality nor the uniqueness of
     /// a mapping, so removing anything here would be inventing a rule.
     ///
@@ -150,7 +152,8 @@ impl GeoPackage {
         Ok(ids)
     }
 
-    /// Create a relationship: its `gpkgext_relations` row, its mapping table,
+    /// Creates a relationship: its `gpkgext_relations` row, its mapping
+    /// table,
     /// and the extension registrations both need.
     ///
     /// Returns the new `gpkgext_relations.id`.

@@ -20,7 +20,7 @@ extension work is written rather than just when it happens.
   extension below needs a public catalogue to hang off, so phase 1 is a
   prerequisite for the rest rather than one item among them.
 
-This milestone also carries M3's unbuilt items. `geopackage-cli` and
+This milestone also includes M3's unbuilt items. `geopackage-cli` and
 `geopackage-ffi` do not exist, which leaves M3 acceptance criteria 6 and 7
 unmet, M4's tile subcommands deferred, and design decision D12's single
 `unsafe` carve-out hypothetical. They are phases 8 and 9 here.
@@ -98,7 +98,7 @@ not a publication schedule; what ships, and when, is decided after M5.
       *(Done in `tests/extensions.rs` for the fixtures, which also pins the
       inventory so a fixture gaining an extension shows as a diff, and in
       `tests/corpus_external.rs` for the fetched corpus. What the corpus
-      carries today: `gpkg_rtree_index`, `gpkg_metadata`, `gpkg_schema`. That
+      contains today: `gpkg_rtree_index`, `gpkg_metadata`, `gpkg_schema`. That
       is thin evidence for the phase order below, and worth revisiting against
       a wider corpus rather than treating as settled.)*
 
@@ -232,7 +232,7 @@ widespread implementation produces.
       Requirement 96 gives five lowercase values and no escape hatch, so
       `ReferenceScope::parse` returns `Option`. `md_scope` is not: Requirement
       94 says SHALL, then SHOULD, then "however, this list is not exhaustive;
-      new scopes are permitted", so `MetadataScope` carries `Other(String)`.
+      new scopes are permitted", so `MetadataScope` includes `Other(String)`.
       Modelling it closed would have made a conformant file unreadable.
       Payloads stay strings, as planned.
 - [x] Timestamps go through `geopackage_core::datetime` (Requirement 100 puts
@@ -321,7 +321,7 @@ was originally sized for.
       because SQLite does not expose such constraints in an easily queryable
       way. So the model should not try to infer or enforce cardinality.
 
-      `ets-gpkg12` carries `RTETests`, so acceptance criterion 3 has a path for
+      `ets-gpkg12` includes `RTETests`, so acceptance criterion 3 has a path for
       this extension without new harness work.
 - [x] Fixture: `gdal_related.gpkg`. No GeoPackage in the committed fixtures or
       the fetched corpus carried `gpkgext_relations`, confirmed by sweeping
@@ -390,9 +390,9 @@ So the escape hatch is not needed, and `gpkg_rtree_index` covers curve layers.
       ulps despite GDAL reaching them by a quadrant sweep rather than the
       chord-side test.
 - [x] Register the member types of a container geometry, not only the declared
-      column type. Found by the fixture: GDAL's `multicurve` layer carries
+      column type. Found by the fixture: GDAL's `multicurve` layer registers
       `gpkg_geom_CIRCULARSTRING` alongside `gpkg_geom_MULTICURVE`, and its
-      `multisurface` layer carries `gpkg_geom_CURVEPOLYGON`. `create_layer`
+      `multisurface` layer registers `gpkg_geom_CURVEPOLYGON`. `create_layer`
       registers only what it is told, which is the column's declared type, so
       ours was the thinner registration.
       *(Done 2026-07-29. The walk that computes a curve's envelope now also
@@ -419,7 +419,7 @@ So the escape hatch is not needed, and `gpkg_rtree_index` covers curve layers.
       the body is malformed.)*
 
 Fixture budget note: the five indexed layers cost 57 KB of the 256 KB corpus
-budget, because each carries the seven-trigger RTree schema. The total is now
+budget, because each has the seven-trigger RTree schema. The total is now
 223 KB. A sixth curve layer would not fit; trimming a layer or raising the
 budget is the choice if one is wanted.
 
@@ -439,14 +439,14 @@ not much use to an embedding caller.
       answer, `Warning` when the file is out of step with the current spec but
       reads correctly, and `Advisory` for a remark such as an unindexed layer.
       Findings come back most severe first.
-- [x] Each finding carries repair advice where repair exists, naming the method
+- [x] Each finding includes repair advice where repair exists, naming the method
       that performs it. `repair()` is `None` where the fix needs the producing
       writer or a decision about data this crate should not take on the
       caller's behalf, which is most of the extension findings.
 - [x] Run it over every committed fixture, with the findings pinned, so a
       change in what is detected is a diff. Two the sweep established rather
       than confirmed: `gdal_points_1_2.gpkg` reports
-      `LegacySpatialIndexTriggers`, correctly, since a 1.2 file carries the
+      `LegacySpatialIndexTriggers`, correctly, since a 1.2 file has the
       pre-1.4 trigger set, and `gdal_multilayer_1_4.gpkg` reports three
       unindexed layers, which is how it was built.
 
@@ -751,7 +751,7 @@ The options:
 4. **Keep the borrow, make the rebuild cheap.** Handles stay borrowed and every
    current guarantee stands, including the compile-time one. The library grows a
    constructor that builds a `Layer` from a cached, shared schema rather than
-   re-querying, and the FFI holds the cache and rebuilds per call. Removes the
+   re-querying, and the FFI keeps the cache and rebuilds per call. Removes the
    performance objection without touching the ownership model. Requires
    `Layer`'s owned fields (`schema`, `value_columns`) to become shared for the
    rebuild to be cheap, for which `value_column_names: Arc<[String]>` is already
@@ -811,7 +811,7 @@ handle and should not change at all.
 
 ### Inheriting an open transaction
 
-**Done.** `geopackage/src/transaction.rs` carries `WriteTransaction`, which is
+**Done.** `geopackage/src/transaction.rs` defines `WriteTransaction`, which is
 `Layer::extent`'s branch made reusable, and every write path goes through it.
 The change was smaller than the sketch below expected, because both writers
 already held the connection alongside the transaction and prepared every
@@ -845,7 +845,7 @@ this: it checks `conn.is_autocommit()` and, when a transaction is open, runs
 its statements directly rather than opening one, "inheriting theirs gives the
 same atomicity" (`geopackage/src/extent.rs`). Savepoints are the other
 candidate, but `rusqlite`'s `Connection::savepoint` needs `&mut Connection` and
-this crate only ever holds `&Connection`, so they would have to be driven as
+this crate only ever has `&Connection`, so they would have to be driven as
 raw `SAVEPOINT`/`RELEASE` SQL. Inheriting is simpler and is what the one
 existing precedent does, so it is the design unless rollback granularity turns
 out to matter to someone.
@@ -1063,7 +1063,7 @@ The items the sense-check produced, in rough order of consumer value:
       paths, both needing a Linux runner because Valgrind has no macOS arm64
       port. Deciding where that runner comes from is the blocking part of both
       issues, not the benches themselves.
-- [ ] The QGIS interop job (#6), which also carries M4's undelivered acceptance
+- [ ] The QGIS interop job (#6), which also includes M4's undelivered acceptance
       criterion 2: a pyramid written here rendering correctly in QGIS.
 - [ ] Docs: book-style guide (mdBook), cookbook for the ten common tasks,
       migration notes from gdal, gpkg-rs and rusqlite-gpkg, FFI integration

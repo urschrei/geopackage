@@ -1,6 +1,6 @@
 //! Whether a threaded bounding-box-filtered columnar read would pay.
 //!
-//! M3 designed the threaded filtered read before building it: one thread
+//! The threaded filtered read was designed before it was built: one thread
 //! walks the RTree and hands candidate id blocks to workers, so the scan
 //! happens once and no feature is returned twice. It also recorded the open
 //! question, whether filtered results are typically large enough for any of

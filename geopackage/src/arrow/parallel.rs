@@ -56,7 +56,7 @@ pub(crate) fn dense_key_span(
 /// Worker `w` of `n` reads batches `w`, `w + n`, `w + 2n`, and so on, and the
 /// consumer takes from the workers in the same rotation. Batches therefore
 /// arrive in key order without any reordering buffer, and each worker's channel
-/// holds one batch, so the memory in flight is bounded by the thread count.
+/// buffers one batch, so the memory in flight is bounded by the thread count.
 pub(crate) struct ParallelBatches {
     /// One receiver per worker, drained in rotation.
     receivers: Vec<std::sync::mpsc::Receiver<std::result::Result<WorkerMessage, ArrowError>>>,

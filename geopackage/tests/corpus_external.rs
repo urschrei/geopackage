@@ -74,7 +74,7 @@ struct Tally {
 }
 
 /// The variant name of a finding, which is what gets pinned: the payload
-/// carries table names and counts that would make the expectation a
+/// contains table names and counts that would make the expectation a
 /// restatement of the file rather than of what we detect in it.
 fn finding_kind(finding: &geopackage::Finding) -> String {
     let debug = format!("{finding:?}");
@@ -276,7 +276,7 @@ fn sweep_external_corpus() {
                 ("NoSpatialIndex", 1),
             ],
         ),
-        // Written with no indexes, as its name says it carries no extensions.
+        // Written with no indexes, as its name says it has no extensions.
         (
             "gdal_sample_v1.2_no_extensions.gpkg",
             &[("NoSpatialIndex", 16)],
@@ -285,7 +285,7 @@ fn sweep_external_corpus() {
             "nga_rivers.gpkg",
             &[("LegacyApplicationId", 1), ("NoSpatialIndex", 1)],
         ),
-        // A 1.2 file, so its one indexed layer carries the pre-1.4 triggers.
+        // A 1.2 file, so its one indexed layer has the pre-1.4 triggers.
         ("ogc_sample1_2.gpkg", &[("LegacySpatialIndexTriggers", 1)]),
     ];
     for (name, want) in expected {

@@ -3,7 +3,7 @@
 //!
 //! One catalogue table, `gpkgext_relations`, names each relationship; each row
 //! points at a user-defined mapping table whose `base_id` and `related_id`
-//! columns hold the pairs. The mapping table is the relationship's data, and
+//! columns store the pairs. The mapping table is the relationship's data, and
 //! this crate neither constrains nor infers its cardinality: the spec is
 //! explicit that a `UNIQUE` constraint could enforce one-to-many but is NOT
 //! RECOMMENDED, because SQLite does not expose such constraints in an easily
@@ -61,7 +61,7 @@ pub struct Relation {
     pub related_primary_column: String,
     /// What kind of relationship this is.
     pub relation_name: RelationName,
-    /// The mapping table holding the pairs.
+    /// The mapping table that stores the pairs.
     pub mapping_table_name: String,
 }
 
@@ -84,7 +84,7 @@ pub enum RelationName {
     Attributes,
     /// Related tiles.
     Tiles,
-    /// An `x-<author>_<name>` extension, held without the `x-` prefix.
+    /// An `x-<author>_<name>` extension, stored without the `x-` prefix.
     Extended {
         /// The person or organisation maintaining the relation type.
         author: String,
@@ -97,7 +97,7 @@ pub enum RelationName {
 }
 
 impl RelationName {
-    /// Identify a `relation_name` value. Never fails.
+    /// Identifies a `relation_name` value. Never fails.
     pub fn parse(value: &str) -> Self {
         match value {
             "media" => return Self::Media,
@@ -122,7 +122,7 @@ impl RelationName {
         Self::Other(value.to_owned())
     }
 
-    /// The `relation_name` column value.
+    /// Returns the `relation_name` column value.
     pub fn as_string(&self) -> String {
         match self {
             Self::Media => "media".to_owned(),
@@ -135,7 +135,7 @@ impl RelationName {
         }
     }
 
-    /// Whether Requirement 8 accepts this value.
+    /// Returns `true` if Requirement 8 accepts this value.
     pub fn is_conformant(&self) -> bool {
         !matches!(self, Self::Other(_))
     }
@@ -147,12 +147,11 @@ impl fmt::Display for RelationName {
     }
 }
 
-/// `CREATE TABLE` SQL for a user-defined mapping table.
+/// Returns `CREATE TABLE` SQL for a user-defined mapping table.
 ///
 /// Requirement 9 asks for `base_id` and `related_id` and permits other
-/// columns; Table 3 gives both as non-null. GDAL leaves them nullable, which is
-/// read without complaint, but what this crate writes follows the table
-/// definition.
+/// columns; Table 3 gives both as non-null. GDAL leaves them nullable, which
+/// is accepted on read, but this crate writes the table definition's form.
 ///
 /// # Errors
 ///

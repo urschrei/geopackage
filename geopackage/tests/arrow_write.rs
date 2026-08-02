@@ -334,11 +334,11 @@ fn a_layer_can_be_created_from_an_arrow_schema() {
     let after = batches(&target, "pts", ArrowReadOptions::default());
     assert_eq!(
         before[0], after[0],
-        "the derived layer holds different data"
+        "the derived layer contains different data"
     );
 }
 
-/// The derived schema carries the SRS across, and declares a geometry column
+/// The derived schema preserves the SRS, and declares a geometry column
 /// that accepts anything, since WKB does not say what it will contain.
 #[test]
 fn a_derived_layer_keeps_the_srs_and_takes_any_geometry() {

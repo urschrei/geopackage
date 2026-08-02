@@ -19,16 +19,16 @@ pub(crate) struct ColumnConstraints<'conn> {
     pub(crate) per_column: Vec<Option<ColumnConstraint>>,
     /// `SELECT ?1 GLOB ?2`, prepared once, for the glob form.
     ///
-    /// The pattern language is SQLite's, defined by whatever the engine
-    /// holding the file does, so the engine answers rather than a copy of its
-    /// rules living here. That also gives numbers SQLite's own text coercion,
+    /// The pattern language is SQLite's, defined by whatever the engine that
+    /// stores the file does, so the engine is asked rather than its rules
+    /// being copied here. That also gives numbers SQLite's own text coercion,
     /// which is what a trigger enforcing the same constraint would apply.
-    /// `None` when no column carries a glob, which is the usual case.
+    /// `None` when no column has a glob, which is the usual case.
     pub(crate) glob: Option<CachedStatement<'conn>>,
 }
 
 impl<'conn> ColumnConstraints<'conn> {
-    /// Resolve each value column's constraint, once per writer.
+    /// Resolves each value column's constraint, once per writer.
     pub(crate) fn read(
         layer: &Layer<'_>,
         conn: &'conn Connection,
@@ -68,7 +68,8 @@ impl<'conn> ColumnConstraints<'conn> {
         }
     }
 
-    /// Whether anything at all is enforced, so the row paths can skip the walk.
+    /// Returns `true` if anything at all is enforced, so the row paths can
+    /// skip the walk.
     pub(crate) fn is_empty(&self) -> bool {
         self.per_column.iter().all(Option::is_none)
     }
@@ -77,7 +78,8 @@ impl<'conn> ColumnConstraints<'conn> {
         self.per_column.get(index).and_then(Option::as_ref)
     }
 
-    /// Whether `value` satisfies the constraint on the column at `index`.
+    /// Returns `true` if `value` satisfies the constraint on the column at
+    /// `index`.
     ///
     /// The range and enum forms are decided here; the glob form is put to
     /// SQLite.
@@ -128,8 +130,8 @@ impl<'conn> ColumnConstraints<'conn> {
     }
 }
 
-/// Whether `value` falls inside a range constraint, honouring both bounds'
-/// inclusivity. Anything but a range is outside it.
+/// Returns `true` if `value` falls inside a range constraint, honouring both
+/// bounds' inclusivity. Anything but a range is outside it.
 pub(crate) fn in_range(kind: &ConstraintKind, value: f64) -> bool {
     let ConstraintKind::Range {
         min,
@@ -155,12 +157,12 @@ pub(crate) fn in_range(kind: &ConstraintKind, value: f64) -> bool {
 
 /// A value reduced to what a constraint can judge it by.
 ///
-/// The three write paths hand values over in three forms; this is what they
+/// The three write paths supply values in three forms; this is what they
 /// have in common as far as a `range`, `enum` or `glob` is concerned.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Checkable<'a> {
     /// No value. A constraint says what a value may be, not that there has to
-    /// be one, so NULL satisfies every constraint. A column that must hold
+    /// be one, so NULL satisfies every constraint. A column that must contain
     /// something says so with `NOT NULL`.
     Null,
     /// An integer, compared numerically against a `range` and by its decimal
@@ -177,7 +179,7 @@ pub(crate) enum Checkable<'a> {
     Unchecked,
 }
 
-/// The value forms a write path can hand over.
+/// The value forms a write path can supply.
 pub(crate) trait AsCheckable {
     /// This value, as a constraint sees it.
     fn as_checkable(&self) -> Checkable<'_>;

@@ -29,8 +29,8 @@
 //! writes, which is not one this crate keeps: [`Layer::extent`] records an
 //! extent it had to measure. The difference is what the two cost and what
 //! their absence does. Rebuilding an index reads every geometry in the layer
-//! and rewrites the tree, which is not a bill to hand someone who asked a
-//! question; and an index that is stale or of an older generation is not
+//! and rewrites the tree, which is too expensive to run as the side effect of
+//! a question; and an index that is stale or of an older generation is not
 //! silently believed, because [`Layer::has_spatial_index`] reports it as
 //! unusable and queries fall back to a correct scan. An extent is neither:
 //! measuring it is comparatively cheap, and a wrong one is believed
@@ -64,7 +64,7 @@ pub enum SpatialIndexStatus {
     /// No spatial index: neither the virtual table nor any RTree trigger is
     /// present. Build one with [`Layer::create_spatial_index`].
     Absent,
-    /// A complete, current index: the virtual table exists and carries the
+    /// A complete, current index: the virtual table exists and has the
     /// GeoPackage 1.4 trigger set. [`Layer::features_in`] uses it.
     Current,
     /// A present index maintained by a legacy (pre-1.4) or mixed trigger set.
@@ -87,7 +87,7 @@ pub enum SpatialIndexStatus {
 }
 
 impl SpatialIndexStatus {
-    /// The status as a short phrase, for reporting a layer's index.
+    /// Returns the status as a short phrase, for reporting a layer's index.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Absent => "absent",
@@ -104,7 +104,7 @@ impl std::fmt::Display for SpatialIndexStatus {
     }
 }
 
-/// What an [`Layer::audit_spatial_index`] found: how the index's contents
+/// The result of [`Layer::audit_spatial_index`]: how the index's contents
 /// compare with the geometries they are supposed to describe.
 ///
 /// [`SpatialIndexStatus`] answers a structural question, whether the virtual
@@ -133,7 +133,8 @@ pub struct SpatialIndexAudit {
 }
 
 impl SpatialIndexAudit {
-    /// Whether the index describes exactly the rows it should, covering each.
+    /// Returns `true` if the index describes exactly the rows it should,
+    /// covering each.
     ///
     /// False means a bounding-box query can return the wrong answer, and that
     /// [`Layer::rebuild_spatial_index`] is the fix.
@@ -144,7 +145,8 @@ impl SpatialIndexAudit {
 }
 
 impl Layer<'_> {
-    /// Classify this layer's RTree spatial index (see [`SpatialIndexStatus`]).
+    /// Classifies this layer's RTree spatial index (see
+    /// [`SpatialIndexStatus`]).
     ///
     /// A layer with no geometry column is [`SpatialIndexStatus::Absent`]. This
     /// is the detector for the interrupted-bulk-build case: a
@@ -172,7 +174,8 @@ impl Layer<'_> {
 }
 
 impl Layer<'_> {
-    /// Build an RTree spatial index over this feature layer's geometry column.
+    /// Builds an RTree spatial index over this feature layer's geometry
+    /// column.
     ///
     /// Creates the `rtree_<table>_<column>` virtual table, installs the
     /// GeoPackage 1.4 trigger set (the UPSERT-safe generation), populates the
@@ -199,7 +202,7 @@ impl Layer<'_> {
         self.create_spatial_index_with(BulkIndexOptions::default())
     }
 
-    /// Build the RTree spatial index with an explicit choice of build path.
+    /// Builds the RTree spatial index with an explicit choice of build path.
     ///
     /// Identical to [`Self::create_spatial_index`] but with a caller-supplied
     /// [`BulkIndexOptions`] controlling the bulk-vs-triggered threshold.
@@ -269,7 +272,7 @@ impl Layer<'_> {
         )
     }
 
-    /// Remove this layer's RTree spatial index: its triggers, the
+    /// Removes this layer's RTree spatial index: its triggers, the
     /// `rtree_<table>_<column>` virtual table (and its shadow tables), and the
     /// `gpkg_extensions` registration row. The `gpkg_extensions` table itself is
     /// left in place.
@@ -300,8 +303,8 @@ impl Layer<'_> {
         Ok(())
     }
 
-    /// Repair a legacy, inconsistent, or desynchronised RTree spatial index:
-    /// install the GeoPackage 1.4 trigger set and rebuild the index content.
+    /// Repairs a legacy, inconsistent, or desynchronised RTree spatial index:
+    /// installs the GeoPackage 1.4 trigger set and rebuilds the index content.
     ///
     /// The pre-1.4 `update1` trigger corrupts an index under `UPSERT`; 1.4
     /// renamed the fixed triggers so the repaired state is detectable by name.
@@ -359,9 +362,9 @@ impl Layer<'_> {
         self.rebuild_index_impl(geom, pk)
     }
 
-    /// Rebuild the RTree spatial index from the geometries, whatever state it
-    /// is in: drop every RTree trigger, install the 1.4 set, empty the virtual
-    /// table and repopulate it, in one transaction.
+    /// Rebuilds the RTree spatial index from the geometries, whatever state
+    /// it is in: drops every RTree trigger, installs the 1.4 set, empties the
+    /// virtual table and repopulates it, in one transaction.
     ///
     /// [`Self::repair_spatial_index`] is the cheap operation and answers a
     /// structural question, so it returns without doing anything when the
@@ -371,7 +374,7 @@ impl Layer<'_> {
     ///
     /// Like the repair, it is never invoked automatically, and for the same
     /// reason: this reads every geometry in the layer and rewrites the tree,
-    /// which is not something to do to a caller who only asked a question.
+    /// which is too expensive to run unrequested.
     ///
     /// # Errors
     ///
@@ -422,7 +425,7 @@ impl Layer<'_> {
         Ok(())
     }
 
-    /// Compare the RTree's contents against the geometries they describe.
+    /// Compares the RTree's contents against the geometries they describe.
     ///
     /// [`Self::spatial_index_status`] asks whether the index is *there*; this
     /// asks whether it is *right*, which structure cannot answer. A file may
@@ -498,8 +501,8 @@ impl Layer<'_> {
         })
     }
 
-    /// This layer's geometry column, or [`Error::NoGeometryColumn`] when it has
-    /// none (an attribute layer, or a feature table with no
+    /// Returns this layer's geometry column, or [`Error::NoGeometryColumn`]
+    /// when it has none (an attribute layer, or a feature table with no
     /// `gpkg_geometry_columns` row).
     fn require_geometry_column(&self) -> Result<&GeometryColumn> {
         self.geometry_column()
@@ -508,7 +511,8 @@ impl Layer<'_> {
             })
     }
 
-    /// This layer's single-column primary key, or [`Error::NoPrimaryKey`].
+    /// Returns this layer's single-column primary key, or
+    /// [`Error::NoPrimaryKey`].
     fn require_primary_key(&self) -> Result<&str> {
         self.primary_key_column()
             .ok_or_else(|| Error::NoPrimaryKey {
@@ -517,15 +521,15 @@ impl Layer<'_> {
     }
 }
 
-/// Register the `gpkg_rtree_index` extension for `table`/`column`, creating
+/// Registers the `gpkg_rtree_index` extension for `table`/`column`, creating
 /// `gpkg_extensions` on first use. The `extension_name`, `definition`, and
 /// `scope` values are the spec-prescribed constants from
 /// [`geopackage_core::triggers`] (Annex F.3, requirements 75/76).
-/// Create the RTree virtual table, install the GeoPackage 1.4 trigger set,
-/// populate it from the table's existing rows, and register the extension.
+/// Creates the RTree virtual table, installs the GeoPackage 1.4 trigger set,
+/// populates it from the table's existing rows, and registers the extension.
 ///
 /// Every statement runs on `conn`, which the caller must already have inside a
-/// transaction, and nothing is committed here. Two callers want that: the
+/// transaction, and nothing is committed here. Two callers need that: the
 /// triggered branch of [`Layer::create_spatial_index`], which opens its own, and
 /// [`crate::GeoPackage::create_layer`], which builds the layer and its index in
 /// one transaction so a failure cannot leave a table behind without one.
@@ -557,7 +561,8 @@ fn register_extension_row(conn: &Connection, table: &str, column: &str) -> Resul
     )
 }
 
-/// Drop every RTree trigger for `table`/`column`, of any generation, by name.
+/// Drops every RTree trigger for `table`/`column`, of any generation, by
+/// name.
 ///
 /// Triggers fire on the user table, so their `sqlite_master.tbl_name` is
 /// `table`; the ones belonging to this index share the `rtree_<table>_<column>_`
@@ -606,7 +611,8 @@ mod tests {
         (dir, gpkg)
     }
 
-    /// Whether the rtree contents equal a manual `ST_*` envelope scan.
+    /// Returns `true` if the rtree contents equal a manual `ST_*` envelope
+    /// scan.
     fn rtree_matches_scan(gpkg: &GeoPackage) -> bool {
         let conn = gpkg.connection();
         let read = |sql: &str| -> Vec<(i64, f64, f64, f64, f64)> {
@@ -749,7 +755,7 @@ mod tests {
     /// Dropping the triggers while leaving the virtual table is exactly the file
     /// state an interrupted bulk build (or a crash mid-`write_all`) leaves: the
     /// rows are committed, the rtree table is present but no longer maintained.
-    /// The status detector must flag it `Stale`, the read gate must decline it,
+    /// The status detector must flag it `Stale`, the read gate must reject it,
     /// and `repair_spatial_index` must rebuild it to `Current`.
     #[test]
     fn stale_index_is_detected_and_repaired() {

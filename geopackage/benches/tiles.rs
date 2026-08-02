@@ -1,4 +1,4 @@
-//! Tile throughput benchmarks (M4 acceptance criterion 3).
+//! Tile throughput benchmarks.
 //!
 //! A pyramid is built once and reopened, then measured three ways, because a
 //! tile store is asked for tiles in three different shapes:

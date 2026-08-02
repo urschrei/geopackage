@@ -1,5 +1,5 @@
 //! Registered extension names (Annex F) and the `scope` values a
-//! `gpkg_extensions` row may carry.
+//! `gpkg_extensions` row may take.
 //!
 //! This is the naming half of the extension mechanism (spec clause 2.3.2,
 //! `spec/core/2e_extensions-mechanism.adoc`). Reading a file's catalogue, and
@@ -36,7 +36,7 @@ pub enum ExtensionScope {
 }
 
 impl ExtensionScope {
-    /// Classify a `scope` column value.
+    /// Classifies a `scope` column value.
     ///
     /// Requirement 64 fixes the two valid values as lowercase, and anything
     /// else becomes [`ExtensionScope::Other`] rather than an error: this is a
@@ -49,7 +49,7 @@ impl ExtensionScope {
         }
     }
 
-    /// The `scope` column value.
+    /// Returns the `scope` column value.
     pub fn as_str(&self) -> &str {
         match self {
             Self::ReadWrite => "read-write",
@@ -58,8 +58,8 @@ impl ExtensionScope {
         }
     }
 
-    /// Whether a reader has to understand the extension to read the affected
-    /// data correctly.
+    /// Returns `true` if a reader must understand the extension to read the
+    /// affected data correctly.
     ///
     /// True for an unrecognised scope value: a value the spec does not define
     /// says nothing about what can be ignored.
@@ -67,8 +67,9 @@ impl ExtensionScope {
         !matches!(self, Self::WriteOnly)
     }
 
-    /// Whether a writer has to understand the extension to write the affected
-    /// data correctly. True for every scope, including an unrecognised one.
+    /// Returns `true` if a writer must understand the extension to write the
+    /// affected data correctly. True for every scope, including an
+    /// unrecognised one.
     pub fn affects_writers(&self) -> bool {
         true
     }
@@ -90,14 +91,14 @@ impl ExtensionScope {
 #[non_exhaustive]
 pub enum Extension {
     /// `gpkg_geom_<TYPE>` (Annex F.1): a geometry type beyond the core seven,
-    /// registered against the geometry column that holds it.
+    /// registered against the geometry column that contains it.
     GeometryType(GeometryType),
     /// `gpkg_rtree_index` (Annex F.3): the RTree spatial index.
     RtreeIndex,
     /// `gpkg_geometry_type_trigger` (Annex F.4).
     ///
     /// Removed from the standard on 2016-08-15 by SWG vote, over
-    /// interoperability concerns. Files written before then still carry it.
+    /// interoperability concerns. Files written before then still contain it.
     GeometryTypeTrigger,
     /// `gpkg_srs_id_trigger` (Annex F.5). Removed on 2016-08-15, as
     /// [`Extension::GeometryTypeTrigger`] was.
@@ -151,15 +152,14 @@ pub const GEOM_TYPE_EXTENSION_DEFINITION: &str =
     "http://www.geopackage.org/spec140/#extension_geometry_types";
 
 impl Extension {
-    /// Identify an `extension_name` column value.
+    /// Identifies an `extension_name` column value.
     ///
     /// Names are case sensitive per Requirement 62, and are matched that way,
     /// with one exception: the geometry type in a `gpkg_geom_<TYPE>` name is
     /// parsed the way [`GeometryType::parse`] parses one from
-    /// `gpkg_geometry_columns`, which tolerates the spellings that turn up in
-    /// the wild. A `gpkg_geom_` name whose type is not one this crate knows,
-    /// or is not an extension type, is [`Extension::Other`]: naming a type we
-    /// cannot parse would claim an understanding we do not have.
+    /// `gpkg_geometry_columns`, which accepts the spellings found in the
+    /// wild. A `gpkg_geom_` name whose type this crate cannot parse, or is
+    /// not an extension type, is [`Extension::Other`].
     pub fn from_name(name: &str) -> Self {
         if let Some(geometry_type) = name.strip_prefix(GEOM_PREFIX) {
             return match GeometryType::parse(geometry_type) {
@@ -186,11 +186,11 @@ impl Extension {
         }
     }
 
-    /// The current `extension_name` spelling.
+    /// Returns the current `extension_name` spelling.
     ///
     /// For an extension registered under more than one name over the years
-    /// this is the newest spelling, which is not necessarily the one the file
-    /// being read carries.
+    /// this is the newest spelling, which is not necessarily the one in the
+    /// file being read.
     pub fn name(&self) -> String {
         match self {
             Self::GeometryType(geometry_type) => {
@@ -212,7 +212,7 @@ impl Extension {
         }
     }
 
-    /// What this workspace can do with the extension.
+    /// Returns what this workspace can do with the extension.
     ///
     /// This lives beside the names rather than in the `geopackage` crate so
     /// that the match is exhaustive: adding a variant above stops compiling
@@ -223,9 +223,9 @@ impl Extension {
             // A non-linear geometry column is read and written: the blobs are
             // encoded with the extended flag, their envelopes are computed from
             // the WKB, and they index. What a caller cannot do is get one back
-            // as a geometry object, because `geo-traits` has no arc to give.
-            // That is a limit of the Rust geometry model rather than of this
-            // extension's support, and `Known` would say the data is left
+            // as a geometry object, because `geo-traits` has no circular-arc
+            // type. That is a limit of the Rust geometry model rather than of
+            // this extension's support, and `Known` would say the data is left
             // untouched, which is no longer true of it.
             Self::RtreeIndex
             | Self::ZoomOther
@@ -242,11 +242,11 @@ impl Extension {
         }
     }
 
-    /// Whether OGC removed this extension from the standard.
+    /// Returns `true` if OGC removed this extension from the standard.
     ///
     /// Both removals happened on 2016-08-15, in the same SWG vote, over
-    /// interoperability concerns. A file may still carry them, and this
-    /// workspace reads such a file, but never writes either.
+    /// interoperability concerns. Files may still contain them; this
+    /// workspace reads such files but never writes either extension.
     pub fn is_removed(&self) -> bool {
         self.support() == ExtensionSupport::Removed
     }
@@ -255,9 +255,9 @@ impl Extension {
 /// What this workspace can do with a registered extension.
 ///
 /// This describes the implementation, not the extension: an extension is
-/// [`ExtensionSupport::Known`] when we can say what it is and which tables it
-/// owns, which is enough to leave it alone safely, and
-/// [`ExtensionSupport::Implemented`] only when we read and write it.
+/// [`ExtensionSupport::Known`] when this workspace can identify it and the
+/// tables it owns, which is enough to leave it alone safely, and
+/// [`ExtensionSupport::Implemented`] only when it is read and written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExtensionSupport {
@@ -272,7 +272,7 @@ pub enum ExtensionSupport {
     Known,
     /// Removed from the standard by the SWG vote of 2016-08-15.
     ///
-    /// Tolerated on read, never written.
+    /// Accepted on read, never written.
     Removed,
     /// Not recognised.
     ///
@@ -282,7 +282,8 @@ pub enum ExtensionSupport {
 }
 
 impl ExtensionSupport {
-    /// The support level as a short phrase, for reporting a catalogue row.
+    /// Returns the support level as a short phrase, for reporting a catalogue
+    /// row.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Implemented => "implemented",

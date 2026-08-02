@@ -5,9 +5,9 @@
 //! cannot. `open_lenient` opens the same files but, rather than being stricter,
 //! records typed warnings for conditions a fastidious reader would flag,
 //! legacy `application_id`s, a missing `gpkg_geometry_columns` table, and
-//! catalogue table names that match a real SQLite table only case-insensitively
+//! catalogue table names that match a real SQLite table only case-insensitively,
 //! so callers can inspect and iterate a lightly non-conforming file instead
-//! of being turned away. Strict [`GeoPackage::open`] is unchanged.
+//! of failing to open it. Strict [`GeoPackage::open`] is unchanged.
 
 use crate::{GeoPackage, Result, resolve_table_name, table_exists};
 use geopackage_core::GpkgVersion;
@@ -16,8 +16,8 @@ use geopackage_core::version::{APPLICATION_ID_GP10, APPLICATION_ID_GP11};
 use rusqlite::Connection;
 use std::path::Path;
 
-/// A non-fatal condition [`GeoPackage::open_lenient`] tolerated while opening a
-/// file. Retrieve the list with [`GeoPackage::open_warnings`].
+/// A non-fatal condition [`GeoPackage::open_lenient`] accepted while opening
+/// a file. Retrieve the list with [`GeoPackage::open_warnings`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum OpenWarning {
@@ -30,7 +30,8 @@ pub enum OpenWarning {
         application_id: u32,
     },
     /// The file has no `gpkg_geometry_columns` table. Valid for an
-    /// attribute-only GeoPackage; it means the file carries no feature layers.
+    /// attribute-only GeoPackage; it means the file contains no feature
+    /// layers.
     MissingGeometryColumns,
     /// A `gpkg_contents.table_name` matches a real SQLite table only
     /// case-insensitively. SQLite resolves the table regardless, but the
@@ -45,8 +46,8 @@ pub enum OpenWarning {
     ///
     /// Reading continues: a `write-only` extension is one a reader may ignore
     /// by Requirement 64, and even a `read-write` one is more useful reported
-    /// than refused, since what it affects may be a table the caller never
-    /// touches. Writing to the affected table is refused instead, with
+    /// than rejected, since what it affects may be a table the caller never
+    /// touches. Writing to the affected table fails instead, with
     /// [`Error::UnsupportedExtension`](crate::Error::UnsupportedExtension).
     UnsupportedExtension {
         /// The `extension_name` value, as the file spells it.
@@ -58,7 +59,7 @@ pub enum OpenWarning {
     },
 }
 
-/// One line saying what was tolerated, so a caller reporting warnings does not
+/// One line saying what was accepted, so a caller reporting warnings does not
 /// have to match on them itself.
 impl std::fmt::Display for OpenWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -78,7 +79,7 @@ impl std::fmt::Display for OpenWarning {
             }
             Self::MissingGeometryColumns => write!(
                 f,
-                "no gpkg_geometry_columns table: the file carries no feature layers"
+                "no gpkg_geometry_columns table: the file contains no feature layers"
             ),
             Self::TableNameCaseMismatch { declared, actual } => write!(
                 f,
@@ -95,7 +96,7 @@ impl std::fmt::Display for OpenWarning {
                 };
                 write!(
                     f,
-                    "extension {extension_name:?}{on} is not one this crate recognises (scope {scope}); writes to what it covers are refused"
+                    "extension {extension_name:?}{on} is not one this crate recognises (scope {scope}); writes to what it covers will fail"
                 )
             }
         }
@@ -103,9 +104,9 @@ impl std::fmt::Display for OpenWarning {
 }
 
 impl GeoPackage {
-    /// Open an existing GeoPackage read-write, tolerating a set of legacy and
-    /// lightly non-conforming conditions that are recorded as [`OpenWarning`]s
-    /// rather than errors.
+    /// Opens an existing GeoPackage read-write, accepting a set of legacy and
+    /// lightly non-conforming conditions and recording them as
+    /// [`OpenWarning`]s rather than errors.
     ///
     /// Retrieve the warnings with [`GeoPackage::open_warnings`]. A file that
     /// cannot be identified as a GeoPackage at all, or is missing a required
@@ -115,15 +116,15 @@ impl GeoPackage {
         crate::OpenOptions::new().lenient(true).open(path)
     }
 
-    /// Open an existing GeoPackage read-only, with the same leniency as
+    /// Opens an existing GeoPackage read-only, with the same leniency as
     /// [`GeoPackage::open_lenient`].
     ///
-    /// What an inspection tool wants: the files most worth inspecting are the
-    /// ones something is wrong with, and inspecting them should not require
-    /// write access to the file, its directory, or the medium it sits on.
-    /// [`GeoPackage::open_read_only`] is read-only but strict, and
-    /// [`GeoPackage::open_lenient`] is tolerant but demands write access; this
-    /// is the combination `gpkg info` and `gpkg validate` use.
+    /// The combination an inspection tool needs: the files most worth
+    /// inspecting are the ones something is wrong with, and inspecting them
+    /// should not require write access to the file, its directory, or the
+    /// medium it sits on. [`GeoPackage::open_read_only`] is read-only but
+    /// strict, and [`GeoPackage::open_lenient`] is lenient but requires write
+    /// access; this is the combination `gpkg info` and `gpkg validate` use.
     ///
     /// Warnings are retrieved with [`GeoPackage::open_warnings`], as for
     /// `open_lenient`.
@@ -136,14 +137,15 @@ impl GeoPackage {
         crate::OpenOptions::new().lenient(true).open_read_only(path)
     }
 
-    /// The warnings collected by [`GeoPackage::open_lenient`] (always empty for
-    /// a handle opened with strict [`GeoPackage::open`] or created fresh).
+    /// Returns the warnings collected by [`GeoPackage::open_lenient`] (always
+    /// empty for a handle opened with strict [`GeoPackage::open`] or created
+    /// fresh).
     pub fn open_warnings(&self) -> &[OpenWarning] {
         &self.warnings
     }
 }
 
-/// Everything a lenient open tolerates, as warnings.
+/// Collects everything a lenient open accepts, as warnings.
 ///
 /// Called from the one open path in `lib.rs` when `OpenOptions::lenient` is
 /// set, so leniency composes with every other setting rather than living in a
@@ -168,7 +170,7 @@ pub(crate) fn collect_warnings(
     Ok(warnings)
 }
 
-/// Push an [`OpenWarning::UnsupportedExtension`] for every `gpkg_extensions`
+/// Pushes an [`OpenWarning::UnsupportedExtension`] for every `gpkg_extensions`
 /// row naming an extension this crate cannot identify.
 ///
 /// The rows this crate can name are not reported, whether or not it implements
@@ -190,8 +192,9 @@ fn collect_unsupported_extensions(
     Ok(())
 }
 
-/// Push a [`OpenWarning::TableNameCaseMismatch`] for every `gpkg_contents` row
-/// whose `table_name` differs in case from the physical SQLite table it names.
+/// Pushes a [`OpenWarning::TableNameCaseMismatch`] for every `gpkg_contents`
+/// row whose `table_name` differs in case from the physical SQLite table it
+/// names.
 fn collect_case_mismatches(conn: &Connection, warnings: &mut Vec<OpenWarning>) -> Result<()> {
     let declared_names: Vec<String> = {
         let mut stmt = conn.prepare("SELECT table_name FROM gpkg_contents")?;

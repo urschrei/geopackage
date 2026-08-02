@@ -1,5 +1,5 @@
 //! GDAL interoperability and manual GeoPackage 1.4 conformance checks on files
-//! this crate writes (M2 acceptance criteria 1 and 2).
+//! this crate writes.
 //!
 //! These tests need a local GDAL (`ogrinfo`/`ogr2ogr`) and so are `#[ignore]`d:
 //! GDAL is available on the maintainer's machine but not in CI (see
@@ -444,7 +444,7 @@ fn gdal_roundtrip_wkb_and_values() {
     );
 }
 
-// --- tiles (M4) -------------------------------------------------------------
+// --- tiles ------------------------------------------------------------------
 
 /// A greyscale PGM, the one raster format that can be written here without an
 /// encoder: `gdal_translate` turns it into a tile pyramid.
@@ -467,7 +467,7 @@ fn fixture_tile() -> Vec<u8> {
         .unwrap()
         .get_tile(TileCoord::new(0, 0, 0))
         .unwrap()
-        .expect("the fixture holds one tile")
+        .expect("the fixture contains one tile")
 }
 
 #[test]
@@ -787,7 +787,7 @@ fn column_constraints_round_trip_as_gdal_field_domains() {
     );
     let members = copy.column_constraint("codes").unwrap().unwrap();
     // As a set: GDAL hands the members back in its own order, and the spec
-    // calls an enum a set, so the order carries no meaning.
+    // calls an enum a set, so the order has no meaning.
     match members.kind {
         geopackage::ConstraintKind::Enum(mut values) => {
             values.sort();

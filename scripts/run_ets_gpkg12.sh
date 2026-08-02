@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Run the OGC ETS (Executable Test Suite) ets-gpkg12 conformance tests against a
-# GeoPackage file, for M2 acceptance criterion 1.
+# GeoPackage file.
 #
 # ets-gpkg12 validates GeoPackage 1.2 semantics (no 1.3/1.4 ETS exists as of
 # 2026-07); the 1.4-specific checks are covered separately by the manual

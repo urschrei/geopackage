@@ -1,10 +1,12 @@
 //! No-IO core of the [OGC GeoPackage](https://www.geopackage.org/spec140/) format.
 //!
-//! This crate holds the parts of the GeoPackage 1.4 specification that can be
-//! expressed without a database connection. Most users want the `geopackage`
-//! crate, which adds the SQLite container on top of this one. Use this crate
-//! directly when you need the format code without SQLite: a fuzz target, or
-//! another GeoPackage implementation sharing the codec and DDL.
+//! This crate contains the parts of the GeoPackage 1.4 specification that can
+//! be expressed without a database connection. The `geopackage` crate adds the
+//! SQLite container on top of this one and is the usual entry point. Use this
+//! crate directly when you need the format code without SQLite: a fuzz target,
+//! or another GeoPackage implementation sharing the codec and DDL.
+//!
+//! # Modules
 //!
 //! - [`gpb`]: the GeoPackage Binary (GPB) geometry blob header codec
 //! - [`geometry`]: the parsed geometry view ([`GpbGeometry`]), and the GPB
@@ -29,6 +31,8 @@
 //! SQL text is reproduced verbatim from the spec's normative annexes
 //! (Annex C "Table Definition SQL", Annex F.3 "R-tree Spatial Indexes").
 //!
+//! # Example
+//!
 //! Encode a geometry as a GPB blob and parse it back:
 //!
 //! ```
@@ -52,10 +56,9 @@
 //! # Cargo features
 //!
 //! - **`geo-types`** (on by default): adds [`GpbGeometry::to_geo`], converting
-//!   a parsed geometry to an owned `geo-types` value. Decline it with
-//!   `default-features = false`; the [`geo_traits`] implementation, which is
-//!   how coordinates are read without materialising anything, does not depend
-//!   on it.
+//!   a parsed geometry to an owned `geo-types` value. Disable it with
+//!   `default-features = false`; the [`geo_traits`] implementation, which reads
+//!   coordinates directly from the blob, does not depend on it.
 //!
 //! # Reading untrusted geometries
 //!
@@ -68,8 +71,8 @@
 
 // `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
 // workspace lints table (root Cargo.toml). This crate never uses `unsafe`; the
-// planned `geopackage-ffi` crate (M3) is the sole intended exception, and will
-// opt out of the workspace lints rather than relax them here.
+// `geopackage-ffi` crate is the sole exception, and opts out of the workspace
+// lints rather than relaxing them here.
 
 mod error;
 

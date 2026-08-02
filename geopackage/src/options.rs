@@ -39,7 +39,7 @@ pub enum JournalMode {
 }
 
 impl JournalMode {
-    /// The `PRAGMA journal_mode` keyword.
+    /// Returns the `PRAGMA journal_mode` keyword.
     pub(crate) fn keyword(self) -> &'static str {
         match self {
             Self::Delete => "DELETE",
@@ -68,7 +68,7 @@ pub enum Synchronous {
 }
 
 impl Synchronous {
-    /// The numeric `PRAGMA synchronous` code (0–3).
+    /// Returns the numeric `PRAGMA synchronous` code (0–3).
     pub(crate) fn code(self) -> i32 {
         match self {
             Self::Off => 0,
@@ -79,8 +79,25 @@ impl Synchronous {
     }
 }
 
+/// How long a statement waits for another connection's lock before failing,
+/// unless [`OpenOptions::busy_timeout`] says otherwise.
+///
+/// SQLite's own default is to fail immediately, which makes any concurrent
+/// writer turn an ordinary write into an error. Five seconds is long enough to
+/// ride out the writes a cooperating process actually makes and short enough
+/// not to look like a hang.
+pub const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// A builder for opening or creating a [`GeoPackage`] with an explicit journal
 /// mode and/or `synchronous` level.
+///
+/// Both settings are optional. An unspecified journal mode leaves the file's
+/// existing mode untouched (a freshly created file is
+/// [`JournalMode::Delete`]); an unspecified synchronous level keeps SQLite's
+/// default. Journal mode is ignored by [`Self::open_read_only`], which cannot
+/// write the change.
+///
+/// # Examples
 ///
 /// ```no_run
 /// # fn main() -> Result<(), geopackage::Error> {
@@ -92,21 +109,6 @@ impl Synchronous {
 /// # let _ = gpkg;
 /// # Ok(()) }
 /// ```
-///
-/// How long a statement waits for another connection's lock before failing,
-/// unless [`OpenOptions::busy_timeout`] says otherwise.
-///
-/// SQLite's own default is to fail immediately, which makes any concurrent
-/// writer turn an ordinary write into an error. Five seconds is long enough to
-/// ride out the writes a cooperating process actually makes and short enough
-/// not to look like a hang.
-pub const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Both settings are optional. An unspecified journal mode leaves the file's
-/// existing mode untouched (a freshly created file is
-/// [`JournalMode::Delete`]); an unspecified synchronous level keeps SQLite's
-/// default. Journal mode is ignored by [`Self::open_read_only`], which cannot
-/// write the change.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OpenOptions {
     pub(crate) journal_mode: Option<JournalMode>,
@@ -118,31 +120,31 @@ pub struct OpenOptions {
 }
 
 impl OpenOptions {
-    /// A builder with no settings applied (the same defaults the plain
-    /// [`GeoPackage::create`] / [`GeoPackage::open`] constructors use).
+    /// Creates a builder with no settings applied (the same defaults the
+    /// plain [`GeoPackage::create`] / [`GeoPackage::open`] constructors use).
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Set the journal mode ([`JournalMode::Wal`] to opt into WAL).
+    /// Sets the journal mode ([`JournalMode::Wal`] to opt into WAL).
     #[must_use]
     pub fn journal_mode(mut self, mode: JournalMode) -> Self {
         self.journal_mode = Some(mode);
         self
     }
 
-    /// Tolerate legacy and lightly non-conforming files, recording what was
-    /// tolerated as [`crate::OpenWarning`]s rather than refusing to open.
+    /// Accepts legacy and lightly non-conforming files, recording what was
+    /// accepted as [`crate::OpenWarning`]s rather than failing to open.
     ///
-    /// Composes with every other setting here, which is the point: before this
-    /// existed, leniency was reachable only through [`GeoPackage::open_lenient`]
-    /// and [`GeoPackage::open_read_only_lenient`], which take no options at all,
-    /// so a caller wanting WAL and leniency, or constraint enforcement and
-    /// leniency, could have either but not both.
+    /// Composes with every other setting here: leniency was previously
+    /// reachable only through [`GeoPackage::open_lenient`] and
+    /// [`GeoPackage::open_read_only_lenient`], which take no options at all,
+    /// so WAL and leniency, or constraint enforcement and leniency, could not
+    /// be combined.
     ///
     /// Leniency covers presentation, not identity: a file that cannot be
     /// identified as a GeoPackage, or that is missing a required core table, is
-    /// still an error. Retrieve what was tolerated with
+    /// still an error. Retrieve what was accepted with
     /// [`GeoPackage::open_warnings`].
     #[must_use]
     pub fn lenient(mut self, lenient: bool) -> Self {
@@ -150,18 +152,19 @@ impl OpenOptions {
         self
     }
 
-    /// Set the `synchronous` durability level.
+    /// Sets the `synchronous` durability level.
     #[must_use]
     pub fn synchronous(mut self, synchronous: Synchronous) -> Self {
         self.synchronous = Some(synchronous);
         self
     }
 
-    /// How long a statement waits for a lock another connection holds before
-    /// giving up with `SQLITE_BUSY`. [`DEFAULT_BUSY_TIMEOUT`] when unset.
+    /// Sets how long a statement waits for a lock another connection holds
+    /// before giving up with `SQLITE_BUSY`. [`DEFAULT_BUSY_TIMEOUT`] when
+    /// unset.
     ///
     /// `Duration::ZERO` restores SQLite's own default, which is to fail
-    /// immediately. That is rarely what a caller wants: a GeoPackage is a
+    /// immediately. That is rarely the right choice: a GeoPackage is a
     /// single-writer database that readers and writers are expected to share,
     /// so a write that meets a concurrent writer should wait rather than fail
     /// on the first attempt.
@@ -178,19 +181,19 @@ impl OpenOptions {
         self
     }
 
-    /// Write to tables carrying an extension this crate cannot identify,
-    /// instead of refusing with [`Error::UnsupportedExtension`].
+    /// Allows writes to tables covered by an extension this crate cannot
+    /// identify, instead of failing with [`Error::UnsupportedExtension`].
     ///
-    /// By default a write to such a table is refused, because an extension we
-    /// cannot name may constrain the rows, triggers or encodings of the table
-    /// it covers, and Requirement 64 makes every extension one a writer has to
-    /// understand. Set this when you know what the extension is and know that
-    /// writing beside it is safe: the check is the crate's, not the format's,
-    /// and a caller who knows more than the catalogue does should be able to
-    /// say so.
+    /// By default such a write fails, because an unidentifiable extension may
+    /// constrain the rows, triggers or encodings of the table it covers, and
+    /// Requirement 64 makes every extension one a writer has to understand.
+    /// Set this when you know what the extension is and know that writing
+    /// beside it is safe: the check is the crate's, not the format's, and a
+    /// caller who knows more than the catalogue does should be able to say
+    /// so.
     ///
     /// Reads are unaffected either way, and extensions this crate can name
-    /// never trigger the refusal. GDAL, for comparison, warns in this
+    /// never trigger the error. GDAL, for comparison, warns in this
     /// situation and proceeds.
     ///
     /// [`Error::UnsupportedExtension`]: crate::Error::UnsupportedExtension
@@ -200,18 +203,17 @@ impl OpenOptions {
         self
     }
 
-    /// Check written values against the `gpkg_schema` constraints their
-    /// columns declare, refusing a row that violates one with
+    /// Checks written values against the `gpkg_schema` constraints their
+    /// columns declare, rejecting a row that violates one with
     /// [`Error::ColumnConstraintViolation`].
     ///
     /// Off by default, because the format makes these constraints advisory:
     /// "These restrictions MAY be enforced by SQL triggers or by code in
     /// applications that update GeoPackage data values". A file can therefore
-    /// hold values its own constraints forbid, and refusing to write beside
-    /// them by default would be this crate imposing a rule the format does
-    /// not.
+    /// contain values its own constraints forbid, and rejecting writes beside
+    /// them by default would impose a rule the format does not.
     ///
-    /// What is checked, for a column carrying a constraint: a `range` against
+    /// What is checked, for a constrained column: a `range` against
     /// integers and floats, an `enum` against text and against the decimal
     /// form of a number, since the spec's own sample enumerates numbers as
     /// text, and a `glob` by asking SQLite. NULL satisfies every constraint, a
@@ -222,8 +224,8 @@ impl OpenOptions {
     /// The glob form goes to SQLite (`SELECT ?1 GLOB ?2`, prepared once per
     /// writer) rather than being matched here. Its pattern language has no
     /// definition beyond what SQLite does with it, and this crate bundles
-    /// SQLite, so the engine holding the file is the authority on what its own
-    /// constraints mean. That also gives a number SQLite's own text coercion,
+    /// SQLite, so the engine that stores the file is the authority on what its
+    /// own constraints mean. That also gives a number SQLite's own text coercion,
     /// which is what a trigger enforcing the same constraint would apply.
     ///
     /// Applies to every write path, the columnar one included. Measured at
@@ -237,7 +239,7 @@ impl OpenOptions {
         self
     }
 
-    /// Fill in [`DEFAULT_BUSY_TIMEOUT`] where the caller set none.
+    /// Fills in [`DEFAULT_BUSY_TIMEOUT`] where the caller set none.
     ///
     /// Applied by the entry points that open the connection themselves. A
     /// caller-supplied connection keeps whatever timeout it already has unless
@@ -250,7 +252,7 @@ impl OpenOptions {
         self
     }
 
-    /// Create a new GeoPackage 1.4 file at `path` with these options.
+    /// Creates a new GeoPackage 1.4 file at `path` with these options.
     ///
     /// As [`GeoPackage::create`], but applying the configured journal mode and
     /// `synchronous` level to the new connection.
@@ -258,12 +260,12 @@ impl OpenOptions {
         GeoPackage::create_configured(path.as_ref(), self)
     }
 
-    /// Open an existing GeoPackage read-write with these options.
+    /// Opens an existing GeoPackage read-write with these options.
     pub fn open<P: AsRef<Path>>(self, path: P) -> Result<GeoPackage> {
         GeoPackage::open_configured(path.as_ref(), OpenFlags::SQLITE_OPEN_READ_WRITE, self)
     }
 
-    /// Open an existing GeoPackage read-only with these options.
+    /// Opens an existing GeoPackage read-only with these options.
     ///
     /// The journal mode is ignored (a read-only connection cannot change it);
     /// the `synchronous` level is still applied.
@@ -271,7 +273,7 @@ impl OpenOptions {
         GeoPackage::open_configured(path.as_ref(), OpenFlags::SQLITE_OPEN_READ_ONLY, self)
     }
 
-    /// Wrap an already-open connection with these options.
+    /// Wraps an already-open connection with these options.
     ///
     /// As [`GeoPackage::from_connection`], but applying the configured journal
     /// mode and `synchronous` level. The caller is responsible for the

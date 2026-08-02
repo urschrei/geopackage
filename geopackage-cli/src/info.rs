@@ -1,7 +1,7 @@
 //! `gpkg info`: what a file declares and what state it is in.
 //!
 //! Opened with [`GeoPackage::open_read_only_lenient`], so a file with something wrong
-//! with it is reported rather than refused: an inspection tool that will not
+//! with it is reported rather than rejected: an inspection tool that will not
 //! open the files worth inspecting is not much use. The warnings that leniency
 //! collected are printed first, before anything they might explain.
 

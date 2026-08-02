@@ -1,19 +1,15 @@
 //! `gpkg copy`: read a GeoPackage through this crate and write it back out.
 //!
-//! The dogfood command, and M3 acceptance criterion 6: a file GDAL wrote,
-//! copied through here, comes out clean under the validators.
-//!
 //! # What is copied
 //!
 //! Feature and attribute layers: their schemas, their spatial reference
 //! systems, their rows, and a spatial index wherever the source had one.
 //!
 //! **Not** tiles, and not the extension tables (`gpkg_metadata`, `gpkg_schema`,
-//! the Related Tables mapping tables). Those are recorded as out of scope in
-//! roadmap phase 8: the corpus-generation job that would have demanded full
-//! fidelity was cut, leaving M3 criterion 6, which features satisfy. A source
-//! carrying anything not copied is reported at the end rather than passed over
-//! in silence, so the output is never mistaken for the whole file.
+//! the Related Tables mapping tables). Those are out of scope for this
+//! command. A source containing anything not copied is reported at the end
+//! rather than passed over in silence, so the output is never mistaken for
+//! the whole file.
 //!
 //! # How geometry crosses
 //!
@@ -182,7 +178,7 @@ fn copy_layer(src: &GeoPackage, dst: &GeoPackage, layer: &Layer<'_>) -> Result<(
     Ok(())
 }
 
-/// Name anything in the source this command did not carry over, so a copy is
+/// Names anything in the source this command did not copy, so a copy is
 /// never quietly mistaken for the whole file.
 fn report_what_was_left(src: &GeoPackage, dst: &GeoPackage, copied: &[Layer<'_>]) -> Result<()> {
     let mut left = Vec::new();
@@ -223,6 +219,6 @@ fn report_what_was_left(src: &GeoPackage, dst: &GeoPackage, copied: &[Layer<'_>]
         copied.len(),
         left.join("; ")
     );
-    println!("`gpkg copy` carries feature and attribute layers only.");
+    println!("`gpkg copy` copies feature and attribute layers only.");
     Ok(())
 }

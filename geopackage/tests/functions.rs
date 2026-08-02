@@ -1,6 +1,6 @@
 //! The registered `ST_*` functions over envelope-less GPB blobs, exercised
-//! through SQL. These are the M1 fallback the M0 build could not do: full WKB
-//! traversal for non-point geometries whose GPB header carries no envelope.
+//! through SQL. These cover the fallback path: full WKB traversal for
+//! non-point geometries whose GPB header has no envelope.
 
 #![expect(
     clippy::unwrap_used,
@@ -117,7 +117,8 @@ fn empty_linestring_reports_empty() {
 
 #[test]
 fn envelopeless_point_still_works() {
-    // The M0 point-only fallback case must keep working through the new path.
+    // The simplest fallback case, an envelope-less point, must keep working
+    // through the same traversal.
     let (_dir, gpkg) = gpkg();
     let geom: Geometry<f64> = Point::new(3.0, -4.0).into();
     let blob = envelopeless_gpb(&geom, true);

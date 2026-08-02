@@ -41,7 +41,7 @@
 //!
 //! Some codes are ordinary answers rather than faults.
 //! `gpkg_tiles_get` and `gpkg_tiles_get_into` return `GPKG_STATUS_NOT_FOUND`
-//! for an address a sparse pyramid holds no tile at, and `gpkg_layer_extent`
+//! for an address a sparse pyramid has no tile at, and `gpkg_layer_extent`
 //! returns it for a layer with nothing to measure. Branch on the code before
 //! treating a call as failed.
 //!
@@ -50,7 +50,7 @@
 //! `geopackage::Error` has 46 variants and gains more as the library grows.
 //! Mapping each to its own C constant would put a header-breaking change behind
 //! every new variant, so the codes here are a small closed set of categories a
-//! caller can branch on, and the message carries the detail. A new library
+//! caller can branch on, and the message supplies the detail. A new library
 //! variant classifies into an existing category or into [`Status::Other`];
 //! neither changes the header.
 //!
@@ -161,7 +161,7 @@ impl From<&Error> for Status {
     }
 }
 
-/// Classify an Arrow failure, which reaches this crate when a stream the caller
+/// Classifies an Arrow failure, which reaches this crate when a stream the caller
 /// supplied to `gpkg_layer_write_arrow` fails part-way through.
 ///
 /// `ArrowError` belongs to `arrow-schema` and is not `#[non_exhaustive]`, so an
@@ -192,8 +192,8 @@ fn arrow_status(error: &ArrowError) -> Status {
     }
 }
 
-/// Classify a spec-level failure from `geopackage-core`, which `Error::Core`
-/// carries whole.
+/// Classifies a spec-level failure from `geopackage-core`, which `Error::Core`
+/// wraps whole.
 ///
 /// Four variants, three of which wrap enums of their own, so this and the two
 /// below follow the wrapping down to the variant that says what happened.
@@ -211,7 +211,7 @@ fn core_status(error: &CoreError) -> Status {
     }
 }
 
-/// Classify a GPB header failure.
+/// Classifies a GPB header failure.
 fn gpb_status(error: &GpbError) -> Status {
     match error {
         // Bytes that are not a well-formed GPB blob. `Status::InvalidArgument`
@@ -227,7 +227,7 @@ fn gpb_status(error: &GpbError) -> Status {
     }
 }
 
-/// Classify a geometry failure.
+/// Classifies a geometry failure.
 fn geometry_status(error: &GeometryError) -> Status {
     match error {
         GeometryError::Header(gpb) => gpb_status(gpb),
@@ -243,14 +243,14 @@ fn geometry_status(error: &GeometryError) -> Status {
         // The body is well formed and this library cannot write it, which is
         // the one geometry failure that is not a fault in the bytes.
         GeometryError::NonLinearMember { .. } => Status::Unsupported,
-        // Serialising a geometry this library itself holds failed, so the fault
-        // is not in anything the caller passed.
+        // Serialising a geometry this library itself produced failed, so the
+        // fault is not in anything the caller passed.
         GeometryError::EncodeWkb(_) => Status::Other,
         _ => Status::Other,
     }
 }
 
-/// Classify a tile failure, which `Error::Tile` carries whole.
+/// Classifies a tile failure, which `Error::Tile` wraps whole.
 ///
 /// Split out rather than folded into the match above because `TileError` is a
 /// twelve-variant enum in its own right, and its variants divide differently:
@@ -297,7 +297,7 @@ pub struct gpkg_error_t {
     pub message: *mut c_char,
 }
 
-/// Fill an error out-parameter, if the caller supplied one.
+/// Fills an error out-parameter, if the caller supplied one.
 ///
 /// # Safety
 ///
@@ -322,7 +322,7 @@ pub(crate) unsafe fn set_error(slot: *mut gpkg_error_t, code: Status, message: &
     slot.message = owned.into_raw();
 }
 
-/// Fill an error out-parameter from a library error.
+/// Fills an error out-parameter from a library error.
 ///
 /// # Safety
 ///
@@ -332,7 +332,7 @@ pub(crate) unsafe fn set_library_error(slot: *mut gpkg_error_t, error: &Error) {
     unsafe { set_error(slot, Status::from(error), &error.to_string()) }
 }
 
-/// Release the message an error holds, and reset its code to `GPKG_STATUS_OK`.
+/// Releases the message an error contains, and resets its code to `GPKG_STATUS_OK`.
 ///
 /// Safe to call on an error that was never filled in, and safe to call twice:
 /// the message pointer is cleared as it is freed. Passing NULL does nothing.

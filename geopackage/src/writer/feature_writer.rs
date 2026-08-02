@@ -17,7 +17,7 @@ use super::write_all::{BboxFold, GeomTarget};
 /// A prepared-statement writer over one layer, owning a transaction.
 ///
 /// Obtain one with [`crate::Layer::writer`]. Each `insert`/`update`/`delete` stages
-/// into the writer's transaction through a statement the writer holds;
+/// into the writer's transaction through a statement the writer keeps;
 /// [`Self::commit`] flushes catalogue metadata and commits. Dropping a writer
 /// without committing rolls its transaction back. The `gpkg_contents` bounding
 /// box is grown by a running fold over written geometry envelopes and
@@ -42,22 +42,22 @@ pub struct FeatureWriter<'conn> {
     pub(crate) value_columns: Vec<ValueColumn>,
     pub(crate) geometry: Option<GeomTarget>,
     pub(crate) bbox: BboxFold,
-    /// The four possible `INSERT` statements, by whether the row carries an
-    /// explicit feature id and whether it carries a geometry.
+    /// The four possible `INSERT` statements, by whether the row has an
+    /// explicit feature id and whether it has a geometry.
     ///
     /// A layer's shape is fixed for a writer's lifetime, so every statement it
     /// can issue is composed and prepared once here rather than per row.
     /// Composing an `INSERT` costs a `Vec` of column names, a `String` per
     /// placeholder and two joins, which is around seventeen allocations for a
     /// fifteen-column table; looking one up in the connection's statement cache
-    /// costs one more. Held this way, a row costs neither.
+    /// costs one more. Prepared this way, a row costs neither.
     ///
     /// The statements come from the connection rather than from `tx`, so they
     /// borrow what the transaction borrows instead of borrowing the transaction
     /// itself. They still run inside it: a SQLite transaction belongs to the
     /// connection, not to the statements prepared against it.
     pub(crate) insert_stmts: [CachedStatement<'conn>; 4],
-    /// The two possible `UPDATE` statements, by whether the row carries a
+    /// The two possible `UPDATE` statements, by whether the row has a
     /// geometry. A writer's update sets every value column, so there are only
     /// these two shapes.
     pub(crate) update_stmts: [CachedStatement<'conn>; 2],
@@ -69,8 +69,8 @@ pub struct FeatureWriter<'conn> {
     /// The value columns named by the most recent [`Self::update_columns`]
     /// call, in the order given, and the statement prepared for them.
     ///
-    /// A partial update's shape is the caller's to choose, so it cannot be
-    /// prepared up front like the others. Holding the last one makes a loop
+    /// The caller chooses a partial update's shape, so it cannot be
+    /// prepared up front like the others. Keeping the last one makes a loop
     /// that recomputes the same columns for every row prepare once; a caller
     /// alternating between two sets of columns re-prepares on each change.
     /// The starting state names no columns, which is a statement in its own
@@ -85,8 +85,8 @@ pub struct FeatureWriter<'conn> {
     pub(crate) bbox_dirty: bool,
     /// Whether the fold covers the whole layer, and so may be recorded. False
     /// when the writer started with no usable recorded box over a table that
-    /// already held rows, which makes the fold a lower bound rather than the
-    /// extent.
+    /// already contained rows, which makes the fold a lower bound rather than
+    /// the extent.
     pub(crate) bbox_covers_layer: bool,
     /// The non-linear geometry types written through this writer, which the
     /// flush registers as `gpkg_geom_<TYPE>` rows.
@@ -101,7 +101,7 @@ pub struct FeatureWriter<'conn> {
 }
 
 impl<'conn> FeatureWriter<'conn> {
-    /// Insert a feature with a geometry, returning its feature id.
+    /// Inserts a feature with a geometry, returning its feature id.
     ///
     /// `fid` is `None` to let SQLite assign the id (returned), or `Some(id)` for
     /// an explicit id. `values` must have one entry per value column, in
@@ -136,7 +136,7 @@ impl<'conn> FeatureWriter<'conn> {
         .map(|(assigned, _)| assigned)
     }
 
-    /// Insert a feature whose geometry is already ISO WKB, returning its
+    /// Inserts a feature whose geometry is already ISO WKB, returning its
     /// feature id.
     ///
     /// [`Self::insert`] takes a geometry object, which the `geo-traits`
@@ -255,12 +255,12 @@ impl<'conn> FeatureWriter<'conn> {
         Ok((assigned, xy))
     }
 
-    /// Insert a feature whose geometry is already ISO WKB, with its non-geometry
-    /// values already prepared as bindings.
+    /// Inserts a feature whose geometry is already ISO WKB, with its
+    /// non-geometry values already prepared as bindings.
     ///
     /// The counterpart of [`Self::insert_returning_envelope`] for the columnar
     /// path, and the reason it takes bindings rather than [`Value`]s: an Arrow
-    /// batch already holds every string and blob contiguously, so a binding that
+    /// batch already stores every string and blob contiguously, so a binding that
     /// borrows from it costs nothing, where building a `Value` would allocate
     /// per cell and copy. Only `DATE` and `DATETIME` have to be owned, because
     /// they are formatted rather than copied.
@@ -343,8 +343,8 @@ impl<'conn> FeatureWriter<'conn> {
         Ok(assigned)
     }
 
-    /// Insert a row with no geometry (a NULL geometry on a feature table, or an
-    /// attribute row), returning its feature id.
+    /// Inserts a row with no geometry (a NULL geometry on a feature table, or
+    /// an attribute row), returning its feature id.
     ///
     /// # Errors
     ///
@@ -358,7 +358,7 @@ impl<'conn> FeatureWriter<'conn> {
         )
     }
 
-    /// [`Self::insert_row`] for a caller holding owned values.
+    /// [`Self::insert_row`] for a caller with owned values.
     pub(crate) fn insert_row_owned(&mut self, fid: Option<i64>, values: &[Value]) -> Result<i64> {
         self.check_constraints(values)?;
         self.insert_row_binds(fid, values.len(), values.iter().map(value_to_bind))
@@ -386,7 +386,7 @@ impl<'conn> FeatureWriter<'conn> {
         Ok(assigned)
     }
 
-    /// Update the feature `fid`, setting its geometry and values. Returns
+    /// Updates the feature `fid`, setting its geometry and values. Returns
     /// whether a row matched.
     ///
     /// Writing a geometry while a cursor over the same layer is stepping is the
@@ -428,8 +428,8 @@ impl<'conn> FeatureWriter<'conn> {
     /// The bytes are wrapped in a GPB header and stored as they arrive, so a
     /// geometry this crate cannot represent as a `geo-types` value, a curve
     /// above all, survives an update the way it survives an insert. That is
-    /// also what a consumer moving geometry between files wants: no decode, no
-    /// re-encode, and nothing lost in between.
+    /// also the right behaviour for moving geometry between files: no decode,
+    /// no re-encode, and nothing lost in between.
     ///
     /// Returns whether a row matched.
     ///
@@ -480,7 +480,7 @@ impl<'conn> FeatureWriter<'conn> {
         Ok(matched)
     }
 
-    /// Update the feature `fid`'s non-geometry values, leaving the geometry
+    /// Updates the feature `fid`'s non-geometry values, leaving the geometry
     /// untouched. Returns whether a row matched.
     ///
     /// # Errors
@@ -502,7 +502,7 @@ impl<'conn> FeatureWriter<'conn> {
         Ok(matched)
     }
 
-    /// Update named value columns of the feature `fid`, leaving every other
+    /// Updates named value columns of the feature `fid`, leaving every other
     /// column, and the geometry, untouched. Returns whether a row matched.
     ///
     /// [`Self::update_row`] restates the whole row, so a caller recomputing one
@@ -571,8 +571,8 @@ impl<'conn> FeatureWriter<'conn> {
         self.update_columns(fid, &[(column, value)])
     }
 
-    /// Whether `columns` names exactly what the held partial statement was
-    /// prepared for, in the same order. Comparing the names rather than
+    /// Returns `true` if `columns` names exactly what the kept partial
+    /// statement was prepared for, in the same order. Comparing the names rather than
     /// rebuilding the statement text is what keeps a repeated shape free.
     fn partial_matches(&self, columns: &[(&str, CellRef<'_>)]) -> bool {
         self.partial_columns.len() == columns.len()
@@ -595,7 +595,7 @@ impl<'conn> FeatureWriter<'conn> {
         }
     }
 
-    /// Delete the feature `fid`. Returns whether a row matched.
+    /// Deletes the feature `fid`. Returns whether a row matched.
     ///
     /// The bounding box is not shrunk (that would need a rescan; an
     /// over-estimate is spec-legal).
@@ -607,8 +607,8 @@ impl<'conn> FeatureWriter<'conn> {
         Ok(matched)
     }
 
-    /// Flush `gpkg_contents` (`last_change`, and the bounding box when a
-    /// geometry was written) and commit the transaction.
+    /// Flushes `gpkg_contents` (`last_change`, and the bounding box when a
+    /// geometry was written) and commits the transaction.
     ///
     /// # When the transaction was the caller's
     ///
@@ -617,7 +617,7 @@ impl<'conn> FeatureWriter<'conn> {
     /// does not nest. This call then does everything above except the commit:
     /// the `gpkg_contents` flush is staged like every other statement, and
     /// success means the work is in the caller's transaction, not that it is
-    /// durable. Committing is theirs to issue, and so is rolling back.
+    /// durable. The caller issues the commit, or the rollback.
     ///
     /// It follows that dropping such a writer without calling this does not
     /// roll anything back, so an error part-way through a sequence of writes
@@ -627,8 +627,8 @@ impl<'conn> FeatureWriter<'conn> {
         Ok(())
     }
 
-    /// The connection underlying this writer's transaction, so a caller holding
-    /// the writer can run additional statements inside the same transaction.
+    /// Returns the connection underlying this writer's transaction, so a
+    /// caller can run additional statements inside the same transaction.
     ///
     /// Borrowed for `'conn` rather than for the writer, because the connection
     /// outlives the writer and the bulk path needs it after
@@ -637,7 +637,7 @@ impl<'conn> FeatureWriter<'conn> {
         self.conn
     }
 
-    /// Flush the `gpkg_contents` metadata and hand back the still-open
+    /// Flushes the `gpkg_contents` metadata and returns the still-open
     /// transaction, leaving it to the caller to commit.
     ///
     /// The bulk `write_all` path uses this to keep the row inserts and the
@@ -700,8 +700,8 @@ impl<'conn> FeatureWriter<'conn> {
         Ok(tx)
     }
 
-    /// Validate the geometry's `z`/`m` against the column and encode it to a GPB
-    /// blob, returning the blob and its XY envelope (for the bbox fold).
+    /// Validates the geometry's `z`/`m` against the column and encodes it to a
+    /// GPB blob, returning the blob and its XY envelope (for the bbox fold).
     fn encode_geometry<G: GeometryTrait<T = f64>>(
         &self,
         geometry: &G,
@@ -720,7 +720,7 @@ impl<'conn> FeatureWriter<'conn> {
         encode_gpb(geometry, geom.srs_id).map_err(|e| Error::Core(e.into()))
     }
 
-    /// Enforce a `z`/`m` presence constraint for a written geometry.
+    /// Enforces a `z`/`m` presence constraint for a written geometry.
     fn check_zm(
         &self,
         dimension: &'static str,
@@ -744,11 +744,11 @@ impl<'conn> FeatureWriter<'conn> {
             column: column.to_owned(),
             dimension,
             constraint,
-            verb: if present { "carries" } else { "lacks" },
+            verb: if present { "has" } else { "lacks" },
         })
     }
 
-    /// Reject a value list whose length does not match the layer's value
+    /// Rejects a value list whose length does not match the layer's value
     /// columns.
     fn check_value_count(&self, found: usize) -> Result<()> {
         if found == self.value_columns.len() {
@@ -762,7 +762,7 @@ impl<'conn> FeatureWriter<'conn> {
         })
     }
 
-    /// Check a whole row's values against the layer's `gpkg_schema`
+    /// Checks a whole row's values against the layer's `gpkg_schema`
     /// constraints, in value-column order.
     ///
     /// Returns immediately for a file that did not ask for enforcement, or a
@@ -799,8 +799,8 @@ impl<'conn> FeatureWriter<'conn> {
         Ok(())
     }
 
-    /// Build the error for a value the constraint at `index` refused. Off the
-    /// hot path, so it re-reads what it needs rather than being threaded
+    /// Builds the error for a value the constraint at `index` rejected. Off
+    /// the hot path, so it re-reads what it needs rather than being threaded
     /// through the check.
     fn violation(&self, index: usize, value: Checkable<'_>) -> Error {
         let (constraint_name, constraint) = match self.constraints.at(index) {
@@ -825,7 +825,8 @@ impl<'conn> FeatureWriter<'conn> {
         }
     }
 
-    /// The prepared `INSERT` for this combination of explicit id and geometry.
+    /// Returns the prepared `INSERT` for this combination of explicit id and
+    /// geometry.
     ///
     /// Selected by matching rather than by indexing, so the four cases are
     /// exhaustive and there is no absent-slot case to invent an answer for.
@@ -839,13 +840,14 @@ impl<'conn> FeatureWriter<'conn> {
         }
     }
 
-    /// The prepared `UPDATE`, with or without the geometry assignment.
+    /// Returns the prepared `UPDATE`, with or without the geometry
+    /// assignment.
     fn update_stmt(&mut self, with_geometry: bool) -> &mut CachedStatement<'conn> {
         let [plain, with_geom] = &mut self.update_stmts;
         if with_geometry { with_geom } else { plain }
     }
 
-    /// Run one insert.
+    /// Runs one insert.
     ///
     /// Takes the bindings as [`Params`] rather than a slice so callers can pass
     /// a chained iterator of borrowed bindings: a row is then written without
@@ -885,7 +887,7 @@ pub(crate) struct ValueColumn {
     pub(crate) quoted: String,
 }
 
-/// Compose one of the four `INSERT` statements. Called once per writer.
+/// Composes one of the four `INSERT` statements. Called once per writer.
 pub(crate) fn build_insert_sql(shape: &Shape<'_>, with_fid: bool, with_geometry: bool) -> String {
     let mut columns: Vec<&str> = Vec::with_capacity(shape.value_columns.len() + 2);
     if with_fid {
@@ -911,8 +913,8 @@ pub(crate) fn build_insert_sql(shape: &Shape<'_>, with_fid: bool, with_geometry:
     )
 }
 
-/// Compose one of the two `UPDATE ... WHERE <pk> = ?` statements. Called once
-/// per writer.
+/// Composes one of the two `UPDATE ... WHERE <pk> = ?` statements. Called
+/// once per writer.
 pub(crate) fn build_update_sql(shape: &Shape<'_>, with_geometry: bool) -> String {
     let mut assignments: Vec<String> = Vec::with_capacity(shape.value_columns.len() + 1);
     let mut index = 1;
@@ -938,9 +940,9 @@ pub(crate) fn build_update_sql(shape: &Shape<'_>, with_geometry: bool) -> String
     )
 }
 
-/// Compose the `UPDATE` for a named subset of the value columns, assigning them
-/// in the order given. Called only when [`FeatureWriter::update_columns`] is
-/// asked for a set of columns other than the one it last prepared.
+/// Composes the `UPDATE` for a named subset of the value columns, assigning
+/// them in the order given. Called only when [`FeatureWriter::update_columns`]
+/// is called with a set of columns other than the one it last prepared.
 pub(crate) fn build_partial_update_sql(
     shape: &Shape<'_>,
     columns: &[(&str, CellRef<'_>)],
@@ -982,7 +984,7 @@ pub(crate) fn build_partial_update_sql(
     ))
 }
 
-/// Re-borrow a prepared binding so it can be chained with owned ones.
+/// Re-borrows a prepared binding so it can be chained with owned ones.
 ///
 /// The columnar path hands over a slice of bindings it still owns. Cloning them
 /// to build the statement's parameter list would copy every owned cell, which

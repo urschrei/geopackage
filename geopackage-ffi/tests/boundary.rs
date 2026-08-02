@@ -3,9 +3,9 @@
 //! Miri cannot execute native code, and SQLite here is bundled and built from
 //! source, so anything that opens a database is out of its reach: it stops at
 //! `can't call foreign function sqlite3_threadsafe`. What is left, and what
-//! this file holds, is every path that validates an argument or moves a string
-//! across the boundary without touching a file. That is a narrow slice, but it
-//! is the slice where the pointer handling lives, so it is worth gating.
+//! this file contains, is every path that validates an argument or moves a
+//! string across the boundary without touching a file. That is a narrow slice,
+//! but it is the slice where the pointer handling lives, so it is worth gating.
 //!
 //! The rest of the unsafe, and in particular the lifetime erasure in
 //! `handle.rs`, is checked by AddressSanitizer over `tests/layer.rs` instead,

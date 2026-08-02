@@ -23,8 +23,8 @@
 //! remainder     zero padding
 //! ```
 //!
-//! The root is always node 1. `%_rowid` maps each leaf entry's rowid to the node
-//! holding it, and `%_parent` maps each non-root node to its parent.
+//! The root is always node 1. `%_rowid` maps each leaf entry's rowid to the
+//! node containing it, and `%_parent` maps each non-root node to its parent.
 //!
 //! # What `rtreecheck` requires
 //!
@@ -49,9 +49,9 @@ const NODE_HEADER: usize = 4;
 const RND_TOWARDS: f64 = 1.0 - 1.0 / 8_388_608.0;
 const RND_AWAY: f64 = 1.0 + 1.0 / 8_388_608.0;
 
-/// The largest `f32` that is `<= d`, matching the RTree module's
-/// `rtreeValueDown`. Minimum bounds are rounded this way so the stored box never
-/// excludes a value it should contain.
+/// Returns the largest `f32` that is `<= d`, matching the RTree module's
+/// `rtreeValueDown`. Minimum bounds are rounded this way so the stored box
+/// never excludes a value it should contain.
 fn coord_down(d: f64) -> f32 {
     let f = d as f32;
     if f64::from(f) > d {
@@ -61,7 +61,7 @@ fn coord_down(d: f64) -> f32 {
     }
 }
 
-/// The smallest `f32` that is `>= d`, matching the RTree module's
+/// Returns the smallest `f32` that is `>= d`, matching the RTree module's
 /// `rtreeValueUp`.
 fn coord_up(d: f64) -> f32 {
     let f = d as f32;
@@ -82,8 +82,8 @@ struct Cell {
 }
 
 impl Cell {
-    /// The union of two cells' bounds. Both inputs are already `f32`, so the
-    /// union is exact and needs no further rounding.
+    /// Returns the union of two cells' bounds. Both inputs are already `f32`,
+    /// so the union is exact and needs no further rounding.
     fn union(bounds: &[f32; 4], other: &[f32; 4]) -> [f32; 4] {
         [
             bounds[0].min(other[0]),
@@ -93,7 +93,7 @@ impl Cell {
         ]
     }
 
-    /// The centre of this cell, used for the spatial sort.
+    /// Returns the centre of this cell, used for the spatial sort.
     fn centre(&self) -> (f64, f64) {
         (
             (f64::from(self.bounds[0]) + f64::from(self.bounds[1])) / 2.0,
@@ -104,21 +104,21 @@ impl Cell {
 
 /// Where a packed tree's rows are sent as it is built.
 ///
-/// The tree is streamed rather than returned, so peak memory does not carry a
-/// copy of every node blob and every rowid mapping on top of the entry set. At
-/// 10M rows those two together are several hundred megabytes.
+/// The tree is streamed rather than returned, so peak memory does not include
+/// a copy of every node blob and every rowid mapping on top of the entry set.
+/// At 10M rows those two together are several hundred megabytes.
 pub(crate) trait NodeSink {
     /// One `%_node` row: the node number and its blob.
     fn node(&mut self, nodeno: i64, blob: &[u8]) -> Result<()>;
-    /// One `%_rowid` row: an indexed row's id and the leaf holding it.
+    /// One `%_rowid` row: an indexed row's id and the leaf containing it.
     fn rowid(&mut self, rowid: i64, nodeno: i64) -> Result<()>;
     /// One `%_parent` row: a non-root node and its parent.
     fn parent(&mut self, nodeno: i64, parentnode: i64) -> Result<()>;
 }
 
-/// Hilbert index of a point on a 16-bit-per-axis grid over `extent`, used to
-/// order entries so that nodes packed from consecutive entries are spatially
-/// compact.
+/// Returns the Hilbert index of a point on a 16-bit-per-axis grid over
+/// `extent`, used to order entries so that nodes packed from consecutive
+/// entries are spatially compact.
 ///
 /// `extent` is the bounding box of the whole entry set rather than a fixed
 /// domain, so this works for projected coordinate systems as well as degrees.
@@ -163,7 +163,7 @@ fn hilbert(x: f64, y: f64, extent: &[f64; 4]) -> u32 {
     d
 }
 
-/// Serialise one node into `blob`: the header followed by its cells,
+/// Serialises one node into `blob`: the header followed by its cells,
 /// zero-padded to `node_size`.
 ///
 /// Writes into a caller-owned buffer so a build streams through one allocation
@@ -185,8 +185,8 @@ fn encode_node_into(blob: &mut Vec<u8>, depth: u16, cells: &[Cell], node_size: u
     blob.resize(node_size, 0);
 }
 
-/// The number of nodes at each level, leaves first, for `entries` entries at
-/// `per_node` entries per node.
+/// Returns the number of nodes at each level, leaves first, for `entries`
+/// entries at `per_node` entries per node.
 ///
 /// The last entry is always 1: the root. Returned so node numbers can be
 /// assigned before anything is built, which is what lets the tree stream out
@@ -207,8 +207,8 @@ fn level_sizes(entries: usize, per_node: usize) -> Vec<usize> {
     levels
 }
 
-/// Build an RTree over `entries` (`(rowid, [min_x, max_x, min_y, max_y])` in
-/// `f64`) and stream it into `sink`.
+/// Builds an RTree over `entries` (`(rowid, [min_x, max_x, min_y, max_y])` in
+/// `f64`) and streams it into `sink`.
 ///
 /// `node_size` is the byte length the RTree module expects every node blob to
 /// have; read it from the freshly created index rather than re-deriving it, so
@@ -228,7 +228,7 @@ pub(crate) fn pack_into<S: NodeSink>(
     sink: &mut S,
 ) -> Result<()> {
     let capacity = node_size.saturating_sub(NODE_HEADER) / BYTES_PER_CELL;
-    debug_assert!(capacity > 0, "node size {node_size} holds no cells");
+    debug_assert!(capacity > 0, "node size {node_size} fits no cells");
     // Entries per node: the requested fraction of capacity, but never more than
     // the format allows and never fewer than 2.
     //
@@ -395,14 +395,15 @@ mod tests {
         }
     }
 
-    /// Pack into a [`Collected`] at full fill, the shape the tests assert on.
+    /// Packs into a [`Collected`] at full fill, the shape the tests assert
+    /// on.
     fn pack(entries: &[(i64, [f64; 4])], node_size: usize) -> Result<Collected> {
         let mut collected = Collected::default();
         pack_into(entries, node_size, 1.0, &mut collected)?;
         Ok(collected)
     }
 
-    /// Read the cells back out of an encoded node.
+    /// Reads the cells back out of an encoded node.
     fn decode_cells(blob: &[u8]) -> Vec<Cell> {
         let count = blob
             .get(2..4)

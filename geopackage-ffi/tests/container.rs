@@ -21,7 +21,7 @@ fn error_slot() -> gpkg_error_t {
     }
 }
 
-/// The message an error holds, if any.
+/// The message an error contains, if any.
 fn message(error: &gpkg_error_t) -> Option<String> {
     if error.message.is_null() {
         return None;
@@ -225,7 +225,7 @@ fn an_srs_reads_back_with_its_definition() {
         take_string(definition).is_some_and(|text| text.contains("4326") || text.contains("WGS")),
         "the WKT definition should describe WGS 84"
     );
-    // This file carries no CRS WKT extension, so there is no WKT2 definition
+    // This file has no CRS WKT extension, so there is no WKT2 definition
     // and no epoch.
     assert!(wkt2.is_null());
     assert!(epoch.is_nan());

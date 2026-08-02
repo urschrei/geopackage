@@ -11,18 +11,14 @@
 //! zone database, no arithmetic. Convert to your preferred datetime crate at
 //! the boundary.
 //!
-//! Calendar arithmetic is [jiff](https://docs.rs/jiff)'s (issue #24): validating
-//! a date, and converting one to and from the epoch counts a columnar reader
-//! needs. What stays here is the part that is a GeoPackage concern rather than a
-//! datetime one, namely which text forms are accepted on read and exactly which
-//! is written back.
-//!
-//! jiff is used with no timezone database at all (`default-features = false`,
-//! `std` only). A GeoPackage `DATETIME` is UTC by definition, and this crate
-//! transforms neither coordinates nor times, so none of `tz-system`, `tz-fat`
-//! or the `tzdb-*` bundles are wanted. jiff stays an implementation detail: no
-//! jiff type appears in this crate's API, so a jiff major version is not a
-//! breaking change here.
+//! Calendar arithmetic (date validation, epoch conversion) is delegated to
+//! [jiff](https://docs.rs/jiff); this module keeps only the GeoPackage
+//! concerns, namely which text forms are accepted on read and exactly which
+//! form is written back. jiff is built with no timezone database
+//! (`default-features = false`, `std` only): a GeoPackage `DATETIME` is UTC by
+//! definition, and this crate transforms neither coordinates nor times. No
+//! jiff type appears in this crate's API, so a jiff major version bump is not
+//! a breaking change here.
 
 use jiff::civil::Date as JiffDate;
 use std::fmt;
@@ -36,13 +32,26 @@ pub struct Date {
 }
 
 impl Date {
-    /// Construct a calendar-validated date. Years are limited to 0–9999 by
-    /// the four-digit text form.
+    /// Creates a calendar-validated date. Years are limited to 0–9999 by the
+    /// four-digit text form.
     ///
-    /// The calendar itself is jiff's business: leap years, month lengths and the
-    /// century rules are not things this crate should be maintaining its own
-    /// version of. The year bound is ours, because it comes from the spec's text
-    /// form rather than from the calendar.
+    /// Calendar rules (leap years, month lengths, the century rules) are
+    /// delegated to jiff; the year bound comes from the spec's text form, not
+    /// from the calendar.
+    ///
+    /// # Errors
+    ///
+    /// [`DateTimeError::OutOfRange`] if a component is outside its calendar
+    /// range.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use geopackage_core::datetime::Date;
+    ///
+    /// assert!(Date::new(2024, 2, 29).is_ok());
+    /// assert!(Date::new(2023, 2, 29).is_err());
+    /// ```
     pub fn new(year: u16, month: u8, day: u8) -> Result<Self, DateTimeError> {
         if year > 9999 {
             return Err(DateTimeError::OutOfRange("year"));
@@ -51,7 +60,7 @@ impl Date {
         Ok(Self { year, month, day })
     }
 
-    /// This date as a jiff date, validating it on the way.
+    /// Converts to a jiff date, validating the components.
     fn to_jiff_checked(year: u16, month: u8, day: u8) -> Result<JiffDate, DateTimeError> {
         if !(1..=12).contains(&month) {
             return Err(DateTimeError::OutOfRange("month"));
@@ -70,17 +79,27 @@ impl Date {
             .ok_or(DateTimeError::OutOfRange("day"))
     }
 
-    /// This date as a jiff date. Infallible: a [`Date`] is validated on
+    /// Converts to a jiff date. Infallible: a [`Date`] is validated on
     /// construction.
     fn to_jiff(self) -> JiffDate {
         Self::to_jiff_checked(self.year, self.month, self.day).unwrap_or(JiffDate::ZERO)
     }
 
-    /// Days from the Unix epoch to this date, negative before it.
+    /// Returns the number of days from the Unix epoch to this date, negative
+    /// before it.
     ///
-    /// The count an Arrow `Date32` column holds, and the natural currency for
-    /// converting to any other datetime crate without this one having an opinion
-    /// about which.
+    /// This is the value an Arrow `Date32` column stores, and a convenient
+    /// interchange form for any other datetime crate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use geopackage_core::datetime::Date;
+    ///
+    /// assert_eq!(Date::new(1970, 1, 1)?.days_since_epoch(), 0);
+    /// assert_eq!(Date::new(1969, 12, 31)?.days_since_epoch(), -1);
+    /// # Ok::<(), geopackage_core::datetime::DateTimeError>(())
+    /// ```
     pub fn days_since_epoch(self) -> i32 {
         let epoch = JiffDate::new(1970, 1, 1).unwrap_or(JiffDate::ZERO);
         // Whole days, so the hour count divides exactly and truncation is not a
@@ -89,13 +108,13 @@ impl Date {
         i32::try_from(hours / 24).unwrap_or(i32::MAX)
     }
 
-    /// The date `days` from the Unix epoch, the inverse of
+    /// Returns the date `days` days from the Unix epoch; the inverse of
     /// [`Self::days_since_epoch`].
     ///
     /// # Errors
     ///
     /// [`DateTimeError::OutOfRange`] for a count outside the years this type
-    /// can hold.
+    /// can represent.
     pub fn from_days_since_epoch(days: i32) -> Result<Self, DateTimeError> {
         let epoch = JiffDate::new(1970, 1, 1)
             .ok()
@@ -117,7 +136,24 @@ impl Date {
         )
     }
 
-    /// Parse `YYYY-MM-DD`.
+    /// Parses `YYYY-MM-DD`.
+    ///
+    /// # Errors
+    ///
+    /// [`DateTimeError::Malformed`] for any other shape;
+    /// [`DateTimeError::OutOfRange`] for a component outside its calendar
+    /// range.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use geopackage_core::datetime::Date;
+    ///
+    /// let date = Date::parse("2026-07-24")?;
+    /// assert_eq!((date.year(), date.month(), date.day()), (2026, 7, 24));
+    /// assert!(Date::parse("2026/07/24").is_err());
+    /// # Ok::<(), geopackage_core::datetime::DateTimeError>(())
+    /// ```
     pub fn parse(s: &str) -> Result<Self, DateTimeError> {
         // Slice pattern: matches iff the input is exactly 10 bytes with `-`
         // separators at positions 4 and 7; any other shape is `Malformed`.
@@ -131,17 +167,17 @@ impl Date {
         )
     }
 
-    /// Year (0–9999).
+    /// Returns the year (0–9999).
     pub fn year(&self) -> u16 {
         self.year
     }
 
-    /// Month (1–12).
+    /// Returns the month (1–12).
     pub fn month(&self) -> u8 {
         self.month
     }
 
-    /// Day of month (1–31).
+    /// Returns the day of month (1–31).
     pub fn day(&self) -> u8 {
         self.day
     }
@@ -157,8 +193,8 @@ impl fmt::Display for Date {
 /// precision, and an optional UTC offset.
 ///
 /// The strict spec form always has `offset_minutes == Some(0)` (the trailing
-/// `Z`). `None` means the text carried no zone designator at all (lenient
-/// parses only).
+/// `Z`). `None` means the text had no zone designator at all (lenient parses
+/// only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DateTime {
     /// Calendar date component.
@@ -176,16 +212,17 @@ pub struct DateTime {
 }
 
 impl DateTime {
-    /// Microseconds from the Unix epoch to this instant, negative before it.
+    /// Returns the number of microseconds from the Unix epoch to this instant,
+    /// negative before it.
     ///
-    /// The count an Arrow `Timestamp(Microsecond, "UTC")` column holds. A value
-    /// carrying a UTC offset is normalised to UTC; text with no zone designator
-    /// at all, which only lenient parsing produces, is read as UTC, which is
-    /// what the spec says a `DATETIME` column holds.
+    /// This is the value an Arrow `Timestamp(Microsecond, "UTC")` column
+    /// stores. A value with a UTC offset is normalised to UTC; text with no
+    /// zone designator, which only lenient parsing produces, is read as UTC,
+    /// as the spec defines for `DATETIME` columns.
     ///
-    /// Sub-microsecond precision is truncated, since the target unit cannot
-    /// carry it. The strict spec form is millisecond precision, so this only
-    /// bites on lenient input with more than six fractional digits.
+    /// Sub-microsecond precision is truncated. The strict spec form is
+    /// millisecond precision, so truncation affects only lenient input with
+    /// more than six fractional digits.
     ///
     /// # Errors
     ///
@@ -225,13 +262,13 @@ impl DateTime {
             .ok_or(DateTimeError::OutOfRange("datetime"))
     }
 
-    /// The UTC instant `micros` from the Unix epoch, the inverse of
-    /// [`Self::micros_since_epoch`].
+    /// Returns the UTC instant `micros` microseconds from the Unix epoch; the
+    /// inverse of [`Self::micros_since_epoch`].
     ///
     /// # Errors
     ///
     /// [`DateTimeError::OutOfRange`] for a count outside the years this type
-    /// can hold.
+    /// can represent.
     pub fn from_micros_since_epoch(micros: i64) -> Result<Self, DateTimeError> {
         let civil = jiff::Timestamp::from_microsecond(micros)
             .ok()
@@ -268,7 +305,18 @@ impl DateTime {
         })
     }
 
-    /// Parse the strict 1.4 form `YYYY-MM-DDTHH:MM:SS.SSSZ` and nothing else.
+    /// Parses the strict 1.4 form `YYYY-MM-DDTHH:MM:SS.SSSZ` and nothing else.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use geopackage_core::datetime::DateTime;
+    ///
+    /// let dt = DateTime::parse_strict("2026-07-24T12:34:56.789Z")?;
+    /// assert_eq!(dt.nanosecond, 789_000_000);
+    /// assert!(DateTime::parse_strict("2026-07-24T12:34:56Z").is_err());
+    /// # Ok::<(), geopackage_core::datetime::DateTimeError>(())
+    /// ```
     pub fn parse_strict(s: &str) -> Result<Self, DateTimeError> {
         // Exactly 24 bytes with `T` at 10, `.` at 19, `Z` at 23; the digit
         // and calendar validation is delegated to `parse_lenient`.
@@ -308,9 +356,19 @@ impl DateTime {
         Ok(dt)
     }
 
-    /// Parse common ISO 8601 datetime variants found in real files:
+    /// Parses common ISO 8601 datetime variants found in real files:
     /// `T` or space separator, optional `.` + 1–9 fractional-second digits,
     /// and an optional `Z` or `±HH:MM` / `±HHMM` offset.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use geopackage_core::datetime::DateTime;
+    ///
+    /// let dt = DateTime::parse_lenient("2026-07-24 12:34:56+02:00")?;
+    /// assert_eq!(dt.offset_minutes, Some(120));
+    /// # Ok::<(), geopackage_core::datetime::DateTimeError>(())
+    /// ```
     pub fn parse_lenient(s: &str) -> Result<Self, DateTimeError> {
         // The fixed 19-byte prefix `YYYY-MM-DDsHH:MM:SS` (s is `T` or space),
         // with `rest` capturing an optional fractional part and/or zone. The
@@ -429,7 +487,7 @@ pub enum DateTimeError {
     OutOfRange(&'static str),
 }
 
-/// Build a signed UTC offset in minutes from a `+`/`-` sign byte, two hour
+/// Builds a signed UTC offset in minutes from a `+`/`-` sign byte, two hour
 /// digits, and an already-parsed minute value. Returns `Some(offset)`, matching
 /// the caller's `offset_minutes` field, or an `OutOfRange` error.
 fn make_offset(sign: u8, hour_digits: [u8; 2], minute: u32) -> Result<Option<i16>, DateTimeError> {

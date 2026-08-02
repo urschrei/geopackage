@@ -1,14 +1,13 @@
 /*
- * GDAL's Arrow write path into a GeoPackage, timed, for comparison against this
- * crate's `write_arrow` (M3 acceptance criterion 3, write side). Driven by
- * scripts/compare_gdal_arrow_write.sh.
+ * GDAL's Arrow write path into a GeoPackage, timed, for comparison against
+ * this crate's `write_arrow`. Driven by scripts/compare_gdal_arrow_write.sh.
  *
  * The counterpart of scripts/gdal_arrow_read.c. Both arms of the comparison do
  * the same thing: read a source GeoPackage's Arrow stream into memory first,
  * untimed, then time only the writing of those batches into a fresh file. The
  * read is deliberately outside the measurement, because otherwise the figure
  * would be a read plus a write and would say nothing about either. That is the
- * mistake the M2 GDAL comparison had to withdraw.
+ * mistake an earlier GDAL comparison had to withdraw.
  *
  * Note that GDAL's GeoPackage driver has no specialised WriteArrowBatch: its
  * slide 11 lists only GeoParquet and GeoArrow, so this exercises the generic

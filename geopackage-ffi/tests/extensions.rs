@@ -98,7 +98,7 @@ fn the_catalogue_can_be_walked_with_support_levels() {
     // SAFETY: a live container handle and a writable out-parameter.
     let status = unsafe { gpkg_extensions_count(gpkg, &raw mut count, &raw mut error) };
     assert_eq!(status, Status::Ok, "{:?}", message(&error));
-    assert_eq!(count, 4, "the fixture carries four extension rows");
+    assert_eq!(count, 4, "the fixture contains four extension rows");
 
     // Rows come back ordered by extension name, then table, then column, so
     // the metadata rows precede the rtree rows. A metadata row applies to a
