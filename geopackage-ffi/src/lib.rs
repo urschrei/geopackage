@@ -262,7 +262,7 @@ pub use schema::{
 };
 pub use stream::{
     gpkg_add_epsg_srs, gpkg_create_layer_from_arrow_schema, gpkg_layer_read_arrow,
-    gpkg_layer_read_arrow_in, gpkg_layer_write_arrow,
+    gpkg_layer_read_arrow_filtered, gpkg_layer_read_arrow_in, gpkg_layer_write_arrow,
 };
 pub use tiles::{
     gpkg_bytes_free, gpkg_tiles_count, gpkg_tiles_count_at, gpkg_tiles_delete, gpkg_tiles_extent,
