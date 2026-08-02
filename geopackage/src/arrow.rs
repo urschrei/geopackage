@@ -156,6 +156,12 @@ impl Layer<'_> {
     /// where it sits in the table rather than being moved to one end. See the
     /// [module documentation](self) for the type mapping.
     ///
+    /// A projection ([`Layer::with_columns`], [`Layer::without_geometry`])
+    /// narrows this schema exactly as it narrows a row read: the primary key
+    /// is always a field, a value column is a field when the projection names
+    /// it, and the geometry is a field only when projected in. The reads on
+    /// this handle return batches of this schema.
+    ///
     /// # Errors
     ///
     /// [`crate::Error`] if the table schema cannot be introspected.
@@ -165,9 +171,25 @@ impl Layer<'_> {
             .schema()
             .columns
             .iter()
+            .filter(|column| self.arrow_reads_column(column, geometry))
             .map(|column| field_for(column, geometry))
             .collect();
         Ok(Arc::new(Schema::new(fields)))
+    }
+
+    /// Whether a read of this handle carries `column`: the primary key always,
+    /// the geometry per the projection, a value column when the projection
+    /// keeps it.
+    fn arrow_reads_column(&self, column: &Column, geometry: Option<&GeometryColumn>) -> bool {
+        if self.primary_key_column() == Some(column.name.as_str()) {
+            return true;
+        }
+        if geometry.is_some_and(|g| g.column_name == column.name) {
+            return self.reads_geometry();
+        }
+        self.read_value_columns()
+            .iter()
+            .any(|kept| kept.name == column.name)
     }
 }
 
@@ -493,7 +515,11 @@ impl Layer<'_> {
     /// surface through the iterator.
     pub fn read_arrow(&self, options: ArrowReadOptions) -> Result<ArrowBatches<'_>> {
         let sequential = self.read_arrow_sequential(options)?;
-        if options.resolved_threads() < 2 {
+        // A projected layer declines the parallel path: its workers rebuild
+        // the layer from the table name over their own connections, which
+        // would read every column. Declining is the idiom the other
+        // conditions below use.
+        if options.resolved_threads() < 2 || self.is_projected() {
             return Ok(sequential);
         }
         let Some(parallel) = self.parallel_source(options)? else {
@@ -709,17 +735,32 @@ impl Layer<'_> {
             // `features_in` falls back to as well.
             _ => (String::new(), Vec::new()),
         };
-        let rows_sql = format!(
-            "SELECT {row_columns} FROM {table} WHERE {user_and}{key} >= ?{key_slot}{spatial_sql} \
-             ORDER BY {key} LIMIT ?{limit_slot}"
-        );
-        let sql = rows_sql.clone();
         let geometry_index = self.geometry_column().and_then(|geom| {
             schema
                 .fields()
                 .iter()
                 .position(|field| *field.name() == geom.column_name)
         });
+        // A bounding-box filter needs each candidate's geometry for the exact
+        // re-test, and a projection may have left it out of the schema. It is
+        // then selected as a hidden trailing column: read for the test,
+        // appended to no builder, absent from the batches. The row path does
+        // the same, wordlessly, by reading the geometry and not carrying it
+        // into the feature.
+        let mut row_columns = row_columns;
+        let hidden_geometry = match (filter, geometry_index, self.geometry_column()) {
+            (Some(_), None, Some(geom)) => {
+                row_columns.push(',');
+                row_columns.push_str(&quote(&geom.column_name)?);
+                Some(schema.fields().len() + usize::from(key_field.is_none()))
+            }
+            _ => None,
+        };
+        let rows_sql = format!(
+            "SELECT {row_columns} FROM {table} WHERE {user_and}{key} >= ?{key_slot}{spatial_sql} \
+             ORDER BY {key} LIMIT ?{limit_slot}"
+        );
+        let sql = rows_sql.clone();
         let conn = self.gpkg().connection();
         let datetime = self.conversion_options().datetime;
         let names: Vec<String> = schema
@@ -804,6 +845,7 @@ impl Layer<'_> {
                 next_key: i64::MIN,
                 exhausted: false,
                 user_params,
+                hidden_geometry,
                 filter: filter.map(|bbox| {
                     Box::new(SpatialFilter {
                         bbox,
@@ -1277,6 +1319,10 @@ struct SequentialBatches<'a> {
     /// The caller's `WHERE` parameters, bound first (`?1` to `?N`) on every
     /// page. Empty for a reader with no `WHERE` clause.
     user_params: Vec<rusqlite::types::Value>,
+    /// Absolute row index of the geometry selected only for the bbox re-test,
+    /// set when a projection keeps the geometry out of the schema but a
+    /// filter still needs it. Never a field, so never appended to a builder.
+    hidden_geometry: Option<usize>,
     /// The spatial filter, set only by `read_arrow_in`. Boxed so an unfiltered
     /// reader, which is every reader the threaded path builds, carries one
     /// pointer rather than the whole of it.
@@ -1481,9 +1527,14 @@ impl SequentialBatches<'_> {
                 // any value is converted, so a row outside the box costs
                 // nothing beyond reading its geometry, and conversion errors
                 // surface only for rows that are actually returned. Same rule
-                // and same helper as the row path.
+                // and same helper as the row path. The geometry is a schema
+                // field or, on a projected read, the hidden trailing column
+                // selected for exactly this test.
                 if let Some(filter) = &self.filter {
-                    let geometry_index = self.geometry_index.map(|index| index + offset);
+                    let geometry_index = self
+                        .geometry_index
+                        .map(|index| index + offset)
+                        .or(self.hidden_geometry);
                     if !crate::layer::row_in_box(row, geometry_index, &filter.bbox)? {
                         continue;
                     }
