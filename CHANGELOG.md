@@ -21,6 +21,15 @@ While the version is below 1.0 the API may change in any release.
   page-advance accounting. Both decline the aggregate and threaded paths, as
   the bbox read does. Reading a single row is `fid = ?1`.
 
+- **The Arrow reads honour a column projection.** `Layer::with_columns` and
+  `without_geometry` narrowed only the row path; `arrow_schema()` and every
+  Arrow read now narrow the same way: the primary key always, value columns
+  as named, the geometry only when projected in. A bbox read on a handle
+  whose projection excludes the geometry still re-tests each candidate
+  exactly, through a hidden trailing column that reaches no batch. The
+  threaded path declines on a projected layer, since its workers rebuild the
+  layer by name and would read every column.
+
 - **`geopackage-ffi`: `gpkg_layer_read_arrow_filtered`.** The general form of
   the Arrow readers: a bounding box (NULL or four doubles), a SQL `WHERE`
   clause (NULL or `select`'s raw-SQL contract, placeholders `?1` to `?N`

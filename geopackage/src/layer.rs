@@ -427,10 +427,17 @@ impl<'a> Layer<'a> {
     }
 
     /// The value columns a read yields: the projection's, or all of them.
-    fn read_value_columns(&self) -> &[Column] {
+    pub(crate) fn read_value_columns(&self) -> &[Column] {
         self.projection
             .as_ref()
             .map_or(&self.value_columns, |p| &p.value_columns)
+    }
+
+    /// Whether a projection is set, whatever it selects. The parallel Arrow
+    /// path declines on a projected layer, since its workers rebuild the layer
+    /// from the table name and would read every column.
+    pub(crate) fn is_projected(&self) -> bool {
+        self.projection.is_some()
     }
 
     /// The names of [`Self::read_value_columns`], for a [`Feature`] to share.
@@ -442,7 +449,7 @@ impl<'a> Layer<'a> {
 
     /// Whether a read carries the geometry into the features it yields. A
     /// filtered query may still select it, to filter with.
-    fn reads_geometry(&self) -> bool {
+    pub(crate) fn reads_geometry(&self) -> bool {
         match &self.projection {
             Some(projection) => projection.geometry,
             None => self.geometry_column.is_some(),
