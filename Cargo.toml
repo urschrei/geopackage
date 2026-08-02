@@ -11,10 +11,6 @@ edition = "2024"
 # gates it or declares an accurate rust-version.
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
-# The repo has not been transferred to the georust org yet (roadmap 02-ecosystem,
-# issue #18). Point at the live URL so the crates.io/docs.rs links resolve;
-# GitHub keeps a redirect from the old path after a transfer, so this stays
-# correct once the move happens.
 repository = "https://github.com/urschrei/geopackage"
 readme = "README.md"
 authors = ["The GeoRust developers"]
@@ -59,7 +55,7 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # The Arrow data plane. `arrow-array`/`arrow-schema` only: the GeoArrow WKB
 # encoding is a Binary field carrying extension metadata, so `geoarrow-array`
 # would add a dependency without adding capability. Revisit if native GeoArrow
-# coordinate encodings land (roadmap 05-m3).
+# coordinate encodings land.
 arrow-array = "59"
 arrow-schema = "59"
 # `geopackage-cli` only. `derive` for the command tree; `wrap_help` is left off
