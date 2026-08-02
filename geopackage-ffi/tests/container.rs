@@ -9,7 +9,7 @@ use std::ffi::{CStr, CString};
 
 use geopackage_ffi::{
     Status, gpkg_close, gpkg_create, gpkg_error_clear, gpkg_error_t, gpkg_open,
-    gpkg_open_read_only, gpkg_open_warning, gpkg_open_warning_count, gpkg_string_free,
+    gpkg_open_read_only, gpkg_open_warning, gpkg_open_warning_count, gpkg_srs, gpkg_string_free,
     gpkg_version,
 };
 
@@ -183,4 +183,92 @@ fn version_of_a_null_handle_is_rejected() {
 fn freeing_a_null_string_does_nothing() {
     // SAFETY: NULL is explicitly permitted.
     unsafe { gpkg_string_free(std::ptr::null_mut()) };
+}
+
+#[test]
+fn an_srs_reads_back_with_its_definition() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the crate directory has a parent")
+        .join("geopackage/tests/fixtures/gdal_multilayer_1_4.gpkg");
+    let c_path = CString::new(path.to_str().expect("path is UTF-8")).expect("no interior NUL");
+    let mut error = error_slot();
+    // SAFETY: a valid path and a writable error slot.
+    let gpkg = unsafe { gpkg_open_read_only(c_path.as_ptr(), &raw mut error) };
+    assert!(!gpkg.is_null(), "{:?}", message(&error));
+
+    let mut name: *mut std::ffi::c_char = std::ptr::null_mut();
+    let mut organization: *mut std::ffi::c_char = std::ptr::null_mut();
+    let mut code = 0i32;
+    let mut definition: *mut std::ffi::c_char = std::ptr::null_mut();
+    let mut wkt2: *mut std::ffi::c_char = std::ptr::null_mut();
+    let mut epoch = 0f64;
+    // SAFETY: a live container handle and writable out-parameters.
+    let status = unsafe {
+        gpkg_srs(
+            gpkg,
+            4326,
+            &raw mut name,
+            &raw mut organization,
+            &raw mut code,
+            &raw mut definition,
+            &raw mut wkt2,
+            &raw mut epoch,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+    assert_eq!(take_string(organization).as_deref(), Some("EPSG"));
+    assert_eq!(code, 4326);
+    assert!(take_string(name).is_some_and(|text| !text.is_empty()));
+    assert!(
+        take_string(definition).is_some_and(|text| text.contains("4326") || text.contains("WGS")),
+        "the WKT definition should describe WGS 84"
+    );
+    // This file carries no CRS WKT extension, so there is no WKT2 definition
+    // and no epoch.
+    assert!(wkt2.is_null());
+    assert!(epoch.is_nan());
+
+    // Out-parameters may be skipped: only the definition, nothing else.
+    let mut only_definition: *mut std::ffi::c_char = std::ptr::null_mut();
+    // SAFETY: as above, with the other out-parameters deliberately NULL.
+    let status = unsafe {
+        gpkg_srs(
+            gpkg,
+            4326,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut only_definition,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+    assert!(take_string(only_definition).is_some());
+
+    // An id no row declares reports rather than inventing.
+    // SAFETY: as above.
+    let status = unsafe {
+        gpkg_srs(
+            gpkg,
+            999_999,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::NotFound);
+    // SAFETY: an error slot this library filled in.
+    unsafe { gpkg_error_clear(&raw mut error) };
+
+    // SAFETY: nothing borrows the container.
+    let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(closed, Status::Ok);
 }

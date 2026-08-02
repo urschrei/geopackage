@@ -245,8 +245,8 @@ pub mod writer;
 
 pub use container::{
     gpkg_begin, gpkg_close, gpkg_commit, gpkg_create, gpkg_in_transaction, gpkg_open,
-    gpkg_open_read_only, gpkg_open_warning, gpkg_open_warning_count, gpkg_rollback, gpkg_t,
-    gpkg_version,
+    gpkg_open_read_only, gpkg_open_warning, gpkg_open_warning_count, gpkg_rollback, gpkg_srs,
+    gpkg_t, gpkg_version,
 };
 pub use error::{Status, gpkg_error_clear, gpkg_error_t};
 pub use layer::{

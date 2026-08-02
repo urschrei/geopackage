@@ -660,6 +660,56 @@ gpkg_status gpkg_commit(gpkg_t *gpkg, gpkg_error_t *error);
 gpkg_status gpkg_rollback(gpkg_t *gpkg, gpkg_error_t *error);
 
 /**
+ * Read a spatial reference system's definition and identity.
+ *
+ * What the file's `gpkg_spatial_ref_sys` row carries for `srs_id`, which is
+ * the id `gpkg_layer_srs_id` reports. Every out-parameter may be NULL to
+ * skip it; each string written is owned by the caller and released with
+ * `gpkg_string_free`.
+ *
+ * - `out_definition` is the WKT definition every GeoPackage carries. The
+ *   spec's value for a definition that could not be produced, `undefined`,
+ *   is returned as the string it is.
+ * - `out_definition_wkt2` is the WKT2 definition, present only in a file
+ *   carrying the CRS WKT extension and populated for this row; NULL
+ *   otherwise.
+ * - `out_epoch` receives the coordinate epoch as a decimal year, or NaN when
+ *   the row carries none, which is the common case.
+ * - `out_organization` and `out_organization_coordsys_id` are the authority
+ *   and its code, such as `EPSG` and `4326`; `out_name` is the row's own
+ *   name.
+ *
+ * ```c
+ * int32_t srs_id = 0;
+ * gpkg_layer_srs_id(layer, &srs_id, &error);
+ *
+ * char *definition = NULL;
+ * if (gpkg_srs(gpkg, srs_id, NULL, NULL, NULL, &definition, NULL, NULL,
+ *              &error) == GPKG_STATUS_OK) {
+ *     // ... hand definition to a projection library ...
+ *     gpkg_string_free(definition);
+ * }
+ * ```
+ *
+ * An id no row declares is `GPKG_STATUS_NOT_FOUND`. On any failure nothing
+ * is written to any out-parameter.
+ *
+ * # Safety
+ *
+ * `gpkg` must be a live container handle; every out-parameter NULL or
+ * writable; `error` NULL or writable.
+ */
+gpkg_status gpkg_srs(const gpkg_t *gpkg,
+                     int32_t srs_id,
+                     char **out_name,
+                     char **out_organization,
+                     int32_t *out_organization_coordsys_id,
+                     char **out_definition,
+                     char **out_definition_wkt2,
+                     double *out_epoch,
+                     gpkg_error_t *error);
+
+/**
  * Release the message an error holds, and reset its code to `GPKG_STATUS_OK`.
  *
  * Safe to call on an error that was never filled in, and safe to call twice:

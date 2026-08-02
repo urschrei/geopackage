@@ -547,3 +547,119 @@ pub unsafe extern "C" fn gpkg_rollback(gpkg: *mut gpkg_t, error: *mut gpkg_error
     // SAFETY: forwarded to this function's own contract.
     unsafe { transaction_statement(gpkg, error, "gpkg_rollback", "ROLLBACK", true) }
 }
+
+/// Read a spatial reference system's definition and identity.
+///
+/// What the file's `gpkg_spatial_ref_sys` row carries for `srs_id`, which is
+/// the id `gpkg_layer_srs_id` reports. Every out-parameter may be NULL to
+/// skip it; each string written is owned by the caller and released with
+/// `gpkg_string_free`.
+///
+/// - `out_definition` is the WKT definition every GeoPackage carries. The
+///   spec's value for a definition that could not be produced, `undefined`,
+///   is returned as the string it is.
+/// - `out_definition_wkt2` is the WKT2 definition, present only in a file
+///   carrying the CRS WKT extension and populated for this row; NULL
+///   otherwise.
+/// - `out_epoch` receives the coordinate epoch as a decimal year, or NaN when
+///   the row carries none, which is the common case.
+/// - `out_organization` and `out_organization_coordsys_id` are the authority
+///   and its code, such as `EPSG` and `4326`; `out_name` is the row's own
+///   name.
+///
+/// ```c
+/// int32_t srs_id = 0;
+/// gpkg_layer_srs_id(layer, &srs_id, &error);
+///
+/// char *definition = NULL;
+/// if (gpkg_srs(gpkg, srs_id, NULL, NULL, NULL, &definition, NULL, NULL,
+///              &error) == GPKG_STATUS_OK) {
+///     // ... hand definition to a projection library ...
+///     gpkg_string_free(definition);
+/// }
+/// ```
+///
+/// An id no row declares is `GPKG_STATUS_NOT_FOUND`. On any failure nothing
+/// is written to any out-parameter.
+///
+/// # Safety
+///
+/// `gpkg` must be a live container handle; every out-parameter NULL or
+/// writable; `error` NULL or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_srs(
+    gpkg: *const Container,
+    srs_id: i32,
+    out_name: *mut *mut c_char,
+    out_organization: *mut *mut c_char,
+    out_organization_coordsys_id: *mut i32,
+    out_definition: *mut *mut c_char,
+    out_definition_wkt2: *mut *mut c_char,
+    out_epoch: *mut f64,
+    error: *mut gpkg_error_t,
+) -> Status {
+    if gpkg.is_null() {
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::BadArgument, "gpkg handle is NULL") };
+        return Status::BadArgument;
+    }
+    // SAFETY: the caller guarantees a live container handle.
+    let srs = match unsafe { (*gpkg).gpkg().srs(srs_id) } {
+        Ok(Some(srs)) => srs,
+        Ok(None) => {
+            let message = format!("no spatial reference system with srs_id {srs_id}");
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_error(error, Status::NotFound, &message) };
+            return Status::NotFound;
+        }
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            return Status::from(&err);
+        }
+    };
+
+    // Every string is converted before anything is written, so a failure
+    // writes nothing and the caller has nothing partial to free.
+    let mut strings = [
+        (out_name, Some(srs.name)),
+        (out_organization, Some(srs.organization)),
+        (out_definition, Some(srs.definition)),
+        (out_definition_wkt2, srs.definition_wkt2),
+    ]
+    .map(|(out, text)| (out, text, std::ptr::null_mut::<c_char>()));
+    for (out, text, converted) in &mut strings {
+        if let (false, Some(text)) = (out.is_null(), text.as_deref()) {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            let owned = unsafe { out_string(text, error) };
+            if owned.is_null() {
+                for (_, _, earlier) in &strings {
+                    if !earlier.is_null() {
+                        // SAFETY: `earlier` came from `CString::into_raw` in
+                        // `out_string` above and has not been handed out.
+                        drop(unsafe { std::ffi::CString::from_raw(*earlier) });
+                    }
+                }
+                return Status::InvalidArgument;
+            }
+            *converted = owned;
+        }
+    }
+    for (out, _, converted) in &strings {
+        if !out.is_null() {
+            // SAFETY: the caller guarantees non-NULL out-parameters are
+            // writable. An absent optional writes NULL, which the caller may
+            // free harmlessly.
+            unsafe { *(*out) = *converted };
+        }
+    }
+    if !out_organization_coordsys_id.is_null() {
+        // SAFETY: the caller guarantees a writable out-parameter.
+        unsafe { *out_organization_coordsys_id = srs.organization_coordsys_id };
+    }
+    if !out_epoch.is_null() {
+        // SAFETY: as above.
+        unsafe { *out_epoch = srs.epoch.unwrap_or(f64::NAN) };
+    }
+    Status::Ok
+}
