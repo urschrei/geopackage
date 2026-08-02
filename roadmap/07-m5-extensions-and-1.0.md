@@ -876,7 +876,7 @@ concern this item exists to settle: whether the surface reflects what
 GeoPackage users need in ergonomics and performance, checked outward rather
 than inward.
 
-- [ ] **Compare against GDAL's C API**, since that is what nearly every
+- [x] **Compare against GDAL's C API**, since that is what nearly every
       GeoPackage consumer programs against today. For each call such a
       consumer would use, record whether this ABI has an equivalent, a
       deliberate omission with its reasoning, or a gap. The vector side:
@@ -886,16 +886,50 @@ than inward.
       `ExecuteSQL`. The raster side: subdataset listing, band and block
       access, overview selection. The output is a table, committed here, so
       the omissions are decisions rather than accidents.
-- [ ] **Ask what QGIS would need** to sit on this ABI in place of its GDAL
+      *(Done 2026-08-02. The table lives in
+      [09-c-api-sense-check.md](09-c-api-sense-check.md) rather than inline,
+      since it runs to three tables and nine findings. Most of the surface
+      classifies as equivalent; the reasoned omissions are capability
+      probing, `ExecuteSQL`, row-at-a-time reads and decoded pixels.)*
+- [x] **Ask what QGIS would need** to sit on this ABI in place of its GDAL
       provider, as the most demanding realistic consumer: capability probing,
       subset strings, request-scoped column and geometry subsets, editing
       sessions, unique-value and aggregate queries, and bounding-box requests
       at interactive rates, which is the access pattern the handle-lifetime
       measurements were taken for. #6 already plans QGIS interop CI; this is
       the API-shape half of the same question.
-- [ ] **Decide what follows**: C API additions, Rust changes that inform new
+      *(Done 2026-08-02, same document. The rendering and editing loops are
+      covered; what QGIS would miss is the same three gaps GDAL's comparison
+      found (attribute filters, projection, the CRS definition) plus schema
+      evolution, which the workspace does not have in any language.)*
+- [x] **Decide what follows**: C API additions, Rust changes that inform new
       C API items, or a recorded conclusion that the surface stands. New work
       becomes unticked items here rather than silent scope growth.
+      *(Decided 2026-08-02, in the document's decision section. The headline:
+      nothing found blocks the freeze, since every finding is additive. Five
+      items follow below; schema evolution and layer deletion are deferred
+      past 1.0 as additive work; the rest of the findings are recorded
+      omissions.)*
+
+The items the sense-check produced, in rough order of consumer value:
+
+- [ ] **A filtered Arrow read, then its C entry point** (F1). The largest
+      gap: OGR's `SetAttributeFilter`, QGIS's subset strings and by-FID
+      access are all the same missing call. Library work first, as phase 8b
+      was: an Arrow read carrying a WHERE clause and parameters, declining
+      to the direct loop as the bbox read does. By-FID access is `fid = ?1`
+      through the same call.
+- [ ] **Column projection over C** (F2): open a layer with a column subset.
+      The library side (`with_columns`, `without_geometry`) already exists.
+- [ ] **The SRS definition over C** (F3): what `srs()` reads, past the bare
+      id that `gpkg_layer_srs_id` hands over today.
+- [ ] **The fail-fast pair over C** (F4): enumerate extension rows with
+      their support level, and surface `validate()`'s findings. The
+      catalogue exists so a client can fail fast; a C caller currently
+      cannot ask.
+- [ ] **A pyramid cursor over C** (F9): walk stored tiles rather than
+      probing the declared grid, which on a sparse pyramid is O(grid)
+      against the cursor's O(stored).
 
 - [ ] **API review.** Audit every `pub` item; `#[non_exhaustive]` where growth
       is plausible; error variants stabilised; rusqlite kept out of the public
