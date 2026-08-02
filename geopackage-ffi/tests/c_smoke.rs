@@ -307,3 +307,30 @@ fn a_c_program_inspects_a_file_it_knows_nothing_about() {
     assert!(stdout.contains("pyramids: 1"), "{stdout}");
     assert!(stdout.contains("ok"), "{stdout}");
 }
+
+#[test]
+fn a_c_program_runs_the_interactive_read_loop() {
+    // Projection, CRS resolution, and the three filter shapes of the one
+    // filtered read: bbox, bbox plus clause, and by fid.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Some(binary) = build_c_example(dir.path(), "query") else {
+        return;
+    };
+
+    let run = Command::new(&binary)
+        .arg(fixture("gdal_multilayer_1_4.gpkg"))
+        .arg("points")
+        .output()
+        .expect("failed to run the compiled C program");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        run.status.success(),
+        "query.c failed:\nstdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(stdout.contains("crs: EPSG:4326"), "{stdout}");
+    assert!(stdout.contains("in view: 3 rows"), "{stdout}");
+    assert!(stdout.contains("matching subset: 1 rows"), "{stdout}");
+    assert!(stdout.contains("selected by fid: 1 rows"), "{stdout}");
+    assert!(stdout.contains("ok"), "{stdout}");
+}
