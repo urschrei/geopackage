@@ -913,12 +913,25 @@ than inward.
 
 The items the sense-check produced, in rough order of consumer value:
 
-- [ ] **A filtered Arrow read, then its C entry point** (F1). The largest
+- [x] **A filtered Arrow read, then its C entry point** (F1). The largest
       gap: OGR's `SetAttributeFilter`, QGIS's subset strings and by-FID
       access are all the same missing call. Library work first, as phase 8b
       was: an Arrow read carrying a WHERE clause and parameters, declining
       to the direct loop as the bbox read does. By-FID access is `fid = ?1`
       through the same call.
+      *(Done 2026-08-02. `Layer::read_arrow_where` and `read_arrow_in_where`
+      in Rust, composed rather than clause-only, since a QGIS-style consumer
+      runs a subset string and a canvas rectangle together. The clause keeps
+      `select`'s `?1` to `?N` contract: the paginated query numbers its own
+      key, limit and rtree bounds after `N`, so with no clause the text
+      degenerates to the unfiltered one and nothing existing changed shape.
+      Simpler than 8b in one respect, which the docs record: the clause is
+      exact SQL, so only the bbox half needs the client-side re-test. Over C
+      it is one entry point, `gpkg_layer_read_arrow_filtered`, taking NULL-able
+      bbox and clause with `gpkg_value_t` parameters, degenerating to
+      `gpkg_layer_read_arrow` with both absent. The aggregate path declines
+      under a clause for uniformity rather than necessity; revisit with a
+      measurement if filtered reads show up in one.)*
 - [ ] **Column projection over C** (F2): open a layer with a column subset.
       The library side (`with_columns`, `without_geometry`) already exists.
 - [ ] **The SRS definition over C** (F3): what `srs()` reads, past the bare
