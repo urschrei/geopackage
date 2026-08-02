@@ -30,6 +30,11 @@ While the version is below 1.0 the API may change in any release.
   threaded path declines on a projected layer, since its workers rebuild the
   layer by name and would read every column.
 
+- **`geopackage-ffi`: the extensions catalogue.** `gpkg_extensions_count`
+  and `gpkg_extension_at` walk the `gpkg_extensions` rows with the support
+  level this library claims for each, which is what lets a C consumer fail
+  fast instead of meeting an `UnsupportedExtension` refusal mid-write.
+
 - **`geopackage-ffi`: `gpkg_srs`.** The spatial reference system behind the
   id `gpkg_layer_srs_id` reports: name, organization and code, the WKT
   definition, the WKT2 definition where the CRS WKT extension carries one,
