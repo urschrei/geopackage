@@ -261,3 +261,49 @@ fn which_cbindgen() -> Result<PathBuf, ()> {
         _ => Err(()),
     }
 }
+
+#[test]
+fn a_c_program_inspects_a_file_it_knows_nothing_about() {
+    // The fail-fast pattern from C: warnings, enumeration, the extensions
+    // catalogue with support levels, and validation, all before any write.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Some(binary) = build_c_example(dir.path(), "inspect") else {
+        return;
+    };
+
+    // A feature file: five layers, four extension rows, advisory findings.
+    let run = Command::new(&binary)
+        .arg(fixture("gdal_multilayer_1_4.gpkg"))
+        .output()
+        .expect("failed to run the compiled C program");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        run.status.success(),
+        "inspect.c failed:\nstdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(stdout.contains("layers: 5"), "{stdout}");
+    assert!(stdout.contains("extensions: 4"), "{stdout}");
+    assert!(
+        stdout.contains("gpkg_rtree_index on points: implemented"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("would decline writes"), "{stdout}");
+    // The fixture has unindexed layers, so validation reports advisories.
+    assert!(stdout.contains("[advisory]"), "{stdout}");
+    assert!(stdout.contains("ok"), "{stdout}");
+
+    // A tile file: the pyramid enumeration side of the same program.
+    let run = Command::new(&binary)
+        .arg(fixture("gdal_tiles.gpkg"))
+        .output()
+        .expect("failed to run the compiled C program");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        run.status.success(),
+        "inspect.c failed:\nstdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(stdout.contains("pyramids: 1"), "{stdout}");
+    assert!(stdout.contains("ok"), "{stdout}");
+}
