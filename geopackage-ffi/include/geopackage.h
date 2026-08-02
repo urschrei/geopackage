@@ -213,6 +213,12 @@ typedef int32_t gpkg_value_kind;
 typedef struct gpkg_t gpkg_t;
 
 /**
+ * What `gpkg_validate` found. Owns its findings outright: unlike a layer or
+ * tiles handle it borrows nothing, so it does not block `gpkg_close`.
+ */
+typedef struct FindingsHandle FindingsHandle;
+
+/**
  * A `gpkg_layer_t`: a layer, and the container it borrows.
  */
 typedef struct gpkg_layer_t gpkg_layer_t;
@@ -394,6 +400,12 @@ typedef struct {
  * and destroyed by `gpkg_tiles_free`.
  */
 typedef gpkg_tiles_t gpkg_tiles_t;
+
+/**
+ * The findings of one validation run. Opaque; created by `gpkg_validate` and
+ * destroyed by `gpkg_findings_free`.
+ */
+typedef FindingsHandle gpkg_findings_t;
 
 /**
  * A write transaction over one layer. Opaque; created by
@@ -1790,6 +1802,68 @@ gpkg_status gpkg_tiles_get_into(const gpkg_tiles_t *tiles,
  * already been freed.
  */
 void gpkg_string_free(char *text);
+
+/**
+ * Validate the file, returning the findings most severe first.
+ *
+ * Runs every check the library has: the container tables, the spatial
+ * indexes and their trigger generation, the extension catalogue, and the
+ * metadata, schema and relation extensions where the file carries them. A
+ * conforming file returns an empty findings list, and the call succeeding
+ * says nothing about the file being clean: ask `gpkg_findings_count`.
+ *
+ * # Safety
+ *
+ * `gpkg` must be a live container handle, `out` writable, `error` NULL or
+ * writable.
+ */
+gpkg_status gpkg_validate(const gpkg_t *gpkg, gpkg_findings_t **out, gpkg_error_t *error);
+
+/**
+ * Release a findings handle. Passing NULL does nothing.
+ *
+ * # Safety
+ *
+ * `findings` must be NULL, or a handle from `gpkg_validate` that has not
+ * already been freed.
+ */
+void gpkg_findings_free(gpkg_findings_t *findings);
+
+/**
+ * How many findings the run produced. Zero for a clean file, and zero for
+ * NULL, so a caller need not branch.
+ *
+ * # Safety
+ *
+ * `findings` must be NULL or a live findings handle.
+ */
+size_t gpkg_findings_count(const gpkg_findings_t *findings);
+
+/**
+ * One finding: severity, description, and repair advice where repair exists.
+ *
+ * Findings are ordered most severe first. Every out-parameter may be NULL to
+ * skip it; each string written is owned by the caller and released with
+ * `gpkg_string_free`. `out_severity` is `error`, `warning` or `advisory`.
+ * `out_repair` names the library call that repairs the finding, and is NULL
+ * where the fix needs the producing writer or a decision about data this
+ * library should not take on the caller's behalf, which is most of the
+ * extension findings.
+ *
+ * An index at or beyond the count is `GPKG_STATUS_NOT_FOUND`. On any failure
+ * nothing is written.
+ *
+ * # Safety
+ *
+ * `findings` must be a live findings handle; every out-parameter NULL or
+ * writable; `error` NULL or writable.
+ */
+gpkg_status gpkg_finding_at(const gpkg_findings_t *findings,
+                            size_t index,
+                            char **out_severity,
+                            char **out_message,
+                            char **out_repair,
+                            gpkg_error_t *error);
 
 /**
  * Begin a write transaction over `layer`.

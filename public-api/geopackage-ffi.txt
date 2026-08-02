@@ -173,6 +173,20 @@ pub mod geopackage_ffi::tiles
 pub type geopackage_ffi::tiles::gpkg_tiles_t = geopackage_ffi::handle::TilesHandle
 pub mod geopackage_ffi::util
 #[no_mangle] pub unsafe c fn geopackage_ffi::util::gpkg_string_free(*mut core::ffi::primitives::c_char)
+pub mod geopackage_ffi::validate
+pub struct geopackage_ffi::validate::FindingsHandle
+impl core::marker::Freeze for geopackage_ffi::validate::FindingsHandle
+impl core::marker::Send for geopackage_ffi::validate::FindingsHandle
+impl core::marker::Sync for geopackage_ffi::validate::FindingsHandle
+impl core::marker::Unpin for geopackage_ffi::validate::FindingsHandle
+impl core::marker::UnsafeUnpin for geopackage_ffi::validate::FindingsHandle
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::validate::FindingsHandle
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::validate::FindingsHandle
+#[no_mangle] pub unsafe c fn geopackage_ffi::validate::gpkg_finding_at(*const geopackage_ffi::validate::gpkg_findings_t, usize, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::validate::gpkg_findings_count(*const geopackage_ffi::validate::gpkg_findings_t) -> usize
+#[no_mangle] pub unsafe c fn geopackage_ffi::validate::gpkg_findings_free(*mut geopackage_ffi::validate::gpkg_findings_t)
+#[no_mangle] pub unsafe c fn geopackage_ffi::validate::gpkg_validate(*const geopackage_ffi::handle::Container, *mut *mut geopackage_ffi::validate::gpkg_findings_t, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+pub type geopackage_ffi::validate::gpkg_findings_t = geopackage_ffi::validate::FindingsHandle
 pub mod geopackage_ffi::value
 #[repr(i32)] pub enum geopackage_ffi::value::ValueKind
 pub geopackage_ffi::value::ValueKind::Blob = 5
@@ -449,6 +463,9 @@ impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_value_
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_error_clear(*mut geopackage_ffi::error::gpkg_error_t)
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_extension_at(*const geopackage_ffi::handle::Container, usize, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_extensions_count(*const geopackage_ffi::handle::Container, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_finding_at(*const geopackage_ffi::validate::gpkg_findings_t, usize, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_findings_count(*const geopackage_ffi::validate::gpkg_findings_t) -> usize
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_findings_free(*mut geopackage_ffi::validate::gpkg_findings_t)
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_in_transaction(*const geopackage_ffi::container::gpkg_t) -> bool
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_layer_column_count(*const geopackage_ffi::handle::LayerHandle, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_layer_column_is_primary_key(*const geopackage_ffi::handle::LayerHandle, usize) -> bool
@@ -498,6 +515,7 @@ impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_value_
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_open(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::tiles::gpkg_tiles_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_put(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, i64, i64, *const u8, usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_zoom_level_count(*const geopackage_ffi::tiles::gpkg_tiles_t, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_validate(*const geopackage_ffi::handle::Container, *mut *mut geopackage_ffi::validate::gpkg_findings_t, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_version(*const geopackage_ffi::container::gpkg_t, *mut geopackage_ffi::error::gpkg_error_t) -> *mut core::ffi::primitives::c_char
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_writer_commit(*mut geopackage_ffi::writer::gpkg_writer_t, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_writer_delete(*mut geopackage_ffi::writer::gpkg_writer_t, i64, *mut bool, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
@@ -505,6 +523,7 @@ impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_value_
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_writer_insert(*mut geopackage_ffi::writer::gpkg_writer_t, *const i64, *const u8, usize, *const geopackage_ffi::value::gpkg_value_t, usize, *mut i64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_writer_update(*mut geopackage_ffi::writer::gpkg_writer_t, i64, *const u8, usize, *const geopackage_ffi::value::gpkg_value_t, usize, *mut bool, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_writer_update_column(*mut geopackage_ffi::writer::gpkg_writer_t, i64, *const core::ffi::primitives::c_char, *const geopackage_ffi::value::gpkg_value_t, *mut bool, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+pub type geopackage_ffi::gpkg_findings_t = geopackage_ffi::validate::FindingsHandle
 pub type geopackage_ffi::gpkg_layer_t = geopackage_ffi::handle::LayerHandle
 pub type geopackage_ffi::gpkg_t = geopackage_ffi::handle::Container
 pub type geopackage_ffi::gpkg_tiles_t = geopackage_ffi::handle::TilesHandle
