@@ -300,3 +300,90 @@ fn agrees_with_features_in_over_lines_whose_envelopes_overlap() {
         );
     }
 }
+
+#[test]
+fn scattered_candidates_agree_across_segment_boundaries() {
+    // The rtree is scanned once and its candidates walked as key segments;
+    // keys further apart than the segment gap start a new segment. This
+    // places five matching rows every hundred, so the candidate ids form
+    // islands far beyond any gap-folding, and walks them with a batch size
+    // small enough that segments and batches interleave every way.
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("s.gpkg")).unwrap();
+    gpkg.add_epsg_srs(4326).unwrap();
+    gpkg.create_layer(
+        &TableSchemaBuilder::new("pts")
+            .column(ColumnSpec::new("name", ColumnType::Text(None)))
+            .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+    )
+    .unwrap();
+    gpkg.layer("pts")
+        .unwrap()
+        .write_all(
+            (0..500)
+                .map(|i: i32| {
+                    // Five in-box rows per hundred; the rest far outside.
+                    let inside = i % 100 < 5;
+                    let x = if inside { 1.0 } else { 500.0 + f64::from(i) };
+                    NewFeature::new(Point::new(x, x), vec![Value::Text(format!("p{i}"))])
+                })
+                .collect::<Vec<_>>(),
+            1000,
+        )
+        .unwrap();
+    let bbox = BoundingBox::new(0.0, 0.0, 2.0, 2.0);
+
+    // The row path yields rtree order; the columnar path orders by key. The
+    // sets must agree, and the columnar result must be the sorted one.
+    let mut expected = row_fids(&gpkg, bbox);
+    expected.sort_unstable();
+    assert_eq!(expected.len(), 25, "the case must select five islands");
+
+    for batch_size in [1, 3, 64, 100_000] {
+        let options = ArrowReadOptions::with_batch_size(batch_size);
+        assert_eq!(
+            arrow_fids(&gpkg, bbox, options),
+            expected,
+            "batch size {batch_size}"
+        );
+    }
+}
+
+#[test]
+fn rows_overfetched_inside_a_folded_gap_are_dropped() {
+    // Small key gaps are folded into one segment, so the range fetch reads
+    // the non-matching rows sitting in them; only the exact re-test keeps
+    // them out of the batches. Alternating in-box and out-of-box rows make
+    // every second row such an over-fetch.
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("g.gpkg")).unwrap();
+    gpkg.add_epsg_srs(4326).unwrap();
+    gpkg.create_layer(
+        &TableSchemaBuilder::new("pts")
+            .column(ColumnSpec::new("name", ColumnType::Text(None)))
+            .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+    )
+    .unwrap();
+    gpkg.layer("pts")
+        .unwrap()
+        .write_all(
+            (0..200)
+                .map(|i: i32| {
+                    let x = if i % 2 == 0 { 1.0 } else { 900.0 };
+                    NewFeature::new(Point::new(x, x), vec![Value::Text(format!("p{i}"))])
+                })
+                .collect::<Vec<_>>(),
+            1000,
+        )
+        .unwrap();
+    let bbox = BoundingBox::new(0.0, 0.0, 2.0, 2.0);
+
+    // As above: the row path yields rtree order, the columnar path key order.
+    let mut expected = row_fids(&gpkg, bbox);
+    expected.sort_unstable();
+    assert_eq!(expected.len(), 100);
+    assert_eq!(
+        arrow_fids(&gpkg, bbox, ArrowReadOptions::default()),
+        expected
+    );
+}

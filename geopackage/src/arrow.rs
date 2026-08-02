@@ -142,6 +142,37 @@ const DATETIME_UNIT: TimeUnit = TimeUnit::Microsecond;
 /// the aggregate can name it as an argument.
 const KEY_ALIAS: &str = "__gpkg_key";
 
+/// Largest key gap folded into one candidate segment.
+///
+/// Sorted rtree candidates are walked as key ranges rather than fetched id by
+/// id, so a gap inside a segment over-fetches the rows in it, each dropped by
+/// the exact re-test. Folding small gaps is the cheaper side of that trade:
+/// continuing a range scan over a few dozen rows costs less than ending the
+/// page and starting a fresh index probe at the next island, and clustered
+/// data, where filtered reads matter, produces mostly such gaps.
+const SEGMENT_GAP: i64 = 64;
+
+/// Sorted candidate ids folded into closed key ranges, gaps up to
+/// [`SEGMENT_GAP`] included.
+fn segment_runs(ids: &[i64]) -> Vec<(i64, i64)> {
+    let mut runs = Vec::new();
+    let mut ids = ids.iter().copied();
+    let Some(first) = ids.next() else {
+        return runs;
+    };
+    let (mut lo, mut hi) = (first, first);
+    for id in ids {
+        if id.saturating_sub(hi) <= SEGMENT_GAP {
+            hi = id;
+        } else {
+            runs.push((lo, hi));
+            (lo, hi) = (id, id);
+        }
+    }
+    runs.push((lo, hi));
+    runs
+}
+
 /// Ceiling on the automatically chosen thread count.
 ///
 /// GDAL's driver uses the same `min(4, cpus)` for the same path. Beyond a few
@@ -547,6 +578,13 @@ impl Layer<'_> {
     /// `f32` envelopes and is queried with widened bounds, so its candidates
     /// are a superset.
     ///
+    /// The index is scanned once, when the read is opened, and the candidate
+    /// set is fixed from then on: a row inserted while batches are still
+    /// being pulled is not returned, even if it intersects the box. A row
+    /// deleted in that window simply stops arriving. This is one consistent
+    /// answer rather than a mixture, and it is also what makes the read fast:
+    /// pages walk candidate key ranges instead of re-querying the index.
+    ///
     /// A batch can therefore come back with fewer rows than the batch size
     /// while rows remain: filtering removes candidates after the query has
     /// bounded them. That is already true of the byte ceiling, so a caller
@@ -695,10 +733,15 @@ impl Layer<'_> {
             None => String::new(),
         };
         // The spatial predicate, when there is one and the layer has an index
-        // to answer it with. A subquery against the RTree rather than a join,
-        // so the select list stays unqualified and the surrounding query is
-        // unchanged; SQLite drives the same index lookup either way.
-        let (spatial_sql, filter_params) = match filter {
+        // to answer it with. The RTree is scanned exactly once, here, and its
+        // candidate ids become key segments the pages walk with an ordinary
+        // range bound; an earlier shape re-evaluated an `IN (SELECT ... FROM
+        // rtree)` subquery on every page, which re-scanned the index once per
+        // batch and measured as most of the filtered read's overhead
+        // (benchmarks/2026-08-02-threaded-filtered-read.md). A fixed candidate
+        // set also gives the read one consistent answer: rows inserted after
+        // this point are not returned, exactly as a snapshot would.
+        let (spatial_sql, segments) = match filter {
             Some(bbox) if self.has_spatial_index()? => {
                 let geom = self
                     .geometry_column()
@@ -709,31 +752,31 @@ impl Layer<'_> {
                     self.table_name(),
                     &geom.column_name,
                 ))?;
-                let id = match self.primary_key_column() {
-                    Some(pk) => quote(pk)?,
-                    None => "rowid".to_owned(),
-                };
+                let mut stmt = self.gpkg().connection().prepare_cached(&format!(
+                    "SELECT id FROM {rtree} \
+                     WHERE minx <= ?1 AND maxx >= ?2 AND miny <= ?3 AND maxy >= ?4"
+                ))?;
+                let mut ids: Vec<i64> = stmt
+                    .query_map(
+                        [
+                            crate::layer::widen_up(bbox.max_x),
+                            crate::layer::widen_down(bbox.min_x),
+                            crate::layer::widen_up(bbox.max_y),
+                            crate::layer::widen_down(bbox.min_y),
+                        ],
+                        |row| row.get(0),
+                    )?
+                    .collect::<rusqlite::Result<_>>()?;
+                ids.sort_unstable();
                 (
-                    format!(
-                        " AND {id} IN (SELECT id FROM {rtree} \
-                          WHERE minx <= ?{} AND maxx >= ?{} AND miny <= ?{} AND maxy >= ?{})",
-                        base + 3,
-                        base + 4,
-                        base + 5,
-                        base + 6
-                    ),
-                    vec![
-                        rusqlite::types::Value::Real(crate::layer::widen_up(bbox.max_x)),
-                        rusqlite::types::Value::Real(crate::layer::widen_down(bbox.min_x)),
-                        rusqlite::types::Value::Real(crate::layer::widen_up(bbox.max_y)),
-                        rusqlite::types::Value::Real(crate::layer::widen_down(bbox.min_y)),
-                    ],
+                    format!(" AND {key} <= ?{}", base + 3),
+                    Some(segment_runs(&ids)),
                 )
             }
             // No index, or no filter: a full scan. When a filter is set the
             // exact re-test still runs over every row, which is what
             // `features_in` falls back to as well.
-            _ => (String::new(), Vec::new()),
+            _ => (String::new(), None),
         };
         let geometry_index = self.geometry_column().and_then(|geom| {
             schema
@@ -830,7 +873,7 @@ impl Layer<'_> {
 
         Ok(ArrowBatches {
             schema: Arc::clone(&schema),
-            source: BatchSource::Sequential(SequentialBatches {
+            source: BatchSource::Sequential(Box::new(SequentialBatches {
                 conn,
                 schema,
                 sql,
@@ -842,18 +885,21 @@ impl Layer<'_> {
                 batch_size: options.batch_size.max(1),
                 max_batch_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
                 last_batch_rows: 0,
-                next_key: i64::MIN,
-                exhausted: false,
+                // A segmented read starts at its first segment; an empty
+                // candidate set has nothing to read at all, and issues no
+                // query to find that out.
+                next_key: match &segments {
+                    Some(segments) => segments.first().map_or(i64::MIN, |(lo, _)| *lo),
+                    None => i64::MIN,
+                },
+                exhausted: segments.as_ref().is_some_and(Vec::is_empty),
+                segments,
+                segment: 0,
                 user_params,
                 hidden_geometry,
-                filter: filter.map(|bbox| {
-                    Box::new(SpatialFilter {
-                        bbox,
-                        params: filter_params,
-                    })
-                }),
+                filter: filter.map(|bbox| Box::new(SpatialFilter { bbox })),
                 aggregate,
-            }),
+            })),
         })
     }
 
@@ -1316,6 +1362,11 @@ struct SequentialBatches<'a> {
     /// Rows with a key at or above this are still to be read.
     next_key: i64,
     exhausted: bool,
+    /// The candidate key ranges from the one-time rtree scan, walked in
+    /// order. `None` for an unfiltered read or the indexless full scan.
+    segments: Option<Vec<(i64, i64)>>,
+    /// Index into [`Self::segments`] of the range being walked.
+    segment: usize,
     /// The caller's `WHERE` parameters, bound first (`?1` to `?N`) on every
     /// page. Empty for a reader with no `WHERE` clause.
     user_params: Vec<rusqlite::types::Value>,
@@ -1426,16 +1477,42 @@ impl SequentialBatches<'_> {
 
     /// Record where the next batch starts, and whether there can be one.
     fn advance(&mut self, last_key: Option<i64>, rows_read: usize, truncated: bool) {
+        // A short batch normally means the current range ran out: the whole
+        // layer for an unsegmented read, the current segment for a segmented
+        // one. It does not when the byte ceiling cut the batch short: there
+        // are rows left, and treating this as the end would silently drop
+        // them.
+        if rows_read < self.batch_size && !truncated {
+            // The key still advances first: a parallel worker resumes its
+            // window from `next_key` even when the page ended short, and a
+            // segmented read overwrites it with the next segment's start.
+            if let Some(next) = last_key.and_then(|key| key.checked_add(1)) {
+                self.next_key = next;
+            }
+            self.next_segment();
+            return;
+        }
         match last_key.and_then(|key| key.checked_add(1)) {
             Some(next) => self.next_key = next,
-            // The key space is exhausted at i64::MAX; there can be no next row.
+            // The key space is exhausted at i64::MAX; there can be no next
+            // row in this segment, nor a later segment to hold one.
             None => self.exhausted = true,
         }
-        // A short batch normally means the layer ran out. It does not when the
-        // byte ceiling cut the batch short: there are rows left, and treating
-        // this as the end would silently drop them.
-        if rows_read < self.batch_size && !truncated {
+    }
+
+    /// Move to the next candidate segment, or the end of the read.
+    ///
+    /// For an unsegmented read there is no next range, so this is where a
+    /// finished scan becomes `exhausted`.
+    fn next_segment(&mut self) {
+        let Some(segments) = &self.segments else {
             self.exhausted = true;
+            return;
+        };
+        self.segment += 1;
+        match segments.get(self.segment) {
+            Some((lo, _)) => self.next_key = *lo,
+            None => self.exhausted = true,
         }
     }
 
@@ -1489,15 +1566,20 @@ impl SequentialBatches<'_> {
             let mut stmt = self.conn.prepare_cached(&self.sql)?;
             // Binding is positional, so the order here is the placeholder
             // numbering: the caller's params take `?1` to `?N`, then the key,
-            // the limit and the widened bounds follow, as the query text
-            // numbered them.
+            // the limit, and the current segment's upper bound where the read
+            // is segmented, as the query text numbered them.
             let mut params: Vec<rusqlite::types::Value> = self.user_params.clone();
             params.push(rusqlite::types::Value::Integer(self.next_key));
             params.push(rusqlite::types::Value::Integer(
                 i64::try_from(self.batch_size).unwrap_or(i64::MAX),
             ));
-            if let Some(filter) = &self.filter {
-                params.extend(filter.params.iter().cloned());
+            if let Some(segments) = &self.segments {
+                // `next_batch_page` is only reached while a segment remains,
+                // since exhausting the last one sets `exhausted`; an i64::MAX
+                // bound on a missing segment would read past the candidates,
+                // and the exact re-test would still drop every extra row.
+                let (_, hi) = segments.get(self.segment).copied().unwrap_or((0, i64::MAX));
+                params.push(rusqlite::types::Value::Integer(hi));
             }
             let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
             // Where the fields start: at 0 when the key is one of them, at 1
@@ -1554,8 +1636,14 @@ impl SequentialBatches<'_> {
         }
 
         if candidates == 0 {
-            self.exhausted = true;
-            return Ok(Page::Exhausted);
+            // An empty page ends the current segment, not necessarily the
+            // read: a segmented read moves to its next range and tries again.
+            self.next_segment();
+            return Ok(if self.exhausted {
+                Page::Exhausted
+            } else {
+                Page::AllFiltered
+            });
         }
         if rows_read == 0 {
             // Every candidate on this page was filtered out. Advance past them
@@ -1579,19 +1667,15 @@ impl SequentialBatches<'_> {
     }
 }
 
-/// The exact re-filter a `read_arrow_in` carries, with the rtree bounds its
-/// query binds.
+/// The exact re-filter a `read_arrow_in` carries.
 ///
-/// The index stores `f32` envelopes and is queried with outward-widened bounds,
-/// so its candidates are a superset: every one has to be re-tested against its
-/// true `f64` envelope, or a filtered columnar read would return rows
-/// `features_in` does not.
+/// The index stores `f32` envelopes and is queried with outward-widened
+/// bounds, and a candidate segment additionally folds small key gaps, so the
+/// fetched rows are a superset twice over: every one has to be re-tested
+/// against its true `f64` envelope, or a filtered columnar read would return
+/// rows `features_in` does not.
 struct SpatialFilter {
     bbox: BoundingBox,
-    /// The four widened bounds, bound as `?3` to `?6`. Empty when the layer has
-    /// no index, in which case the read is a full scan and the exact test does
-    /// all the work.
-    params: Vec<rusqlite::types::Value>,
 }
 
 /// What one page of candidates produced.
@@ -1636,7 +1720,10 @@ pub struct ArrowBatches<'a> {
 }
 
 enum BatchSource<'a> {
-    Sequential(SequentialBatches<'a>),
+    /// Boxed: the sequential reader carries its query text, schema handles
+    /// and segment list, several times the parallel variant's size, and an
+    /// `ArrowBatches` should stay cheap to move.
+    Sequential(Box<SequentialBatches<'a>>),
     Parallel(ParallelBatches),
 }
 
