@@ -2,8 +2,9 @@
 //!
 //! A pyramid is pre-rendered raster tiles, addressed by zoom level, column and
 //! row. [`gpkg_tiles_open`] takes one by name, the same `gpkg_contents` table
-//! name a GeoPackage tool would show, and [`gpkg_tiles_free`] releases it. The
-//! ABI does not enumerate a file's pyramids, so the name comes from elsewhere.
+//! name a GeoPackage tool would show, and [`gpkg_tiles_free`] releases it.
+//! [`gpkg_tiles_names_count`] and [`gpkg_tiles_name_at`] enumerate the file's
+//! pyramids for a caller that does not already know the name.
 //!
 //! Rows count from the **top** of the pyramid's extent downwards, as WMTS and
 //! XYZ do and TMS does not, and both indices are relative to that extent rather
@@ -127,6 +128,84 @@ use crate::util::{borrow_str, out_string};
     reason = "the C name is the type's name; cbindgen emits it verbatim"
 )]
 pub type gpkg_tiles_t = TilesHandle;
+
+/// How many tile pyramids the file declares.
+///
+/// Tile pyramids only: a table `gpkg_contents` declares as `features` or
+/// `attributes` is not counted, and neither is a `tiles` row with no matching
+/// `gpkg_tile_matrix_set` entry. `gpkg_tiles_name_at` walks the same list,
+/// which is ordered by table name.
+///
+/// # Safety
+///
+/// `gpkg` must be a live container handle, `out` writable, `error` NULL or
+/// writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_tiles_names_count(
+    gpkg: *const Container,
+    out: *mut usize,
+    error: *mut gpkg_error_t,
+) -> Status {
+    if gpkg.is_null() || out.is_null() {
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::BadArgument, "gpkg handle or out is NULL") };
+        return Status::BadArgument;
+    }
+    // SAFETY: the caller guarantees a live container handle.
+    match unsafe { (*gpkg).gpkg().tile_pyramids() } {
+        Ok(pyramids) => {
+            // SAFETY: the caller guarantees `out` is writable.
+            unsafe { *out = pyramids.len() };
+            Status::Ok
+        }
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            Status::from(&err)
+        }
+    }
+}
+
+/// The name of the `index`th tile pyramid, or NULL when out of range.
+///
+/// The list is the one `gpkg_tiles_names_count` counts, ordered by table name,
+/// so the pair walks a file's pyramids. An index at or beyond the count is
+/// `GPKG_STATUS_NOT_FOUND` rather than a failure to read.
+///
+/// Owned by the caller; release with `gpkg_string_free`.
+///
+/// # Safety
+///
+/// `gpkg` must be a live container handle; `error` NULL or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_tiles_name_at(
+    gpkg: *const Container,
+    index: usize,
+    error: *mut gpkg_error_t,
+) -> *mut c_char {
+    if gpkg.is_null() {
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::BadArgument, "gpkg handle is NULL") };
+        return std::ptr::null_mut();
+    }
+    // SAFETY: the caller guarantees a live container handle.
+    let pyramids = match unsafe { (*gpkg).gpkg().tile_pyramids() } {
+        Ok(pyramids) => pyramids,
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            return std::ptr::null_mut();
+        }
+    };
+    let Some(pyramid) = pyramids.get(index) else {
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::NotFound, "pyramid index out of range") };
+        return std::ptr::null_mut();
+    };
+    let name = pyramid.table_name().to_owned();
+    // SAFETY: forwarded to the caller's guarantee on `error`.
+    unsafe { out_string(&name, error) }
+}
 
 /// Open a tile pyramid by name.
 ///

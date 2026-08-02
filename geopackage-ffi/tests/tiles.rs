@@ -7,8 +7,8 @@ use geopackage_ffi::{
     Status, gpkg_bytes_free, gpkg_close, gpkg_error_clear, gpkg_error_t, gpkg_open,
     gpkg_open_read_only, gpkg_string_free, gpkg_t, gpkg_tiles_count, gpkg_tiles_count_at,
     gpkg_tiles_delete, gpkg_tiles_extent, gpkg_tiles_free, gpkg_tiles_get, gpkg_tiles_has,
-    gpkg_tiles_matrix_at, gpkg_tiles_name, gpkg_tiles_open, gpkg_tiles_put, gpkg_tiles_t,
-    gpkg_tiles_zoom_level_count,
+    gpkg_tiles_matrix_at, gpkg_tiles_name, gpkg_tiles_name_at, gpkg_tiles_names_count,
+    gpkg_tiles_open, gpkg_tiles_put, gpkg_tiles_t, gpkg_tiles_zoom_level_count,
 };
 
 fn error_slot() -> gpkg_error_t {
@@ -480,6 +480,33 @@ fn a_rejected_tile_reports_a_category_rather_than_other() {
     // SAFETY: a live pyramid handle, freed exactly once.
     unsafe { gpkg_tiles_free(tiles) };
     // SAFETY: nothing borrows the container.
+    let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(closed, Status::Ok);
+}
+
+#[test]
+fn the_pyramid_list_can_be_walked_by_index() {
+    let (gpkg, mut error) = open();
+
+    let mut count = 0usize;
+    // SAFETY: a live container handle and a writable out-parameter.
+    let status = unsafe { gpkg_tiles_names_count(gpkg, &raw mut count, &raw mut error) };
+    assert_eq!(status, Status::Ok);
+    assert_eq!(count, 1);
+
+    // SAFETY: a live container handle and an in-range index.
+    let name = take_string(unsafe { gpkg_tiles_name_at(gpkg, 0, &raw mut error) });
+    assert_eq!(name.as_deref(), Some("tiles"));
+
+    // Past the end reports rather than reading out of bounds.
+    // SAFETY: a live container handle; the index is deliberately out of range.
+    let past_end = unsafe { gpkg_tiles_name_at(gpkg, count, &raw mut error) };
+    assert!(past_end.is_null());
+    assert_eq!(error.code, Status::NotFound);
+    // SAFETY: an error slot this library filled in.
+    unsafe { gpkg_error_clear(&raw mut error) };
+
+    // SAFETY: enumerating took no handles, so nothing blocks the close.
     let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
     assert_eq!(closed, Status::Ok);
 }

@@ -157,6 +157,8 @@ pub mod geopackage_ffi::tiles
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_has(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, i64, i64, *mut bool, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_matrix_at(*const geopackage_ffi::tiles::gpkg_tiles_t, usize, *mut i64, *mut i64, *mut i64, *mut i64, *mut i64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_name(*const geopackage_ffi::tiles::gpkg_tiles_t, *mut geopackage_ffi::error::gpkg_error_t) -> *mut core::ffi::primitives::c_char
+#[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_name_at(*const geopackage_ffi::handle::Container, usize, *mut geopackage_ffi::error::gpkg_error_t) -> *mut core::ffi::primitives::c_char
+#[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_names_count(*const geopackage_ffi::handle::Container, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_open(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::tiles::gpkg_tiles_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_put(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, i64, i64, *const u8, usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_zoom_level_count(*const geopackage_ffi::tiles::gpkg_tiles_t, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
@@ -477,6 +479,8 @@ impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_value_
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_has(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, i64, i64, *mut bool, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_matrix_at(*const geopackage_ffi::tiles::gpkg_tiles_t, usize, *mut i64, *mut i64, *mut i64, *mut i64, *mut i64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_name(*const geopackage_ffi::tiles::gpkg_tiles_t, *mut geopackage_ffi::error::gpkg_error_t) -> *mut core::ffi::primitives::c_char
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_name_at(*const geopackage_ffi::handle::Container, usize, *mut geopackage_ffi::error::gpkg_error_t) -> *mut core::ffi::primitives::c_char
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_names_count(*const geopackage_ffi::handle::Container, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_open(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::tiles::gpkg_tiles_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_put(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, i64, i64, *const u8, usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_zoom_level_count(*const geopackage_ffi::tiles::gpkg_tiles_t, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status

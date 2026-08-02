@@ -1222,6 +1222,36 @@ gpkg_status gpkg_create_layer_from_arrow_schema(const gpkg_t *gpkg,
 gpkg_status gpkg_add_epsg_srs(const gpkg_t *gpkg, int32_t code, gpkg_error_t *error);
 
 /**
+ * How many tile pyramids the file declares.
+ *
+ * Tile pyramids only: a table `gpkg_contents` declares as `features` or
+ * `attributes` is not counted, and neither is a `tiles` row with no matching
+ * `gpkg_tile_matrix_set` entry. `gpkg_tiles_name_at` walks the same list,
+ * which is ordered by table name.
+ *
+ * # Safety
+ *
+ * `gpkg` must be a live container handle, `out` writable, `error` NULL or
+ * writable.
+ */
+gpkg_status gpkg_tiles_names_count(const gpkg_t *gpkg, size_t *out, gpkg_error_t *error);
+
+/**
+ * The name of the `index`th tile pyramid, or NULL when out of range.
+ *
+ * The list is the one `gpkg_tiles_names_count` counts, ordered by table name,
+ * so the pair walks a file's pyramids. An index at or beyond the count is
+ * `GPKG_STATUS_NOT_FOUND` rather than a failure to read.
+ *
+ * Owned by the caller; release with `gpkg_string_free`.
+ *
+ * # Safety
+ *
+ * `gpkg` must be a live container handle; `error` NULL or writable.
+ */
+char *gpkg_tiles_name_at(const gpkg_t *gpkg, size_t index, gpkg_error_t *error);
+
+/**
  * Open a tile pyramid by name.
  *
  * The name is a `gpkg_contents.table_name` whose row declares `tiles`.
