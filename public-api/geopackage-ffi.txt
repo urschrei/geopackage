@@ -136,7 +136,7 @@ impl !core::panic::unwind_safe::UnwindSafe for geopackage_ffi::handle::TilesHand
 pub struct geopackage_ffi::handle::WriterHandle
 impl geopackage_ffi::handle::WriterHandle
 pub fn geopackage_ffi::handle::WriterHandle::commit(self) -> geopackage::error::Result<()>
-pub fn geopackage_ffi::handle::WriterHandle::writer_mut(&mut self) -> &mut geopackage::writer::FeatureWriter<'static>
+pub fn geopackage_ffi::handle::WriterHandle::writer_mut(&mut self) -> &mut geopackage::writer::feature_writer::FeatureWriter<'static>
 impl !core::marker::Freeze for geopackage_ffi::handle::WriterHandle
 impl !core::marker::Send for geopackage_ffi::handle::WriterHandle
 impl !core::marker::Sync for geopackage_ffi::handle::WriterHandle
