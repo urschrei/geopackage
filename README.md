@@ -9,6 +9,10 @@ A Rust implementation of the
 features, attribute tables, spatial indexing, tile pyramids, and columnar I/O
 through Apache Arrow. Pre-1.0: the API will change without notice.
 
+[The book](https://urschrei.github.io/geopackage/) is the guide: a tutorial,
+how-to guides for common tasks, and the design reasoning. API reference lives
+on [docs.rs](https://docs.rs/geopackage).
+
 ## Install
 
 ```toml
