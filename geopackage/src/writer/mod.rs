@@ -13,29 +13,30 @@
 //! non-geometry values are the crate's own value types. The per-row entry
 //! points take borrowed [`crate::ValueRef`]s, so a row read from one layer
 //! binds into another without its text and blob cells being copied;
-//! [`NewFeature`] holds owned [`Value`]s, because [`Layer::write_all`] consumes
-//! an iterator whose rows have to outlive any single call.
+//! [`NewFeature`] stores owned [`Value`]s, because [`Layer::write_all`]
+//! consumes an iterator whose rows have to outlive any single call.
 //!
 //! An owned transaction (rather than a caller-passed transaction object) keeps
 //! the escape-hatch `rusqlite::Transaction` out of the public surface and lets
 //! the writer maintain the running bounding-box fold and `last_change` at one
 //! commit point. The raw connection ([`crate::GeoPackage::connection`]) remains
-//! available for callers who want to drive their own transaction.
+//! available for callers driving their own transaction.
 //!
 //! ## When the caller has already begun one
 //!
 //! SQLite does not nest transactions, so a writer opened while one is already
 //! open on the connection joins it instead
-//! ([`crate::transaction::WriteTransaction`], which carries the reasoning).
+//! ([`crate::transaction::WriteTransaction`], which documents the reasoning).
 //! Three things follow, and they apply to every write path in the crate rather
 //! than only to this one:
 //!
 //! - [`FeatureWriter::commit`] stages the `gpkg_contents` flush and returns
-//!   success without committing. The durable commit is the caller's.
+//!   success without committing. The caller issues the durable commit.
 //! - Dropping a writer rolls nothing back, so an error part-way through leaves
 //!   what preceded it staged for the caller to discard.
 //! - [`Layer::write_all`]'s `batch_size` stops bounding transactions, because
-//!   every batch belongs to the caller's. It still bounds nothing else: the
+//!   every batch belongs to the caller's transaction. It still bounds nothing
+//!   else: the
 //!   rows are written in the same order and the same statements are used.
 //!
 //! None of this is detectable from a writer, and deliberately so. A caller who
@@ -84,19 +85,19 @@
 //! is written back and `last_change` is refreshed to the strict 1.4 datetime
 //! form via SQLite's `strftime` (matching the normative column default).
 //!
-//! The fold is written back only when the writer can vouch for it. Seeded from
-//! a usable recorded box, growing it keeps it a valid cover. Starting from no
-//! usable box over an empty table, the geometries written are the whole content
-//! and the fold is exact. But starting from no usable box over a table that
-//! already holds rows, the fold covers only what this writer wrote, and
-//! recording it would replace an honest "unknown" with a box that excludes
-//! every pre-existing row. Readers believe a well-ordered extent indefinitely,
+//! The fold is written back only when the writer can guarantee it covers the
+//! layer. Seeded from a usable recorded box, growing it keeps it a valid
+//! cover. Starting from no usable box over an empty table, the geometries
+//! written are the whole content and the fold is exact. But starting from no
+//! usable box over a table that already contains rows, the fold covers only
+//! what this writer wrote, and recording it would replace an accurate
+//! "unknown" with a box that excludes every pre-existing row. Readers believe a well-ordered extent indefinitely,
 //! so that case leaves the extent alone; [`Layer::recompute_extent`] is how it
 //! gets fixed. See [`crate::extent`] for the reasoning in full.
 //!
 //! # Envelopes and Z/M
 //!
-//! Every written geometry gets a GPB envelope (XY, or XYZ when it carries Z),
+//! Every written geometry gets a GPB envelope (XY, or XYZ when it has Z),
 //! so a reader, and the rtree triggers that ask for four bounds a row, never
 //! have to decode the WKB body to get them; encoding is delegated to
 //! [`geopackage_core::geometry::encode_gpb`]. A geometry's `z`/`m` presence is
@@ -107,7 +108,7 @@
 //!
 //! Individual `insert`/`update`/`delete` calls, and the per-batch
 //! [`Layer::write_all`] path, go through ordinary SQL, so a table that already
-//! carries the rtree triggers has its index maintained by those triggers (the
+//! has the rtree triggers has its index maintained by those triggers (the
 //! `ST_*` functions are registered on every connection).
 //!
 //! [`Layer::write_all`] additionally takes the bulk path when it writes a large

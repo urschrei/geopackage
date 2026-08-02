@@ -60,12 +60,13 @@ const MAX_DEPTH: u32 = 32;
 /// the error the tolerance admits shrinks with it.
 const COLLINEAR_TOLERANCE: f64 = 1e-14;
 
-/// The XY envelope of an ISO WKB body as `[min_x, max_x, min_y, max_y]`, or
-/// `None` when the body carries no finite coordinate.
+/// Returns the XY envelope of an ISO WKB body as
+/// `[min_x, max_x, min_y, max_y]`, or `None` when the body has no finite
+/// coordinate.
 ///
 /// Handles every GeoPackage geometry type from Annex G, linear and non-linear,
 /// and any XY/XYZ/XYM/XYZM variant. Circular arcs contribute their true extent
-/// rather than the extent of their control points. Nested geometries carry
+/// rather than the extent of their control points. Nested geometries declare
 /// their own byte order and are read accordingly.
 ///
 /// Non-finite coordinates are skipped, so the NaN empty-point convention
@@ -84,38 +85,38 @@ pub fn xy_envelope(wkb_body: &[u8]) -> Result<Option<[f64; 4]>, GeometryError> {
     Ok(scan(wkb_body)?.xy_envelope)
 }
 
-/// What one walk of an ISO WKB body found.
+/// The result of one walk of an ISO WKB body.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BodyScan {
     /// The envelope to write into a GPB header, on the same rule
     /// [`crate::geometry::write_envelope`] follows: [`gpb::Envelope::Xyz`] when
-    /// the body carries a Z, otherwise [`gpb::Envelope::Xy`], and
+    /// the body has a Z, otherwise [`gpb::Envelope::Xy`], and
     /// [`gpb::Envelope::None`] when it is empty. An M never widens it.
     pub envelope: gpb::Envelope,
-    /// The same bounds as `envelope` in the flat form the rtree wants, or
+    /// The same bounds as `envelope` in the flat form the rtree uses, or
     /// `None` when the body is empty.
     pub xy_envelope: Option<[f64; 4]>,
-    /// Whether the body carries no finite coordinate.
+    /// Whether the body has no finite coordinate.
     pub empty: bool,
     /// The dimensions the body's type code declares, for checking against the
     /// column's `z` and `m` constraints.
     pub dimensions: Dimensions,
     /// How many bytes of the input the geometry occupies. A caller copying the
     /// body into a blob should copy only this much, so trailing bytes beyond
-    /// the geometry are not carried along.
+    /// the geometry are not included.
     pub len: usize,
     /// The non-linear types the body contains, at every nesting depth and
     /// including the body's own.
     ///
     /// Each of these needs a `gpkg_geom_<TYPE>` row for the column the body is
     /// written to (Annex F.1 Requirement 67), and a container's members are not
-    /// implied by its own type: a `MULTICURVE` holding `CIRCULARSTRING`s needs
-    /// a row for each. Registering them is the caller's, since this function
-    /// sees a body and not a table.
+    /// implied by its own type: a `MULTICURVE` containing `CIRCULARSTRING`s
+    /// needs a row for each. Registering them is the caller's responsibility,
+    /// since this function sees a body, not a table.
     pub extension_types: GeometryTypeSet,
 }
 
-/// Walk an ISO WKB body once, returning everything the read and write paths
+/// Walks an ISO WKB body once, returning everything the read and write paths
 /// need from it.
 ///
 /// [`xy_envelope`] is this with only the bounds kept.
@@ -154,8 +155,8 @@ pub fn scan(wkb_body: &[u8]) -> Result<BodyScan, GeometryError> {
     })
 }
 
-/// The XY envelope of the circular arc that runs from `p0` through `p1` to
-/// `p2`, or `None` when no control point is finite.
+/// Returns the XY envelope of the circular arc that runs from `p0` through
+/// `p1` to `p2`, or `None` when no control point is finite.
 ///
 /// The three points are `[x, y]` pairs in the layer's own coordinate space.
 /// The box covers the whole arc, not just the three points: see the module
@@ -175,8 +176,8 @@ pub fn arc_envelope(p0: [f64; 2], p1: [f64; 2], p2: [f64; 2]) -> Option<[f64; 4]
     bounds.finish()
 }
 
-/// The points of the arc's circle furthest along each axis that the arc itself
-/// reaches, in the order left, right, bottom, top.
+/// Returns the points of the arc's circle furthest along each axis that the
+/// arc itself reaches, in the order left, right, bottom, top.
 ///
 /// Each is `None` when the arc stops short of that axis extreme, and all four
 /// are `None` when the control points have no circle through them, in which
@@ -217,8 +218,8 @@ fn arc_extremes(p0: [f64; 2], p1: [f64; 2], p2: [f64; 2]) -> [Option<[f64; 2]>; 
     candidates.map(|candidate| (chord_side(p0, p2, candidate) == interior).then_some(candidate))
 }
 
-/// The centre and radius of the circle through the three points, or `None` when
-/// they are collinear, coincident, or not all finite.
+/// Returns the centre and radius of the circle through the three points, or
+/// `None` when they are collinear, coincident, or not all finite.
 ///
 /// Matched endpoints are the closed-circle convention rather than a degenerate
 /// case: `p0` and `p1` are then the ends of a diameter. That has to be settled
@@ -251,7 +252,7 @@ fn arc_centre(p0: [f64; 2], p1: [f64; 2], p2: [f64; 2]) -> Option<([f64; 2], f64
     // Translate so p1 is the origin. The products below then combine coordinate
     // differences rather than the coordinates themselves, which keeps the
     // cancellation bounded for the large eastings and northings a projected CRS
-    // carries.
+    // produces.
     let (ax, ay) = (x0 - x1, y0 - y1);
     let (cx, cy) = (x2 - x1, y2 - y1);
 
@@ -276,8 +277,9 @@ fn arc_centre(p0: [f64; 2], p1: [f64; 2], p2: [f64; 2]) -> Option<([f64; 2], f64
     Some(([x1 + ox, y1 + oy], radius))
 }
 
-/// Which side of the line through `a` and `b` the point `q` falls on: `1`, `-1`,
-/// or `0` when it is on the line or a coordinate is not finite.
+/// Returns which side of the line through `a` and `b` the point `q` falls
+/// on: `1`, `-1`, or `0` when it is on the line or a coordinate is not
+/// finite.
 fn chord_side(a: [f64; 2], b: [f64; 2], q: [f64; 2]) -> i8 {
     let [ax, ay] = a;
     let [bx, by] = b;
@@ -292,7 +294,7 @@ fn chord_side(a: [f64; 2], b: [f64; 2], q: [f64; 2]) -> i8 {
     }
 }
 
-/// Read one WKB geometry, adding every coordinate it carries to `bounds`.
+/// Reads one WKB geometry, adding every coordinate in it to `bounds`.
 fn read_geometry(
     cursor: &mut Cursor<'_>,
     bounds: &mut XyzBounds,
@@ -351,7 +353,7 @@ fn read_geometry(
     Ok(coord.dimensions)
 }
 
-/// Read a counted coordinate sequence into `bounds`.
+/// Reads a counted coordinate sequence into `bounds`.
 fn read_coords(
     cursor: &mut Cursor<'_>,
     little_endian: bool,
@@ -366,8 +368,8 @@ fn read_coords(
     Ok(())
 }
 
-/// Read a counted coordinate sequence as a chain of circular arcs, adding both
-/// the points and the extent each arc sweeps.
+/// Reads a counted coordinate sequence as a chain of circular arcs, adding
+/// both the points and the extent each arc sweeps.
 ///
 /// A well-formed CircularString has an odd count of at least three. A malformed
 /// one still contributes its points: the trailing pair of an even count is
@@ -408,7 +410,7 @@ fn read_circular_string(
 
 /// How many `f64`s a coordinate occupies, and whether the third is a Z.
 ///
-/// XYM shares its width with XYZ but carries no Z, so the two cannot be told
+/// XYM shares its width with XYZ but has no Z, so the two cannot be told
 /// apart by width alone.
 #[derive(Debug, Clone, Copy)]
 struct CoordLayout {
@@ -417,7 +419,7 @@ struct CoordLayout {
     dimensions: Dimensions,
 }
 
-/// Split an ISO WKB type code into its base type and its coordinate layout.
+/// Splits an ISO WKB type code into its base type and its coordinate layout.
 ///
 /// ISO WKB adds 1000 for Z, 2000 for M and 3000 for ZM. EWKB instead sets high
 /// bit flags and may prefix an SRID, which a GPB body must not do, so it is
@@ -467,7 +469,7 @@ impl<'a> Cursor<'a> {
         Self { bytes, offset: 0 }
     }
 
-    /// Consume the one-byte order marker that opens every WKB geometry.
+    /// Consumes the one-byte order marker that opens every WKB geometry.
     fn read_byte_order(&mut self) -> Result<bool, GeometryError> {
         let offset = self.offset;
         match self.take(1)? {
@@ -505,7 +507,7 @@ impl<'a> Cursor<'a> {
         })
     }
 
-    /// Read one coordinate, keeping X, Y and any Z, and skipping an M.
+    /// Reads one coordinate, keeping X, Y and any Z, and skipping an M.
     fn read_coord(
         &mut self,
         little_endian: bool,
@@ -846,7 +848,7 @@ mod tests {
 
     #[test]
     fn reads_a_curve_polygon_whose_rings_are_full_geometries() {
-        // A CurvePolygon ring carries its own byte order and type code, unlike
+        // A CurvePolygon ring has its own byte order and type code, unlike
         // a Polygon's bare linear rings.
         let ring = wkb(8, &coords(&[[1.0, 0.0], [-1.0, 0.0], [1.0, 0.0]]));
         let body = wkb(10, &children(&[ring]));

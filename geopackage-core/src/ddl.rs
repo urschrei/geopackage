@@ -88,7 +88,7 @@ CREATE TABLE gpkg_extensions (
 /// `//`, which SQLite does not accept.
 ///
 /// The primary key is `(table_name, column_name)`, so a column has at most one
-/// row. Before 1.2.1 `table_name` carried a foreign key to `gpkg_contents`;
+/// row. Before 1.2.1 `table_name` had a foreign key to `gpkg_contents`;
 /// that was relaxed, but files written under the old definition still have it.
 pub const CREATE_GPKG_DATA_COLUMNS: &str = "\
 CREATE TABLE gpkg_data_columns (
@@ -162,7 +162,7 @@ CREATE TABLE gpkg_metadata (
 /// GeoPackage 1.2 also defined `gpkg_metadata_reference_column_name_insert`
 /// and `_update` triggers over this table. GeoPackage 1.4 does not: Annex D
 /// defines trigger SQL only for `gpkg_tile_matrix` and the two sample tables,
-/// so nothing here creates them, and a file carrying them is not wrong, only
+/// so nothing here creates them, and a file that has them is not wrong, only
 /// older.
 pub const CREATE_GPKG_METADATA_REFERENCE: &str = "\
 CREATE TABLE gpkg_metadata_reference (

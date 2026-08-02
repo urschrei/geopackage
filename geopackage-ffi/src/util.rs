@@ -14,7 +14,7 @@
 //! gpkg_string_free(name);                                     // owned
 //! ```
 //!
-//! A returning call can also fail because the text it would hand back holds an
+//! A returning call can also fail because the text it would return contains an
 //! interior NUL and so cannot be a C string at all. That is only reachable for
 //! a name a file itself supplies, and it is reported as
 //! `GPKG_STATUS_INVALID_ARGUMENT` rather than passed on truncated.
@@ -23,7 +23,7 @@ use std::ffi::{CStr, CString, c_char};
 
 use crate::error::{Status, gpkg_error_t, set_error};
 
-/// Borrow a C string as `&str`, reporting a NULL or non-UTF-8 argument.
+/// Borrows a C string as `&str`, reporting a NULL or non-UTF-8 argument.
 ///
 /// `what` names the argument in the error message, so a caller passing two
 /// strings can tell which one was wrong.
@@ -62,7 +62,7 @@ pub(crate) unsafe fn borrow_str<'a>(
     }
 }
 
-/// Hand a Rust string to C as an owned allocation, to be released with
+/// Converts a Rust string into an owned C allocation, to be released with
 /// [`gpkg_string_free`].
 ///
 /// # Safety
@@ -87,7 +87,7 @@ pub(crate) unsafe fn out_string(text: &str, error: *mut gpkg_error_t) -> *mut c_
     }
 }
 
-/// Release a string this library returned.
+/// Releases a string this library returned.
 ///
 /// Every call that returns a `char *` returns an allocation the caller owns,
 /// so each one is paired with this. Passing NULL does nothing, which is what
@@ -116,7 +116,7 @@ pub unsafe extern "C" fn gpkg_string_free(text: *mut c_char) {
     drop(unsafe { CString::from_raw(text) });
 }
 
-/// Convert and write a set of optional strings to NULL-able out-parameters.
+/// Converts and writes a set of optional strings to NULL-able out-parameters.
 ///
 /// Everything is converted before anything is written, so a failure writes
 /// nothing and the caller has nothing partial to free. An absent value writes

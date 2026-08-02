@@ -43,7 +43,7 @@ the gate in particular, are a larger share, which is consistent with that.
 
 ## Why we are slower, and it is our own lesson
 
-The read path carries an explicit constraint, from criterion 1: build Arrow
+The read path has an explicit constraint, from criterion 1: build Arrow
 arrays straight from the statement, never through a `Feature` or a `Value`,
 because a columnar path layered over the row path is slower than the row path it
 wraps. That is measured, and it is why `read_arrow` is what it is.
@@ -92,7 +92,7 @@ ratio is the figure to read.
 
 ## Second change: bind straight from the Arrow arrays
 
-A row now holds `Arc<RecordBatch>`, a shared column layout and an index, rather
+A row now stores `Arc<RecordBatch>`, a shared column layout and an index, rather
 than owned values. Strings and blobs are bound as slices into the Arrow buffers
 through `ToSqlOutput::Borrowed`, and only `DATE` and `DATETIME` are owned,
 because a GeoPackage stores them as text that has to be produced.
@@ -107,8 +107,8 @@ checker without two passes.
 `insert_sql` composed the statement on each call: a `Vec` of column names, a
 `String` per placeholder, and two joins. For a fifteen-column table that is
 roughly seventeen allocations per row, to produce one of four fixed strings. The
-four are now built once per writer and indexed by whether the row carries an
-explicit id and whether it carries a geometry.
+four are now built once per writer and indexed by whether the row has an
+explicit id and whether it has a geometry.
 
 **1.30x to 1.04x** with an index and **1.32x to 0.93x** without, so the columnar
 write is now ahead of GDAL in the unindexed case.

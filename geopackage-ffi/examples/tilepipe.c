@@ -120,7 +120,7 @@ int main(int argc, char **argv) {
     gpkg_tile_cursor_free(cursor);
     printf("copied %lld tiles\n", copied);
 
-    /* Prove the copy holds what the source holds. */
+    /* Prove the copy contains what the source contains. */
     bool has = false;
     if (gpkg_tiles_has(copy, 1, 1, 0, &has, &error) != GPKG_STATUS_OK ||
         !has) {

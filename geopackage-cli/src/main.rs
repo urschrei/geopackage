@@ -1,10 +1,4 @@
 //! `gpkg`: a command-line tool over the `geopackage` crate.
-//!
-//! Every subcommand is a thin arrangement of library calls. Where the library
-//! has no method for something, that is a gap in the library rather than
-//! something for this crate to work around: being the first consumer outside
-//! the workspace is part of what this tool is for (roadmap phase 8, which
-//! precedes the API freeze deliberately).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -30,6 +24,10 @@ struct Cli {
 enum Command {
     /// Summarise a file: version, layers, schemas, spatial reference systems,
     /// index health and registered extensions.
+    ///
+    /// Opens the file read-only and leniently, so a file with something wrong
+    /// with it can still be inspected; any warnings the lenient open collected
+    /// are printed first. Nothing is modified.
     Info {
         /// The `.gpkg` file to read.
         file: PathBuf,
@@ -46,6 +44,10 @@ enum Command {
         strict: bool,
     },
     /// Build a spatial index on a layer that has none.
+    ///
+    /// Creates the RTree virtual table and the GeoPackage 1.4 trigger set,
+    /// populates the index from the existing rows, and registers the
+    /// extension. Fails if the layer already has a spatial index.
     Index {
         /// The `.gpkg` file to write to.
         file: PathBuf,
@@ -56,7 +58,7 @@ enum Command {
     /// that were left desynchronised.
     ///
     /// A layer with no index is left alone: that is a choice rather than a
-    /// defect, and `gpkg index` is how one is asked for.
+    /// defect, and `gpkg index` is how to request one.
     Repair {
         /// The `.gpkg` file to write to.
         file: PathBuf,
@@ -65,7 +67,7 @@ enum Command {
     },
     /// Copy the feature and attribute layers of one file into a new one.
     ///
-    /// Tiles and the extension tables are not carried; whatever is left behind
+    /// Tiles and the extension tables are not copied; whatever is left behind
     /// is named at the end.
     Copy {
         /// The `.gpkg` file to read.
@@ -73,7 +75,7 @@ enum Command {
         /// The `.gpkg` file to create. Must not already exist.
         dst: PathBuf,
     },
-    /// Tile pyramids: what a file holds, and the bytes of one tile.
+    /// Tile pyramids: what a file contains, and the bytes of one tile.
     Tiles {
         #[command(subcommand)]
         command: TileCommand,
@@ -82,7 +84,7 @@ enum Command {
 
 #[derive(Subcommand)]
 enum TileCommand {
-    /// Describe every tile pyramid in a file, or one named one.
+    /// Describe every tile pyramid in a file, or a single named pyramid.
     Info {
         /// The `.gpkg` file to read.
         file: PathBuf,
@@ -91,7 +93,7 @@ enum TileCommand {
     },
     /// Write one tile's stored bytes out, addressed by zoom, column and row.
     ///
-    /// No image is decoded: the bytes come out exactly as the file holds them,
+    /// No image is decoded: the bytes come out exactly as the file stores them,
     /// whatever `--out` is named.
     Get {
         /// The `.gpkg` file to read.

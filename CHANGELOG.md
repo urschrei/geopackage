@@ -70,7 +70,7 @@ While the version is below 1.0 the API may change in any release.
 
 - **`geopackage-ffi`: `gpkg_srs`.** The spatial reference system behind the
   id `gpkg_layer_srs_id` reports: name, organization and code, the WKT
-  definition, the WKT2 definition where the CRS WKT extension carries one,
+  definition, the WKT2 definition where the CRS WKT extension supplies one,
   and the coordinate epoch (NaN when absent). Every out-parameter may be
   NULL to skip it, and a failure writes none of them.
 
@@ -172,7 +172,7 @@ While the version is below 1.0 the API may change in any release.
   table. Until now the table could only be written, never read, so a caller had
   no way to ask what a file it had been handed actually declares.
 
-  Each row carries an `ExtensionScope` (Requirement 64) and identifies as an
+  Each row has an `ExtensionScope` (Requirement 64) and identifies as an
   `Extension`: the Annex F names, the two extensions the SWG removed on
   2016-08-15, and `gdal_aspatial`, with the historical spellings folded in, so
   `gpkg_elevation_tiles`, `2d_gridded_coverage` and `gpkg_2d_gridded_coverage`
@@ -191,7 +191,7 @@ While the version is below 1.0 the API may change in any release.
   Until now such a write went ahead silently.
 
   The refusal covers feature and tile writes, index builds, repairs and drops,
-  and the creation of a table where the file itself carries such an extension.
+  and the creation of a table where the file itself declares such an extension.
   Reads are never refused: a `write-only` extension is one Requirement 64 says
   a reader may ignore, and refusing to read a file helps nobody.
   `GeoPackage::blocking_extension` and `TilePyramid::blocking_extension`
@@ -200,7 +200,7 @@ While the version is below 1.0 the API may change in any release.
   `OpenOptions::allow_unsupported_extension_writes` turns the refusal off for
   a caller who knows the extension is harmless. Extensions this crate can
   name, implemented or not, never trigger it.
-- **`Srs` carries the `gpkg_crs_wkt` extension's columns**: `definition_wkt2`
+- **`Srs` includes the `gpkg_crs_wkt` extension's columns**: `definition_wkt2`
   (`definition_12_063`) and `epoch`, both `Option`. The extension could be
   written, by `add_epsg_srs` for a code with no WKT1 form, but not read: a file
   carrying a WKT2 definition read back as though it had none. `srs` and
@@ -272,7 +272,7 @@ While the version is below 1.0 the API may change in any release.
   a file: version, layers, schemas, spatial reference systems, index state, tile
   pyramids and registered extensions with the support level this workspace has
   for each. `gpkg validate` prints what `GeoPackage::validate` found, most
-  severe first, with the repair advice each finding carries, and exits non-zero
+  severe first, with the repair advice each finding includes, and exits non-zero
   when a finding is an error, meaning a reader can get a wrong answer from the
   file; `--strict` promotes warnings too, so the command is usable as a gate in
   a script. `gpkg index` and `gpkg repair` build and put right spatial indexes,
@@ -281,7 +281,7 @@ While the version is below 1.0 the API may change in any release.
   `gpkg tiles get` describe a pyramid and write one tile's stored bytes out.
   `gpkg copy` copies feature and attribute layers into a new file.
 
-  `copy` carries layers only, not tiles and not the extension tables, and names
+  `copy` copies layers only, not tiles and not the extension tables, and names
   what it left behind rather than passing over it in silence. Geometry crosses
   as WKB rather than through `geo-types`, so the non-linear curve types survive
   a copy byte for byte instead of being lost to an encoding that cannot describe
@@ -421,7 +421,7 @@ While the version is below 1.0 the API may change in any release.
   `GPKG_STATUS_UNSUPPORTED`.
 
   For geometries: a body that cannot be read as ISO WKB, a GPB blob that is
-  truncated or carries the wrong magic, and an identifier that cannot be quoted
+  truncated or has the wrong magic, and an identifier that cannot be quoted
   are `GPKG_STATUS_INVALID_ARGUMENT`; a GPB version this library does not
   implement, and a well-formed body this library cannot write, are
   `GPKG_STATUS_UNSUPPORTED`. The distinction that matters is the last one: a
@@ -504,10 +504,10 @@ While the version is below 1.0 the API may change in any release.
   already there: an honest "unknown" replaced by a confidently wrong value, and
   a wrong extent is the worst of the three states, because GDAL and QGIS both
   return a well-ordered box verbatim and never recompute it. The test is not
-  whether the recorded box is absent but whether the table already holds rows:
-  absent over an empty table means the fold is the whole content and is exact,
-  absent over a populated one means it is only a lower bound. An inverted box
-  now reads as absent, as GDAL reads it, rather than being grown from.
+  whether the recorded box is absent but whether the table already contains
+  rows: absent over an empty table means the fold is the whole content and is
+  exact, absent over a populated one means it is only a lower bound. An inverted
+  box now reads as absent, as GDAL reads it, rather than being grown from.
 - **`Layer::extent` records what it had to measure**, so reading the extent of a
   file whose recorded bounds are unusable changes that file's contents and
   modification time. This mirrors GDAL, whose `GetExtent` persists through
@@ -547,7 +547,7 @@ While the version is below 1.0 the API may change in any release.
   does only when the structure is wrong.
 - **`OpenOptions::busy_timeout` and `DEFAULT_BUSY_TIMEOUT`**; see above.
 - **`Error::ExtentPersist`**, when a measured extent could not be recorded for a
-  reason other than another connection holding a lock. It carries the
+  reason other than another connection holding a lock. It includes the
   measurement, so the answer is not lost with the failure. Lock contention does
   not produce it: a concurrent writer means the measurement describes a layer
   changing underneath it, so the file keeps what it had and the measurement is
@@ -577,7 +577,7 @@ fixture.
   The writer built its `UPDATE` and `DELETE` statement text on every call, which
   scaled with the layer's width at 10 allocations a row on three value columns
   and 30 on twelve, and then looked the statement up in the connection's cache
-  for one more. It now holds every statement it can issue, prepared once at
+  for one more. It now keeps every statement it can issue, prepared once at
   construction from the connection rather than from its transaction, so it stays
   a plain struct rather than a self-referential one.
 - **A scan that recomputes one column costs 2 allocations a row**, down from 12,
@@ -782,17 +782,17 @@ their caveats.
 - **The scalar write path is faster.** `FeatureWriter` composed its `INSERT`
   statement on every call: for a fifteen-column table roughly seventeen
   allocations per row, to produce one of four fixed strings. The four are now
-  built once per writer and indexed by whether the row carries an explicit id
-  and whether it carries a geometry. 22.6% off an unindexed point write and
-  16.0% off a bulk one, measured at the same row count. This cost has been in
-  the released write path since that path existed; it was found by asking what
-  remained once the columnar-specific candidates were gone.
+  built once per writer and indexed by whether the row has an explicit id and
+  whether it has a geometry. 22.6% off an unindexed point write and 16.0% off a
+  bulk one, measured at the same row count. This cost has been in the released
+  write path since that path existed; it was found by asking what remained once
+  the columnar-specific candidates were gone.
 
 - **`create_layer` now builds a spatial index by default** ([#26]). Previously a
   feature layer came back unindexed and the caller asked for an index
   separately. Decline it with `TableSchemaBuilder::spatial_index(false)`.
 
-  This changes the bytes a file gets: an indexed layer carries the
+  This changes the bytes a file gets: an indexed layer has the
   `rtree_<table>_<column>` virtual table, its shadow tables, the GeoPackage 1.4
   trigger set and a `gpkg_extensions` row. All of that is spec-legal and is what
   `ogr2ogr` produces, but it is a change rather than an improvement in disguise.
@@ -827,7 +827,7 @@ their caveats.
 
 - **A bulk `write_all` normalises the trigger set it reinstalls**, which it has
   always done but now does in more cases. The path drops whatever RTree triggers
-  a file carries and reinstalls the GeoPackage 1.4 set, so a file written against
+  a file has and reinstalls the GeoPackage 1.4 set, so a file written against
   a pre-1.4 trigger generation comes out with 1.4 triggers. That was previously
   reachable only for a fresh bulk load into an empty index; it now also follows a
   large write into a populated index, or one from a source that does not
@@ -898,7 +898,7 @@ A performance and durability release. No API is removed or changed: the only
 public additions are `StructuralCheck`, `DEFAULT_FILL_FACTOR` and two builder
 methods on `BulkIndexOptions`, so upgrading from 0.1.0 needs no code changes.
 
-It also carries metadata fixes that 0.1.0 could not: that release's crates.io
+It also includes metadata fixes that 0.1.0 could not: that release's crates.io
 and docs.rs pages point at a repository URL that does not exist, and show no
 README, neither of which can be corrected in place.
 
@@ -995,7 +995,7 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   `repair_spatial_index` recovers a `Stale` index left by a crash mid-bulk-build.
 - **Durability.** `OpenOptions` with typed `JournalMode` and `Synchronous`
   enums; WAL is opt-in, and a handle that opted into it checkpoints and resets
-  the file to `DELETE` on `close` and on drop, so a handed-over `.gpkg` carries
+  the file to `DELETE` on `close` and on drop, so a handed-over `.gpkg` has
   no `-wal`/`-shm` sidecars.
 - **`geopackage-core`.** No-IO spec layer: GPB header codec, column and geometry
   type vocabulary, `DATE`/`DATETIME` parsing, normative DDL and

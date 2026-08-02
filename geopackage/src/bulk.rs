@@ -46,9 +46,9 @@
 //! result is checked against SQLite's own checker and against the input before
 //! anything relies on it. Removing or defaulting-off the gate is a question for
 //! 1.0, once the packer has enough history behind it to justify the trust; it is
-//! not a change to make while the format handling is this new. Until then the
-//! honest framing is that roughly half of a bulk index build is insurance, and
-//! the reason to keep paying it is confidence rather than speed.
+//! not a change to make while the format handling is this new. Until then,
+//! roughly half of a bulk index build is insurance, and the reason to keep
+//! paying it is confidence rather than speed.
 //!
 //! The entry set itself comes either from an `ST_*` scan of the table or, when
 //! the caller can prove it accounts for every indexable row, from envelopes
@@ -76,7 +76,7 @@ pub const DEFAULT_BULK_THRESHOLD: usize = 10_000;
 /// Default fraction of each RTree node's capacity used by the bulk build.
 ///
 /// Packing full gives the smallest tree, the shallowest descent and the best
-/// queries, which is what a bulk load wants. The cost is that a full node has
+/// queries, which suits a bulk load. The cost is that a full node has
 /// no room for a later insert, so the first append into it splits immediately.
 /// Appends after a bulk load go through the triggers, which is the per-row path
 /// this build exists to avoid, so the default favours the load and the queries.
@@ -137,8 +137,8 @@ pub enum BulkVerification {
     ///
     /// Nothing is read back, so a build cannot fail its check and cannot fall
     /// back to the triggered path. `crate::Layer::audit_spatial_index` remains
-    /// available afterwards for a caller who wants the answer later rather than
-    /// on every write.
+    /// available afterwards for a caller who needs the answer later rather
+    /// than on every write.
     #[default]
     None,
     /// Read every entry back and check it against the envelopes accumulated
@@ -176,7 +176,7 @@ impl Default for BulkIndexOptions {
 }
 
 impl BulkIndexOptions {
-    /// Options with an explicit bulk threshold.
+    /// Creates options with an explicit bulk threshold.
     pub fn with_threshold(bulk_threshold: usize) -> Self {
         Self {
             bulk_threshold,
@@ -184,7 +184,7 @@ impl BulkIndexOptions {
         }
     }
 
-    /// Always take the bulk path (threshold `0`).
+    /// Always takes the bulk path (threshold `0`).
     ///
     /// For [`crate::Layer::write_all`] this forces the path, not a rebuild: a
     /// write small relative to an already populated index still has its entries
@@ -194,22 +194,22 @@ impl BulkIndexOptions {
         Self::with_threshold(0)
     }
 
-    /// Never take the bulk path (threshold [`usize::MAX`]).
+    /// Never takes the bulk path (threshold [`usize::MAX`]).
     pub fn never_bulk() -> Self {
         Self::with_threshold(usize::MAX)
     }
 
-    /// Set the structural check the gate runs after the copy.
+    /// Sets the structural check the gate runs after the copy.
     #[must_use]
     pub fn with_verification(mut self, verification: BulkVerification) -> Self {
         self.verification = verification;
         self
     }
 
-    /// Set the fraction of each node's capacity to fill, in `(0, 1]`.
+    /// Sets the fraction of each node's capacity to fill, in `(0, 1]`.
     ///
-    /// Values outside that range are clamped, and every node holds at least one
-    /// entry regardless. See [`DEFAULT_FILL_FACTOR`] for the trade-off.
+    /// Values outside that range are clamped, and every node contains at least
+    /// one entry regardless. See [`DEFAULT_FILL_FACTOR`] for the trade-off.
     #[must_use]
     pub fn with_fill_factor(mut self, fill_factor: f64) -> Self {
         self.fill_factor = fill_factor;
@@ -273,7 +273,7 @@ struct ShadowTables<'c> {
 }
 
 impl ShadowTables<'_> {
-    /// Insert the buffered `%_rowid` rows in key order.
+    /// Inserts the buffered `%_rowid` rows in key order.
     fn flush(&mut self) -> Result<()> {
         self.rowid_buffer.sort_unstable_by_key(|&(rowid, _)| rowid);
         let mut stmt = self.conn.prepare_cached(&self.rowid_sql)?;
@@ -324,7 +324,8 @@ fn node_size(conn: &Connection, rtree: &str) -> Result<usize> {
     Ok(usize::try_from(size).unwrap_or(0))
 }
 
-/// Clear the three shadow tables and stream a freshly packed tree into them.
+/// Clears the three shadow tables and streams a freshly packed tree into
+/// them.
 fn write_packed(
     conn: &Connection,
     rtree: &str,
@@ -351,7 +352,8 @@ fn write_packed(
     sink.flush()
 }
 
-/// The number of rows in `table` (the cheap decision proxy: no `ST_*` calls).
+/// Returns the number of rows in `table` (the cheap decision proxy: no
+/// `ST_*` calls).
 pub(crate) fn table_row_count(conn: &Connection, table: &str) -> Result<usize> {
     let count: i64 = conn.query_row(
         &format!("SELECT count(*) FROM {}", quote(table)?),
@@ -361,8 +363,9 @@ pub(crate) fn table_row_count(conn: &Connection, table: &str) -> Result<usize> {
     Ok(usize::try_from(count).unwrap_or(usize::MAX))
 }
 
-/// The XY envelope to index for one geometry blob, or `None` if the row is not
-/// indexable (empty under the same rule the `ST_*` functions apply).
+/// Returns the XY envelope to index for one geometry blob, or `None` if the
+/// row is not indexable (empty under the same rule the `ST_*` functions
+/// apply).
 ///
 /// This reproduces in a single parse what the previous SQL scan computed with
 /// five `ST_*` calls per row. The blob is known non-NULL (the query's
@@ -375,7 +378,7 @@ fn envelope_of(blob: &[u8]) -> std::result::Result<Option<[f64; 4]>, geopackage_
     // `ST_IsEmpty` traverses the body whenever the header flag is unset, so a
     // faithful set requires the same traversal here rather than trusting a
     // present header envelope. That traversal also yields the bounds for a blob
-    // whose header carries no envelope, so one walk serves both purposes.
+    // whose header has no envelope, so one walk serves both purposes.
     let (bounds, _) = geometry::blob_envelope_and_empty(blob)?;
     Ok(bounds)
 }
@@ -431,7 +434,8 @@ fn accumulate_envelopes(
     Ok(out)
 }
 
-/// Gate a freshly copied RTree against the accumulated `(fid, envelope)` set.
+/// Gates a freshly copied RTree against the accumulated `(fid, envelope)`
+/// set.
 ///
 /// Passes only when the index contains exactly one row per accumulated entry
 /// (row count and a bijection on `id`), each stored bound conservatively
@@ -526,7 +530,7 @@ fn gate(
     Ok(true)
 }
 
-/// Build (or rebuild) the RTree `rtree` for `table`/`geom` via the bulk
+/// Builds (or rebuilds) the RTree `rtree` for `table`/`geom` via the bulk
 /// shadow-table copy, gated with automatic fallback to the triggered
 /// population.
 ///
@@ -538,7 +542,7 @@ fn gate(
 ///
 /// `precomputed` supplies the `(fid, envelope)` entry set directly instead of
 /// deriving it from an `ST_*` scan of the table. Pass `Some` only when the
-/// caller can prove it holds an entry for every indexable row: the bulk
+/// caller can prove it has an entry for every indexable row: the bulk
 /// `write_all` path passes the envelopes it computed while encoding, and only
 /// when the table was empty before the write. An incomplete set would build an
 /// index missing rows, which the gate cannot detect because it checks the index
@@ -547,10 +551,9 @@ fn gate(
 /// `fault` is [`no_fault`] outside tests.
 ///
 /// This opens and commits its own transaction, or joins one already open on
-/// `conn` and leaves the commit to whoever began it. A caller that holds a
-/// transaction it wants to keep managing itself calls
-/// [`fill_index_in_transaction`] instead, which does no transaction management
-/// at all.
+/// `conn` and leaves the commit to whoever began it. A caller managing its own
+/// transaction calls [`fill_index_in_transaction`] instead, which does no
+/// transaction management at all.
 #[expect(
     clippy::too_many_arguments,
     reason = "internal build entry point threading the whole build context; a parameter struct would be used by these two call sites alone"

@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 #
-# Compare this crate's Arrow write path against GDAL's, like for like
-# (M3 acceptance criterion 3, write side).
+# Compare this crate's Arrow write path against GDAL's, like for like.
 #
 # Both arms do the same thing: read one source GeoPackage's Arrow stream into
 # memory, untimed, then time only the writing of those batches into a fresh
 # file. The read sits outside the measurement deliberately. Timing a read plus a
 # write produces a figure that says nothing about either, which is exactly the
-# mistake the M2 GDAL comparison had to withdraw.
+# mistake an earlier GDAL comparison had to withdraw.
 #
 # Worth knowing when reading the result: GDAL's GeoPackage driver has no
 # specialised WriteArrowBatch. Slide 11 of the reference talk lists only

@@ -1,4 +1,4 @@
-//! End-to-end proof of the M0 stack: GPB encoding (core) + registered ST_*
+//! End-to-end proof of the base stack: GPB encoding (core) + registered ST_*
 //! functions + the 1.4 trigger set maintaining a real SQLite rtree,
 //! including the UPSERT case that corrupted pre-1.4 GeoPackages.
 
@@ -33,8 +33,9 @@ fn gpb_empty_point(srs_id: i32) -> Vec<u8> {
 
 /// GPB blob for a LINESTRING with no header envelope (little-endian WKB).
 ///
-/// M0 could not index this: its `ST_*` fallback handled points only, so the
-/// insert trigger's `ST_MinX`/… calls failed. M1's full traversal fixes it.
+/// An `ST_*` fallback that read only header envelopes could not index this:
+/// the insert trigger's `ST_MinX`/… calls failed. The full WKB traversal
+/// handles it.
 fn gpb_linestring_no_envelope(srs_id: i32, pts: &[(f64, f64)]) -> Vec<u8> {
     let mut blob = encode_header(srs_id, &Envelope::None, false, false);
     blob.push(1); // WKB little-endian
@@ -183,9 +184,9 @@ fn spatial_query_via_rtree() {
 
 #[test]
 fn envelopeless_non_point_insert_indexes_via_traversal() {
-    // The M0 acceptance gap: an envelope-less non-point geometry inserted into
+    // The hard case: an envelope-less non-point geometry inserted into
     // an rtree-indexed table. The insert trigger calls ST_MinX/ST_MaxX/…,
-    // which now traverse the WKB body to bound it. End-to-end proof.
+    // which traverse the WKB body to bound it. End-to-end proof.
     let (_dir, gpkg) = setup();
     let conn = gpkg.connection();
     conn.execute(

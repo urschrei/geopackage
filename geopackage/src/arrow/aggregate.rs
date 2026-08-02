@@ -21,7 +21,7 @@ pub(crate) struct AggregateState {
 }
 
 impl AggregateState {
-    /// Register the function under a name unique to this reader.
+    /// Registers the function under a name unique to this reader.
     ///
     /// Unique because two readers can share a connection, and a shared name
     /// would have the second overwrite the first's function and the first's
@@ -63,7 +63,7 @@ impl AggregateState {
 pub(crate) struct BatchFiller {
     pub(crate) names: Vec<String>,
     pub(crate) types: Vec<DataType>,
-    /// Which argument carries the pagination key.
+    /// Which argument is the pagination key.
     pub(crate) key_argument: usize,
     /// Where the schema fields start among the arguments: 1 when the key had to
     /// be selected separately, 0 when it is one of the fields.
@@ -71,7 +71,7 @@ pub(crate) struct BatchFiller {
     pub(crate) geometry_index: Option<usize>,
     pub(crate) datetime: DateTimeParsing,
     pub(crate) capacity: usize,
-    /// Ceiling on the geometry bytes one batch may carry.
+    /// Ceiling on the geometry bytes one batch may contain.
     pub(crate) max_bytes: usize,
     pub(crate) output: Arc<Mutex<Option<FilledBatch>>>,
     /// The first append failure, kept so a typed error survives instead of
@@ -133,7 +133,7 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
                 _ => 0,
             }
         });
-        // The row count guard means a batch always carries at least one row,
+        // The row count guard means a batch always contains at least one row,
         // so a geometry larger than the whole budget still makes progress
         // instead of stalling the read.
         if acc.rows > 0 && acc.bytes.saturating_add(geometry_bytes) > self.max_bytes {

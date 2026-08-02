@@ -1,4 +1,4 @@
-//! Read-path throughput benchmarks (M2 acceptance criterion 4).
+//! Read-path throughput benchmarks.
 //!
 //! Two point layers of the same data are built once (kept alive for the whole
 //! run): one with a 1.4 spatial index, one without. The benchmarks then measure

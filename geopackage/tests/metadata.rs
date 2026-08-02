@@ -315,7 +315,7 @@ fn the_gdal_written_fixture_reads() {
     let gpkg = GeoPackage::open(&dst).unwrap();
 
     let records = gpkg.metadata().unwrap();
-    assert!(!records.is_empty(), "the fixture carries metadata");
+    assert!(!records.is_empty(), "the fixture contains metadata");
     assert!(records.iter().all(|r| r.scope == MetadataScope::Dataset));
     assert!(records.iter().all(|r| r.mime_type == "text/xml"));
 

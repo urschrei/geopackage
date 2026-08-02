@@ -21,7 +21,7 @@ pub enum Error {
     /// separately because it names an Arrow type rather than a declared
     /// GeoPackage one.
     #[cfg(feature = "arrow")]
-    #[error("column {column:?} maps to Arrow {expected} but holds a {found} value")]
+    #[error("column {column:?} maps to Arrow {expected} but contains a {found} value")]
     ArrowValueMismatch {
         /// The column that was read.
         column: String,
@@ -80,12 +80,12 @@ pub enum Error {
     InvalidZmFlag {
         /// The table the row describes.
         table_name: String,
-        /// Which column carried the bad value: `"z"` or `"m"`.
+        /// Which column had the bad value: `"z"` or `"m"`.
         column: &'static str,
         /// The value as stored.
         value: i64,
     },
-    /// Introspection was asked for a table that does not exist (its
+    /// Introspection was requested for a table that does not exist (its
     /// `PRAGMA table_info` returned no rows).
     #[error("no such table: {table_name:?}")]
     NoSuchTable {
@@ -102,7 +102,7 @@ pub enum Error {
     },
     /// A stored value's SQLite storage class is incompatible with the column's
     /// declared GeoPackage type; the value is surfaced rather than coerced.
-    #[error("column {column:?} declared {declared:?} holds an incompatible {found} value")]
+    #[error("column {column:?} declared {declared:?} contains an incompatible {found} value")]
     ValueTypeMismatch {
         /// The column that was read.
         column: String,
@@ -112,22 +112,23 @@ pub enum Error {
         /// `REAL`, `TEXT`, or `BLOB`.
         found: &'static str,
     },
-    /// A `BOOLEAN` column holds an INTEGER other than `0` or `1`, read under
+    /// A `BOOLEAN` column contains an INTEGER other than `0` or `1`, read
+    /// under
     /// [`StorageStrictness::Strict`](crate::StorageStrictness::Strict).
     ///
     /// The storage class is the right one, so this is not a
     /// [`Self::ValueTypeMismatch`]: the value itself is outside what the
     /// declared type permits. Lenient conversion, the default, reads any
     /// non-zero integer as `true` instead.
-    #[error("column {column:?} declared BOOLEAN holds {value}, which is neither 0 nor 1")]
+    #[error("column {column:?} declared BOOLEAN contains {value}, which is neither 0 nor 1")]
     NonBooleanInteger {
         /// The column that was read.
         column: String,
-        /// The integer the column actually holds.
+        /// The integer the column actually contains.
         value: i64,
     },
-    /// A `DATE` or `DATETIME` column holds text that does not parse.
-    #[error("column {column:?} holds invalid date/datetime text {text:?}")]
+    /// A `DATE` or `DATETIME` column contains text that does not parse.
+    #[error("column {column:?} contains invalid date/datetime text {text:?}")]
     InvalidDateTimeValue {
         /// The column that was read.
         column: String,
@@ -186,7 +187,7 @@ pub enum Error {
         /// The zoom level that is not declared.
         zoom_level: i64,
     },
-    /// A tile payload in an encoding no tile pyramid may hold.
+    /// A tile payload in an encoding no tile pyramid may contain.
     ///
     /// The base spec allows PNG and JPEG (Requirements 36 and 37), and the
     /// `gpkg_webp` extension allows WebP, which the write path registers as it
@@ -216,7 +217,7 @@ pub enum Error {
     ColumnConstraintViolation {
         /// The table written to.
         table_name: String,
-        /// The column whose value was refused.
+        /// The column whose value was rejected.
         column_name: String,
         /// The `gpkg_data_column_constraints.constraint_name` it violates.
         constraint_name: String,
@@ -226,13 +227,12 @@ pub enum Error {
         value: String,
     },
     /// A `gpkg_data_column_constraints` constraint the spec's own rules rule
-    /// out, met while reading it or refused while writing it.
+    /// out, found while reading it or rejected while writing it.
     ///
-    /// Requirements 108 to 114 pin down what each `constraint_type` may carry:
+    /// Requirements 108 to 114 fix what each `constraint_type` may contain:
     /// a `range` needs both bounds and needs `min` below `max`, an `enum` or
     /// `glob` needs a `value`, and the type has to be one of the three. A row
-    /// outside that says what it constrains without saying how, and there is
-    /// no honest reading of it.
+    /// outside those rules names what it constrains without saying how.
     #[error("column constraint {constraint_name:?} is not usable: {reason}")]
     InvalidColumnConstraint {
         /// The `constraint_name` the rows share.
@@ -240,8 +240,8 @@ pub enum Error {
         /// What is wrong with it.
         reason: &'static str,
     },
-    /// A write was refused because the target table carries an extension this
-    /// crate cannot identify.
+    /// A write to a table covered by an extension this crate cannot
+    /// identify.
     ///
     /// Requirement 64 makes every extension one a writer has to understand:
     /// `read-write` affects readers and writers, `write-only` affects writers.
@@ -250,13 +250,13 @@ pub enum Error {
     /// file its own producer can no longer read. This is the "fail fast" that
     /// clause 2.3.2 gives the catalogue as its purpose.
     ///
-    /// Reading is never refused for this reason, and an extension this crate
+    /// Reading never fails for this reason, and an extension this crate
     /// can name does not raise it: see
     /// [`ExtensionSupport`](geopackage_core::extensions::ExtensionSupport).
     /// A caller who knows the extension is harmless can proceed with
     /// [`OpenOptions::allow_unsupported_extension_writes`](crate::OpenOptions::allow_unsupported_extension_writes).
     #[error(
-        "table {table_name:?} carries the unrecognised {extension_name:?} extension \
+        "table {table_name:?} declares the unrecognised {extension_name:?} extension \
          (scope {scope:?}), so writing to it could produce a file its producer cannot read: \
          override with OpenOptions::allow_unsupported_extension_writes"
     )]
@@ -360,7 +360,7 @@ pub enum Error {
         /// The record the chain returned to.
         id: i64,
     },
-    /// A `gpkg_metadata_reference` row carries a `reference_scope` that is not
+    /// A `gpkg_metadata_reference` row has a `reference_scope` that is not
     /// one of the five Requirement 96 allows.
     #[error("unknown metadata reference_scope {scope:?}")]
     UnknownReferenceScope {
@@ -386,13 +386,13 @@ pub enum Error {
     /// [`crate::Layer::extent`] measured a layer's extent but could not record
     /// it, for a reason that is not another connection holding a lock.
     ///
-    /// The measurement succeeded and is carried here, so nothing is lost by the
-    /// failure: the caller can use `extent` and decide what to make of the
-    /// store being unwritable. Lock contention does not produce this, because a
-    /// concurrent writer means the measurement is not one the crate could vouch
-    /// for anyway; what does are the conditions that mean the store is broken
-    /// or unwritable in a way that will not clear, such as an unwritable
-    /// directory, a full disk, or an I/O error.
+    /// The measurement succeeded and is included here, so nothing is lost by
+    /// the failure: the caller can use `extent` and decide how to treat the
+    /// unwritable store. Lock contention does not produce this, because a
+    /// concurrent writer means the measurement may already be stale; what does
+    /// produce it are conditions under which the store is broken or unwritable
+    /// in a way that will not clear, such as an unwritable directory, a full
+    /// disk, or an I/O error.
     #[error("measured the extent of table {table_name:?} but could not record it: {source}")]
     ExtentPersist {
         /// The table whose extent was measured.
@@ -447,7 +447,7 @@ pub enum Error {
         table_name: String,
     },
     /// [`crate::Layer::create_spatial_index`] was called on a layer whose
-    /// geometry column already carries an RTree spatial index (its
+    /// geometry column already has an RTree spatial index (its
     /// `rtree_<table>_<column>` virtual table already exists).
     #[error("table {table_name:?} column {column_name:?} already has a spatial index")]
     SpatialIndexExists {
@@ -484,7 +484,7 @@ pub enum Error {
         dimension: &'static str,
         /// The column's declared constraint.
         constraint: geopackage_core::types::ZmFlag,
-        /// `"carries"` when the geometry has the dimension, `"lacks"` when it
+        /// `"has"` when the geometry includes the dimension, `"lacks"` when it
         /// does not.
         verb: &'static str,
     },

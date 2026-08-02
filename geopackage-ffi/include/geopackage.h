@@ -156,7 +156,7 @@ typedef int32_t gpkg_status;
 #endif // __cplusplus
 
 /**
- * Which case a [`gpkg_value_t`] holds.
+ * Which case a [`gpkg_value_t`] contains.
  *
  * `#[repr(i32)]` so cbindgen emits a plain C enum with stable values. Values
  * are assigned explicitly and must never be reused for another meaning.
@@ -318,7 +318,7 @@ typedef struct {
 /**
  * A date and time, with an optional UTC offset.
  *
- * `has_offset` false means the time carries no offset, which the spec permits
+ * `has_offset` false means the time has no offset, which the spec permits
  * and which is not the same as an offset of zero: zero is `Z`.
  */
 typedef struct {
@@ -395,7 +395,7 @@ typedef union {
  */
 typedef struct {
   /**
-   * Which case `value` holds.
+   * Which case `value` contains.
    */
   gpkg_value_kind kind;
   /**
@@ -436,10 +436,10 @@ extern "C" {
 #endif // __cplusplus
 
 /**
- * Open an existing GeoPackage read-write.
+ * Opens an existing GeoPackage read-write.
  *
  * The file is validated strictly: one that does not identify as a GeoPackage,
- * or that is missing a core table, is refused rather than opened.
+ * or that is missing a core table, is rejected rather than opened.
  * `gpkg_open_read_only` is the tolerant counterpart.
  *
  * Returns NULL on failure, with `error` filled in when it is non-NULL.
@@ -465,16 +465,16 @@ extern "C" {
 gpkg_t *gpkg_open(const char *path, gpkg_error_t *error);
 
 /**
- * Open an existing GeoPackage read-only, tolerating legacy and lightly
+ * Opens an existing GeoPackage read-only, accepting legacy and lightly
  * non-conforming files.
  *
  * A reader that turned away the files worth reading would not be much use, so
- * this accepts what it can and records each thing it tolerated;
+ * this accepts what it can and records each thing it accepted;
  * `gpkg_open_warning_count` and `gpkg_open_warning` report them. What it will
- * not tolerate is a file that fails to identify as a GeoPackage at all.
+ * not accept is a file that fails to identify as a GeoPackage at all.
  *
  * The handle is read-only, so a write through it fails with `GPKG_STATUS_IO`
- * carrying SQLite's own message.
+ * and SQLite's own message.
  *
  * # Safety
  *
@@ -483,7 +483,7 @@ gpkg_t *gpkg_open(const char *path, gpkg_error_t *error);
 gpkg_t *gpkg_open_read_only(const char *path, gpkg_error_t *error);
 
 /**
- * Create a new GeoPackage 1.4 file.
+ * Creates a new GeoPackage 1.4 file.
  *
  * The file is seeded with the two core tables and the spatial reference
  * systems the specification requires, and nothing else: a layer is added with
@@ -500,9 +500,9 @@ gpkg_t *gpkg_open_read_only(const char *path, gpkg_error_t *error);
 gpkg_t *gpkg_create(const char *path, gpkg_error_t *error);
 
 /**
- * Close a GeoPackage and release its handle.
+ * Closes a GeoPackage and releases its handle.
  *
- * Refuses with `GPKG_STATUS_HANDLE_IN_USE` while anything taken from it is
+ * Fails with `GPKG_STATUS_HANDLE_IN_USE` while anything taken from it is
  * still alive, which means a layer handle, a tile pyramid handle, a writer or
  * an Arrow stream. In that case **the handle remains valid and open**, nothing
  * has been released, and the caller should free those children and call again.
@@ -532,7 +532,7 @@ gpkg_t *gpkg_create(const char *path, gpkg_error_t *error);
 gpkg_status gpkg_close(gpkg_t *gpkg, gpkg_error_t *error);
 
 /**
- * The GeoPackage specification version the file declares, as `"1.0"` through
+ * Returns the GeoPackage specification version the file declares, as `"1.0"` through
  * `"1.4"`.
  *
  * This is what the file's `application_id` and `user_version` pragmas say
@@ -549,10 +549,10 @@ gpkg_status gpkg_close(gpkg_t *gpkg, gpkg_error_t *error);
 char *gpkg_version(const gpkg_t *gpkg, gpkg_error_t *error);
 
 /**
- * How many warnings a lenient open collected.
+ * Returns the number of warnings a lenient open collected.
  *
  * Always 0 for a handle from `gpkg_open` or `gpkg_create`, which are strict,
- * and for a file `gpkg_open_read_only` found nothing to forgive in. Pair it
+ * and for a file `gpkg_open_read_only` found nothing to warn about. Pair it
  * with `gpkg_open_warning`, which takes an index below this count.
  *
  * ```c
@@ -573,10 +573,10 @@ char *gpkg_version(const gpkg_t *gpkg, gpkg_error_t *error);
 size_t gpkg_open_warning_count(const gpkg_t *gpkg);
 
 /**
- * One warning from a lenient open, as text, or NULL when `index` is out of
+ * Returns one warning from a lenient open, as text, or NULL when `index` is out of
  * range.
  *
- * Each describes one thing the open tolerated: a legacy `application_id`, a
+ * Each describes one thing the open accepted: a legacy `application_id`, a
  * missing `gpkg_geometry_columns` table, a catalogue name matching its table
  * only case-insensitively, or an extension the library cannot identify.
  * `gpkg_open_warning_count` bounds the index.
@@ -591,10 +591,10 @@ size_t gpkg_open_warning_count(const gpkg_t *gpkg);
 char *gpkg_open_warning(const gpkg_t *gpkg, size_t index, gpkg_error_t *error);
 
 /**
- * Whether a transaction is open on this handle.
+ * Returns whether a transaction is open on this handle.
  *
  * The way to ask before calling `gpkg_begin`, `gpkg_commit` or
- * `gpkg_rollback`, each of which refuses when the state is not what it needs.
+ * `gpkg_rollback`, each of which fails when the state is not what it needs.
  * `false` for a NULL handle, which has no transaction either.
  *
  * ```c
@@ -611,7 +611,7 @@ char *gpkg_open_warning(const gpkg_t *gpkg, size_t index, gpkg_error_t *error);
 bool gpkg_in_transaction(const gpkg_t *gpkg);
 
 /**
- * Begin a transaction, so that several writes commit or fail together.
+ * Begins a transaction, so that several writes commit or fail together.
  *
  * Every write made through this handle until `gpkg_commit` or
  * `gpkg_rollback` joins this transaction, including the ones that would
@@ -641,7 +641,7 @@ bool gpkg_in_transaction(const gpkg_t *gpkg);
  * SQLite takes the write lock at the first write rather than here. Until then
  * another connection can still write to the file.
  *
- * Refuses with `GPKG_STATUS_INVALID_ARGUMENT` when a transaction is already
+ * Fails with `GPKG_STATUS_INVALID_ARGUMENT` when a transaction is already
  * open, since SQLite does not nest them. `gpkg_in_transaction` asks without
  * provoking the error.
  *
@@ -656,10 +656,10 @@ bool gpkg_in_transaction(const gpkg_t *gpkg);
 gpkg_status gpkg_begin(gpkg_t *gpkg, gpkg_error_t *error);
 
 /**
- * Commit the open transaction, making everything written since `gpkg_begin`
+ * Commits the open transaction, making everything written since `gpkg_begin`
  * durable.
  *
- * Refuses with `GPKG_STATUS_INVALID_ARGUMENT` when no transaction is open,
+ * Fails with `GPKG_STATUS_INVALID_ARGUMENT` when no transaction is open,
  * rather than succeeding silently, so an unbalanced pair is reported where it
  * happens.
  *
@@ -670,7 +670,7 @@ gpkg_status gpkg_begin(gpkg_t *gpkg, gpkg_error_t *error);
 gpkg_status gpkg_commit(gpkg_t *gpkg, gpkg_error_t *error);
 
 /**
- * Discard everything written since `gpkg_begin`.
+ * Discards everything written since `gpkg_begin`.
  *
  * This is how a partly-failed sequence is undone: a write that fails part-way
  * through leaves what preceded it in the transaction, for the caller to keep
@@ -678,7 +678,7 @@ gpkg_status gpkg_commit(gpkg_t *gpkg, gpkg_error_t *error);
  * a spatial index dropped inside the transaction, along with its triggers and
  * its `gpkg_extensions` row, comes back.
  *
- * Refuses with `GPKG_STATUS_INVALID_ARGUMENT` when no transaction is open.
+ * Fails with `GPKG_STATUS_INVALID_ARGUMENT` when no transaction is open.
  * A cleanup path that cannot know either way should ask `gpkg_in_transaction`
  * first, or pass NULL for `error` and ignore the status.
  *
@@ -689,21 +689,21 @@ gpkg_status gpkg_commit(gpkg_t *gpkg, gpkg_error_t *error);
 gpkg_status gpkg_rollback(gpkg_t *gpkg, gpkg_error_t *error);
 
 /**
- * Read a spatial reference system's definition and identity.
+ * Reads a spatial reference system's definition and identity.
  *
- * What the file's `gpkg_spatial_ref_sys` row carries for `srs_id`, which is
- * the id `gpkg_layer_srs_id` reports. Every out-parameter may be NULL to
+ * Reports what the file's `gpkg_spatial_ref_sys` row records for `srs_id`,
+ * which is the id `gpkg_layer_srs_id` reports. Every out-parameter may be NULL to
  * skip it; each string written is owned by the caller and released with
  * `gpkg_string_free`.
  *
- * - `out_definition` is the WKT definition every GeoPackage carries. The
+ * - `out_definition` is the WKT definition every GeoPackage records. The
  *   spec's value for a definition that could not be produced, `undefined`,
  *   is returned as the string it is.
  * - `out_definition_wkt2` is the WKT2 definition, present only in a file
- *   carrying the CRS WKT extension and populated for this row; NULL
+ *   with the CRS WKT extension and populated for this row; NULL
  *   otherwise.
  * - `out_epoch` receives the coordinate epoch as a decimal year, or NaN when
- *   the row carries none, which is the common case.
+ *   the row records none, which is the common case.
  * - `out_organization` and `out_organization_coordsys_id` are the authority
  *   and its code, such as `EPSG` and `4326`; `out_name` is the row's own
  *   name.
@@ -739,7 +739,7 @@ gpkg_status gpkg_srs(const gpkg_t *gpkg,
                      gpkg_error_t *error);
 
 /**
- * Release the message an error holds, and reset its code to `GPKG_STATUS_OK`.
+ * Releases the message an error contains, and resets its code to `GPKG_STATUS_OK`.
  *
  * Safe to call on an error that was never filled in, and safe to call twice:
  * the message pointer is cleared as it is freed. Passing NULL does nothing.
@@ -762,10 +762,10 @@ gpkg_status gpkg_srs(const gpkg_t *gpkg,
 void gpkg_error_clear(gpkg_error_t *error);
 
 /**
- * How many `gpkg_extensions` rows the file carries.
+ * Returns the number of `gpkg_extensions` rows in the file.
  *
  * Zero for a file with no `gpkg_extensions` table at all, which is a file
- * carrying no extensions. `gpkg_extension_at` walks the same list, ordered
+ * registering no extensions. `gpkg_extension_at` walks the same list, ordered
  * by extension name, then table, then column.
  *
  * # Safety
@@ -776,7 +776,7 @@ void gpkg_error_clear(gpkg_error_t *error);
 gpkg_status gpkg_extensions_count(const gpkg_t *gpkg, size_t *out, gpkg_error_t *error);
 
 /**
- * One `gpkg_extensions` row, with the support level this library claims.
+ * Returns one `gpkg_extensions` row, with the support level this library claims.
  *
  * The list is the one `gpkg_extensions_count` counts. Every out-parameter
  * may be NULL to skip it; each string written is owned by the caller and
@@ -805,7 +805,7 @@ gpkg_status gpkg_extension_at(const gpkg_t *gpkg,
                               gpkg_error_t *error);
 
 /**
- * Open a feature layer by name.
+ * Opens a feature layer by name.
  *
  * The name is a `gpkg_contents.table_name`, matched without regard to case,
  * as SQLite resolves table names. A name no row declares is
@@ -830,7 +830,7 @@ gpkg_status gpkg_extension_at(const gpkg_t *gpkg,
 gpkg_layer_t *gpkg_layer_open(const gpkg_t *gpkg, const char *name, gpkg_error_t *error);
 
 /**
- * Open an attribute (non-spatial) layer by name.
+ * Opens an attribute (non-spatial) layer by name.
  *
  * The same call as `gpkg_layer_open` for a table `gpkg_contents` declares as
  * `attributes` rather than `features`. Such a table has no geometry column, so
@@ -845,14 +845,14 @@ gpkg_layer_t *gpkg_layer_open(const gpkg_t *gpkg, const char *name, gpkg_error_t
 gpkg_layer_t *gpkg_attributes_open(const gpkg_t *gpkg, const char *name, gpkg_error_t *error);
 
 /**
- * Open a feature layer that reads only the named columns.
+ * Opens a feature layer that reads only the named columns.
  *
- * `gpkg_layer_open`, projected: a read of the returned handle carries the
+ * `gpkg_layer_open`, projected: a read of the returned handle selects the
  * feature id, the named value columns, and the geometry only if its column
  * is named. On a layer whose geometries are large, reading one attribute
  * through a projected handle touches none of the geometry blobs, which is
  * most of the read on such layers. The Arrow schema narrows to match, so a
- * stream from this handle carries exactly these fields.
+ * stream from this handle yields exactly these fields.
  *
  * Columns come back in the table's order whatever order they are named in,
  * and naming one twice selects it once. The feature id need not be named. A
@@ -885,7 +885,7 @@ gpkg_layer_t *gpkg_layer_open_with_columns(const gpkg_t *gpkg,
                                            gpkg_error_t *error);
 
 /**
- * Open an attribute (non-spatial) layer that reads only the named columns.
+ * Opens an attribute (non-spatial) layer that reads only the named columns.
  *
  * `gpkg_attributes_open` with `gpkg_layer_open_with_columns`'s projection,
  * on the same terms; there is no geometry column to name.
@@ -901,7 +901,7 @@ gpkg_layer_t *gpkg_attributes_open_with_columns(const gpkg_t *gpkg,
                                                 gpkg_error_t *error);
 
 /**
- * Release a layer handle.
+ * Releases a layer handle.
  *
  * The container it came from can be closed once every handle taken from it has
  * been freed, so this is what a `GPKG_STATUS_HANDLE_IN_USE` from `gpkg_close`
@@ -916,13 +916,13 @@ gpkg_layer_t *gpkg_attributes_open_with_columns(const gpkg_t *gpkg,
  *
  * `layer` must be NULL, or a handle from `gpkg_layer_open` or
  * `gpkg_attributes_open` that has not already been freed. The container it
- * came from must still be alive, which is guaranteed by `gpkg_close` refusing
+ * came from must still be alive, which is guaranteed by `gpkg_close` failing
  * while this handle exists.
  */
 void gpkg_layer_free(gpkg_layer_t *layer);
 
 /**
- * The layer's table name.
+ * Returns the layer's table name.
  *
  * Owned by the caller; release with `gpkg_string_free`.
  *
@@ -933,7 +933,7 @@ void gpkg_layer_free(gpkg_layer_t *layer);
 char *gpkg_layer_name(const gpkg_layer_t *layer, gpkg_error_t *error);
 
 /**
- * The number of rows in the layer, written through `out`.
+ * Writes the number of rows in the layer through `out`.
  *
  * A `SELECT count(*)` over the table, so it reads the table rather than a
  * stored figure and costs what that costs.
@@ -946,7 +946,7 @@ char *gpkg_layer_name(const gpkg_layer_t *layer, gpkg_error_t *error);
 gpkg_status gpkg_layer_count(const gpkg_layer_t *layer, uint64_t *out, gpkg_error_t *error);
 
 /**
- * How many feature layers the file declares.
+ * Returns the number of feature layers the file declares.
  *
  * Feature layers only: a table `gpkg_contents` declares as `attributes` or
  * `tiles` is not counted, and neither is a `features` row with no matching
@@ -960,7 +960,7 @@ gpkg_status gpkg_layer_count(const gpkg_layer_t *layer, uint64_t *out, gpkg_erro
 gpkg_status gpkg_layer_names_count(const gpkg_t *gpkg, size_t *out, gpkg_error_t *error);
 
 /**
- * The name of the `index`th feature layer, or NULL when out of range.
+ * Returns the name of the `index`th feature layer, or NULL when out of range.
  *
  * The list is the one `gpkg_layer_names_count` counts, ordered by table name,
  * so the pair walks a file's layers. An index at or beyond the count is
@@ -975,7 +975,7 @@ gpkg_status gpkg_layer_names_count(const gpkg_t *gpkg, size_t *out, gpkg_error_t
 char *gpkg_layer_name_at(const gpkg_t *gpkg, size_t index, gpkg_error_t *error);
 
 /**
- * Whether a layer holds features or attributes, as `"features"` or
+ * Returns whether a layer contains features or attributes, as `"features"` or
  * `"attributes"`.
  *
  * Owned by the caller; release with `gpkg_string_free`.
@@ -987,7 +987,7 @@ char *gpkg_layer_name_at(const gpkg_t *gpkg, size_t index, gpkg_error_t *error);
 char *gpkg_layer_kind(const gpkg_layer_t *layer, gpkg_error_t *error);
 
 /**
- * How many columns the layer's table has, geometry and primary key included.
+ * Returns the number of columns in the layer's table, geometry and primary key included.
  *
  * # Safety
  *
@@ -996,7 +996,7 @@ char *gpkg_layer_kind(const gpkg_layer_t *layer, gpkg_error_t *error);
 gpkg_status gpkg_layer_column_count(const gpkg_layer_t *layer, size_t *out, gpkg_error_t *error);
 
 /**
- * The name of the `index`th column, or NULL when out of range.
+ * Returns the name of the `index`th column, or NULL when out of range.
  *
  * Owned by the caller; release with `gpkg_string_free`.
  *
@@ -1007,12 +1007,12 @@ gpkg_status gpkg_layer_column_count(const gpkg_layer_t *layer, size_t *out, gpkg
 char *gpkg_layer_column_name(const gpkg_layer_t *layer, size_t index, gpkg_error_t *error);
 
 /**
- * The declared SQL type of the `index`th column, exactly as the file spells
+ * Returns the declared SQL type of the `index`th column, exactly as the file spells
  * it, or the empty string for a column declared without one.
  *
- * The declared text rather than a parsed enum, because a GeoPackage may carry
- * a type outside the spec's vocabulary and this crate keeps such a column
- * rather than rejecting it. A caller wanting the spec's own names can compare
+ * The declared text rather than a parsed enum, because a GeoPackage may
+ * declare a type outside the spec's vocabulary and this crate keeps such a
+ * column rather than rejecting it. A caller wanting the spec's own names can compare
  * against them.
  *
  * Owned by the caller; release with `gpkg_string_free`.
@@ -1024,7 +1024,7 @@ char *gpkg_layer_column_name(const gpkg_layer_t *layer, size_t index, gpkg_error
 char *gpkg_layer_column_type(const gpkg_layer_t *layer, size_t index, gpkg_error_t *error);
 
 /**
- * Whether the `index`th column is the primary key. `false` for an index out
+ * Returns whether the `index`th column is the primary key. `false` for an index out
  * of range, which [`gpkg_layer_column_count`] distinguishes.
  *
  * # Safety
@@ -1034,7 +1034,7 @@ char *gpkg_layer_column_type(const gpkg_layer_t *layer, size_t index, gpkg_error
 bool gpkg_layer_column_is_primary_key(const gpkg_layer_t *layer, size_t index);
 
 /**
- * The geometry column's name, or NULL for an attribute layer.
+ * Returns the geometry column's name, or NULL for an attribute layer.
  *
  * A NULL return with `error` left at `GPKG_STATUS_OK` means the layer simply
  * has no geometry, which is not a failure.
@@ -1048,7 +1048,7 @@ bool gpkg_layer_column_is_primary_key(const gpkg_layer_t *layer, size_t index);
 char *gpkg_layer_geometry_column(const gpkg_layer_t *layer, gpkg_error_t *error);
 
 /**
- * The geometry column's declared type, such as `"POINT"`, or NULL for an
+ * Returns the geometry column's declared type, such as `"POINT"`, or NULL for an
  * attribute layer.
  *
  * Owned by the caller; release with `gpkg_string_free`.
@@ -1060,7 +1060,7 @@ char *gpkg_layer_geometry_column(const gpkg_layer_t *layer, gpkg_error_t *error)
 char *gpkg_layer_geometry_type(const gpkg_layer_t *layer, gpkg_error_t *error);
 
 /**
- * The geometry column's spatial reference system id, written through `out`.
+ * Writes the geometry column's spatial reference system id through `out`.
  *
  * The id is a `gpkg_spatial_ref_sys.srs_id`, which for a file written by this
  * library is the EPSG code. Returns `GPKG_STATUS_NOT_FOUND` for a layer with
@@ -1073,7 +1073,7 @@ char *gpkg_layer_geometry_type(const gpkg_layer_t *layer, gpkg_error_t *error);
 gpkg_status gpkg_layer_srs_id(const gpkg_layer_t *layer, int32_t *out, gpkg_error_t *error);
 
 /**
- * The layer's extent, written through the four out-parameters.
+ * Writes the layer's extent through the four out-parameters.
  *
  * The bounds recorded in `gpkg_contents`, in the layer's own spatial reference
  * system. Where those bounds are unusable, they are measured from the
@@ -1097,7 +1097,7 @@ gpkg_status gpkg_layer_extent(const gpkg_layer_t *layer,
                               gpkg_error_t *error);
 
 /**
- * The spatial index's state, as `"absent"`, `"current"`, `"legacy trigger
+ * Returns the spatial index's state, as `"absent"`, `"current"`, `"legacy trigger
  * set"` or `"stale"`.
  *
  * `"legacy trigger set"` is an index kept by the pre-1.4 triggers, which
@@ -1114,7 +1114,7 @@ gpkg_status gpkg_layer_extent(const gpkg_layer_t *layer,
 char *gpkg_layer_spatial_index_status(const gpkg_layer_t *layer, gpkg_error_t *error);
 
 /**
- * Whether a bounding-box query on this layer will use the spatial index.
+ * Returns whether a bounding-box query on this layer will use the spatial index.
  *
  * False for a `stale` or absent index: a desynchronised index is not trusted,
  * and the query falls back to a correct full scan. So this answers how a
@@ -1128,11 +1128,11 @@ char *gpkg_layer_spatial_index_status(const gpkg_layer_t *layer, gpkg_error_t *e
 gpkg_status gpkg_layer_has_spatial_index(const gpkg_layer_t *layer, bool *out, gpkg_error_t *error);
 
 /**
- * Build the spatial index on a layer that has none.
+ * Builds the spatial index on a layer that has none.
  *
  * Creates the RTree virtual table, installs the GeoPackage 1.4 trigger set,
  * populates it from the rows already there, and registers the extension, all
- * in one transaction. Refuses with `GPKG_STATUS_ALREADY_EXISTS` when the
+ * in one transaction. Fails with `GPKG_STATUS_ALREADY_EXISTS` when the
  * layer has an index, and with `GPKG_STATUS_NOT_FOUND` when it has no
  * geometry column or no single-column primary key to key the index on.
  *
@@ -1143,7 +1143,7 @@ gpkg_status gpkg_layer_has_spatial_index(const gpkg_layer_t *layer, bool *out, g
 gpkg_status gpkg_layer_create_spatial_index(const gpkg_layer_t *layer, gpkg_error_t *error);
 
 /**
- * Drop the spatial index and its triggers.
+ * Drops the spatial index and its triggers.
  *
  * Removes the RTree virtual table, its triggers and its `gpkg_extensions`
  * row, in one transaction. A feature layer with no index is not an error:
@@ -1157,7 +1157,7 @@ gpkg_status gpkg_layer_create_spatial_index(const gpkg_layer_t *layer, gpkg_erro
 gpkg_status gpkg_layer_drop_spatial_index(const gpkg_layer_t *layer, gpkg_error_t *error);
 
 /**
- * Put a legacy or desynchronised spatial index right, rebuilding it and
+ * Puts a legacy or desynchronised spatial index right, rebuilding it and
  * installing the GeoPackage 1.4 trigger set.
  *
  * A layer with no index is left alone: an absent index is a choice rather
@@ -1171,7 +1171,7 @@ gpkg_status gpkg_layer_drop_spatial_index(const gpkg_layer_t *layer, gpkg_error_
 gpkg_status gpkg_layer_repair_spatial_index(const gpkg_layer_t *layer, gpkg_error_t *error);
 
 /**
- * Read a layer as an Arrow C Data Interface stream.
+ * Reads a layer as an Arrow C Data Interface stream.
  *
  * `out` is filled in with a stream the caller owns and must release through
  * its own `release` callback, as the C Data Interface specifies. The stream
@@ -1226,13 +1226,13 @@ gpkg_status gpkg_layer_read_arrow(const gpkg_layer_t *layer,
                                   gpkg_error_t *error);
 
 /**
- * Read the rows of a layer intersecting a bounding box, as an Arrow stream.
+ * Reads the rows of a layer intersecting a bounding box, as an Arrow stream.
  *
  * The box is in the layer's own spatial reference system, and a row is
  * returned when its geometry's envelope intersects the box, edges included.
  * An envelope is not the geometry, so the rows are a superset of those that
  * actually intersect: testing the geometries themselves is the caller's, on
- * the WKB the stream carries.
+ * the WKB the stream yields.
  *
  * Served by the layer's RTree index when it has a usable one, and by a full
  * scan with the same filter otherwise, returning the same rows either way.
@@ -1264,14 +1264,14 @@ gpkg_status gpkg_layer_read_arrow_in(const gpkg_layer_t *layer,
                                      gpkg_error_t *error);
 
 /**
- * Read the rows matching a SQL `WHERE` clause, a bounding box, or both, as an
+ * Reads the rows matching a SQL `WHERE` clause, a bounding box, or both, as an
  * Arrow stream.
  *
  * The general form of the three readers: `bbox` is NULL or four doubles
  * (`min_x`, `min_y`, `max_x`, `max_y`) on the terms of
  * `gpkg_layer_read_arrow_in`, and `where_clause` is NULL or a SQL clause on
  * the terms below. With both NULL this is `gpkg_layer_read_arrow`; with both
- * set the stream carries the rows satisfying the two together.
+ * set the stream yields the rows satisfying the two together.
  *
  * The clause is **raw SQL, trusted from the caller**: it is appended
  * (parenthesised) to the query, not parsed or sanitised, exactly as the Rust
@@ -1320,17 +1320,17 @@ gpkg_status gpkg_layer_read_arrow_filtered(const gpkg_layer_t *layer,
                                            gpkg_error_t *error);
 
 /**
- * Write an Arrow C Data Interface stream into a layer.
+ * Writes an Arrow C Data Interface stream into a layer.
  *
  * Writing appends: every batch adds rows, and nothing here changes or removes
- * one that is already there. That is what a bulk load wants, and it is why
- * re-writing rows that carry their own feature ids fails on the primary key
+ * one that is already there. That suits a bulk load, and it is why
+ * re-writing rows that supply their own feature ids fails on the primary key
  * rather than replacing them. To change or remove an existing feature, take a
  * `gpkg_writer_t` with `gpkg_layer_writer`.
  *
  * The stream's schema must name columns the layer has. A column the layer
- * does not have is refused rather than dropped, because discarding data a
- * caller asked to write would be worse than declining it; a column of the
+ * does not have is rejected rather than dropped, because discarding data a
+ * caller asked to write would be worse than rejecting it; a column of the
  * layer the stream does not name is left to its default. A type the layer
  * cannot store is `GPKG_STATUS_INVALID_ARGUMENT`. Building the layer with
  * `gpkg_create_layer_from_arrow_schema` from the same schema is what makes
@@ -1338,8 +1338,8 @@ gpkg_status gpkg_layer_read_arrow_filtered(const gpkg_layer_t *layer,
  *
  * A stream column matching the layer's primary key supplies each row's fid,
  * and a NULL there has one assigned. A stream appending to a layer that
- * already holds rows should therefore omit that column, or carry NULLs in
- * it: a fid the table already holds fails the write.
+ * already contains rows should therefore omit that column, or supply NULLs
+ * in it: a fid the table already contains fails the write.
  *
  * Takes ownership of `stream`, as the C Data Interface specifies for a moved
  * stream: it is released here whether the write succeeds or fails, and the
@@ -1390,7 +1390,7 @@ gpkg_status gpkg_layer_write_arrow(const gpkg_layer_t *layer,
                                    gpkg_error_t *error);
 
 /**
- * Create a layer whose columns come from an Arrow schema.
+ * Creates a layer whose columns come from an Arrow schema.
  *
  * The schema is borrowed, not consumed: the caller still owns it and must
  * release it. This is what lets a C consumer copy a layer without any
@@ -1420,7 +1420,7 @@ gpkg_status gpkg_layer_write_arrow(const gpkg_layer_t *layer,
  * schema's GeoArrow metadata. The referenced SRS must already exist in the
  * destination; `gpkg_add_epsg_srs` puts one there. The geometry column is
  * declared `GEOMETRY` rather than the source's own type, because the GeoArrow
- * WKB encoding does not carry one.
+ * WKB encoding does not record one.
  *
  * `spatial_index` asks for an RTree index over that column, which is the
  * usual choice for a layer that will be queried by bounding box.
@@ -1429,7 +1429,7 @@ gpkg_status gpkg_layer_write_arrow(const gpkg_layer_t *layer,
  *
  * Fails with `GPKG_STATUS_ALREADY_EXISTS` when the file already has a table
  * of that name, and with `GPKG_STATUS_NOT_FOUND` when the schema names a
- * spatial reference system the file does not carry.
+ * spatial reference system the file does not register.
  *
  * # Safety
  *
@@ -1444,9 +1444,9 @@ gpkg_status gpkg_create_layer_from_arrow_schema(const gpkg_t *gpkg,
                                                 gpkg_error_t *error);
 
 /**
- * Register an EPSG spatial reference system in the file.
+ * Registers an EPSG spatial reference system in the file.
  *
- * A layer cannot name an SRS the file does not carry, so this is what a C
+ * A layer cannot name an SRS the file does not register, so this is what a C
  * consumer calls before creating one.
  *
  * # Safety
@@ -1456,7 +1456,7 @@ gpkg_status gpkg_create_layer_from_arrow_schema(const gpkg_t *gpkg,
 gpkg_status gpkg_add_epsg_srs(const gpkg_t *gpkg, int32_t code, gpkg_error_t *error);
 
 /**
- * How many tile pyramids the file declares.
+ * Returns the number of tile pyramids the file declares.
  *
  * Tile pyramids only: a table `gpkg_contents` declares as `features` or
  * `attributes` is not counted, and neither is a `tiles` row with no matching
@@ -1471,7 +1471,7 @@ gpkg_status gpkg_add_epsg_srs(const gpkg_t *gpkg, int32_t code, gpkg_error_t *er
 gpkg_status gpkg_tiles_names_count(const gpkg_t *gpkg, size_t *out, gpkg_error_t *error);
 
 /**
- * The name of the `index`th tile pyramid, or NULL when out of range.
+ * Returns the name of the `index`th tile pyramid, or NULL when out of range.
  *
  * The list is the one `gpkg_tiles_names_count` counts, ordered by table name,
  * so the pair walks a file's pyramids. An index at or beyond the count is
@@ -1486,7 +1486,7 @@ gpkg_status gpkg_tiles_names_count(const gpkg_t *gpkg, size_t *out, gpkg_error_t
 char *gpkg_tiles_name_at(const gpkg_t *gpkg, size_t index, gpkg_error_t *error);
 
 /**
- * Open a tile pyramid by name.
+ * Opens a tile pyramid by name.
  *
  * The name is a `gpkg_contents.table_name` whose row declares `tiles`.
  * A name no such row declares is `GPKG_STATUS_NOT_FOUND`, and a name that
@@ -1507,7 +1507,7 @@ char *gpkg_tiles_name_at(const gpkg_t *gpkg, size_t index, gpkg_error_t *error);
 gpkg_tiles_t *gpkg_tiles_open(const gpkg_t *gpkg, const char *name, gpkg_error_t *error);
 
 /**
- * Release a tile pyramid handle. Passing NULL does nothing.
+ * Releases a tile pyramid handle. Passing NULL does nothing.
  *
  * # Safety
  *
@@ -1517,7 +1517,7 @@ gpkg_tiles_t *gpkg_tiles_open(const gpkg_t *gpkg, const char *name, gpkg_error_t
 void gpkg_tiles_free(gpkg_tiles_t *tiles);
 
 /**
- * The pyramid's table name. Owned by the caller; release with
+ * Returns the pyramid's table name. Owned by the caller; release with
  * `gpkg_string_free`.
  *
  * # Safety
@@ -1527,7 +1527,7 @@ void gpkg_tiles_free(gpkg_tiles_t *tiles);
 char *gpkg_tiles_name(const gpkg_tiles_t *tiles, gpkg_error_t *error);
 
 /**
- * How many tiles the pyramid holds, across every zoom level.
+ * Returns the number of tiles in the pyramid, across every zoom level.
  *
  * # Safety
  *
@@ -1536,11 +1536,12 @@ char *gpkg_tiles_name(const gpkg_tiles_t *tiles, gpkg_error_t *error);
 gpkg_status gpkg_tiles_count(const gpkg_tiles_t *tiles, int64_t *out, gpkg_error_t *error);
 
 /**
- * How many tiles the pyramid holds at one zoom level.
+ * Returns the number of tiles at one zoom level.
  *
- * `zoom_level` is the number a level carries, which `gpkg_tiles_matrix_at`
- * reports, not its position in the ladder. A level the pyramid does not
- * declare holds no tiles, so the answer is 0 rather than an error.
+ * `zoom_level` is the number a level is declared with, which
+ * `gpkg_tiles_matrix_at` reports, not its position in the ladder. A level the
+ * pyramid does not declare contains no tiles, so the answer is 0 rather than
+ * an error.
  *
  * # Safety
  *
@@ -1552,7 +1553,7 @@ gpkg_status gpkg_tiles_count_at(const gpkg_tiles_t *tiles,
                                 gpkg_error_t *error);
 
 /**
- * How many zoom levels the pyramid declares.
+ * Returns the number of zoom levels the pyramid declares.
  *
  * The number of `gpkg_tile_matrix` rows, which bounds the `index` that
  * `gpkg_tiles_matrix_at` takes. A declared level may hold no tiles.
@@ -1566,11 +1567,11 @@ gpkg_status gpkg_tiles_zoom_level_count(const gpkg_tiles_t *tiles,
                                         gpkg_error_t *error);
 
 /**
- * One zoom level's matrix, by position in the declared ladder rather than by
+ * Returns one zoom level's matrix, by position in the declared ladder rather than by
  * zoom number, so a caller can walk them without guessing which exist.
  *
  * `index` runs from zero to `gpkg_tiles_zoom_level_count`, in ascending zoom
- * order, and `zoom_level` is the number the level actually carries, which is
+ * order, and `zoom_level` is the level's actual number, which is
  * what `gpkg_tiles_count_at`, `gpkg_tiles_get` and `gpkg_tiles_put` address
  * tiles by. `matrix_width` and `matrix_height` are the grid in tiles;
  * `tile_width` and `tile_height` are one tile in pixels.
@@ -1593,7 +1594,7 @@ gpkg_status gpkg_tiles_matrix_at(const gpkg_tiles_t *tiles,
                                  gpkg_error_t *error);
 
 /**
- * The pyramid's extent and spatial reference system.
+ * Returns the pyramid's extent and spatial reference system.
  *
  * The `gpkg_tile_matrix_set` bounds: the ground area the grids are indexed
  * against, which is what makes a tile address mean a place. It is not a
@@ -1614,11 +1615,11 @@ gpkg_status gpkg_tiles_extent(const gpkg_tiles_t *tiles,
                               gpkg_error_t *error);
 
 /**
- * Whether a tile is stored at an address.
+ * Returns whether a tile is stored at an address.
  *
  * Cheaper than fetching one to find out, since no payload is read. An address
- * no zoom level or grid contains is `false` rather than an error: it holds no
- * tile either.
+ * no zoom level or grid contains is `false` rather than an error: it contains
+ * no tile either.
  *
  * # Safety
  *
@@ -1632,7 +1633,7 @@ gpkg_status gpkg_tiles_has(const gpkg_tiles_t *tiles,
                            gpkg_error_t *error);
 
 /**
- * The bytes stored at a tile address.
+ * Returns the bytes stored at a tile address.
  *
  * On success `out_data` receives an allocation the caller owns and must
  * release with `gpkg_bytes_free`, and `out_len` its length. A tile that is not
@@ -1656,7 +1657,7 @@ gpkg_status gpkg_tiles_has(const gpkg_tiles_t *tiles,
  * reading many tiles: it copies into the caller's own buffer, so no allocation
  * crosses the boundary and there is no length to keep hold of.
  *
- * The bytes are what the file holds. Nothing is decoded.
+ * The bytes are what the file stores. Nothing is decoded.
  *
  * # Safety
  *
@@ -1672,7 +1673,7 @@ gpkg_status gpkg_tiles_get(const gpkg_tiles_t *tiles,
                            gpkg_error_t *error);
 
 /**
- * Store bytes at a tile address.
+ * Stores bytes at a tile address.
  *
  * The address is checked against the zoom level's grid and the payload's
  * header against the tile size the level declares. Reading a header is not
@@ -1709,7 +1710,7 @@ gpkg_status gpkg_tiles_put(const gpkg_tiles_t *tiles,
                            gpkg_error_t *error);
 
 /**
- * Delete the tile at an address, reporting through `out_deleted` whether one
+ * Deletes the tile at an address, reporting through `out_deleted` whether one
  * was there. `out_deleted` may be NULL.
  *
  * Deleting where there is no tile is success with `out_deleted` false, not an
@@ -1729,13 +1730,13 @@ gpkg_status gpkg_tiles_delete(const gpkg_tiles_t *tiles,
                               gpkg_error_t *error);
 
 /**
- * Release a byte buffer this library returned.
+ * Releases a byte buffer this library returned.
  *
- * `gpkg_tiles_get` is the only call that hands one over, and its `out_len` is
+ * `gpkg_tiles_get` is the only call that returns one, and its `out_len` is
  * the `len` to pass here. Passing a NULL pointer does nothing.
  *
  * Passing the wrong `len` is undefined behaviour, and not one a sanitizer can
- * be relied on to catch. A caller who would rather not carry the length
+ * be relied on to catch. A caller who would rather not track the length
  * should use [`gpkg_tiles_get_into`], where no allocation crosses the
  * boundary and there is nothing to get wrong.
  *
@@ -1747,7 +1748,7 @@ gpkg_status gpkg_tiles_delete(const gpkg_tiles_t *tiles,
 void gpkg_bytes_free(uint8_t *data, size_t len);
 
 /**
- * The bytes at a tile address, into a buffer the caller owns.
+ * Reads the bytes at a tile address into a buffer the caller owns.
  *
  * The safer of the two readers, and the faster one for a caller reading many
  * tiles: no allocation crosses the boundary, so there is no ownership to get
@@ -1775,8 +1776,8 @@ void gpkg_bytes_free(uint8_t *data, size_t len);
  * }
  * ```
  *
- * Passing NULL with a `capacity` of zero is allowed, and is how the length is
- * asked for on its own: nothing is copied, `out_len` holds what the tile
+ * Passing NULL with a `capacity` of zero is allowed, and is how to request
+ * the length on its own: nothing is copied, `out_len` reports what the tile
  * needs, and the return is the `GPKG_STATUS_INVALID_ARGUMENT` that any buffer
  * too small gets.
  *
@@ -1799,7 +1800,7 @@ gpkg_status gpkg_tiles_get_into(const gpkg_tiles_t *tiles,
                                 gpkg_error_t *error);
 
 /**
- * Walk every stored tile, in matrix order.
+ * Walks every stored tile, in matrix order.
  *
  * The cursor visits what the pyramid stores rather than probing the declared
  * grid with `gpkg_tiles_has`, which on a sparse pyramid is the difference
@@ -1807,7 +1808,7 @@ gpkg_status gpkg_tiles_get_into(const gpkg_tiles_t *tiles,
  * open a new one.
  *
  * The cursor counts against the *container*, like an Arrow stream: the
- * container refuses to close while the cursor is alive, and the tiles handle
+ * container cannot close while the cursor is alive, and the tiles handle
  * it came from may be freed first.
  *
  * ```c
@@ -1842,11 +1843,11 @@ gpkg_status gpkg_tiles_get_into(const gpkg_tiles_t *tiles,
 gpkg_tile_cursor_t *gpkg_tiles_cursor(const gpkg_tiles_t *tiles, gpkg_error_t *error);
 
 /**
- * Walk the stored tiles of one zoom level, in matrix order.
+ * Walks the stored tiles of one zoom level, in matrix order.
  *
  * As `gpkg_tiles_cursor`, narrowed to `zoom`. A zoom level the pyramid does
  * not declare scans nothing, since nothing is stored at it; only
- * `gpkg_tiles_cursor_in` refuses an unknown level, because it needs the
+ * `gpkg_tiles_cursor_in` rejects an unknown level, because it needs the
  * level's grid to turn the box into tile indices.
  *
  * # Safety
@@ -1858,7 +1859,7 @@ gpkg_tile_cursor_t *gpkg_tiles_cursor_at(const gpkg_tiles_t *tiles,
                                          gpkg_error_t *error);
 
 /**
- * Walk the stored tiles of one zoom level that a bounding box touches.
+ * Walks the stored tiles of one zoom level that a bounding box touches.
  *
  * The box is in the pyramid's own spatial reference system; nothing is
  * transformed. A box outside the pyramid's extent scans nothing, which is
@@ -1877,7 +1878,7 @@ gpkg_tile_cursor_t *gpkg_tiles_cursor_in(const gpkg_tiles_t *tiles,
                                          gpkg_error_t *error);
 
 /**
- * The next stored tile, or the end of the scan.
+ * Returns the next stored tile, or the end of the scan.
  *
  * On `GPKG_STATUS_OK`, either `out_data` points at the tile's payload with
  * its length in `out_len` and the address in the coordinate out-parameters,
@@ -1909,7 +1910,7 @@ gpkg_status gpkg_tile_cursor_next(gpkg_tile_cursor_t *cursor,
                                   gpkg_error_t *error);
 
 /**
- * Release a tile cursor. Passing NULL does nothing.
+ * Releases a tile cursor. Passing NULL does nothing.
  *
  * # Safety
  *
@@ -1919,7 +1920,7 @@ gpkg_status gpkg_tile_cursor_next(gpkg_tile_cursor_t *cursor,
 void gpkg_tile_cursor_free(gpkg_tile_cursor_t *cursor);
 
 /**
- * Create a tile pyramid, returning its handle.
+ * Creates a tile pyramid, returning its handle.
  *
  * The pyramid is declared over the extent `min_x, min_y, max_x, max_y` in
  * the spatial reference system `srs_id`, which must already exist in the
@@ -1963,12 +1964,12 @@ gpkg_tiles_t *gpkg_tiles_create(const gpkg_t *gpkg,
                                 gpkg_error_t *error);
 
 /**
- * Create a tile pyramid on the web mercator quad, returning its handle.
+ * Creates a tile pyramid on the web mercator quad, returning its handle.
  *
  * The tiling every XYZ basemap uses: `EPSG:3857`, the full quad extent, one
  * 256-pixel tile at zoom 0, doubling per level. `gpkg_add_epsg_srs(gpkg,
  * 3857, ...)` must have run first, since a pyramid cannot name an SRS the
- * file does not carry. Everything else is as `gpkg_tiles_create`.
+ * file does not register. Everything else is as `gpkg_tiles_create`.
  *
  * # Safety
  *
@@ -1981,7 +1982,7 @@ gpkg_tiles_t *gpkg_tiles_create_web_mercator(const gpkg_t *gpkg,
                                              gpkg_error_t *error);
 
 /**
- * Release a string this library returned.
+ * Releases a string this library returned.
  *
  * Every call that returns a `char *` returns an allocation the caller owns,
  * so each one is paired with this. Passing NULL does nothing, which is what
@@ -2003,11 +2004,11 @@ gpkg_tiles_t *gpkg_tiles_create_web_mercator(const gpkg_t *gpkg,
 void gpkg_string_free(char *text);
 
 /**
- * Validate the file, returning the findings most severe first.
+ * Validates the file, returning the findings most severe first.
  *
  * Runs every check the library has: the container tables, the spatial
  * indexes and their trigger generation, the extension catalogue, and the
- * metadata, schema and relation extensions where the file carries them. A
+ * metadata, schema and relation extensions where the file has them. A
  * conforming file returns an empty findings list, and the call succeeding
  * says nothing about the file being clean: ask `gpkg_findings_count`.
  *
@@ -2019,7 +2020,7 @@ void gpkg_string_free(char *text);
 gpkg_status gpkg_validate(const gpkg_t *gpkg, gpkg_findings_t **out, gpkg_error_t *error);
 
 /**
- * Release a findings handle. Passing NULL does nothing.
+ * Releases a findings handle. Passing NULL does nothing.
  *
  * # Safety
  *
@@ -2029,7 +2030,7 @@ gpkg_status gpkg_validate(const gpkg_t *gpkg, gpkg_findings_t **out, gpkg_error_
 void gpkg_findings_free(gpkg_findings_t *findings);
 
 /**
- * How many findings the run produced. Zero for a clean file, and zero for
+ * Returns the number of findings the run produced. Zero for a clean file, and zero for
  * NULL, so a caller need not branch.
  *
  * # Safety
@@ -2039,7 +2040,7 @@ void gpkg_findings_free(gpkg_findings_t *findings);
 size_t gpkg_findings_count(const gpkg_findings_t *findings);
 
 /**
- * One finding: severity, description, and repair advice where repair exists.
+ * Returns one finding: severity, description, and repair advice where repair exists.
  *
  * Findings are ordered most severe first. Every out-parameter may be NULL to
  * skip it; each string written is owned by the caller and released with
@@ -2065,7 +2066,7 @@ gpkg_status gpkg_finding_at(const gpkg_findings_t *findings,
                             gpkg_error_t *error);
 
 /**
- * Begin a write transaction over `layer`.
+ * Begins a write transaction over `layer`.
  *
  * The writer borrows the layer's container, which cannot be closed while the
  * writer is alive. Finish with `gpkg_writer_commit`, or discard the work with
@@ -2083,7 +2084,7 @@ gpkg_status gpkg_finding_at(const gpkg_findings_t *findings,
 gpkg_writer_t *gpkg_layer_writer(const gpkg_layer_t *layer, gpkg_error_t *error);
 
 /**
- * Commit the writer's work and destroy it.
+ * Commits the writer's work and destroys it.
  *
  * The handle is destroyed whether this succeeds or fails, so it must not be
  * used again either way. Inside a transaction the caller opened with
@@ -2098,7 +2099,7 @@ gpkg_writer_t *gpkg_layer_writer(const gpkg_layer_t *layer, gpkg_error_t *error)
 gpkg_status gpkg_writer_commit(gpkg_writer_t *writer, gpkg_error_t *error);
 
 /**
- * Discard the writer's work and destroy it.
+ * Discards the writer's work and destroys it.
  *
  * Everything staged since `gpkg_layer_writer` is rolled back. Inside a
  * transaction the caller opened, nothing is rolled back here: the work stays
@@ -2114,7 +2115,7 @@ gpkg_status gpkg_writer_commit(gpkg_writer_t *writer, gpkg_error_t *error);
 void gpkg_writer_free(gpkg_writer_t *writer);
 
 /**
- * Insert a feature, with or without a geometry.
+ * Inserts a feature, with or without a geometry.
  *
  * `fid` is NULL to have an id assigned, or points at the id to use. The id
  * written is reported through `out_fid` when that is non-NULL.
@@ -2140,7 +2141,7 @@ gpkg_status gpkg_writer_insert(gpkg_writer_t *writer,
                                gpkg_error_t *error);
 
 /**
- * Update the feature `fid`, replacing every value column and, when `wkb` is
+ * Updates the feature `fid`, replacing every value column and, when `wkb` is
  * given, the geometry.
  *
  * `out_matched` reports whether a row with that id was there to update; a
@@ -2160,7 +2161,7 @@ gpkg_status gpkg_writer_update(gpkg_writer_t *writer,
                                gpkg_error_t *error);
 
 /**
- * Update one column of the feature `fid`, leaving every other value and the
+ * Updates one column of the feature `fid`, leaving every other value and the
  * geometry alone.
  *
  * The shape a caller wants when correcting one field: nothing else has to be
@@ -2180,7 +2181,7 @@ gpkg_status gpkg_writer_update_column(gpkg_writer_t *writer,
                                       gpkg_error_t *error);
 
 /**
- * Delete the feature `fid`.
+ * Deletes the feature `fid`.
  *
  * `out_matched` reports whether a row with that id was there to delete; a
  * missing row is not an error.

@@ -1,4 +1,4 @@
-//! The `gpkg_metadata` extension's two tables: `gpkg_metadata`, which holds
+//! The `gpkg_metadata` extension's two tables: `gpkg_metadata`, which stores
 //! documents, and `gpkg_metadata_reference`, which attaches them to a file's
 //! contents.
 //!
@@ -176,7 +176,7 @@ impl NewMetadata {
 }
 
 impl GeoPackage {
-    /// Every `gpkg_metadata` record, by `id`.
+    /// Returns every `gpkg_metadata` record, by `id`.
     ///
     /// An empty vector for a file with no metadata table, which is the common
     /// case rather than an error.
@@ -238,7 +238,7 @@ impl GeoPackage {
         Ok(record)
     }
 
-    /// Add a metadata document, returning its assigned `id`.
+    /// Adds a metadata document, returning its assigned `id`.
     ///
     /// Creates both extension tables and registers the extension on first use.
     ///
@@ -264,7 +264,7 @@ impl GeoPackage {
         Ok(id)
     }
 
-    /// Attach a metadata record to a target.
+    /// Attaches a metadata record to a target.
     ///
     /// `parent_id` names a record this one refines. Requirement 102 forbids it
     /// equalling `md_file_id`, which is rejected here rather than written.
@@ -341,7 +341,7 @@ impl GeoPackage {
         Ok(())
     }
 
-    /// Every `gpkg_metadata_reference` row, as stored.
+    /// Returns every `gpkg_metadata_reference` row, as stored.
     ///
     /// The edges of the reference graph, not a traversal of it: see the module
     /// documentation, and [`GeoPackage::metadata_ancestors`] for the walk.
@@ -394,7 +394,7 @@ impl GeoPackage {
             .collect()
     }
 
-    /// The references attached to `target`.
+    /// Returns the references attached to `target`.
     ///
     /// # Errors
     ///
@@ -418,7 +418,7 @@ impl GeoPackage {
             .collect())
     }
 
-    /// Walk `md_parent_id` upwards from `id`, nearest parent first.
+    /// Walks `md_parent_id` upwards from `id`, nearest parent first.
     ///
     /// The returned records do not include `id` itself. The walk is the reason
     /// enumeration hands back edges rather than a tree: `md_parent_id` is a
@@ -462,7 +462,7 @@ impl GeoPackage {
     }
 }
 
-/// Create both tables and register the extension, once.
+/// Creates both tables and registers the extension, once.
 ///
 /// Both are registered even when only one is about to gain rows: the extension
 /// is the pair, and GDAL writes a row for each, which is what Annex F.8's test

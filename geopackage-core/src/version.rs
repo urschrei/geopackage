@@ -26,11 +26,21 @@ pub enum GpkgVersion {
 }
 
 impl GpkgVersion {
-    /// Classify a file from its `application_id` and `user_version` pragmas.
+    /// Classifies a file from its `application_id` and `user_version` pragmas.
     ///
     /// Returns `None` if the pragmas do not identify a GeoPackage.
     /// `user_version` values above the newest known 104xx range map to
     /// `V1_4` (per spec, clients should attempt to read newer minor versions).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use geopackage_core::GpkgVersion;
+    /// use geopackage_core::version::APPLICATION_ID_GPKG;
+    ///
+    /// let version = GpkgVersion::from_pragmas(APPLICATION_ID_GPKG, 10400);
+    /// assert_eq!(version, Some(GpkgVersion::V1_4));
+    /// ```
     pub fn from_pragmas(application_id: u32, user_version: u32) -> Option<Self> {
         match application_id {
             APPLICATION_ID_GP10 => Some(Self::V1_0),
@@ -45,7 +55,7 @@ impl GpkgVersion {
         }
     }
 
-    /// The `user_version` this crate writes for the given version
+    /// Returns the `user_version` this crate writes for the given version
     /// (`None` for 1.0/1.1, which predate `user_version` use).
     pub fn user_version(self) -> Option<u32> {
         match self {
@@ -56,9 +66,9 @@ impl GpkgVersion {
         }
     }
 
-    /// The version as it is written in the specification, such as `"1.4"`.
+    /// Returns the version as written in the specification, such as `"1.4"`.
     ///
-    /// The minor-patch part is not included because the pragmas do not carry
+    /// The minor-patch part is not included because the pragmas do not record
     /// it: a `user_version` of 10401 and one of 10400 both classify as
     /// [`Self::V1_4`].
     pub fn as_str(self) -> &'static str {

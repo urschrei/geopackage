@@ -15,7 +15,7 @@
 //! [declined in 2018](https://github.com/opengeospatial/geopackage/issues/443),
 //! on the grounds that maintaining it on insert and delete is too expensive.
 //!
-//! So a file that arrives from elsewhere may carry an extent that is stale,
+//! So a file that arrives from elsewhere may record an extent that is stale,
 //! inflated, or simply wrong, and it is still conformant. Nothing in this crate
 //! ever uses the stored extent to answer a query: [`Layer::features_in`] and
 //! [`Layer::cursor_in`] go through the RTree or a full scan with an exact `f64`
@@ -36,16 +36,17 @@
 //! edit session.
 //!
 //! The rule this crate follows is therefore: **never record an extent that
-//! cannot be vouched for**. NULL is spec-legal, honest, and self-repairing at
-//! the reader. A wrong box is believed forever. Concretely:
+//! cannot be guaranteed to cover the layer**. NULL is spec-legal, accurate,
+//! and self-repairing at the reader. A wrong box is believed forever.
+//! Concretely:
 //!
 //! - [`crate::FeatureWriter`] grows the recorded box to cover what it writes and
 //!   never shrinks it, so the result is exact or an over-estimate, which the
 //!   spec expressly permits.
-//! - A writer that cannot vouch for its starting point leaves the extent alone
+//! - A writer that cannot rely on its starting point leaves the extent alone
 //!   rather than replacing it with a box covering only the rows it wrote. That
 //!   is the case where the stored extent is absent, NULL or inverted while the
-//!   table already holds rows.
+//!   table already contains rows.
 //! - [`Layer::extent`] and [`Layer::recompute_extent`] write NULL, rather than
 //!   anything invented, for a layer with no geometries to measure.
 //! - [`Layer::extent`] records what it measured only when it could measure the
@@ -89,14 +90,16 @@ use crate::transaction::WriteTransaction;
 use crate::{BoundingBox, Error, Layer, Result};
 
 impl Layer<'_> {
-    /// The layer's extent: the recorded `gpkg_contents` bounds when they are
-    /// usable, and otherwise the true extent measured from the geometries.
+    /// Returns the layer's extent: the recorded `gpkg_contents` bounds when
+    /// they are usable, and otherwise the true extent measured from the
+    /// geometries.
     ///
-    /// `None` when the layer holds no geometry to measure. The recorded bounds
-    /// are usable when all four are present and neither axis is inverted, which
-    /// is the same test GDAL applies; a recorded box that passes it is returned
-    /// as it stands, so this inherits whatever inexactness the file carries. Use
-    /// [`Self::recompute_extent`] for an answer that does not.
+    /// `None` when the layer contains no geometry to measure. The recorded
+    /// bounds are usable when all four are present and neither axis is
+    /// inverted, which is the same test GDAL applies; a recorded box that
+    /// passes it is returned as it stands, so this inherits whatever
+    /// inexactness the file records. Use [`Self::recompute_extent`] for an
+    /// answer that does not.
     ///
     /// # This can modify the file
     ///
@@ -121,12 +124,12 @@ impl Layer<'_> {
     /// - [`Error::NoGeometryColumn`] if the layer has no geometry column.
     /// - [`Error::ExtentPersist`] if the measurement could not be recorded for a
     ///   reason other than another connection holding a lock: an unwritable
-    ///   directory, a full disk, an I/O error. It carries the measured extent,
-    ///   so the answer is not lost with the failure.
+    ///   directory, a full disk, an I/O error. It includes the measured
+    ///   extent, so the answer is not lost with the failure.
     ///
     /// Lock contention is deliberately **not** an error. A concurrent writer
     /// means the measurement describes a layer that is being changed underneath
-    /// it, so it is not a value this crate could vouch for; the file is left as
+    /// it, so it is not a value this crate can guarantee; the file is left as
     /// it was and the measurement is returned. Waiting for the lock is already
     /// covered by [`crate::OpenOptions::busy_timeout`], and in the two cases
     /// that arise here most often, a read-to-write upgrade under a rollback
@@ -147,8 +150,8 @@ impl Layer<'_> {
         self.measure_and_record()
     }
 
-    /// Measure the extent and record it, returning the measurement whether or
-    /// not it could be recorded.
+    /// Measures the extent and records it, returning the measurement whether
+    /// or not it could be recorded.
     fn measure_and_record(&self) -> Result<Option<BoundingBox>> {
         let conn = self.gpkg().connection();
         // GDAL's `GetUpdate()` gate. A read-only connection has nothing to
@@ -172,7 +175,7 @@ impl Layer<'_> {
         self.finish_recording(measured, recorded)
     }
 
-    /// Write a measured extent into `gpkg_contents`.
+    /// Writes a measured extent into `gpkg_contents`.
     ///
     /// Nothing to measure records NULL, but only where the bounds are not NULL
     /// already: an empty layer is read far more often than it changes, and a
@@ -206,14 +209,14 @@ impl Layer<'_> {
         .map(|_| ())
     }
 
-    /// Decide what a failed recording means.
+    /// Decides what a failed recording means.
     ///
-    /// Another connection's lock is not a failure to report: it says a writer is
-    /// active, which is exactly the condition under which the measurement is not
-    /// vouchable, so the file keeps what it had and the measurement is returned.
-    /// Anything else means the store is unwritable or broken, which the caller
-    /// should hear about, and the measurement travels with the error so that
-    /// hearing about it costs nothing.
+    /// Another connection's lock is not a failure to report: it says a writer
+    /// is active, which is exactly the condition under which the measurement
+    /// cannot be guaranteed, so the file keeps what it had and the
+    /// measurement is returned. Anything else means the store is unwritable or
+    /// broken, which the caller should hear about, and the measurement is
+    /// included with the error so that hearing about it costs nothing.
     fn finish_recording(
         &self,
         measured: Option<BoundingBox>,
@@ -230,7 +233,7 @@ impl Layer<'_> {
         }
     }
 
-    /// Measure the layer's true extent and record it in `gpkg_contents`,
+    /// Measures the layer's true extent and records it in `gpkg_contents`,
     /// returning what was written.
     ///
     /// The counterpart of GDAL's `RECOMPUTE EXTENT ON <layer>`. A layer with no
@@ -247,7 +250,7 @@ impl Layer<'_> {
     /// The measurement and the write share one transaction. Two statements in
     /// autocommit would leave a window for another connection to commit a row
     /// between them, and the box recorded would then exclude it: a value the
-    /// crate cannot vouch for, which is the one thing this module forbids.
+    /// crate cannot guarantee, which is the one thing this module forbids.
     /// Holding the read open closes the window under a rollback journal, and
     /// under WAL turns it into a `SQLITE_BUSY_SNAPSHOT` error rather than a
     /// silent write of a stale measurement.
@@ -282,16 +285,16 @@ impl Layer<'_> {
         Ok(measured)
     }
 
-    /// The recorded extent, if it is usable: all four bounds present, and
-    /// neither axis inverted.
+    /// Returns the recorded extent, if it is usable: all four bounds present,
+    /// and neither axis inverted.
     ///
-    /// An inverted box is treated as absent rather than repaired. It carries no
-    /// information about where the data is, and GDAL reads it the same way.
+    /// An inverted box is treated as absent rather than repaired. It says
+    /// nothing about where the data is, and GDAL reads it the same way.
     ///
     /// This reports only what the file says; it never writes. Its callers
     /// decide what to do about an unusable answer: [`Layer::extent`] measures
-    /// and records, and [`crate::FeatureWriter`] declines to record a fold it
-    /// cannot vouch for.
+    /// and records, and [`crate::FeatureWriter`] does not record a fold it
+    /// cannot guarantee.
     pub(crate) fn stored_extent(&self) -> Result<Option<BoundingBox>> {
         let bounds: Option<[Option<f64>; 4]> = self
             .gpkg()
@@ -312,7 +315,7 @@ impl Layer<'_> {
         Ok(Some(BoundingBox::new(min_x, min_y, max_x, max_y)))
     }
 
-    /// Measure the true extent from the geometries themselves, through the
+    /// Measures the true extent from the geometries themselves, through the
     /// registered `ST_*` functions.
     ///
     /// NULL and empty geometries contribute nothing: `ST_MinX` and its siblings
@@ -344,7 +347,7 @@ impl Layer<'_> {
         Ok(Some(BoundingBox::new(min_x, min_y, max_x, max_y)))
     }
 
-    /// Whether the table holds at least one row.
+    /// Returns `true` if the table contains at least one row.
     ///
     /// The writer needs this to tell "the extent is unknown because nothing has
     /// been written yet", where a fold over what it writes is the whole truth,
@@ -361,7 +364,7 @@ impl Layer<'_> {
     }
 }
 
-/// Whether an error is another connection holding a lock.
+/// Returns `true` if an error is another connection holding a lock.
 ///
 /// `DatabaseBusy` is the plain code behind both `SQLITE_BUSY` and
 /// `SQLITE_BUSY_SNAPSHOT`, which is the whole of what contention looks like on

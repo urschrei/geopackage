@@ -19,13 +19,14 @@ pub const EXTENSION_DEFINITION: &str = "http://www.geopackage.org/spec140/#exten
 /// `gpkg_extensions.scope` value.
 pub const EXTENSION_SCOPE: &str = "write-only";
 
-/// The unquoted rtree virtual table name for a table/column pair.
+/// Returns the unquoted rtree virtual table name for a table/column pair.
 pub fn rtree_table_name(table: &str, column: &str) -> String {
     format!("rtree_{table}_{column}")
 }
 
-/// `CREATE VIRTUAL TABLE` statement, in the exact form checked by the OGC
-/// abstract test suite (double-quoted vtab name, verbatim column list).
+/// Returns the `CREATE VIRTUAL TABLE` statement, in the exact form checked by
+/// the OGC abstract test suite (double-quoted vtab name, verbatim column
+/// list).
 pub fn create_rtree_table_sql(table: &str, column: &str) -> Result<String, Error> {
     Ok(format!(
         "CREATE VIRTUAL TABLE {} USING rtree(id, minx, maxx, miny, maxy)",
@@ -33,7 +34,8 @@ pub fn create_rtree_table_sql(table: &str, column: &str) -> Result<String, Error
     ))
 }
 
-/// Statement populating a freshly created index from existing rows.
+/// Returns the statement populating a freshly created index from existing
+/// rows.
 pub fn populate_rtree_sql(table: &str, column: &str, pk: &str) -> Result<String, Error> {
     let (rt, t, c, i) = quoted(table, column, pk)?;
     Ok(format!(
@@ -42,7 +44,7 @@ pub fn populate_rtree_sql(table: &str, column: &str, pk: &str) -> Result<String,
     ))
 }
 
-/// The complete GeoPackage 1.4 trigger set (insert, update2, update4,
+/// Returns the complete GeoPackage 1.4 trigger set (insert, update2, update4,
 /// update5, update6, update7, delete), verbatim from Annex F.3 modulo
 /// identifier quoting.
 pub fn create_triggers_sql(table: &str, column: &str, pk: &str) -> Result<Vec<String>, Error> {
@@ -122,7 +124,7 @@ pub fn create_triggers_sql(table: &str, column: &str, pk: &str) -> Result<Vec<St
     ])
 }
 
-/// `DROP TRIGGER` statements for the deprecated pre-1.4 triggers
+/// Returns `DROP TRIGGER` statements for the deprecated pre-1.4 triggers
 /// (`update1`, `update3`), for upgrading older GeoPackages.
 pub fn drop_legacy_triggers_sql(table: &str, column: &str) -> Result<[String; 2], Error> {
     let base = rtree_table_name(table, column);
@@ -138,7 +140,7 @@ pub fn drop_legacy_triggers_sql(table: &str, column: &str) -> Result<[String; 2]
     ])
 }
 
-/// Which generation of rtree triggers a table/column pair carries.
+/// Which generation of rtree triggers is present for a table/column pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerGeneration {
     /// The 1.4 set (`update5`/`update6`/`update7` present, no legacy triggers).
@@ -153,7 +155,7 @@ pub enum TriggerGeneration {
     None,
 }
 
-/// Classify trigger generation from the trigger names present for
+/// Classifies the trigger generation from the trigger names present for
 /// `table`/`column` (e.g. from `sqlite_master`).
 pub fn classify_triggers<'a>(
     names: impl IntoIterator<Item = &'a str>,

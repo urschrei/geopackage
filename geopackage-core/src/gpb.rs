@@ -43,7 +43,7 @@ pub enum Envelope {
 }
 
 impl Envelope {
-    /// The envelope contents indicator code (0–4) for the flags byte.
+    /// Returns the envelope contents indicator code (0–4) for the flags byte.
     pub fn indicator(&self) -> u8 {
         match self {
             Envelope::None => 0,
@@ -54,7 +54,8 @@ impl Envelope {
         }
     }
 
-    /// The envelope values as a slice in spec order (empty for `None`).
+    /// Returns the envelope values as a slice in spec order (empty for
+    /// `None`).
     pub fn values(&self) -> &[f64] {
         match self {
             Envelope::None => &[],
@@ -64,7 +65,7 @@ impl Envelope {
         }
     }
 
-    /// `(minx, maxx, miny, maxy)` if an envelope is present.
+    /// Returns `(minx, maxx, miny, maxy)` if an envelope is present.
     pub fn xy_bounds(&self) -> Option<(f64, f64, f64, f64)> {
         match *self.values() {
             [minx, maxx, miny, maxy, ..] => Some((minx, maxx, miny, maxy)),
@@ -114,11 +115,11 @@ pub enum GpbError {
 const MAGIC: [u8; 2] = [0x47, 0x50]; // "GP"
 const HEADER_BASE_LEN: usize = 8;
 
-/// The byte offset of the WKB body within a GPB blob, without decoding the
-/// envelope.
+/// Returns the byte offset of the WKB body within a GPB blob, without
+/// decoding the envelope.
 ///
-/// [`parse_header`] reads the envelope's doubles, which a caller that only wants
-/// the body does not need: the offset follows from the envelope indicator in the
+/// [`parse_header`] also decodes the envelope's doubles, which are not needed
+/// to locate the body: the offset follows from the envelope indicator in the
 /// flags byte alone. Reading a whole geometry column as WKB is exactly that
 /// case, and the decode would otherwise happen once per row. The magic,
 /// version and indicator are still validated, so a malformed blob is an error
@@ -159,11 +160,23 @@ pub fn body_offset(blob: &[u8]) -> Result<usize, GpbError> {
     Ok(offset)
 }
 
-/// Parse a GPB header from `blob`.
+/// Parses a GPB header from `blob`.
 ///
 /// Returns the header and the byte offset at which the ISO WKB body starts.
 /// Reserved flag bits (6–7) are ignored on read; [`encode_header`] always
 /// writes them as zero.
+///
+/// # Examples
+///
+/// ```
+/// use geopackage_core::gpb::{Envelope, encode_header, parse_header};
+///
+/// let blob = encode_header(4326, &Envelope::Xy([0.0, 1.0, 0.0, 1.0]), false, false);
+/// let (header, body_offset) = parse_header(&blob)?;
+/// assert_eq!(header.srs_id, 4326);
+/// assert_eq!(body_offset, 40);
+/// # Ok::<(), geopackage_core::gpb::GpbError>(())
+/// ```
 pub fn parse_header(blob: &[u8]) -> Result<(GpbHeader, usize), GpbError> {
     // Slice pattern for the fixed 8-byte header; `rest` is the envelope
     // region. A shorter blob has no complete header.
@@ -218,7 +231,7 @@ pub fn parse_header(blob: &[u8]) -> Result<(GpbHeader, usize), GpbError> {
     ))
 }
 
-/// Read `N` big-/little-endian `f64` envelope values from the start of the
+/// Reads `N` big-/little-endian `f64` envelope values from the start of the
 /// envelope region `rest`. Returns [`GpbError::Truncated`] (with the offset
 /// the full header would need) when fewer than `N * 8` bytes are present.
 fn read_doubles<const N: usize>(
@@ -248,16 +261,17 @@ fn read_doubles<const N: usize>(
     Ok(vals)
 }
 
-/// The encoded length of a GPB header carrying `envelope`.
+/// Returns the encoded length of a GPB header with the given envelope.
 ///
-/// Lets a caller size a blob for the header and its WKB body together, so the
-/// body does not have to grow the vector the header was written into.
+/// Use this to size a buffer for the header and its WKB body together, so
+/// that appending the body does not reallocate.
 #[must_use]
 pub fn header_len(envelope: &Envelope) -> usize {
     HEADER_BASE_LEN + envelope.values().len() * 8
 }
 
-/// Encode a GPB header (always little-endian, version 0, reserved bits zero).
+/// Encodes a GPB header (always little-endian, version 0, reserved bits
+/// zero).
 ///
 /// Concatenate the result with an ISO WKB body to form a complete GPB blob.
 pub fn encode_header(srs_id: i32, envelope: &Envelope, empty: bool, extended: bool) -> Vec<u8> {
@@ -266,12 +280,12 @@ pub fn encode_header(srs_id: i32, envelope: &Envelope, empty: bool, extended: bo
     out
 }
 
-/// [`encode_header`] appending into an existing buffer.
+/// Encodes a GPB header into an existing buffer; [`encode_header`] with the
+/// allocation under the caller's control.
 ///
-/// The write path builds one blob per geometry: sizing it for the header and
-/// the body up front and appending both means a row is encoded in a single
-/// allocation, where encoding the header into its own exactly-sized vector and
-/// then appending the body grows that vector every time.
+/// The write path builds one blob per geometry: sizing the buffer for the
+/// header and the body up front and appending both encodes a row in a single
+/// allocation.
 pub fn encode_header_into(
     out: &mut Vec<u8>,
     srs_id: i32,

@@ -1,4 +1,4 @@
-//! Write-path throughput benchmarks (M2 acceptance criterion 4).
+//! Write-path throughput benchmarks.
 //!
 //! Measures [`geopackage::Layer::write_all`] for point, linestring, and polygon
 //! layers across the three index configurations:

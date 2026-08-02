@@ -50,12 +50,12 @@
 //!
 //! # Worked programs
 //!
-//! Five complete C programs ship in `examples/`, and every one is compiled
+//! Five complete C programs ship in `examples/`, all are compiled
 //! against the committed header and run by the test suite on every CI run,
-//! so unlike prose they cannot drift from the ABI. Each is one pattern:
+//! to avoid drift from the ABI:
 //!
 //! - `smoke.c`: first contact. Open a file, walk its layers, pull a layer
-//!   through the Arrow stream, watch the close refusal hold.
+//!   through the Arrow stream, watch the close-while-in-use failure hold.
 //! - `inspect.c`: the fail-fast pattern. A tolerant read-only open, the
 //!   warnings it collected, layer and pyramid enumeration, the extensions
 //!   catalogue with support levels, and validation, all before any write
@@ -73,8 +73,8 @@
 //! # The edit cycle
 //!
 //! The usual thing to do with a GeoPackage is to open a file that already
-//! exists, look at what it holds, add to it, and close it. This program is
-//! that cycle. The rows to append arrive as an Arrow stream, here from a
+//! exists, look at what it contains, add to it, and close it.
+//! The rows to append arrive as an Arrow stream, here from a
 //! function left undefined: another layer's [`gpkg_layer_read_arrow`] produces
 //! one, and so does any library that exports the Arrow C Data Interface.
 //!
@@ -173,7 +173,7 @@
 //!   overwrites the pointer, and the first message is then unreachable.
 //! - **Failure** is NULL for a function returning a pointer, and a status other
 //!   than `GPKG_STATUS_OK` for a function returning [`Status`]. The codes are a
-//!   small set of categories to branch on, and the message carries the detail.
+//!   small set of categories to branch on, and the message supplies the detail.
 //! - **Handles** are opaque, and each has exactly one destructor: `gpkg_t` from
 //!   [`gpkg_open`], [`gpkg_open_read_only`] or [`gpkg_create`] is destroyed by
 //!   [`gpkg_close`]; `gpkg_layer_t` from [`gpkg_layer_open`],
@@ -207,7 +207,7 @@
 //! memset(&stream, 0, sizeof(stream));
 //! gpkg_layer_read_arrow(layer, &stream, &error);
 //!
-//! // Refused while either child is alive, and nothing is torn down.
+//! // Fails while either child is alive, and nothing is torn down.
 //! if (gpkg_close(gpkg, &error) == GPKG_STATUS_HANDLE_IN_USE) {
 //!     gpkg_error_clear(&error);
 //! }
@@ -217,7 +217,7 @@
 //! gpkg_close(gpkg, &error);  // now it succeeds
 //! ```
 //!
-//! The refusal is the runtime form of the rule the Rust API states in its
+//! That failure is the runtime form of the rule the Rust API states in its
 //! types, where `close` takes `self` and a live `Layer` borrows it, so the
 //! compiler rejects the same program instead. [`handle`] describes how the
 //! borrow is erased and what keeps the erasure sound.
@@ -245,10 +245,10 @@
 //!   Arrow schema without its columns being described in C at all.
 //! - [`tiles`]: tile pyramids, addressed by zoom level, column and row.
 //!   Created, enumerated, read by address or walked by cursor; payloads cross
-//!   the boundary as the bytes the file holds, and nothing is decoded.
+//!   the boundary as the bytes the file stores, and nothing is decoded.
 //! - [`error`] and [`util`]: the status codes, the error out-parameter, and
 //!   [`gpkg_string_free`]. The other deallocator, [`gpkg_bytes_free`], sits
-//!   with [`tiles`], which is the only thing that hands out an owned buffer.
+//!   with [`tiles`], which is the only thing that returns an owned buffer.
 //!
 //! - [`writer`]: changing features a row at a time. Insert, update and delete,
 //!   with geometry as WKB and values as [`gpkg_value_t`].

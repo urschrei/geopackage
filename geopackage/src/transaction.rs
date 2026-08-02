@@ -23,24 +23,24 @@
 //!
 //! Savepoints are the other way to get nesting, and they are rejected here.
 //! `rusqlite::Connection::savepoint` needs `&mut Connection`, and this crate
-//! holds only `&Connection` (the read path shares it), so savepoints would have
+//! has only `&Connection` (the read path shares it), so savepoints would have
 //! to be driven as raw `SAVEPOINT`/`RELEASE` text. That is more machinery for a
-//! finer rollback granularity nobody has asked for. If someone does, this is the
-//! one type that would have to change.
+//! finer rollback granularity nobody has requested. If a need arises, this is
+//! the one type that would have to change.
 //!
 //! # What it costs the caller
 //!
-//! Three consequences follow, and each is documented at the API that carries
-//! it:
+//! Three consequences follow, and each is documented at the API it belongs
+//! to:
 //!
 //! - **`commit` does not commit** when the transaction was inherited. It still
 //!   does everything else a commit does, including flushing `gpkg_contents`,
-//!   but the durable commit is the caller's to issue.
+//!   but the caller issues the durable commit.
 //! - **Dropping a writer does not roll back** when the transaction was
 //!   inherited, so an error part-way through leaves partial work staged in the
 //!   caller's transaction for them to discard.
 //! - **[`crate::Layer::write_all`]'s `batch_size` stops bounding
-//!   transactions**, because every batch belongs to the caller's.
+//!   transactions**, because every batch belongs to the caller's transaction.
 
 use rusqlite::{Connection, Transaction};
 
@@ -50,8 +50,8 @@ use rusqlite::{Connection, Transaction};
 /// asking the connection whether a transaction is already open. Finish with
 /// [`Self::commit`], which commits only what it opened.
 ///
-/// This is deliberately not `Deref<Target = Connection>`. Every site that holds
-/// one also holds the `&Connection` it was opened on, and the two are the same
+/// This is deliberately not `Deref<Target = Connection>`. Every site that has
+/// one also has the `&Connection` it was opened on, and the two are the same
 /// connection, so a deref would offer a second name for something already in
 /// scope. Statements are issued against the connection; this value exists only
 /// to decide the commit.
@@ -64,7 +64,7 @@ pub(crate) enum WriteTransaction<'conn> {
 }
 
 impl<'conn> WriteTransaction<'conn> {
-    /// Open a transaction on `conn`, or inherit the one already open.
+    /// Opens a transaction on `conn`, or inherits the one already open.
     ///
     /// `unchecked_transaction` rather than `transaction`, because the latter
     /// needs `&mut Connection` and this crate shares `&Connection` between the
@@ -77,11 +77,12 @@ impl<'conn> WriteTransaction<'conn> {
         }
     }
 
-    /// Commit, if there is anything here to commit.
+    /// Commits, if there is anything here to commit.
     ///
     /// An inherited transaction is left open and reports success: the work is
     /// staged in the caller's transaction, and committing here would commit
-    /// their statements alongside ours, which is not this call's to decide.
+    /// the caller's statements too, which is not this call's decision to
+    /// make.
     pub(crate) fn commit(self) -> rusqlite::Result<()> {
         match self {
             Self::Owned(tx) => tx.commit(),

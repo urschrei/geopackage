@@ -56,7 +56,7 @@ serde_json = "1"
 # Only the `system` feature: the default set also probes disks, networks,
 # components and users, none of which we ask anything about.
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
-# M3 Arrow data plane. `arrow-array`/`arrow-schema` only: the GeoArrow WKB
+# The Arrow data plane. `arrow-array`/`arrow-schema` only: the GeoArrow WKB
 # encoding is a Binary field carrying extension metadata, so `geoarrow-array`
 # would add a dependency without adding capability. Revisit if native GeoArrow
 # coordinate encodings land (roadmap 05-m3).
@@ -67,9 +67,9 @@ arrow-schema = "59"
 # handful of subcommands do not need.
 clap = { version = "4", features = ["derive"] }
 
-# Inherited by every member via `[lints] workspace = true`. The planned
-# `geopackage-ffi` crate (M3) is the sole intended exception: it will not
-# inherit these lints, confining `unsafe` to the C ABI boundary.
+# Inherited by every member via `[lints] workspace = true`. The
+# `geopackage-ffi` crate is the sole exception: it does not inherit these
+# lints, confining `unsafe` to the C ABI boundary.
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

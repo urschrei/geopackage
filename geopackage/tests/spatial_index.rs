@@ -2,7 +2,7 @@
 //! `drop_spatial_index`, and `repair_spatial_index`.
 //!
 //! These exercise the write-side index management on top of the read-side
-//! `has_spatial_index` / `features_in` from M1: building an index over an
+//! `has_spatial_index` / `features_in`: building an index over an
 //! already-populated table, its `gpkg_extensions` registration, and the
 //! legacy-trigger repair path.
 
@@ -296,7 +296,7 @@ fn features_in_uses_vtab_with_identical_results() {
 }
 
 /// The `EXPLAIN QUERY PLAN` detail lines for `sql`, joined. The rtree form
-/// carries four placeholders (the query box) and the full-scan form none; both
+/// has four placeholders (the query box) and the full-scan form none; both
 /// are bound with the right number of dummy values.
 fn query_plan(conn: &Connection, sql: &str) -> String {
     let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
@@ -545,7 +545,7 @@ fn upsert_null(conn: &Connection, fid: i64) {
     .unwrap();
 }
 
-/// M2 acceptance criterion 3: the RTree contents provably match a full-scan
+/// The RTree contents provably match a full-scan
 /// rebuild after an arbitrary insert/update/delete/upsert sequence, with the
 /// initial index built through both the triggered and the bulk path.
 ///
@@ -1121,7 +1121,7 @@ fn bulk_build_skips_null_and_empty_geometries() {
     assert_eq!(rtree_rows(conn), envelope_scan(conn));
 }
 
-/// A geometry whose GPB header carries no envelope must still be indexed by the
+/// A geometry whose GPB header has no envelope must still be indexed by the
 /// bulk build, with bounds taken from the WKB body.
 ///
 /// GDAL writes envelope-less point blobs, so this is the common shape of a

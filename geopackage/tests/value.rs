@@ -214,10 +214,7 @@ fn non_boolean_integer_is_lenient_by_default_and_strict_on_request() {
         .connection()
         .query_row("SELECT typeof(flag) FROM things", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(
-        stored, "integer",
-        "BOOLEAN carries no affinity to convert it"
-    );
+    assert_eq!(stored, "integer", "BOOLEAN has no affinity to convert it");
 
     assert_eq!(
         gpkg.column_values("things", "flag", ConversionOptions::default())
@@ -255,7 +252,7 @@ fn conformant_booleans_are_unaffected_by_strictness() {
     }
 }
 
-/// The layer read path carries lenient value interpretation by default, so a
+/// The layer read path uses lenient value interpretation by default, so a
 /// file with a non-conformant `BOOLEAN` still reads.
 ///
 /// `Layer` seeds itself from `ConversionOptions::default()` rather than

@@ -20,7 +20,7 @@
 //! | anything else | by SQLite affinity | see below |
 //!
 //! **Integer widths collapse to `Int64`.** SQLite does not enforce a declared
-//! integer width: a `TINYINT` column holds whatever integer it was given, and
+//! integer width: a `TINYINT` column stores whatever integer it was given, and
 //! reading one that exceeds the width is an ordinary thing to have to do. Every
 //! width therefore maps to `Int64`, which cannot truncate. This matches
 //! [`crate::Value::Integer`], which collapses the same widths for the same
@@ -29,22 +29,22 @@
 //! **`DATETIME` becomes microsecond UTC.** The GeoPackage form is a UTC
 //! ISO 8601 string with millisecond precision, and
 //! [`geopackage_core::datetime::DateTime`] parses finer input than that, so
-//! microseconds hold what the strict form can express with room for the lenient
+//! microseconds represent what the strict form can express with room for the lenient
 //! form. Values are converted, not reinterpreted: the text is parsed and the
 //! instant is written, so a consumer sees a timestamp rather than a string.
 //!
 //! **A type outside the vocabulary is mapped by SQLite's affinity rules.**
 //! `VARCHAR(20)` and friends are common in files written by other tools, and
 //! [`geopackage_core::types::ColumnType::parse`] returns `None` for them.
-//! Refusing to read such a column would make the Arrow path useless on real
+//! Rejecting such a column would make the Arrow path useless on real
 //! files, so the declared type is run through the affinity rules from
 //! [SQLite section 3.1](https://www.sqlite.org/datatype3.html#determination_of_column_affinity),
-//! which is exactly how SQLite itself decides what such a column holds.
+//! which is exactly how SQLite itself decides what such a column contains.
 //!
 //! # Nullability
 //!
 //! A field is non-nullable only when the column is `NOT NULL`. The primary key
-//! is non-nullable regardless, since SQLite's `INTEGER PRIMARY KEY` cannot hold
+//! is non-nullable regardless, since SQLite's `INTEGER PRIMARY KEY` cannot be
 //! NULL.
 
 use std::sync::Arc;
@@ -81,7 +81,7 @@ pub struct ArrowBatches<'a> {
 }
 
 pub(crate) enum BatchSource<'a> {
-    /// Boxed: the sequential reader carries its query text, schema handles
+    /// Boxed: the sequential reader stores its query text, schema handles
     /// and segment list, several times the parallel variant's size, and an
     /// `ArrowBatches` should stay cheap to move.
     Sequential(Box<SequentialBatches<'a>>),

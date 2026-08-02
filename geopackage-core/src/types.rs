@@ -45,10 +45,20 @@ pub enum GeometryType {
 }
 
 impl GeometryType {
-    /// Parse a geometry type name, case-insensitively.
+    /// Parses a geometry type name, case-insensitively.
     ///
     /// The spec writes the names in upper case; other cases appear in the
     /// wild and are accepted on read.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use geopackage_core::types::GeometryType;
+    ///
+    /// assert_eq!(GeometryType::parse("POINT"), Some(GeometryType::Point));
+    /// assert_eq!(GeometryType::parse("point"), Some(GeometryType::Point));
+    /// assert_eq!(GeometryType::parse("TRIANGLE"), None);
+    /// ```
     pub fn parse(name: &str) -> Option<Self> {
         Some(match name.to_ascii_uppercase().as_str() {
             "GEOMETRY" => Self::Geometry,
@@ -70,7 +80,7 @@ impl GeometryType {
         })
     }
 
-    /// The canonical (upper-case) spec name.
+    /// Returns the canonical (upper-case) spec name.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Geometry => "GEOMETRY",
@@ -91,7 +101,7 @@ impl GeometryType {
         }
     }
 
-    /// Whether this type requires a `gpkg_geom_<TYPE>` extension row
+    /// Returns `true` if this type requires a `gpkg_geom_<TYPE>` extension row
     /// (everything beyond the core eight).
     pub fn is_extension(&self) -> bool {
         !matches!(
@@ -129,8 +139,8 @@ impl GeometryType {
         Self::Surface,
     ];
 
-    /// The type an ISO WKB base code names, or `None` for a code that is not a
-    /// GeoPackage geometry type.
+    /// Returns the type an ISO WKB base code names, or `None` for a code that
+    /// is not a GeoPackage geometry type.
     ///
     /// The base code is the type code with its dimension offset removed: ISO
     /// WKB adds 1000 for Z, 2000 for M and 3000 for ZM.
@@ -138,7 +148,7 @@ impl GeometryType {
         Self::ALL.get(base as usize).copied()
     }
 
-    /// Which bit of a [`GeometryTypeSet`] stands for this type.
+    /// Returns the [`GeometryTypeSet`] bit for this type.
     const fn bit(self) -> u16 {
         1 << match self {
             Self::Geometry => 0,
@@ -166,13 +176,13 @@ impl fmt::Display for GeometryType {
     }
 }
 
-/// A set of geometry types, held as a bitset so that walking a geometry can
+/// A set of geometry types, stored as a bitset so that walking a geometry can
 /// accumulate one without allocating.
 ///
-/// This exists to report what a geometry body actually contains, which is not
-/// the same as the type its column declares: a `MULTICURVE` may hold
-/// `CIRCULARSTRING`s and a `MULTISURFACE` may hold `CURVEPOLYGON`s, and under
-/// Annex F.1 Requirement 67 each non-linear type present needs its own
+/// Reports what a geometry body actually contains, which is not the same as
+/// the type its column declares: a `MULTICURVE` may contain `CIRCULARSTRING`s
+/// and a `MULTISURFACE` may contain `CURVEPOLYGON`s, and under Annex F.1
+/// Requirement 67 each non-linear type present needs its own
 /// `gpkg_geom_<TYPE>` row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GeometryTypeSet(u16);
@@ -183,27 +193,28 @@ impl GeometryTypeSet {
         Self(0)
     }
 
-    /// Add one type.
+    /// Adds a type to the set.
     pub fn insert(&mut self, ty: GeometryType) {
         self.0 |= ty.bit();
     }
 
-    /// Add everything `other` holds.
+    /// Adds every type in `other` to the set.
     pub fn extend(&mut self, other: Self) {
         self.0 |= other.0;
     }
 
-    /// Whether `ty` is in the set.
+    /// Returns `true` if `ty` is in the set.
     pub fn contains(self, ty: GeometryType) -> bool {
         self.0 & ty.bit() != 0
     }
 
-    /// Whether the set holds nothing.
+    /// Returns `true` if the set is empty.
     pub fn is_empty(self) -> bool {
         self.0 == 0
     }
 
-    /// The types in the set, in the order [`GeometryType`] declares them.
+    /// Iterates over the types in the set, in the order [`GeometryType`]
+    /// declares them.
     pub fn iter(self) -> impl Iterator<Item = GeometryType> {
         GeometryType::ALL
             .into_iter()
@@ -248,12 +259,22 @@ pub enum ColumnType {
 }
 
 impl ColumnType {
-    /// Parse a declared SQL column type as it appears in
+    /// Parses a declared SQL column type as it appears in
     /// `PRAGMA table_info`, case-insensitively, including `TEXT(N)`/`BLOB(N)`
     /// length suffixes.
     ///
-    /// Returns `None` for declared types outside the spec vocabulary (which
-    /// SQLite happily stores; lenient readers keep the raw string instead).
+    /// Returns `None` for declared types outside the spec vocabulary; SQLite
+    /// stores such types, and lenient readers keep the raw string.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use geopackage_core::types::ColumnType;
+    ///
+    /// assert_eq!(ColumnType::parse("INTEGER"), Some(ColumnType::Integer));
+    /// assert_eq!(ColumnType::parse("TEXT(50)"), Some(ColumnType::Text(Some(50))));
+    /// assert_eq!(ColumnType::parse("VARCHAR(20)"), None);
+    /// ```
     pub fn parse(declared: &str) -> Option<Self> {
         let s = declared.trim().to_ascii_uppercase();
         if let Some(rest) = s.strip_prefix("TEXT") {
@@ -276,7 +297,7 @@ impl ColumnType {
         })
     }
 
-    /// The canonical DDL spelling of this type.
+    /// Returns the canonical DDL spelling of this type.
     pub fn ddl_name(&self) -> String {
         match self {
             Self::Boolean => "BOOLEAN".into(),
@@ -303,16 +324,16 @@ impl ColumnType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ZmFlag {
-    /// `0`: the dimension is prohibited (geometries must not carry it).
+    /// `0`: the dimension is prohibited (no geometry may include it).
     Prohibited,
-    /// `1`: the dimension is mandatory (every geometry carries it).
+    /// `1`: the dimension is mandatory (every geometry must include it).
     Mandatory,
-    /// `2`: the dimension is optional (geometries may or may not carry it).
+    /// `2`: the dimension is optional.
     Optional,
 }
 
 impl ZmFlag {
-    /// Interpret a raw `z`/`m` column code. Returns `None` for any value
+    /// Interprets a raw `z`/`m` column code. Returns `None` for any value
     /// other than `0`, `1`, or `2`.
     pub fn from_code(code: u8) -> Option<Self> {
         Some(match code {
@@ -323,7 +344,8 @@ impl ZmFlag {
         })
     }
 
-    /// The raw `z`/`m` column code (`0`, `1`, or `2`) for this constraint.
+    /// Returns the raw `z`/`m` column code (`0`, `1`, or `2`) for this
+    /// constraint.
     pub fn code(&self) -> u8 {
         match self {
             Self::Prohibited => 0,
@@ -333,7 +355,7 @@ impl ZmFlag {
     }
 }
 
-/// Parse the `(N)` suffix of `TEXT(N)`/`BLOB(N)`; empty means no length.
+/// Parses the `(N)` suffix of `TEXT(N)`/`BLOB(N)`; empty means no length.
 fn parse_len_suffix(rest: &str) -> Option<Option<u32>> {
     let rest = rest.trim();
     if rest.is_empty() {

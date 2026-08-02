@@ -5,7 +5,7 @@
 //! attributes, and its payloads are opaque here: this crate stores, indexes and
 //! validates tiles, and decodes none of them. What it does read is each
 //! payload's header, which is how a tile written at the wrong pixel size, or in
-//! a format the table may not hold, is caught rather than stored (see
+//! a format the table may not contain, is caught rather than stored (see
 //! [`geopackage_core::tiles::probe`]).
 //!
 //! The geometry of a pyramid, and the spec's rules about it, live in
@@ -14,7 +14,7 @@
 //!
 //! Creation validates; reading does not. A pyramid another implementation wrote
 //! opens on whatever its `gpkg_tile_matrix` rows say, because a reader that
-//! refuses an imperfect file is of no use for looking at one.
+//! rejects an imperfect file cannot be used to inspect one.
 
 use geopackage_core::ddl;
 use geopackage_core::ident::quote;
@@ -32,9 +32,9 @@ use crate::{
 
 /// A declarative builder for a tile pyramid.
 ///
-/// Carries the pyramid's extent and spatial reference system
-/// ([`TileMatrixSet`]), the zoom levels it declares ([`TileMatrix`]), and the
-/// catalogue metadata, then goes to [`GeoPackage::create_tile_pyramid`].
+/// Declares the pyramid's extent and spatial reference system
+/// ([`TileMatrixSet`]), its zoom levels ([`TileMatrix`]), and the catalogue
+/// metadata, then goes to [`GeoPackage::create_tile_pyramid`].
 ///
 /// The zoom levels are usually built from the extent rather than written out:
 /// [`TileMatrixSet::ladder`] derives a power-of-two ladder whose pixel sizes
@@ -71,7 +71,8 @@ pub struct TilePyramidBuilder {
 }
 
 impl TilePyramidBuilder {
-    /// Start a builder for a pyramid of the given name over the given extent.
+    /// Starts a builder for a pyramid of the given name over the given
+    /// extent.
     ///
     /// The name is validated when the builder reaches
     /// [`GeoPackage::create_tile_pyramid`], not here.
@@ -86,42 +87,42 @@ impl TilePyramidBuilder {
         }
     }
 
-    /// Declare one zoom level.
+    /// Declares one zoom level.
     #[must_use]
     pub fn matrix(mut self, matrix: TileMatrix) -> Self {
         self.matrices.push(matrix);
         self
     }
 
-    /// Declare a set of zoom levels, in any order.
+    /// Declares a set of zoom levels, in any order.
     #[must_use]
     pub fn matrices(mut self, matrices: impl IntoIterator<Item = TileMatrix>) -> Self {
         self.matrices.extend(matrices);
         self
     }
 
-    /// Set `gpkg_contents.identifier` (a human-readable name). Defaults to the
-    /// table name when left unset.
+    /// Sets `gpkg_contents.identifier` (a human-readable name). Defaults to
+    /// the table name when left unset.
     #[must_use]
     pub fn identifier(mut self, identifier: impl Into<String>) -> Self {
         self.identifier = Some(identifier.into());
         self
     }
 
-    /// Set `gpkg_contents.description`.
+    /// Sets `gpkg_contents.description`.
     #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
     }
 
-    /// Allow zoom levels that do not step by factors of two, registering the
+    /// Allows zoom levels that do not step by factors of two, registering the
     /// `gpkg_zoom_other` extension for the table.
     ///
     /// Off by default, and the omission is an error rather than a silent
     /// registration: a ladder that does not double is usually a mistake in the
-    /// pixel sizes, and a file that quietly carries an extension is one whose
-    /// readers may not have it. Such a pyramid is always *read* whether or not
+    /// pixel sizes, and a file that quietly registers an extension is one
+    /// whose readers may not have it. Such a pyramid is always *read* whether or not
     /// this was set, as it is for the file's original writer.
     #[must_use]
     pub fn allow_zoom_other(mut self, allow: bool) -> Self {
@@ -129,7 +130,7 @@ impl TilePyramidBuilder {
         self
     }
 
-    /// The table name.
+    /// Returns the table name.
     pub fn table_name(&self) -> &str {
         &self.table_name
     }
@@ -139,7 +140,7 @@ impl TilePyramidBuilder {
 ///
 /// Obtained from [`GeoPackage::create_tile_pyramid`], [`GeoPackage::tiles`] or
 /// [`GeoPackage::tile_pyramids`]. The matrix set and the zoom levels are read
-/// once at construction and held sorted by zoom level, so addressing a tile
+/// once at construction and kept sorted by zoom level, so addressing a tile
 /// costs a binary search rather than a query, and the handle borrows the
 /// [`GeoPackage`] for its lifetime.
 pub struct TilePyramid<'a> {
@@ -173,8 +174,8 @@ struct TileSql {
 }
 
 impl TileSql {
-    /// Build the statements for a table, whose name is quoted once here rather
-    /// than at every call.
+    /// Builds the statements for a table, whose name is quoted once here
+    /// rather than at every call.
     fn new(table: &str) -> Result<Self> {
         let table = quote(table)?;
         // Matrix order, which is what a consumer walking a pyramid expects:
@@ -207,7 +208,7 @@ impl TileSql {
 
 /// One tile of a pyramid, borrowing its payload from the row it was read from.
 ///
-/// The payload is the bytes as stored, in whatever format the table holds:
+/// The payload is the bytes as stored, in whatever format the table contains:
 /// this crate does not decode them. [`Tile::to_vec`] copies, and everything
 /// else here borrows.
 #[derive(Debug)]
@@ -217,22 +218,23 @@ pub struct Tile<'a> {
 }
 
 impl Tile<'_> {
-    /// Where this tile sits in the pyramid.
+    /// Returns where this tile sits in the pyramid.
     pub fn coord(&self) -> TileCoord {
         self.coord
     }
 
-    /// The stored payload, borrowed from SQLite's row buffer.
+    /// Returns the stored payload, borrowed from SQLite's row buffer.
     pub fn data(&self) -> &[u8] {
         self.data
     }
 
-    /// The stored payload, copied into an owned buffer.
+    /// Returns the stored payload, copied into an owned buffer.
     pub fn to_vec(&self) -> Vec<u8> {
         self.data.to_vec()
     }
 
-    /// What the payload's header declares: its encoding and pixel size.
+    /// Returns what the payload's header declares: its encoding and pixel
+    /// size.
     ///
     /// # Errors
     ///
@@ -253,7 +255,7 @@ impl std::fmt::Debug for TilePyramid<'_> {
 }
 
 impl GeoPackage {
-    /// Create a tile pyramid from a [`TilePyramidBuilder`].
+    /// Creates a tile pyramid from a [`TilePyramidBuilder`].
     ///
     /// Emits the tile pyramid user table, a `gpkg_contents` row
     /// (`data_type = 'tiles'`, bounded by the matrix set extent), the
@@ -326,7 +328,7 @@ impl GeoPackage {
         }
         conn.execute_batch(&tiles::create_tile_table_sql(name)?)?;
         // The extent is the matrix set's, not a measurement: for tiles it is
-        // exact by Requirement 144, and gpkg_contents holds the same box.
+        // exact by Requirement 144, and gpkg_contents records the same box.
         conn.execute(
             "INSERT INTO gpkg_contents \
              (table_name, data_type, identifier, description, min_x, min_y, max_x, max_y, srs_id) \
@@ -381,7 +383,7 @@ impl GeoPackage {
         self.tiles(name)
     }
 
-    /// Open a tile pyramid by name.
+    /// Opens a tile pyramid by name.
     ///
     /// Nothing is validated: the matrix set and zoom levels are reported as the
     /// file records them.
@@ -430,7 +432,7 @@ impl GeoPackage {
         })
     }
 
-    /// Every tile pyramid in the file, by `gpkg_contents` name.
+    /// Returns every tile pyramid in the file, by `gpkg_contents` name.
     pub fn tile_pyramids(&self) -> Result<Vec<TilePyramid<'_>>> {
         if !table_exists(self.connection(), "gpkg_tile_matrix_set")? {
             return Ok(Vec::new());
@@ -449,33 +451,33 @@ impl GeoPackage {
 }
 
 impl<'a> TilePyramid<'a> {
-    /// The physical SQLite table name backing this pyramid.
+    /// Returns the physical SQLite table name backing this pyramid.
     pub fn table_name(&self) -> &str {
         &self.table_name
     }
 
-    /// The [`GeoPackage`] this pyramid belongs to.
+    /// Returns the [`GeoPackage`] this pyramid belongs to.
     pub fn gpkg(&self) -> &'a GeoPackage {
         self.gpkg
     }
 
-    /// The pyramid's extent and spatial reference system.
+    /// Returns the pyramid's extent and spatial reference system.
     pub fn matrix_set(&self) -> &TileMatrixSet {
         &self.matrix_set
     }
 
-    /// Every declared zoom level, ascending.
+    /// Returns every declared zoom level, ascending.
     pub fn matrices(&self) -> &[TileMatrix] {
         &self.matrices
     }
 
-    /// The zoom levels this pyramid declares, ascending.
+    /// Returns the zoom levels this pyramid declares, ascending.
     pub fn zoom_levels(&self) -> Vec<i64> {
         self.matrices.iter().map(|m| m.zoom_level).collect()
     }
 
-    /// The tile matrix for one zoom level, or `None` if the pyramid does not
-    /// declare that level.
+    /// Returns the tile matrix for one zoom level, or `None` if the pyramid
+    /// does not declare that level.
     pub fn matrix(&self, zoom_level: i64) -> Option<&TileMatrix> {
         self.matrices
             .binary_search_by_key(&zoom_level, |matrix| matrix.zoom_level)
@@ -483,12 +485,12 @@ impl<'a> TilePyramid<'a> {
             .and_then(|index| self.matrices.get(index))
     }
 
-    /// One tile's payload, or `None` where the pyramid holds no tile at that
-    /// address.
+    /// Returns one tile's payload, or `None` where the pyramid has no tile at
+    /// that address.
     ///
     /// Copies the payload out of SQLite once, which is what an owned return
     /// costs. [`Self::get_tile_into`] reuses a buffer instead, and
-    /// [`Self::cursor`] lends the bytes without copying at all.
+    /// [`Self::cursor`] borrows the bytes without copying at all.
     ///
     /// The address is not checked against the zoom level's grid: a tile outside
     /// it is simply absent, as any other empty address is. The write path is
@@ -504,8 +506,8 @@ impl<'a> TilePyramid<'a> {
             .optional()?)
     }
 
-    /// One tile's payload, read into a caller-owned buffer, returning whether a
-    /// tile was there.
+    /// Reads one tile's payload into a caller-owned buffer, returning whether
+    /// a tile was there.
     ///
     /// The buffer is cleared first and reused, so a loop over many tiles
     /// allocates once rather than once per tile. Its contents are untouched
@@ -527,8 +529,8 @@ impl<'a> TilePyramid<'a> {
         Ok(found.is_some())
     }
 
-    /// Whether the pyramid holds a tile at an address, without reading its
-    /// payload.
+    /// Returns `true` if the pyramid has a tile at an address, without
+    /// reading its payload.
     pub fn has_tile(&self, coord: TileCoord) -> Result<bool> {
         let conn = self.gpkg.connection();
         let mut stmt = conn.prepare_cached(&self.sql.exists)?;
@@ -541,7 +543,7 @@ impl<'a> TilePyramid<'a> {
             .is_some())
     }
 
-    /// How many tiles the pyramid holds.
+    /// Returns the number of tiles in the pyramid.
     pub fn tile_count(&self) -> Result<i64> {
         let conn = self.gpkg.connection();
         Ok(conn
@@ -549,7 +551,7 @@ impl<'a> TilePyramid<'a> {
             .query_row([], |r| r.get(0))?)
     }
 
-    /// How many tiles the pyramid holds at one zoom level.
+    /// Returns the number of tiles at one zoom level.
     pub fn tile_count_at(&self, zoom_level: i64) -> Result<i64> {
         let conn = self.gpkg.connection();
         Ok(conn
@@ -557,23 +559,23 @@ impl<'a> TilePyramid<'a> {
             .query_row([zoom_level], |r| r.get(0))?)
     }
 
-    /// Stream every tile, in matrix order: by zoom level, then north to south,
-    /// then west to east.
+    /// Streams every tile, in matrix order: by zoom level, then north to
+    /// south, then west to east.
     ///
     /// Two calls, as the feature read path is: the cursor owns the statement,
     /// and [`TileCursor::tiles`] borrows it to walk the rows. There is no
     /// materialising counterpart, because one zoom level of a real pyramid is
-    /// more payload than a `Vec` of them should hold.
+    /// more payload than a `Vec` of them should contain.
     pub fn cursor(&self) -> Result<TileCursor<'_>> {
         self.cursor_with(&self.sql.scan, Vec::new())
     }
 
-    /// Stream the tiles of one zoom level, in matrix order.
+    /// Streams the tiles of one zoom level, in matrix order.
     pub fn cursor_at(&self, zoom_level: i64) -> Result<TileCursor<'_>> {
         self.cursor_with(&self.sql.scan_at, vec![zoom_level.into()])
     }
 
-    /// Stream the tiles of one zoom level that a bounding box touches, in
+    /// Streams the tiles of one zoom level that a bounding box touches, in
     /// matrix order.
     ///
     /// The box is in the pyramid's own spatial reference system; this crate
@@ -626,7 +628,7 @@ impl<'a> TilePyramid<'a> {
         Ok(TileCursor { stmt, params })
     }
 
-    /// Write one tile, replacing whatever was at that address.
+    /// Writes one tile, replacing whatever was at that address.
     ///
     /// Validated: the zoom level has to be one the pyramid declares, the column
     /// and row have to fall inside that level's grid, and the payload has to be
@@ -652,7 +654,7 @@ impl<'a> TilePyramid<'a> {
         writer.commit()
     }
 
-    /// Delete one tile, returning whether there was one to delete.
+    /// Deletes one tile, returning whether there was one to delete.
     pub fn delete_tile(&self, coord: TileCoord) -> Result<bool> {
         let mut writer = self.writer()?;
         let deleted = writer.delete(coord)?;
@@ -660,7 +662,7 @@ impl<'a> TilePyramid<'a> {
         Ok(deleted)
     }
 
-    /// Open a [`TileWriter`]: one transaction, prepared statements, and
+    /// Opens a [`TileWriter`]: one transaction, prepared statements, and
     /// per-tile `put`/`delete`.
     ///
     /// Nothing is written until [`TileWriter::commit`]; dropping the writer
@@ -669,8 +671,8 @@ impl<'a> TilePyramid<'a> {
         TileWriter::new(self)
     }
 
-    /// The extension this crate cannot identify that stops it writing to this
-    /// pyramid, if there is one.
+    /// Returns the extension this crate cannot identify that stops it writing
+    /// to this pyramid, if there is one.
     ///
     /// Read when the handle was opened, so a row registered since then is not
     /// reflected here. See [`GeoPackage::blocking_extension`].
@@ -678,7 +680,7 @@ impl<'a> TilePyramid<'a> {
         self.write_block.as_ref()
     }
 
-    /// Refuse a write when an unidentified extension covers the pyramid.
+    /// Rejects a write when an unidentified extension covers the pyramid.
     fn check_writable(&self) -> Result<()> {
         match &self.write_block {
             None => Ok(()),
@@ -690,8 +692,8 @@ impl<'a> TilePyramid<'a> {
         }
     }
 
-    /// Write many tiles, committing every `batch_size` of them (`0` writes
-    /// them all in one transaction), and return how many were written.
+    /// Writes many tiles, committing every `batch_size` of them (`0` writes
+    /// them all in one transaction), and returns how many were written.
     ///
     /// Payloads are borrowed, not consumed: anything that is `AsRef<[u8]>` will
     /// do, so tiles copied from another pyramid go straight from one row's
@@ -726,7 +728,7 @@ impl<'a> TilePyramid<'a> {
         }
     }
 
-    /// Whether this pyramid satisfies the spec's consistency rules.
+    /// Returns `Ok` if this pyramid satisfies the spec's consistency rules.
     ///
     /// Creation checks this, so a pyramid this crate wrote always passes. Worth
     /// asking of one that arrived in a file from elsewhere, since every tile
@@ -734,7 +736,7 @@ impl<'a> TilePyramid<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Tile`] carrying the first rule the pyramid breaks.
+    /// [`Error::Tile`] naming the first rule the pyramid breaks.
     pub fn validate(&self) -> Result<()> {
         self.matrix_set.validate(&self.matrices)?;
         Ok(())
@@ -748,7 +750,8 @@ impl<'a> TilePyramid<'a> {
 /// commits. Dropping a writer without committing rolls it back.
 ///
 /// Unless a transaction was already open on the connection, in which case the
-/// writer joins it and both of those sentences belong to whoever began it. See
+/// writer joins it and committing or rolling back passes to whoever began it.
+/// See
 /// [`Self::commit`], and [`crate::FeatureWriter::commit`] for the reasoning in
 /// full.
 ///
@@ -762,7 +765,7 @@ pub struct TileWriter<'conn> {
     conn: &'conn Connection,
     table_name: String,
     /// The pyramid's zoom levels, ascending. Copied in rather than borrowed so
-    /// the writer carries one lifetime; a pyramid has tens of levels, and this
+    /// the writer has one lifetime; a pyramid has tens of levels, and this
     /// is one allocation per writer against a binary search per tile.
     matrices: Vec<TileMatrix>,
     /// `INSERT ... ON CONFLICT DO UPDATE`: writing a tile where one already
@@ -799,7 +802,7 @@ impl<'conn> TileWriter<'conn> {
         })
     }
 
-    /// Write one tile, replacing whatever was at that address.
+    /// Writes one tile, replacing whatever was at that address.
     ///
     /// # Errors
     ///
@@ -840,7 +843,7 @@ impl<'conn> TileWriter<'conn> {
         Ok(())
     }
 
-    /// Delete one tile, returning whether there was one to delete.
+    /// Deletes one tile, returning whether there was one to delete.
     pub fn delete(&mut self, coord: TileCoord) -> Result<bool> {
         let deleted = self.delete_stmt.execute(rusqlite::params![
             coord.zoom_level,
@@ -851,7 +854,7 @@ impl<'conn> TileWriter<'conn> {
         Ok(deleted > 0)
     }
 
-    /// Refresh `gpkg_contents.last_change` and commit.
+    /// Refreshes `gpkg_contents.last_change` and commits.
     ///
     /// A writer that wrote nothing commits an empty transaction and leaves
     /// `last_change` alone.
@@ -888,7 +891,8 @@ impl<'conn> TileWriter<'conn> {
         Ok(())
     }
 
-    /// Register `gpkg_webp` for this table, once, on the first WebP payload.
+    /// Registers `gpkg_webp` for this table, once, on the first WebP
+    /// payload.
     fn register_webp(&mut self) -> Result<()> {
         if self.webp_registered.is_none() {
             self.webp_registered = Some(crate::extensions::is_registered(
@@ -921,8 +925,8 @@ impl std::fmt::Debug for TileWriter<'_> {
     }
 }
 
-/// A prepared tile scan, holding its statement so that
-/// [`TileCursor::tiles`] can lend each payload straight out of the row.
+/// A prepared tile scan, owning its statement so that [`TileCursor::tiles`]
+/// can borrow each payload straight out of the row.
 ///
 /// The split is the one [`crate::FeatureCursor`] uses, and for the same reason:
 /// rusqlite's row cursor borrows its statement, so an iterator owning both
@@ -941,7 +945,7 @@ impl std::fmt::Debug for TileCursor<'_> {
 }
 
 impl TileCursor<'_> {
-    /// Run the scan and walk its tiles.
+    /// Runs the scan and walks its tiles.
     ///
     /// Each call re-runs the query from the start, so a cursor can be walked
     /// more than once.
@@ -953,11 +957,11 @@ impl TileCursor<'_> {
     }
 }
 
-/// A scan in progress, lending one tile at a time.
+/// A scan in progress, borrowing one tile at a time.
 ///
-/// Not an [`Iterator`]: an iterator's item cannot borrow from the iterator, and
-/// the whole point here is to hand out the payload without copying it. Walk it
-/// with `while let Some(tile) = stream.next()?`, or hand a closure to
+/// Not an [`Iterator`]: an iterator's item cannot borrow from the iterator,
+/// and the whole point here is to return the payload without copying it. Walk
+/// it with `while let Some(tile) = stream.next()?`, or pass a closure to
 /// [`Self::for_each`].
 ///
 /// ```
@@ -993,7 +997,7 @@ impl std::fmt::Debug for TileStream<'_> {
 }
 
 impl TileStream<'_> {
-    /// The next tile of the scan, or `None` at its end.
+    /// Returns the next tile of the scan, or `None` at its end.
     ///
     /// The returned [`Tile`] borrows this stream, so it is dropped before the
     /// next call. Copy what you need out of it with [`Tile::to_vec`].
@@ -1011,7 +1015,7 @@ impl TileStream<'_> {
         }))
     }
 
-    /// Run a closure over every remaining tile.
+    /// Runs a closure over every remaining tile.
     ///
     /// The same walk as [`Self::next`] with the borrow handled for you. The
     /// closure's error ends the scan.
@@ -1042,7 +1046,7 @@ fn tile_blob<'a>(row: &'a rusqlite::Row<'a>, index: usize) -> rusqlite::Result<&
     }
 }
 
-/// Read a pyramid's `gpkg_tile_matrix_set` row.
+/// Reads a pyramid's `gpkg_tile_matrix_set` row.
 fn read_matrix_set(conn: &Connection, table: &str) -> Result<Option<TileMatrixSet>> {
     Ok(conn
         .query_row(
@@ -1062,11 +1066,11 @@ fn read_matrix_set(conn: &Connection, table: &str) -> Result<Option<TileMatrixSe
         .optional()?)
 }
 
-/// Read a pyramid's `gpkg_tile_matrix` rows, ascending by zoom level.
+/// Reads a pyramid's `gpkg_tile_matrix` rows, ascending by zoom level.
 ///
 /// A file with no `gpkg_tile_matrix` table at all has no zoom levels, which is
 /// an empty pyramid rather than an error: the tiles table may be empty, and the
-/// spec requires a row only for a level that holds tiles.
+/// spec requires a row only for a level that contains tiles.
 fn read_matrices(conn: &Connection, table: &str) -> Result<Vec<TileMatrix>> {
     if !table_exists(conn, "gpkg_tile_matrix")? {
         return Ok(Vec::new());

@@ -1,5 +1,5 @@
 //! Handle construction cost, against the per-call work it would be repeated
-//! for (M5 phase 9).
+//! for.
 //!
 //! `Layer<'a>` and `TilePyramid<'a>` borrow the `GeoPackage` they came from, so
 //! a C ABI handle cannot hold one: the borrow is exactly the use-after-free the

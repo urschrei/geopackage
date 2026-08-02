@@ -15,7 +15,8 @@ struct RowLayout {
     fid: Option<usize>,
     geometry: Option<usize>,
     /// Batch column index for each of the layer's value columns, in order.
-    /// `None` for a column the batch does not carry, which is written as NULL.
+    /// `None` for a column the batch does not include, which is written as
+    /// NULL.
     values: Vec<Option<usize>>,
 }
 
@@ -86,7 +87,7 @@ impl crate::writer::WritableRow for ArrowRow {
 }
 
 impl Layer<'_> {
-    /// Write Arrow [`RecordBatch`]es into this layer.
+    /// Writes Arrow [`RecordBatch`]es into this layer.
     ///
     /// The columnar counterpart of [`crate::Layer::write_all`], and it shares
     /// that path: batching, the bulk spatial-index decision and the single
@@ -96,7 +97,7 @@ impl Layer<'_> {
     ///
     /// The reader's schema must name columns this layer has. Extra columns in
     /// the batch are an error rather than being ignored, since silently dropping
-    /// data a caller asked to write is worse than refusing it. A column of the
+    /// data a caller asked to write is worse than rejecting it. A column of the
     /// layer that the batch does not name is left to its default.
     ///
     /// A [`RecordBatchReader`](arrow_array::RecordBatchReader) does not say how many rows it will produce, which
@@ -186,7 +187,7 @@ impl Layer<'_> {
 
 /// Work out where each of the layer's columns sits in this batch.
 ///
-/// The layout is computed once per batch and shared, so a row carries two `Arc`
+/// The layout is computed once per batch and shared, so a row stores two `Arc`
 /// handles rather than a copy of anything.
 fn layout_of(
     batch: &RecordBatch,

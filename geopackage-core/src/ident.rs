@@ -2,10 +2,25 @@
 
 use crate::Error;
 
-/// Quote an arbitrary identifier for safe interpolation into SQLite DDL/DML.
+/// Quotes an identifier for safe interpolation into SQLite DDL or DML.
 ///
-/// Uses standard SQL double-quoting, doubling embedded quotes. Rejects
-/// identifiers containing NUL, which SQLite cannot represent.
+/// Uses standard SQL double-quoting, doubling embedded quotes.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidIdentifier`] if the identifier is empty or contains
+/// NUL, which SQLite cannot represent.
+///
+/// # Examples
+///
+/// ```
+/// use geopackage_core::ident::quote;
+///
+/// assert_eq!(quote("roads")?, "\"roads\"");
+/// assert_eq!(quote("we\"ird")?, "\"we\"\"ird\"");
+/// assert!(quote("").is_err());
+/// # Ok::<(), geopackage_core::Error>(())
+/// ```
 pub fn quote(ident: &str) -> Result<String, Error> {
     if ident.is_empty() || ident.contains('\0') {
         return Err(Error::InvalidIdentifier(ident.to_owned()));

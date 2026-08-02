@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Run the PDOK geopackage-validator against a GeoPackage file (M2 acceptance
-# criterion 1, advisory tier).
+# Run the PDOK geopackage-validator against a GeoPackage file (advisory
+# tier).
 #
 # The PDOK validator applies stricter naming/index/SRS/geometry rules than the
 # OGC spec mandates; per roadmap/08-testing-conformance.md its findings are

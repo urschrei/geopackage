@@ -58,7 +58,7 @@ fn add_3857(gpkg: *mut gpkg_t, error: &mut gpkg_error_t) -> Status {
     unsafe { gpkg_add_epsg_srs(gpkg.cast(), 3857, &raw mut *error) }
 }
 
-/// Whether the file on disk carries EPSG:3857, read through the Rust API after
+/// Whether the file on disk has EPSG:3857, read through the Rust API after
 /// the C handle has been closed.
 fn has_3857(path: &Path) -> bool {
     let gpkg = geopackage::GeoPackage::open(path).expect("reopen");
@@ -124,7 +124,7 @@ fn a_second_begin_is_refused_and_leaves_the_first_alone() {
     // SAFETY: as above; the refusal is the case under test.
     let nested = unsafe { gpkg_begin(gpkg, &raw mut error) };
     assert_eq!(nested, Status::InvalidArgument);
-    let text = message(&error).expect("a refusal carries a message");
+    let text = message(&error).expect("a refusal includes a message");
     assert!(text.contains("already open"), "unexpected message: {text}");
     // SAFETY: an error slot this library filled in.
     unsafe { gpkg_error_clear(&raw mut error) };
@@ -149,7 +149,7 @@ fn finishing_a_transaction_that_was_never_begun_is_refused() {
     // SAFETY: a live handle and a writable error slot.
     let committed = unsafe { gpkg_commit(gpkg, &raw mut error) };
     assert_eq!(committed, Status::InvalidArgument);
-    let text = message(&error).expect("a refusal carries a message");
+    let text = message(&error).expect("a refusal includes a message");
     assert!(
         text.contains("no transaction is open"),
         "unexpected message: {text}"

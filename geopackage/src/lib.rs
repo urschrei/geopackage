@@ -9,6 +9,11 @@
 //! [`GeoPackage::tiles`] returns a [`TilePyramid`] handle for the tile side,
 //! described under [Tiles](#tiles) below.
 //!
+//! A command-line companion, `gpkg`, is built by the `geopackage-cli` crate:
+//! `gpkg info`, `gpkg validate`, `gpkg index`, `gpkg repair`, `gpkg copy` and
+//! `gpkg tiles` inspect, check and convert files without writing any code.
+//! Install it with `cargo install geopackage-cli`.
+//!
 //! # Quick start
 //!
 //! Create a file, define a point layer, write features, query by bounding box:
@@ -42,7 +47,7 @@
 //! )?;
 //!
 //! // Served by the layer's RTree index, which `create_layer` builds unless
-//! // `TableSchemaBuilder::spatial_index(false)` declines it.
+//! // `TableSchemaBuilder::spatial_index(false)` turns it off.
 //! for feature in layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))? {
 //!     let feature = feature?;
 //!     assert_eq!(feature.value("name"), Some(ValueRef::Text("Dublin")));
@@ -50,20 +55,23 @@
 //! # Ok(()) }
 //! ```
 //!
-//! [`Layer::features`] iterates every row as an owned [`Feature`];
-//! [`Layer::select`] appends a caller-supplied raw SQL `WHERE` clause;
-//! [`Layer::features_in`] runs the bounding-box query, served by the RTree
-//! index when one is present and a full scan otherwise, with identical
-//! results. Each has a streaming counterpart ([`Layer::cursor`],
-//! [`Layer::cursor_select`], [`Layer::cursor_in`]) that reads one row at a
-//! time and holds no result set. For writing, [`Layer::write_all`] batch-loads
-//! and [`Layer::writer`] opens a transaction with per-row
-//! `insert`/`update`/`delete` ([`FeatureWriter`]).
-//! [`GeoPackage::create_attributes_table`] and [`GeoPackage::attributes`] are
-//! the same for non-spatial attribute tables, and [`GeoPackage::add_epsg_srs`]
-//! registers an EPSG code in `gpkg_spatial_ref_sys`.
-//! [`GeoPackage::open_lenient`] tolerates legacy and lightly malformed files,
-//! collecting [`OpenWarning`]s instead of failing.
+//! # Features
+//!
+//! - [`Layer::features`]: every row as an owned [`Feature`]
+//! - [`Layer::select`]: rows matching a caller-supplied raw SQL `WHERE` clause
+//! - [`Layer::features_in`]: rows in a bounding box, served by the RTree index
+//!   when one is present and a full scan otherwise, with identical results
+//! - [`Layer::cursor`], [`Layer::cursor_select`], [`Layer::cursor_in`]:
+//!   streaming counterparts that read one row at a time and hold no result set
+//! - [`Layer::write_all`]: batch load
+//! - [`Layer::writer`]: a transaction with per-row `insert`/`update`/`delete`
+//!   ([`FeatureWriter`])
+//! - [`GeoPackage::create_attributes_table`], [`GeoPackage::attributes`]: the
+//!   same for non-spatial attribute tables
+//! - [`GeoPackage::add_epsg_srs`]: registers an EPSG code in
+//!   `gpkg_spatial_ref_sys`
+//! - [`GeoPackage::open_lenient`]: accepts legacy and lightly malformed files,
+//!   collecting [`OpenWarning`]s instead of failing
 //!
 //! # Geometry round trips
 //!
@@ -72,7 +80,7 @@
 //! implements [`geo_traits::GeometryTrait`], and every write method accepts
 //! any `impl GeometryTrait<T = f64>`. A geometry can therefore be streamed
 //! out of one file, measured, and written into another without being
-//! converted to a `geo-types` value in either direction if need be: the analysis reads
+//! converted to a `geo-types` value in either direction: the analysis reads
 //! coordinates from the stored encoding, and the writer encodes WKB from the
 //! same view. What _does_ allocate is each row's blob, copied out of SQLite,
 //! and the new blob the writer serialises; an algorithm that produces new
@@ -170,7 +178,7 @@
 //! **Payloads are opaque.** This crate stores, indexes and validates tiles; it
 //! decodes none of them, and depends on no image codec. It reads each
 //! payload's *header*, which is how a tile written at the wrong pixel size, or
-//! in a format the table may not hold, is rejected rather than stored. Turning
+//! in a format the table may not contain, is rejected rather than stored. Turning
 //! a tile into pixels, or a source raster into a pyramid, needs an image
 //! library or GDAL on top of this one.
 //!
@@ -179,7 +187,7 @@
 //! rather than to a global grid. [`TileMatrix::flip_row`](core::tiles::TileMatrix::flip_row)
 //! converts to and from the TMS sense, and
 //! [`TileMatrixSet::xyz_to_tile`](core::tiles::TileMatrixSet::xyz_to_tile)
-//! refuses rather than mis-addressing when a pyramid is not the standard web
+//! errors rather than mis-addressing when a pyramid is not the standard web
 //! mercator quad.
 //!
 //! ```
@@ -212,8 +220,8 @@
 //! tiles.put_tile(TileCoord::new(1, 0, 0), &png(256, 256))?;
 //! assert!(tiles.get_tile(TileCoord::new(1, 0, 0))?.is_some());
 //!
-//! // Streaming a pyramid lends each payload out of the row it was read from,
-//! // so nothing is copied to walk one.
+//! // Streaming a pyramid borrows each payload from the row it was read
+//! // from, so nothing is copied to walk one.
 //! let mut cursor = tiles.cursor()?;
 //! let mut stream = cursor.tiles()?;
 //! while let Some(tile) = stream.next()? {
@@ -279,23 +287,23 @@
 //! `gpkg_extensions` is where a file declares what it uses beyond the core
 //! spec. [`GeoPackage::extensions`] reads that catalogue, and
 //! [`Layer::extensions`] and [`TilePyramid::extensions`] narrow it to one
-//! table. Every row identifies as an [`Extension`] and carries an
+//! table. Every row identifies as an [`Extension`] and has an
 //! [`ExtensionSupport`]: read and written here, identified and left alone,
-//! removed from the standard in 2016 and tolerated on read, or not recognised
+//! removed from the standard in 2016 and accepted on read, or not recognised
 //! at all.
 //!
 //! That last one is not only informational. Writing to a table covered by an
-//! extension this crate cannot identify is refused with
+//! extension this crate cannot identify fails with
 //! [`Error::UnsupportedExtension`], because such an extension may constrain
-//! the rows, triggers or encodings of the table it covers and writing beside
-//! it could produce a file its own producer can no longer read. Reading is
-//! never refused for this reason. [`GeoPackage::blocking_extension`] asks the
+//! the rows, triggers or encodings of the table it covers, and writing beside
+//! it could produce a file its own producer can no longer read. Reading never
+//! fails for this reason. [`GeoPackage::blocking_extension`] asks the
 //! question directly, and
-//! [`OpenOptions::allow_unsupported_extension_writes`] overrides the refusal.
+//! [`OpenOptions::allow_unsupported_extension_writes`] disables the check.
 //!
 //! Two extensions are surfaced as part of the model rather than as catalogue
 //! rows. `gpkg_crs_wkt` puts a WKT2 CRS definition and a coordinate epoch on
-//! [`Srs`], which is how a CRS with no WKT1 form is carried at all.
+//! [`Srs`], which is how a CRS with no WKT1 form is represented at all.
 //! `gpkg_schema` describes columns and constrains their values:
 //! [`GeoPackage::data_columns`] and [`Column::data_column`] give the
 //! descriptions, [`GeoPackage::column_constraint`] resolves what a column's
@@ -342,7 +350,7 @@
 //! # }
 //!
 //! // The constraints are advisory in the format, so checking written values
-//! // against them is asked for rather than assumed.
+//! // against them is opt-in rather than assumed.
 //! let gpkg = OpenOptions::new()
 //!     .enforce_column_constraints(true)
 //!     .open(&path)?;
@@ -358,7 +366,7 @@
 //! - **`geo-types`** (on by default): forwards `geopackage-core`'s feature of
 //!   the same name, which adds
 //!   [`GpbGeometry::to_geo`](geopackage_core::geometry::GpbGeometry::to_geo).
-//!   Decline it with `default-features = false`.
+//!   Disable it with `default-features = false`.
 //! - **`arrow`** (off by default): the columnar paths above. It pulls in
 //!   `arrow-array` and `arrow-schema`, which a caller using only the scalar API
 //!   does not need.
@@ -404,11 +412,11 @@
 //!   ([`TilePyramidBuilder::allow_zoom_other`], off by default, since that
 //!   needs the `gpkg_zoom_other` extension registered).
 //! - **Column projection**, through [`Layer::with_columns`] and
-//!   [`Layer::without_geometry`]: which columns a read of that handle fetches
-//!   and carries. Everything, by default. Worth setting on a layer whose
-//!   geometries are large and whose attributes are what you are after, since
-//!   the geometry is otherwise fetched and copied into every row whether or
-//!   not anything looks at it.
+//!   [`Layer::without_geometry`]: which columns a read of that handle
+//!   fetches. Everything, by default. Worth setting on a layer with large
+//!   geometries when only the attributes are needed, since the geometry is
+//!   otherwise fetched and copied into every row whether or not anything
+//!   reads it.
 //! - [`ConversionOptions`]: how stored values are read back, through
 //!   [`Layer::with_conversion_options`]: which `DATETIME` text forms are
 //!   accepted ([`DateTimeParsing`], default [`DateTimeParsing::Strict`]) and
@@ -438,7 +446,7 @@
 //! [`Layer::write_all_with`].
 //!
 //! Anything not covered here is reachable as SQL: [`GeoPackage::connection`]
-//! hands back the underlying rusqlite connection.
+//! returns the underlying rusqlite connection.
 //!
 //! # What writes, and when
 //!
@@ -473,9 +481,9 @@
 //!
 //! ## What can fail, and why
 //!
-//! - **A read-only connection**, per the table: [`Error::Sqlite`] carrying
-//!   SQLite's `SQLITE_READONLY`. [`Layer::extent`] is the exception that treats
-//!   this as a non-event, since it has an answer either way.
+//! - **A read-only connection**, per the table: [`Error::Sqlite`] with
+//!   SQLite's `SQLITE_READONLY`. [`Layer::extent`] is the exception, since it
+//!   has an answer either way.
 //! - **Another connection holding the write lock**: the statement waits up to
 //!   [`OpenOptions::busy_timeout`] and then fails with `SQLITE_BUSY`. Again
 //!   [`Layer::extent`] is the exception: contention means the measurement
@@ -491,8 +499,8 @@
 //!   [`Layer::cursor_in`].
 //! - **A store that cannot be written for any other reason**, an unwritable
 //!   directory, a full disk, an I/O error: [`Error::ExtentPersist`] from
-//!   [`Layer::extent`], which carries the measurement so the answer is not lost
-//!   with the failure, and [`Error::Sqlite`] from everything else.
+//!   [`Layer::extent`], which includes the measurement so the answer is not
+//!   lost with the failure, and [`Error::Sqlite`] from everything else.
 //!
 //! # Reading untrusted files
 //!
@@ -505,8 +513,8 @@
 
 // `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
 // workspace lints table (root Cargo.toml). This crate never uses `unsafe`; the
-// planned `geopackage-ffi` crate (M3) is the sole intended exception, and will
-// opt out of the workspace lints rather than relax them here.
+// `geopackage-ffi` crate is the sole exception, and opts out of the workspace
+// lints rather than relaxing them here.
 
 #[cfg(feature = "arrow")]
 pub mod arrow;
@@ -584,7 +592,7 @@ pub struct GeoPackage {
     /// The journal mode this handle is responsible for finalising: `Wal` only
     /// when it opted into WAL and must reset the file to `Delete` on close/drop.
     journal_mode: JournalMode,
-    /// Whether writes proceed to tables carrying an extension this crate
+    /// Whether writes proceed to tables covered by an extension this crate
     /// cannot identify. See
     /// [`OpenOptions::allow_unsupported_extension_writes`].
     allow_unsupported_extension_writes: bool,
@@ -595,29 +603,33 @@ pub struct GeoPackage {
 }
 
 impl GeoPackage {
-    /// Create a new GeoPackage 1.4 file at `path` with default options
+    /// Creates a new GeoPackage 1.4 file at `path` with default options
     /// ([`JournalMode::Delete`], SQLite's default `synchronous`).
     ///
-    /// Fails if `path` already exists and is non-empty. Use [`OpenOptions`] to
-    /// create in [`JournalMode::Wal`] or with an explicit [`Synchronous`] level.
+    /// Use [`OpenOptions`] to create in [`JournalMode::Wal`] or with an
+    /// explicit [`Synchronous`] level.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AlreadyExists`] if `path` already exists and is non-empty.
     pub fn create<P: AsRef<Path>>(path: P) -> Result<Self> {
         OpenOptions::new().create(path)
     }
 
-    /// Open an existing GeoPackage read-write with default options.
+    /// Opens an existing GeoPackage read-write with default options.
     ///
     /// Use [`OpenOptions`] to select a journal mode or `synchronous` level.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         OpenOptions::new().open(path)
     }
 
-    /// Open an existing GeoPackage read-only with default options.
+    /// Opens an existing GeoPackage read-only with default options.
     pub fn open_read_only<P: AsRef<Path>>(path: P) -> Result<Self> {
         OpenOptions::new().open_read_only(path)
     }
 
-    /// Wrap an already-open connection with default options, validating that it
-    /// is a GeoPackage and registering the required SQL functions.
+    /// Wraps an already-open connection with default options, validating that
+    /// it is a GeoPackage and registering the required SQL functions.
     pub fn from_connection(conn: Connection) -> Result<Self> {
         // A caller-supplied connection is left in whatever journal mode it
         // already has (no journal pragma applied).
@@ -685,8 +697,8 @@ impl GeoPackage {
         Self::from_connection_configured(conn, options, apply_journal)
     }
 
-    /// Validate a connection as a GeoPackage, apply `options`, and register the
-    /// SQL functions. `apply_journal` is false for a read-only or
+    /// Validates a connection as a GeoPackage, applies `options`, and
+    /// registers the SQL functions. `apply_journal` is false for a read-only or
     /// caller-supplied connection whose journal mode must be left untouched.
     pub(crate) fn from_connection_configured(
         conn: Connection,
@@ -732,12 +744,12 @@ impl GeoPackage {
         })
     }
 
-    /// The spec version declared by the file's pragmas.
+    /// Returns the spec version declared by the file's pragmas.
     pub fn version(&self) -> GpkgVersion {
         self.version
     }
 
-    /// The rows of `gpkg_contents`.
+    /// Returns the rows of `gpkg_contents`.
     pub fn contents(&self) -> Result<Vec<ContentsEntry>> {
         let mut stmt = self.connection().prepare(
             "SELECT table_name, data_type, identifier, srs_id, min_x, min_y, max_x, max_y \
@@ -758,14 +770,14 @@ impl GeoPackage {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Borrow the underlying connection (escape hatch: full SQL access).
+    /// Borrows the underlying connection (escape hatch: full SQL access).
     pub fn connection(&self) -> &Connection {
         self.conn
             .as_ref()
             .expect("connection is present for the whole handle lifetime")
     }
 
-    /// Consume, returning the underlying connection.
+    /// Consumes the handle, returning the underlying connection.
     ///
     /// This **opts out** of the interchange-first close guarantee: the returned
     /// connection keeps whatever journal mode it is in, so a handle that was in
@@ -780,7 +792,7 @@ impl GeoPackage {
             .expect("connection is present until into_connection consumes it")
     }
 
-    /// Close the GeoPackage, finalising a [`JournalMode::Wal`] file back to a
+    /// Closes the GeoPackage, finalising a [`JournalMode::Wal`] file back to a
     /// single [`JournalMode::Delete`] file.
     ///
     /// For a WAL handle this checkpoints the WAL (`TRUNCATE`) and resets the
@@ -814,8 +826,8 @@ impl Drop for GeoPackage {
     }
 }
 
-/// Apply `options` to a freshly opened connection, returning the journal mode
-/// the resulting handle is responsible for finalising.
+/// Applies `options` to a freshly opened connection, returning the journal
+/// mode the resulting handle is responsible for finalising.
 ///
 /// The synchronous level, when set, is always applied. The journal mode is
 /// applied only when `apply_journal` is true (false for a read-only connection,
@@ -851,7 +863,7 @@ fn apply_open_options(
     Ok(JournalMode::Delete)
 }
 
-/// Checkpoint a WAL database fully into the main file and reset it to the
+/// Checkpoints a WAL database fully into the main file and resets it to the
 /// `DELETE` rollback journal, removing the `-wal`/`-shm` sidecars.
 fn finalize_wal_to_delete(conn: &Connection) -> Result<()> {
     // TRUNCATE flushes every committed frame into the main database and shrinks
@@ -861,7 +873,7 @@ fn finalize_wal_to_delete(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Read a 32-bit SQLite database-header pragma (`application_id` or
+/// Reads a 32-bit SQLite database-header pragma (`application_id` or
 /// `user_version`) as a `u32`.
 ///
 /// SQLite reports these fields sign-extended into an `i64`; the values are
@@ -885,14 +897,14 @@ pub(crate) fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bo
     .map(|o| o.is_some())
 }
 
-/// Resolve `name` to the actual SQLite table (or view) name, matching
+/// Resolves `name` to the actual SQLite table (or view) name, matching
 /// case-insensitively.
 ///
 /// SQLite object names resolve case-insensitively, but joins between catalogue
 /// tables (`gpkg_contents`, `gpkg_geometry_columns`) compare the stored strings
 /// exactly. This returns the physical name as SQLite stores it, identical to
 /// `name` for a well-formed file, differing only in case for the wrong-case
-/// files [`GeoPackage::open_lenient`] tolerates. `None` when no such table
+/// files [`GeoPackage::open_lenient`] accepts. `None` when no such table
 /// exists under any casing.
 pub(crate) fn resolve_table_name(
     conn: &Connection,

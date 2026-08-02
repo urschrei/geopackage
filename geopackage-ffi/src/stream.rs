@@ -5,7 +5,7 @@
 //! [`gpkg_layer_read_arrow_filtered`] fill in an `ArrowArrayStream` the caller
 //! owns and pulls from; [`gpkg_layer_write_arrow`] consumes one. The geometry
 //! is a GeoArrow WKB
-//! column whose Arrow metadata carries the coordinate reference system, which
+//! column whose Arrow metadata records the coordinate reference system, which
 //! is what lets [`gpkg_create_layer_from_arrow_schema`] build a destination
 //! layer out of a source stream's schema, with no schema-description API on
 //! this side at all.
@@ -18,7 +18,7 @@
 //! # Reading a layer
 //!
 //! A stream is consumed exactly as the specification says: `get_schema` once,
-//! then `get_next` until it hands back a released array, then `release`.
+//! then `get_next` until it returns a released array, then `release`.
 //!
 //! ```c
 //! struct ArrowArrayStream stream;
@@ -112,12 +112,12 @@
 //!
 //! `FFI_ArrowArrayStream::new` takes `Box<dyn RecordBatchReader + Send>`, so
 //! `Send + 'static`. `geopackage::ArrowBatches<'a>` is neither: it borrows the
-//! layer, and its sequential variant holds a `&Connection`, which is not `Send`
+//! layer, and its sequential variant keeps a `&Connection`, which is not `Send`
 //! because `rusqlite::Connection` is not `Sync`.
 //!
 //! The lifetime is the easy half, erased exactly as [`crate::handle`] erases a
 //! layer's, and made sound by the same rule: a stream counts as a child of its
-//! container, so the container refuses to close while the stream is alive.
+//! container, so the container cannot close while the stream is alive.
 //!
 //! `Send` is the half that cannot be supplied truthfully. Adding
 //! `unsafe impl Send` would assert that a caller may pull batches from a thread
@@ -211,7 +211,7 @@ unsafe fn state<'a>(stream: *mut FFI_ArrowArrayStream) -> Option<&'a mut StreamS
     Some(unsafe { &mut *private.cast::<StreamState>() })
 }
 
-/// Write the stream's schema into `out`.
+/// Writes the stream's schema into `out`.
 ///
 /// # Safety
 ///
@@ -239,7 +239,7 @@ unsafe extern "C" fn get_schema(
     }
 }
 
-/// Write the next batch into `out`, or a released array at end of stream.
+/// Writes the next batch into `out`, or a released array at end of stream.
 ///
 /// # Safety
 ///
@@ -272,7 +272,7 @@ unsafe extern "C" fn get_next(
     }
 }
 
-/// The message from the last failing callback, or NULL.
+/// Returns the message from the last failing callback, or NULL.
 ///
 /// The consumer borrows this; it stays valid until the next call on the stream.
 ///
@@ -296,7 +296,7 @@ unsafe extern "C" fn get_last_error(stream: *mut FFI_ArrowArrayStream) -> *const
 const EINVAL: c_int = 22;
 const EIO: c_int = 5;
 
-/// Build a stream over `batches`, taking `token` as the thing that keeps the
+/// Builds a stream over `batches`, taking `token` as the thing that keeps the
 /// container alive.
 fn export_batches(batches: ArrowBatches<'static>, token: ChildToken) -> FFI_ArrowArrayStream {
     let state = Box::new(StreamState {
@@ -313,7 +313,7 @@ fn export_batches(batches: ArrowBatches<'static>, token: ChildToken) -> FFI_Arro
     }
 }
 
-/// Read a layer as an Arrow C Data Interface stream.
+/// Reads a layer as an Arrow C Data Interface stream.
 ///
 /// `out` is filled in with a stream the caller owns and must release through
 /// its own `release` callback, as the C Data Interface specifies. The stream
@@ -372,13 +372,13 @@ pub unsafe extern "C" fn gpkg_layer_read_arrow(
     unsafe { read_arrow_inner(layer, None, None, out, error) }
 }
 
-/// Read the rows of a layer intersecting a bounding box, as an Arrow stream.
+/// Reads the rows of a layer intersecting a bounding box, as an Arrow stream.
 ///
 /// The box is in the layer's own spatial reference system, and a row is
 /// returned when its geometry's envelope intersects the box, edges included.
 /// An envelope is not the geometry, so the rows are a superset of those that
 /// actually intersect: testing the geometries themselves is the caller's, on
-/// the WKB the stream carries.
+/// the WKB the stream yields.
 ///
 /// Served by the layer's RTree index when it has a usable one, and by a full
 /// scan with the same filter otherwise, returning the same rows either way.
@@ -415,14 +415,14 @@ pub unsafe extern "C" fn gpkg_layer_read_arrow_in(
     unsafe { read_arrow_inner(layer, Some(bbox), None, out, error) }
 }
 
-/// Read the rows matching a SQL `WHERE` clause, a bounding box, or both, as an
+/// Reads the rows matching a SQL `WHERE` clause, a bounding box, or both, as an
 /// Arrow stream.
 ///
 /// The general form of the three readers: `bbox` is NULL or four doubles
 /// (`min_x`, `min_y`, `max_x`, `max_y`) on the terms of
 /// `gpkg_layer_read_arrow_in`, and `where_clause` is NULL or a SQL clause on
 /// the terms below. With both NULL this is `gpkg_layer_read_arrow`; with both
-/// set the stream carries the rows satisfying the two together.
+/// set the stream yields the rows satisfying the two together.
 ///
 /// The clause is **raw SQL, trusted from the caller**: it is appended
 /// (parenthesised) to the query, not parsed or sanitised, exactly as the Rust
@@ -568,17 +568,17 @@ unsafe fn read_arrow_inner(
     Status::Ok
 }
 
-/// Write an Arrow C Data Interface stream into a layer.
+/// Writes an Arrow C Data Interface stream into a layer.
 ///
 /// Writing appends: every batch adds rows, and nothing here changes or removes
-/// one that is already there. That is what a bulk load wants, and it is why
-/// re-writing rows that carry their own feature ids fails on the primary key
+/// one that is already there. That suits a bulk load, and it is why
+/// re-writing rows that supply their own feature ids fails on the primary key
 /// rather than replacing them. To change or remove an existing feature, take a
 /// `gpkg_writer_t` with `gpkg_layer_writer`.
 ///
 /// The stream's schema must name columns the layer has. A column the layer
-/// does not have is refused rather than dropped, because discarding data a
-/// caller asked to write would be worse than declining it; a column of the
+/// does not have is rejected rather than dropped, because discarding data a
+/// caller asked to write would be worse than rejecting it; a column of the
 /// layer the stream does not name is left to its default. A type the layer
 /// cannot store is `GPKG_STATUS_INVALID_ARGUMENT`. Building the layer with
 /// `gpkg_create_layer_from_arrow_schema` from the same schema is what makes
@@ -586,8 +586,8 @@ unsafe fn read_arrow_inner(
 ///
 /// A stream column matching the layer's primary key supplies each row's fid,
 /// and a NULL there has one assigned. A stream appending to a layer that
-/// already holds rows should therefore omit that column, or carry NULLs in
-/// it: a fid the table already holds fails the write.
+/// already contains rows should therefore omit that column, or supply NULLs
+/// in it: a fid the table already contains fails the write.
 ///
 /// Takes ownership of `stream`, as the C Data Interface specifies for a moved
 /// stream: it is released here whether the write succeeds or fails, and the
@@ -678,7 +678,7 @@ pub unsafe extern "C" fn gpkg_layer_write_arrow(
     }
 }
 
-/// Create a layer whose columns come from an Arrow schema.
+/// Creates a layer whose columns come from an Arrow schema.
 ///
 /// The schema is borrowed, not consumed: the caller still owns it and must
 /// release it. This is what lets a C consumer copy a layer without any
@@ -708,7 +708,7 @@ pub unsafe extern "C" fn gpkg_layer_write_arrow(
 /// schema's GeoArrow metadata. The referenced SRS must already exist in the
 /// destination; `gpkg_add_epsg_srs` puts one there. The geometry column is
 /// declared `GEOMETRY` rather than the source's own type, because the GeoArrow
-/// WKB encoding does not carry one.
+/// WKB encoding does not record one.
 ///
 /// `spatial_index` asks for an RTree index over that column, which is the
 /// usual choice for a layer that will be queried by bounding box.
@@ -717,7 +717,7 @@ pub unsafe extern "C" fn gpkg_layer_write_arrow(
 ///
 /// Fails with `GPKG_STATUS_ALREADY_EXISTS` when the file already has a table
 /// of that name, and with `GPKG_STATUS_NOT_FOUND` when the schema names a
-/// spatial reference system the file does not carry.
+/// spatial reference system the file does not register.
 ///
 /// # Safety
 ///
@@ -775,9 +775,9 @@ pub unsafe extern "C" fn gpkg_create_layer_from_arrow_schema(
     }
 }
 
-/// Register an EPSG spatial reference system in the file.
+/// Registers an EPSG spatial reference system in the file.
 ///
-/// A layer cannot name an SRS the file does not carry, so this is what a C
+/// A layer cannot name an SRS the file does not register, so this is what a C
 /// consumer calls before creating one.
 ///
 /// # Safety

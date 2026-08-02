@@ -1,8 +1,7 @@
-//! `gpkg tiles info` and `gpkg tiles get`, deferred from M4 for want of this
-//! crate.
+//! `gpkg tiles info` and `gpkg tiles get`.
 //!
 //! **No image is decoded anywhere here.** `get` writes the stored bytes out
-//! exactly as the file holds them, so `--out tile.png` produces whatever the
+//! exactly as the file stores them, so `--out tile.png` produces whatever the
 //! pyramid stored under that address, whether or not it is a PNG. This crate
 //! reads a payload's header to name its format and pixel size and does nothing
 //! else with it, which is the same position the library takes.

@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
         return fail("gpkg_layer_count", &error);
     }
 
-    /* The schema comes off a stream, which is also what carries the geometry
+    /* The schema comes off a stream, which is also what supplies the geometry
      * column's CRS metadata, so the destination gets the right SRS without
      * anything here knowing what it is. */
     struct ArrowArrayStream schema_stream;
@@ -129,7 +129,7 @@ int main(int argc, char **argv) {
         return fail("gpkg_layer_count (dst)", &error);
     }
     if (landed != expected) {
-        fprintf(stderr, "destination holds %llu rows, source has %llu\n",
+        fprintf(stderr, "destination contains %llu rows, source has %llu\n",
                 (unsigned long long)landed, (unsigned long long)expected);
         return 1;
     }

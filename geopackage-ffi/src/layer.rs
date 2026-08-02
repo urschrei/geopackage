@@ -43,7 +43,7 @@
 //!
 //! A layer handle borrows its container. That borrow is erased to `'static` in
 //! [`crate::handle`], and what makes the erasure sound is the rule enforced
-//! here and in `gpkg_close`: a container refuses to close while any layer
+//! here and in `gpkg_close`: a container cannot close while any layer
 //! handle it produced is still alive. Free the layer first.
 
 use std::ffi::c_char;
@@ -60,7 +60,7 @@ use crate::util::{borrow_str, out_string};
 )]
 pub type gpkg_layer_t = LayerHandle;
 
-/// Open a feature layer by name.
+/// Opens a feature layer by name.
 ///
 /// The name is a `gpkg_contents.table_name`, matched without regard to case,
 /// as SQLite resolves table names. A name no row declares is
@@ -91,7 +91,7 @@ pub unsafe extern "C" fn gpkg_layer_open(
     unsafe { open_layer(gpkg, name, error, false) }
 }
 
-/// Open an attribute (non-spatial) layer by name.
+/// Opens an attribute (non-spatial) layer by name.
 ///
 /// The same call as `gpkg_layer_open` for a table `gpkg_contents` declares as
 /// `attributes` rather than `features`. Such a table has no geometry column, so
@@ -150,14 +150,14 @@ unsafe fn open_layer(
     }
 }
 
-/// Open a feature layer that reads only the named columns.
+/// Opens a feature layer that reads only the named columns.
 ///
-/// `gpkg_layer_open`, projected: a read of the returned handle carries the
+/// `gpkg_layer_open`, projected: a read of the returned handle selects the
 /// feature id, the named value columns, and the geometry only if its column
 /// is named. On a layer whose geometries are large, reading one attribute
 /// through a projected handle touches none of the geometry blobs, which is
 /// most of the read on such layers. The Arrow schema narrows to match, so a
-/// stream from this handle carries exactly these fields.
+/// stream from this handle yields exactly these fields.
 ///
 /// Columns come back in the table's order whatever order they are named in,
 /// and naming one twice selects it once. The feature id need not be named. A
@@ -194,7 +194,7 @@ pub unsafe extern "C" fn gpkg_layer_open_with_columns(
     unsafe { open_layer_with_columns(gpkg, name, columns, columns_len, error, false) }
 }
 
-/// Open an attribute (non-spatial) layer that reads only the named columns.
+/// Opens an attribute (non-spatial) layer that reads only the named columns.
 ///
 /// `gpkg_attributes_open` with `gpkg_layer_open_with_columns`'s projection,
 /// on the same terms; there is no geometry column to name.
@@ -262,7 +262,7 @@ unsafe fn open_layer_with_columns(
     }
 }
 
-/// Release a layer handle.
+/// Releases a layer handle.
 ///
 /// The container it came from can be closed once every handle taken from it has
 /// been freed, so this is what a `GPKG_STATUS_HANDLE_IN_USE` from `gpkg_close`
@@ -277,7 +277,7 @@ unsafe fn open_layer_with_columns(
 ///
 /// `layer` must be NULL, or a handle from `gpkg_layer_open` or
 /// `gpkg_attributes_open` that has not already been freed. The container it
-/// came from must still be alive, which is guaranteed by `gpkg_close` refusing
+/// came from must still be alive, which is guaranteed by `gpkg_close` failing
 /// while this handle exists.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gpkg_layer_free(layer: *mut gpkg_layer_t) {
@@ -290,7 +290,7 @@ pub unsafe extern "C" fn gpkg_layer_free(layer: *mut gpkg_layer_t) {
     drop(unsafe { Box::from_raw(layer) });
 }
 
-/// The layer's table name.
+/// Returns the layer's table name.
 ///
 /// Owned by the caller; release with `gpkg_string_free`.
 ///
@@ -313,7 +313,7 @@ pub unsafe extern "C" fn gpkg_layer_name(
     unsafe { out_string(&name, error) }
 }
 
-/// The number of rows in the layer, written through `out`.
+/// Writes the number of rows in the layer through `out`.
 ///
 /// A `SELECT count(*)` over the table, so it reads the table rather than a
 /// stored figure and costs what that costs.
@@ -348,7 +348,7 @@ pub unsafe extern "C" fn gpkg_layer_count(
     }
 }
 
-/// How many feature layers the file declares.
+/// Returns the number of feature layers the file declares.
 ///
 /// Feature layers only: a table `gpkg_contents` declares as `attributes` or
 /// `tiles` is not counted, and neither is a `features` row with no matching
@@ -384,7 +384,7 @@ pub unsafe extern "C" fn gpkg_layer_names_count(
     }
 }
 
-/// The name of the `index`th feature layer, or NULL when out of range.
+/// Returns the name of the `index`th feature layer, or NULL when out of range.
 ///
 /// The list is the one `gpkg_layer_names_count` counts, ordered by table name,
 /// so the pair walks a file's layers. An index at or beyond the count is

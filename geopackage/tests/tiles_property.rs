@@ -149,7 +149,7 @@ fn written_tiles_read_back_and_scan_in_matrix_order(tc: hegel::TestCase) {
     let batch_size = tc.draw(generators::integers::<usize>().min_value(0).max_value(5));
     assert_eq!(pyramid.write_all(written, batch_size).unwrap(), count);
 
-    // Every distinct address holds the last payload written to it.
+    // Every distinct address contains the last payload written to it.
     assert_eq!(pyramid.tile_count().unwrap(), expected.len() as i64);
     for ((zoom_level, column, row), payload) in &expected {
         let coord = TileCoord::new(*zoom_level, *column, *row);

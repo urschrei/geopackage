@@ -1,10 +1,11 @@
 //! Typed column values: mapping SQLite storage classes to GeoPackage column
 //! types.
 //!
-//! [`Value`] and its borrowed counterpart [`ValueRef`] are the non-geometry cell
-//! types. A [`crate::Feature`] hands out `ValueRef`s pointing into the buffer it
-//! holds its row in, and the write path takes them; `Value` is the owned form,
-//! for a value that has to outlive the row or the call it was passed to.
+//! [`Value`] and its borrowed counterpart [`ValueRef`] are the non-geometry
+//! cell types. A [`crate::Feature`] returns `ValueRef`s pointing into the
+//! buffer that stores its row, and the write path takes them; `Value` is the
+//! owned form, for a value that has to outlive the row or the call it was
+//! passed to.
 //! Conversion from a stored SQLite value is driven by the column's declared
 //! [`ColumnType`]: an
 //! `INTEGER`-declared column yields [`Value::Integer`], a `DATETIME`-declared
@@ -12,10 +13,10 @@
 //! so on. A storage class that is incompatible with the declared type is
 //! reported as [`Error::ValueTypeMismatch`] rather than silently coerced.
 //!
-//! Two cases sit between those: a `BOOLEAN` column holding an integer other than
-//! `0` or `1`, and an integer reaching a `FLOAT`/`DOUBLE` column. Both are
+//! Two cases sit between those: a `BOOLEAN` column containing an integer other
+//! than `0` or `1`, and an integer reaching a `FLOAT`/`DOUBLE` column. Both are
 //! readable as the declared type and both are non-conformant, so which of those
-//! two facts wins is the caller's to choose, through
+//! two facts wins is the caller's choice, through
 //! [`ConversionOptions::storage`] ([`StorageStrictness`]). The default reads
 //! them, since files containing them are read by other implementations without
 //! complaint.
@@ -56,16 +57,16 @@ pub enum Value {
 }
 
 /// A borrowed [`Value`]: the same cases, with text and binary borrowed from
-/// whatever holds the row's bytes.
+/// whatever stores the row's bytes.
 ///
-/// This is what the read path hands out. A [`crate::Feature`] keeps its text and
+/// This is what the read path returns. A [`crate::Feature`] keeps its text and
 /// blob cells in one buffer rather than as a `String` or `Vec<u8>` each, so
-/// there is no `Value` to lend out; a `ValueRef` is built pointing into that
-/// buffer instead. Call [`ValueRef::to_value`] for a `Value` that outlives the
-/// feature.
+/// there is no stored `Value` to borrow; a `ValueRef` is built pointing into
+/// that buffer instead. Call [`ValueRef::to_value`] for a `Value` that
+/// outlives the feature.
 ///
-/// The variants without a borrow are carried by value: [`Date`] and [`DateTime`]
-/// are `Copy` and smaller than a pointer pair.
+/// The variants without a borrow are passed by value: [`Date`] and
+/// [`DateTime`] are `Copy` and smaller than a pointer pair.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum ValueRef<'a> {
@@ -88,7 +89,7 @@ pub enum ValueRef<'a> {
 }
 
 impl<'a> ValueRef<'a> {
-    /// Copy this into an owned [`Value`].
+    /// Copies this into an owned [`Value`].
     ///
     /// Not named `to_owned`: `ValueRef` is `Copy`, so it already has a
     /// `ToOwned::to_owned` returning another `ValueRef`. An inherent method of
@@ -99,9 +100,9 @@ impl<'a> ValueRef<'a> {
         Value::from(*self)
     }
 
-    /// The text, if this is a [`ValueRef::Text`].
+    /// Returns the text, if this is a [`ValueRef::Text`].
     ///
-    /// The borrow is of whatever holds the row's bytes, not of this value, so
+    /// The borrow is of whatever stores the row's bytes, not of this value, so
     /// the result outlives the `ValueRef` it came from.
     #[must_use]
     pub fn as_str(&self) -> Option<&'a str> {
@@ -111,7 +112,8 @@ impl<'a> ValueRef<'a> {
         }
     }
 
-    /// The bytes, if this is a [`ValueRef::Blob`]. Borrowed as [`Self::as_str`].
+    /// Returns the bytes, if this is a [`ValueRef::Blob`]. Borrowed as
+    /// [`Self::as_str`].
     #[must_use]
     pub fn as_blob(&self) -> Option<&'a [u8]> {
         match *self {
@@ -120,15 +122,15 @@ impl<'a> ValueRef<'a> {
         }
     }
 
-    /// Whether this is [`ValueRef::Null`].
+    /// Returns `true` if this is [`ValueRef::Null`].
     #[must_use]
     pub fn is_null(&self) -> bool {
         matches!(*self, ValueRef::Null)
     }
 
-    /// The boolean, if this is a [`ValueRef::Boolean`].
+    /// Returns the boolean, if this is a [`ValueRef::Boolean`].
     ///
-    /// Only that case: an integer column holding `0` or `1` reads as
+    /// Only that case: an integer column containing `0` or `1` reads as
     /// [`ValueRef::Integer`], because what a value converts to is driven by the
     /// column's declared type rather than by its contents.
     #[must_use]
@@ -139,7 +141,7 @@ impl<'a> ValueRef<'a> {
         }
     }
 
-    /// The integer, if this is a [`ValueRef::Integer`].
+    /// Returns the integer, if this is a [`ValueRef::Integer`].
     #[must_use]
     pub fn as_i64(&self) -> Option<i64> {
         match *self {
@@ -148,7 +150,7 @@ impl<'a> ValueRef<'a> {
         }
     }
 
-    /// The float, if this is a [`ValueRef::Float`].
+    /// Returns the float, if this is a [`ValueRef::Float`].
     ///
     /// An `INTEGER`-declared column reads as [`ValueRef::Integer`] even where
     /// the value would widen losslessly, so this does not convert one.
@@ -160,7 +162,7 @@ impl<'a> ValueRef<'a> {
         }
     }
 
-    /// The date, if this is a [`ValueRef::Date`].
+    /// Returns the date, if this is a [`ValueRef::Date`].
     #[must_use]
     pub fn as_date(&self) -> Option<Date> {
         match *self {
@@ -169,7 +171,7 @@ impl<'a> ValueRef<'a> {
         }
     }
 
-    /// The datetime, if this is a [`ValueRef::DateTime`].
+    /// Returns the datetime, if this is a [`ValueRef::DateTime`].
     #[must_use]
     pub fn as_datetime(&self) -> Option<DateTime> {
         match *self {
@@ -209,7 +211,7 @@ impl<'a> From<&'a Value> for ValueRef<'a> {
     }
 }
 
-/// Compare a borrowed value against an owned one without copying either.
+/// Compares a borrowed value against an owned one without copying either.
 ///
 /// This works on bare values only. `Option` has no cross-type `PartialEq` in
 /// the standard library, so `feature.value("x")`, an `Option<ValueRef>`, does
@@ -249,7 +251,7 @@ pub enum DateTimeParsing {
 ///
 /// These cases come from SQLite's storage model rather than from the GeoPackage
 /// types. SQLite stores what it is given under a column's type affinity, and
-/// `BOOLEAN` carries no affinity at all, so a `BOOLEAN` column can hold any
+/// `BOOLEAN` has no affinity at all, so a `BOOLEAN` column can contain any
 /// integer whatever the spec says about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
@@ -264,9 +266,9 @@ pub enum StorageStrictness {
     /// well read.
     #[default]
     Lenient,
-    /// Reject both: a `BOOLEAN` column may hold only `0` or `1`
-    /// ([`Error::NonBooleanInteger`]), and a `FLOAT`/`DOUBLE` column may hold
-    /// only REAL ([`Error::ValueTypeMismatch`]).
+    /// Reject both: a `BOOLEAN` column may contain only `0` or `1`
+    /// ([`Error::NonBooleanInteger`]), and a `FLOAT`/`DOUBLE` column may
+    /// contain only REAL ([`Error::ValueTypeMismatch`]).
     Strict,
 }
 
@@ -304,14 +306,15 @@ impl ConversionOptions {
         }
     }
 
-    /// Set how `DATETIME` text is parsed.
+    /// Sets how `DATETIME` text is parsed.
     #[must_use]
     pub fn with_datetime(mut self, datetime: DateTimeParsing) -> Self {
         self.datetime = datetime;
         self
     }
 
-    /// Set how a value its declared type does not strictly permit is treated.
+    /// Sets how a value its declared type does not strictly permit is
+    /// treated.
     #[must_use]
     pub fn with_storage(mut self, storage: StorageStrictness) -> Self {
         self.storage = storage;
@@ -320,8 +323,8 @@ impl ConversionOptions {
 }
 
 impl GeoPackage {
-    /// Read the values of one non-geometry column as typed [`Value`]s, in the
-    /// table's natural row order.
+    /// Reads the values of one non-geometry column as typed [`Value`]s, in
+    /// the table's natural row order.
     ///
     /// Each cell is interpreted according to the column's declared type in the
     /// table schema (see [`GeoPackage::table_schema`]). This is a building
@@ -375,12 +378,10 @@ impl GeoPackage {
     }
 }
 
-/// Convert a typed [`Value`] into an owned rusqlite value for parameter
+/// Converts a typed [`Value`] into an owned rusqlite value for parameter
 /// binding (the [`crate::Layer::select`] passthrough).
 ///
-/// A borrowed value as an owned SQLite binding.
-///
-/// Query parameters are held by the prepared statement for as long as the
+/// Query parameters are kept by the prepared statement for as long as the
 /// cursor lives, which outlasts the borrow the caller passed in, so this is one
 /// of the few places the read path has to copy. It happens once per query, not
 /// once per row.
@@ -388,9 +389,9 @@ pub(crate) fn value_ref_to_sql(value: &ValueRef<'_>) -> rusqlite::types::Value {
     value_into_sql(value.to_value())
 }
 
-/// Bind a borrowed [`Value`] without copying it.
+/// Binds a borrowed [`Value`] without copying it.
 ///
-/// The scalar write path holds the caller's values for the whole insert, so
+/// The scalar write path keeps the caller's values for the whole insert, so
 /// text and blob cells can be bound straight out of them. Going through
 /// [`value_to_sql`] instead deep-copies every string and blob in the row, once
 /// per row written. Only `DATE` and `DATETIME` are owned here, because they are
@@ -424,8 +425,8 @@ pub(crate) fn value_to_bind(value: &Value) -> rusqlite::types::ToSqlOutput<'_> {
     }
 }
 
-/// [`value_to_sql`] for a caller that owns its value, so a string or blob moves
-/// into the binding instead of being copied.
+/// [`value_ref_to_sql`] for a caller that owns its value, so a string or blob
+/// moves into the binding instead of being copied.
 ///
 /// The columnar write path builds a value per cell and then binds it once, so
 /// cloning there would copy every string twice before it reached SQLite.
@@ -443,7 +444,7 @@ pub(crate) fn value_into_sql(value: Value) -> rusqlite::types::Value {
     }
 }
 
-/// Convert a raw SQLite value into a typed [`Value`], driven by the column's
+/// Converts a raw SQLite value into a typed [`Value`], driven by the column's
 /// declared type.
 ///
 /// `column_type` is `None` for a column whose declared type is outside the
@@ -465,10 +466,11 @@ pub(crate) fn value_ref_from_sql<'a>(
         ColumnType::Boolean => match value {
             SqlValueRef::Integer(0) => Ok(ValueRef::Boolean(false)),
             SqlValueRef::Integer(1) => Ok(ValueRef::Boolean(true)),
-            // The spec says a BOOLEAN column holds 0 or 1, but SQLite gives the
-            // declared type no affinity of its own, so the column holds whatever
-            // was inserted. Anything non-zero reads as `true`, which is the C
-            // convention the writers that produce such files are following.
+            // The spec says a BOOLEAN column contains 0 or 1, but SQLite
+            // gives the declared type no affinity of its own, so the column
+            // stores whatever was inserted. Anything non-zero reads as
+            // `true`, which is the C convention the writers that produce such
+            // files are following.
             SqlValueRef::Integer(value) => match options.storage {
                 StorageStrictness::Lenient => Ok(ValueRef::Boolean(true)),
                 StorageStrictness::Strict => Err(Error::NonBooleanInteger {
@@ -550,7 +552,7 @@ pub(crate) fn value_ref_from_sql<'a>(
     }
 }
 
-/// Surface a value by its raw storage class, used when the declared type is
+/// Surfaces a value by its raw storage class, used when the declared type is
 /// outside the spec vocabulary.
 fn untyped<'a>(value: SqlValueRef<'a>) -> Result<ValueRef<'a>> {
     Ok(match value {
@@ -575,16 +577,16 @@ pub(crate) fn value_from_ref(
     value_ref_from_sql(value, column_type, column_name, options).map(Value::from)
 }
 
-/// Borrow SQLite TEXT bytes as UTF-8.
+/// Borrows SQLite TEXT bytes as UTF-8.
 ///
-/// The parsed types read through this rather than [`text`]: they consume the
-/// text and keep none of it, so copying it first is a `String` allocated and
-/// dropped per cell, per row.
+/// The parsed types read through this: they consume the text and keep none of
+/// it, so copying it first would allocate and drop a `String` per cell, per
+/// row.
 fn text_ref(bytes: &[u8]) -> Result<&str> {
     Ok(std::str::from_utf8(bytes).map_err(rusqlite::Error::from)?)
 }
 
-/// Build a [`Error::ValueTypeMismatch`] for an incompatible storage class.
+/// Builds an [`Error::ValueTypeMismatch`] for an incompatible storage class.
 fn mismatch(column: &str, declared: &ColumnType, found: SqlValueRef<'_>) -> Error {
     Error::ValueTypeMismatch {
         column: column.to_owned(),
@@ -593,7 +595,7 @@ fn mismatch(column: &str, declared: &ColumnType, found: SqlValueRef<'_>) -> Erro
     }
 }
 
-/// The SQLite storage class name of a value, for diagnostics.
+/// Returns the SQLite storage class name of a value, for diagnostics.
 fn storage_class(value: SqlValueRef<'_>) -> &'static str {
     match value {
         SqlValueRef::Null => "NULL",

@@ -5,13 +5,13 @@
 /// stays a sensible allocation.
 pub const DEFAULT_BATCH_SIZE: usize = 65_536;
 
-/// The default ceiling on the geometry bytes one [`RecordBatch`](arrow_array::RecordBatch) may carry.
+/// The default ceiling on the geometry bytes one [`RecordBatch`](arrow_array::RecordBatch) may contain.
 ///
 /// The geometry column is Arrow `Binary`, whose offsets are `i32`, so a single
 /// batch cannot address more than 2 GB of WKB. This is a hard limit of the
 /// type rather than a tuning choice: a batch that crossed it could not be
 /// represented at all. A read that would cross it emits a short batch and
-/// carries on, so the ceiling costs nothing except on layers whose geometries
+/// continues, so the ceiling costs nothing except on layers whose geometries
 /// are large enough to reach it.
 ///
 /// This is the hard ceiling, and no setting can raise a batch past it. The
@@ -20,9 +20,9 @@ pub const DEFAULT_BATCH_SIZE: usize = 65_536;
 /// [`ArrowReadOptions::with_max_batch_bytes`].
 ///
 /// The alternative was Arrow `LargeBinary`, whose `i64` offsets have no such
-/// ceiling. It was declined because it would hand every consumer 64-bit
+/// ceiling. It was rejected because it would give every consumer 64-bit
 /// offsets to solve a problem only very large geometries have, and because
-/// matching GDAL keeps our batches interchangeable with the encoding the
+/// matching GDAL keeps these batches interchangeable with the encoding the
 /// ecosystem already reads. The `geoarrow.wkb` encoding permits either.
 pub const DEFAULT_MAX_BATCH_BYTES: usize = i32::MAX as usize;
 
@@ -65,7 +65,7 @@ const DEFAULT_MAX_THREADS: usize = 4;
 pub struct ArrowReadOptions {
     /// Rows per [`RecordBatch`](arrow_array::RecordBatch). Defaults to [`DEFAULT_BATCH_SIZE`].
     pub batch_size: usize,
-    /// Ceiling on the geometry bytes one [`RecordBatch`](arrow_array::RecordBatch) may carry. Defaults
+    /// Ceiling on the geometry bytes one [`RecordBatch`](arrow_array::RecordBatch) may contain. Defaults
     /// to [`DEFAULT_MAX_BATCH_BYTES`]. A batch that would cross it is emitted
     /// short, and the rows that did not fit begin the next one.
     pub max_batch_bytes: usize,
@@ -98,8 +98,8 @@ impl ArrowReadOptions {
         }
     }
 
-    /// Set the ceiling on geometry bytes per batch. See
-    /// [`DEFAULT_MAX_BATCH_BYTES`] for what it is for and why it cannot simply
+    /// Sets the ceiling on geometry bytes per batch. See
+    /// [`DEFAULT_MAX_BATCH_BYTES`] for its purpose and why it cannot simply
     /// be raised past `i32::MAX`.
     ///
     /// Values above `i32::MAX` are clamped to it, since Arrow `Binary` cannot
@@ -110,7 +110,7 @@ impl ArrowReadOptions {
         self
     }
 
-    /// Set the thread count. `0` chooses a default, `1` reads on the calling
+    /// Sets the thread count. `0` chooses a default, `1` reads on the calling
     /// thread.
     #[must_use]
     pub fn with_threads(mut self, threads: usize) -> Self {

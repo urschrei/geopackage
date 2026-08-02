@@ -1,4 +1,4 @@
-//! Tile pyramids (M4): creation and the catalogue rows it writes, the
+//! Tile pyramids: creation and the catalogue rows it writes, the
 //! validation it applies, and the handle that opens one back.
 
 #![expect(
@@ -139,7 +139,7 @@ fn create_registers_catalogue_rows() {
         )
         .unwrap();
     assert_eq!(srs, 3857);
-    // The user table carries the spec's column set, and its uniqueness
+    // The user table has the spec's column set, and its uniqueness
     // constraint is what makes a tile address a key.
     conn.execute(
         "INSERT INTO basemap (zoom_level, tile_column, tile_row, tile_data) VALUES (0, 0, 0, x'00')",

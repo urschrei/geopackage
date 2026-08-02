@@ -2,8 +2,8 @@
 //!
 //! The point of it is what a read does *not* fetch, which is hard to assert
 //! directly, so these pin the observable consequences: which columns a feature
-//! carries, that an unselected geometry is an error rather than an empty
-//! answer, that a bounding-box query still filters exactly without carrying the
+//! has, that an unselected geometry is an error rather than an empty
+//! answer, that a bounding-box query still filters exactly without fetching the
 //! geometry, and that a projected handle still writes whole rows.
 
 #![expect(

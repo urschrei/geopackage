@@ -17,7 +17,7 @@
 //! What these figures cover, and what they do not: this crate retrieves stored
 //! tile bytes, and GDAL retrieves pixels, because it decodes the payload and
 //! this crate cannot. That is a difference in what the two implementations do,
-//! decided in the M4 scope and recorded in `roadmap/06-m4-tiles.md`, not a
+//! a scope decision recorded in `roadmap/06-m4-tiles.md`, not a
 //! difference in how fast they do the same thing. The two timings are kept
 //! side by side because a caller serving tiles needs both numbers, and the
 //! write-up states which operation each one is.

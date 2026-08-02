@@ -29,13 +29,13 @@ backs everything outside that subset, resolving issue #23. It was rejected
 initially on size, which measurement did not support: with both its
 `wkt2-definitions` and `projjson-definitions` features it adds 1.1 MB to a
 release binary, against 4.3 MB for
-[`crs-definitions`](https://crates.io/crates/crs-definitions). It also carries
-the two forms we actually need, where `crs-definitions` carries only WKT1:
+[`crs-definitions`](https://crates.io/crates/crs-definitions). It also supplies
+the two forms we actually need, where `crs-definitions` supplies only WKT1:
 
 - **WKT2**, for `definition_12_063`. This retires the note that geographic 3D
   CRSs such as EPSG:4979 are deliberately absent. They cannot be expressed in
   WKT1, so `add_epsg_srs` now writes them the way the spec and GDAL both do:
-  `definition` holds the literal `undefined` and the real definition goes in
+  `definition` contains the literal `undefined` and the real definition goes in
   the `gpkg_crs_wkt_1_1` extension column. Verified by round trip: GDAL reads
   our EPSG:4979 layer, resolves it as geographic 3D, and normalises our WKT2
   to a string identical to its own.

@@ -1,11 +1,11 @@
 //! `gpkg_extensions`: the catalogue of extensions a file declares, the one
 //! place this crate writes to it, and what this crate can do with each row.
 //!
-//! Every extension row carries the same five values, so the differences
-//! between extensions live in the constants their own modules hold, not in
-//! repeated insert statements. The table is created on first registration and
-//! never dropped: an empty `gpkg_extensions` is legal, and a file that once
-//! carried an extension keeps the table after the extension is removed, as
+//! Every extension row has the same five values, so the differences between
+//! extensions live in the constants their own modules define, not in repeated
+//! insert statements. The table is created on first registration and never
+//! dropped: an empty `gpkg_extensions` is legal, and a file that once
+//! registered an extension keeps the table after the extension is removed, as
 //! [`crate::Layer::drop_spatial_index`] does.
 //!
 //! Reading the catalogue is what lets a caller "fail fast", which is the
@@ -50,12 +50,12 @@ pub struct ExtensionRow {
 }
 
 impl ExtensionRow {
-    /// Identify [`ExtensionRow::name`].
+    /// Identifies [`ExtensionRow::name`].
     pub fn extension(&self) -> Extension {
         Extension::from_name(&self.name)
     }
 
-    /// What this crate can do with the extension.
+    /// Returns what this crate can do with the extension.
     pub fn support(&self) -> ExtensionSupport {
         self.extension().support()
     }
@@ -86,8 +86,8 @@ fn read_rows(
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// Every row, in a stable order. Shared with the lenient open path, which
-/// collects its warnings before a [`GeoPackage`] exists.
+/// Reads every row, in a stable order. Shared with the lenient open path,
+/// which collects its warnings before a [`GeoPackage`] exists.
 pub(crate) fn read_all(conn: &Connection) -> Result<Vec<ExtensionRow>> {
     read_rows(
         conn,
@@ -97,8 +97,8 @@ pub(crate) fn read_all(conn: &Connection) -> Result<Vec<ExtensionRow>> {
 }
 
 impl GeoPackage {
-    /// Every row of `gpkg_extensions`, ordered by extension name then by what
-    /// it applies to.
+    /// Returns every row of `gpkg_extensions`, ordered by extension name then
+    /// by what it applies to.
     ///
     /// Empty for a file with no `gpkg_extensions` table, which Requirement 59
     /// defines as a GeoPackage rather than an Extended GeoPackage, and empty
@@ -107,7 +107,7 @@ impl GeoPackage {
         read_all(self.connection())
     }
 
-    /// The rows that apply to one table.
+    /// Returns the rows that apply to one table.
     ///
     /// Rows with a NULL `table_name` apply to the whole GeoPackage rather than
     /// to any table, so they are not included here; [`GeoPackage::extensions`]
@@ -125,8 +125,8 @@ impl GeoPackage {
         )
     }
 
-    /// The extension this crate cannot identify that stops it writing to
-    /// `table_name`, if there is one.
+    /// Returns the extension this crate cannot identify that stops it writing
+    /// to `table_name`, if there is one.
     ///
     /// A row covers a table when it names that table, or when its
     /// `table_name` is NULL and it therefore applies to the whole GeoPackage
@@ -156,7 +156,8 @@ impl GeoPackage {
             .find(|row| row.support() == ExtensionSupport::Unrecognised))
     }
 
-    /// Refuse a write to `table_name` if an unidentified extension covers it.
+    /// Rejects a write to `table_name` if an unidentified extension covers
+    /// it.
     pub(crate) fn check_writable(&self, table_name: &str) -> Result<()> {
         match self.blocking_extension(table_name)? {
             None => Ok(()),
@@ -170,10 +171,10 @@ impl GeoPackage {
 }
 
 impl Layer<'_> {
-    /// The extensions registered against this layer's table.
+    /// Returns the extensions registered against this layer's table.
     ///
     /// See [`GeoPackage::table_extensions`], which this calls: an indexed
-    /// layer has a `gpkg_rtree_index` row here, and a layer carrying a
+    /// layer has a `gpkg_rtree_index` row here, and a layer with a
     /// non-linear geometry type has a `gpkg_geom_<TYPE>` row.
     pub fn extensions(&self) -> Result<Vec<ExtensionRow>> {
         self.gpkg().table_extensions(self.table_name())
@@ -181,17 +182,17 @@ impl Layer<'_> {
 }
 
 impl TilePyramid<'_> {
-    /// The extensions registered against this pyramid's table.
+    /// Returns the extensions registered against this pyramid's table.
     ///
     /// See [`GeoPackage::table_extensions`], which this calls: a pyramid
-    /// holding WebP payloads has a `gpkg_webp` row here, and one whose zoom
+    /// containing WebP payloads has a `gpkg_webp` row here, and one whose zoom
     /// levels do not step by factors of two has a `gpkg_zoom_other` row.
     pub fn extensions(&self) -> Result<Vec<ExtensionRow>> {
         self.gpkg().table_extensions(self.table_name())
     }
 }
 
-/// Register an extension, creating `gpkg_extensions` on first use.
+/// Registers an extension, creating `gpkg_extensions` on first use.
 ///
 /// `table` and `column` are `None` for an extension scoped to the whole
 /// GeoPackage rather than to one table or column. Runs on the connection or
@@ -216,7 +217,7 @@ pub(crate) fn register(
     Ok(())
 }
 
-/// Register an extension unless a row for the same table, column and name is
+/// Registers an extension unless a row for the same table, column and name is
 /// already there, returning whether one was written.
 ///
 /// [`register`] is a plain `INSERT`, which the `ge_tce` unique constraint would
@@ -226,7 +227,7 @@ pub(crate) fn register(
 /// registered, and which a second row of the same type reaches again.
 ///
 /// The check is a query rather than `INSERT OR IGNORE` because a file written
-/// elsewhere need not carry the unique constraint, and `OR IGNORE` would then
+/// elsewhere need not have the unique constraint, and `OR IGNORE` would then
 /// duplicate the row instead of ignoring it.
 pub(crate) fn register_if_absent(
     conn: &Connection,
@@ -253,8 +254,8 @@ pub(crate) fn register_if_absent(
     Ok(true)
 }
 
-/// Whether `name` is registered for `table`, which is `None` for an extension
-/// scoped to the whole GeoPackage.
+/// Returns `true` if `name` is registered for `table`, which is `None` for an
+/// extension scoped to the whole GeoPackage.
 ///
 /// `false` for a file with no `gpkg_extensions` table at all, which is the
 /// common case rather than an error.
@@ -272,7 +273,7 @@ pub(crate) fn is_registered(conn: &Connection, table: Option<&str>, name: &str) 
         .is_some())
 }
 
-/// Remove an extension's registration for a table and column.
+/// Removes an extension's registration for a table and column.
 ///
 /// A no-op on a file with no `gpkg_extensions` table, or no such row.
 pub(crate) fn unregister(conn: &Connection, table: &str, column: &str, name: &str) -> Result<()> {

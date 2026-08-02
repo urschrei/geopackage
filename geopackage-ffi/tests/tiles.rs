@@ -268,7 +268,7 @@ fn a_tile_can_be_written_read_back_and_deleted() {
 
 #[test]
 fn a_live_pyramid_handle_blocks_a_close() {
-    // The same rule as layer handles and streams: a pyramid holds an erased
+    // The same rule as layer handles and streams: a pyramid stores an erased
     // borrow of its container, so it counts against the same tally.
     let (gpkg, mut error) = open();
     let tiles = pyramid(gpkg, &mut error);
@@ -417,7 +417,7 @@ fn png_header(width: u32, height: u32) -> Vec<u8> {
 #[test]
 fn a_rejected_tile_reports_a_category_rather_than_other() {
     // Tile failures used to reach C as GPKG_STATUS_OTHER, because the library
-    // error that carries them is one variant wrapping an enum of its own. A
+    // error that contains them is one variant wrapping an enum of its own. A
     // caller can now branch on them.
     let dir = tempfile::tempdir().expect("tempdir");
     let (gpkg, mut error) = open_copy(dir.path());

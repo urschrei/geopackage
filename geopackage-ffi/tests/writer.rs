@@ -77,8 +77,8 @@ fn places(path: &Path) {
     gpkg.close().expect("close");
 }
 
-/// What the file holds for one feature, read through the Rust API after the C
-/// handles are gone.
+/// What the file contains for one feature, read through the Rust API after the
+/// C handles are gone.
 fn stored(path: &Path, fid: i64) -> Option<(String, i64)> {
     let gpkg = geopackage::GeoPackage::open(path).expect("reopen");
     gpkg.connection()
@@ -389,7 +389,7 @@ fn an_impossible_date_is_rejected_at_the_boundary() {
         )
     };
     assert_eq!(status, Status::InvalidArgument);
-    let text = message(&error).expect("a refusal carries a message");
+    let text = message(&error).expect("a refusal includes a message");
     assert!(text.contains("not a date"), "unexpected message: {text}");
     // SAFETY: an error slot this library filled in.
     unsafe { gpkg_error_clear(&raw mut error) };
@@ -412,7 +412,7 @@ fn a_live_writer_blocks_a_close() {
     let writer = unsafe { gpkg_layer_writer(layer, &raw mut error) };
     assert!(!writer.is_null());
 
-    // SAFETY: a live layer handle, freed exactly once. The writer still holds
+    // SAFETY: a live layer handle, freed exactly once. The writer still has
     // its own count, which is the case under test.
     unsafe { gpkg_layer_free(layer) };
     // SAFETY: a live container handle; the refusal leaves it open and usable.

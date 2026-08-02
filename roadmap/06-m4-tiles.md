@@ -53,7 +53,7 @@ this lands as **0.6.0**.
    Tiles class is 24 passed, 0 failed, 0 skipped, and Core is 17 passed, 0
    failed. The classes for features, attributes and every extension are
    skipped, as they should be for a tiles-only file. The `Tiles Encoding WebP`
-   class is among those skipped: the fixture carries no WebP payload, so the
+   class is among those skipped: the fixture contains no WebP payload, so the
    `gpkg_webp` registration path is covered by this crate's own tests rather
    than by the ETS.
 2. [ ] A pyramid written here renders correctly in QGIS. **Deferred** to the

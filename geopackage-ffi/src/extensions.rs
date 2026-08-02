@@ -1,9 +1,9 @@
-//! The `gpkg_extensions` catalogue: what a file carries, and whether this
+//! The `gpkg_extensions` catalogue: what a file registers, and whether this
 //! library supports it.
 //!
-//! The catalogue exists so a client can "fail fast": ask what a file carries
+//! The catalogue exists so a client can "fail fast": ask what a file registers
 //! before working on it, instead of learning mid-write that a table is under
-//! an extension this library cannot honour (which is refused as
+//! an extension this library cannot honour (which fails as
 //! `GPKG_STATUS_UNSUPPORTED` at the write). This pair is the asking. [`gpkg_extensions_count`] sizes the catalogue and
 //! [`gpkg_extension_at`] reads one row, with the support level this library
 //! claims for it.
@@ -28,8 +28,8 @@
 //!
 //! The support level is one of `implemented`, `known, not read or written`,
 //! `removed from the standard in 2016`, and `unrecognised`. A file whose
-//! every row reports `implemented` holds nothing this library will refuse; a
-//! row reporting `unrecognised` names a table this library will not write
+//! every row reports `implemented` contains nothing this library will reject;
+//! a row reporting `unrecognised` names a table this library will not write
 //! unless the open opted out of that protection.
 
 use std::ffi::c_char;
@@ -38,10 +38,10 @@ use crate::error::{Status, gpkg_error_t, set_error, set_library_error};
 use crate::handle::Container;
 use crate::util::write_out_strings;
 
-/// How many `gpkg_extensions` rows the file carries.
+/// Returns the number of `gpkg_extensions` rows in the file.
 ///
 /// Zero for a file with no `gpkg_extensions` table at all, which is a file
-/// carrying no extensions. `gpkg_extension_at` walks the same list, ordered
+/// registering no extensions. `gpkg_extension_at` walks the same list, ordered
 /// by extension name, then table, then column.
 ///
 /// # Safety
@@ -74,7 +74,7 @@ pub unsafe extern "C" fn gpkg_extensions_count(
     }
 }
 
-/// One `gpkg_extensions` row, with the support level this library claims.
+/// Returns one `gpkg_extensions` row, with the support level this library claims.
 ///
 /// The list is the one `gpkg_extensions_count` counts. Every out-parameter
 /// may be NULL to skip it; each string written is owned by the caller and

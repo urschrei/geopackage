@@ -45,7 +45,8 @@ pub struct ColumnSpec {
 }
 
 impl ColumnSpec {
-    /// A nullable column of the given name and type, with no constraints.
+    /// Creates a nullable column of the given name and type, with no
+    /// constraints.
     pub fn new(name: impl Into<String>, column_type: ColumnType) -> Self {
         Self {
             name: name.into(),
@@ -56,21 +57,21 @@ impl ColumnSpec {
         }
     }
 
-    /// Mark the column `NOT NULL`.
+    /// Marks the column `NOT NULL`.
     #[must_use]
     pub fn not_null(mut self) -> Self {
         self.not_null = true;
         self
     }
 
-    /// Mark the column `UNIQUE`.
+    /// Marks the column `UNIQUE`.
     #[must_use]
     pub fn unique(mut self) -> Self {
         self.unique = true;
         self
     }
 
-    /// Set a `DEFAULT` expression, as raw SQL text (e.g. `"0"`, `"'n/a'"`,
+    /// Sets a `DEFAULT` expression, as raw SQL text (e.g. `"0"`, `"'n/a'"`,
     /// `"CURRENT_TIMESTAMP"`). Emitted verbatim, so it is the caller's
     /// responsibility to supply a valid, safe expression.
     #[must_use]
@@ -79,7 +80,8 @@ impl ColumnSpec {
         self
     }
 
-    /// The DDL fragment for this column, e.g. `"name" TEXT(64) NOT NULL`.
+    /// Returns the DDL fragment for this column, e.g.
+    /// `"name" TEXT(64) NOT NULL`.
     fn to_ddl(&self) -> Result<String> {
         let mut ddl = format!("{} {}", quote(&self.name)?, self.column_type.ddl_name());
         if self.not_null {
@@ -108,9 +110,9 @@ pub struct GeometrySpec {
 }
 
 impl GeometrySpec {
-    /// A geometry column named [`DEFAULT_GEOMETRY_COLUMN`], with the given type
-    /// and spatial reference system, and `z`/`m` both [`ZmFlag::Prohibited`]
-    /// (a 2D column).
+    /// Creates a geometry column named [`DEFAULT_GEOMETRY_COLUMN`], with the
+    /// given type and spatial reference system, and `z`/`m` both
+    /// [`ZmFlag::Prohibited`] (a 2D column).
     pub fn new(geometry_type: GeometryType, srs_id: i32) -> Self {
         Self {
             column_name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
@@ -121,33 +123,34 @@ impl GeometrySpec {
         }
     }
 
-    /// Override the geometry column name (default [`DEFAULT_GEOMETRY_COLUMN`]).
+    /// Overrides the geometry column name (default
+    /// [`DEFAULT_GEOMETRY_COLUMN`]).
     #[must_use]
     pub fn column_name(mut self, name: impl Into<String>) -> Self {
         self.column_name = name.into();
         self
     }
 
-    /// Set the `z` (elevation) dimension constraint.
+    /// Sets the `z` (elevation) dimension constraint.
     #[must_use]
     pub fn z(mut self, flag: ZmFlag) -> Self {
         self.z = flag;
         self
     }
 
-    /// Set the `m` (measure) dimension constraint.
+    /// Sets the `m` (measure) dimension constraint.
     #[must_use]
     pub fn m(mut self, flag: ZmFlag) -> Self {
         self.m = flag;
         self
     }
 
-    /// The declared geometry type.
+    /// Returns the declared geometry type.
     pub fn geometry_type(&self) -> GeometryType {
         self.geometry_type
     }
 
-    /// The spatial reference system identifier.
+    /// Returns the spatial reference system identifier.
     pub fn srs_id(&self) -> i32 {
         self.srs_id
     }
@@ -175,7 +178,7 @@ pub struct TableSchemaBuilder {
 }
 
 impl TableSchemaBuilder {
-    /// Start a builder for a table of the given name.
+    /// Starts a builder for a table of the given name.
     ///
     /// The name is validated (and rejected if it begins `gpkg_`) when the
     /// builder is passed to a create method, not here.
@@ -191,19 +194,20 @@ impl TableSchemaBuilder {
         }
     }
 
-    /// Override the primary-key column name (default [`DEFAULT_PRIMARY_KEY`]).
+    /// Overrides the primary-key column name (default
+    /// [`DEFAULT_PRIMARY_KEY`]).
     #[must_use]
     pub fn primary_key(mut self, name: impl Into<String>) -> Self {
         self.primary_key = name.into();
         self
     }
 
-    /// The primary-key column name this builder will use.
+    /// Returns the primary-key column name this builder will use.
     pub fn primary_key_name(&self) -> &str {
         &self.primary_key
     }
 
-    /// Whether [`GeoPackage::create_layer`] should build a spatial index for
+    /// Sets whether [`GeoPackage::create_layer`] builds a spatial index for
     /// this layer. Defaults to `true`.
     ///
     /// An indexed feature layer is what every other implementation produces:
@@ -226,22 +230,22 @@ impl TableSchemaBuilder {
         self
     }
 
-    /// Set `gpkg_contents.identifier` (a human-readable name). Defaults to the
-    /// table name when left unset.
+    /// Sets `gpkg_contents.identifier` (a human-readable name). Defaults to
+    /// the table name when left unset.
     #[must_use]
     pub fn identifier(mut self, identifier: impl Into<String>) -> Self {
         self.identifier = Some(identifier.into());
         self
     }
 
-    /// Set `gpkg_contents.description`.
+    /// Sets `gpkg_contents.description`.
     #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
     }
 
-    /// Add a non-geometry column. Columns appear in the emitted DDL in the
+    /// Adds a non-geometry column. Columns appear in the emitted DDL in the
     /// order added.
     #[must_use]
     pub fn column(mut self, column: ColumnSpec) -> Self {
@@ -249,7 +253,7 @@ impl TableSchemaBuilder {
         self
     }
 
-    /// Set the geometry column (required for [`GeoPackage::create_layer`],
+    /// Sets the geometry column (required for [`GeoPackage::create_layer`],
     /// rejected by [`GeoPackage::create_attributes_table`]).
     #[must_use]
     pub fn geometry(mut self, geometry: GeometrySpec) -> Self {
@@ -257,12 +261,12 @@ impl TableSchemaBuilder {
         self
     }
 
-    /// The table name.
+    /// Returns the table name.
     pub fn table_name(&self) -> &str {
         &self.table_name
     }
 
-    /// The `CREATE TABLE` statement for the user table.
+    /// Returns the `CREATE TABLE` statement for the user table.
     fn create_table_sql(&self) -> Result<String> {
         let mut defs = Vec::with_capacity(self.columns.len() + 2);
         defs.push(format!(
@@ -288,7 +292,7 @@ impl TableSchemaBuilder {
 }
 
 impl GeoPackage {
-    /// Create a feature layer from a [`TableSchemaBuilder`].
+    /// Creates a feature layer from a [`TableSchemaBuilder`].
     ///
     /// Emits the user-table DDL, a `gpkg_contents` row (`data_type = 'features'`),
     /// and a `gpkg_geometry_columns` row (creating that table lazily on first
@@ -306,8 +310,8 @@ impl GeoPackage {
     /// `gpkg_geom_<TYPE>` row in `gpkg_extensions`.
     pub fn create_layer(&self, builder: &TableSchemaBuilder) -> Result<Layer<'_>> {
         // The new table has no rows of its own to be covered yet, so what this
-        // catches is a whole-GeoPackage registration: an extension we cannot
-        // identify that applies to the file may govern what a table in it has
+        // catches is a whole-GeoPackage registration: an unidentifiable
+        // extension that applies to the file may govern what a table in it has
         // to look like.
         self.check_writable(&builder.table_name)?;
         let geometry = builder
@@ -334,7 +338,7 @@ impl GeoPackage {
         self.layer(&builder.table_name)
     }
 
-    /// Create a non-spatial attributes table from a [`TableSchemaBuilder`].
+    /// Creates a non-spatial attributes table from a [`TableSchemaBuilder`].
     ///
     /// Emits the user-table DDL and a `gpkg_contents` row
     /// (`data_type = 'attributes'`), then returns a read/write [`Layer`] handle.
@@ -354,7 +358,7 @@ impl GeoPackage {
         self.attributes(&builder.table_name)
     }
 
-    /// Shared create path for feature and attribute tables.
+    /// The shared create path for feature and attribute tables.
     fn create_table(
         &self,
         builder: &TableSchemaBuilder,

@@ -1,18 +1,18 @@
 //! The `gpkg_schema` extension's model (Annex F.9): column descriptions and
-//! the constraints their values may carry.
+//! the constraints on their values.
 //!
 //! Two tables. `gpkg_data_columns` describes a column: a human-readable name,
 //! a title, a description, a MIME type for a BLOB column, and optionally the
-//! name of a constraint. `gpkg_data_column_constraints` holds the constraints,
+//! name of a constraint. `gpkg_data_column_constraints` stores the constraints,
 //! keyed by that name, in three forms: a numeric `range`, an `enum` of allowed
 //! values, or a `glob` pattern.
 //!
 //! This module is the model only: what a file says. Deciding whether a value
 //! satisfies a constraint belongs to the `geopackage` crate, because one of
 //! the three forms cannot be decided here. A `glob` is a pattern in SQLite's
-//! `GLOB` syntax, whose definition is whatever the engine holding the file
-//! does with it, so the engine is asked rather than a copy of its rules being
-//! kept here. See `geopackage::OpenOptions::enforce_column_constraints`.
+//! `GLOB` syntax, whose definition is whatever the engine that opens the
+//! file implements, so the engine is asked rather than a copy of its rules
+//! being kept here. See `geopackage::OpenOptions::enforce_column_constraints`.
 //!
 //! The spec is explicit that these constraints are advisory as far as the file
 //! format goes: "These restrictions MAY be enforced by SQL triggers or by code
@@ -30,7 +30,7 @@ pub const EXTENSION_SCOPE: &str = "read-write";
 
 /// A row of `gpkg_data_columns`: what one column of one table means.
 ///
-/// Every field but the column's own name is optional, and a row carrying
+/// Every field but the column's own name is optional, and a row with
 /// nothing but a `name` is both legal and common: the extension exists to
 /// supplement `sqlite_master` and `PRAGMA table_info`, not to replace them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,7 +63,7 @@ pub struct ColumnConstraint {
     /// What the constraint allows.
     pub kind: ConstraintKind,
     /// The constraint's description, or for an `enum`, the description of
-    /// whichever member row carried one.
+    /// whichever member row had one.
     pub description: Option<String>,
 }
 
@@ -87,7 +87,7 @@ pub enum ConstraintKind {
     /// `enum`: the set of allowed values, one per row, compared as text
     /// (Requirement 114 makes each row's `value` NOT NULL).
     ///
-    /// The order is the order the rows came back in, and carries no meaning:
+    /// The order is the order the rows came back in, and has no meaning:
     /// the spec calls this a set, and round-tripping a file through GDAL
     /// reorders the members. Compare two enums as sets rather than by
     /// [`PartialEq`] if the file has been through another implementation.
@@ -97,7 +97,7 @@ pub enum ConstraintKind {
 }
 
 impl ConstraintKind {
-    /// The `constraint_type` column value.
+    /// Returns the `constraint_type` column value.
     pub fn type_name(&self) -> &'static str {
         match self {
             Self::Range { .. } => "range",

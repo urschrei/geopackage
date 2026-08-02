@@ -205,9 +205,9 @@ what it said.
 
 Worker `w` of `n` reads batches `w`, `w + n`, `w + 2n`, and the consumer takes
 from the workers in the same rotation, so batches arrive in key order with no
-reordering buffer. Each worker's channel holds one batch, bounding the memory in
-flight by the thread count. Dropping the reader drops the receivers, which makes
-the next send fail and stops the workers; `Drop` then joins them.
+reordering buffer. Each worker's channel buffers one batch, bounding the memory
+in flight by the thread count. Dropping the reader drops the receivers, which
+makes the next send fail and stops the workers; `Drop` then joins them.
 
 Three conditions, each declining rather than failing:
 

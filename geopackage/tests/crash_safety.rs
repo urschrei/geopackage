@@ -1,4 +1,4 @@
-//! Crash safety: a child process opens the GeoPackage, commits one write, holds
+//! Crash safety: a child process opens the GeoPackage, commits one write, keeps
 //! a second write uncommitted, and is `SIGKILL`ed mid-flight; the parent
 //! reopens and asserts `PRAGMA integrity_check` is `ok`, the committed rows
 //! survive, the uncommitted row is gone, and the RTree index is not

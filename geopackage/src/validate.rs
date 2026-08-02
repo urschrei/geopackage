@@ -8,7 +8,7 @@
 //! them all and returns typed findings, which is what an embedding caller
 //! needs and what `gpkg validate` will print.
 //!
-//! Nothing here mutates. A [`Finding`] carries repair advice as text when a
+//! Nothing here mutates. A [`Finding`] includes repair advice as text when a
 //! repair exists, and names the method that performs it; running that is the
 //! caller's decision.
 //!
@@ -38,7 +38,8 @@ pub enum Severity {
 }
 
 impl Severity {
-    /// The severity as a lowercase word: `advisory`, `warning` or `error`.
+    /// Returns the severity as a lowercase word: `advisory`, `warning` or
+    /// `error`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Advisory => "advisory",
@@ -136,7 +137,7 @@ pub enum Finding {
 }
 
 impl Finding {
-    /// How much this matters.
+    /// Returns how much this matters.
     pub fn severity(&self) -> Severity {
         match self {
             // A query against these returns the wrong rows, or a catalogue
@@ -158,7 +159,7 @@ impl Finding {
         }
     }
 
-    /// The table this concerns, when it concerns one.
+    /// Returns the table this concerns, when it concerns one.
     pub fn table_name(&self) -> Option<&str> {
         match self {
             Self::MissingContentsTable { table_name }
@@ -178,11 +179,11 @@ impl Finding {
         }
     }
 
-    /// What would put this right, when anything here can.
+    /// Returns what would put this right, when anything here can.
     ///
-    /// `None` means the fix is not this crate's to make: it needs the writer
-    /// that produced the file, or a decision about data this crate should not
-    /// take on the caller's behalf.
+    /// `None` means the fix is outside this crate: it needs the writer that
+    /// produced the file, or a decision about data this crate should not take
+    /// on the caller's behalf.
     pub fn repair(&self) -> Option<&'static str> {
         match self {
             Self::SpatialIndexOutOfStep { .. } => {
@@ -311,7 +312,7 @@ impl fmt::Display for Finding {
 }
 
 /// Renders `Some(table)` as ` on "table"` and `None` as nothing, so the two
-/// findings carrying an optional table read as sentences either way.
+/// findings with an optional table read as sentences either way.
 struct On<'a>(&'a Option<String>);
 
 impl fmt::Display for On<'_> {
@@ -324,7 +325,7 @@ impl fmt::Display for On<'_> {
 }
 
 impl GeoPackage {
-    /// Check the file and report what is wrong with it.
+    /// Checks the file and reports what is wrong with it.
     ///
     /// One pass over everything this crate knows how to check: the container's
     /// version stamp and catalogue, the extension registrations, every feature

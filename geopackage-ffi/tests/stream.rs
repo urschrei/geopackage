@@ -101,7 +101,7 @@ fn a_layer_streams_every_row_with_its_schema() {
 
 #[test]
 fn a_live_stream_blocks_a_close_just_as_a_layer_handle_does() {
-    // The soundness rule, extended to streams: the stream holds an erased
+    // The soundness rule, extended to streams: the stream stores an erased
     // borrow of the container, so it must count against the same tally.
     let (gpkg, mut error) = open();
     let name = CString::new("points").expect("no interior NUL");

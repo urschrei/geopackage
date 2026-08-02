@@ -1,8 +1,8 @@
 //! `gpkg copy`, the dogfood command.
 //!
-//! M3 acceptance criterion 6 is the full circle: a file GDAL wrote, copied
-//! through this crate, comes out clean. `gpkg validate` stands in for the
-//! external validators here, which run in their own CI job.
+//! The full circle: a file GDAL wrote, copied through this crate, comes out
+//! clean. `gpkg validate` stands in for the external validators here, which
+//! run in their own CI job.
 
 #![expect(
     clippy::unwrap_used,

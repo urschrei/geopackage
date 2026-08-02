@@ -263,9 +263,8 @@ fn findings_come_back_most_severe_first() {
 // --- the corpus ---------------------------------------------------------------
 //
 // Every committed fixture, with its findings pinned. A change in what this
-// crate detects shows up here as a diff rather than passing quietly, which is
-// the phase 7 item asking for known findings on known files to be the expected
-// output.
+// crate detects shows up here as a diff rather than passing quietly: known
+// findings on known files are the expected output.
 
 #[test]
 fn every_committed_fixture_reports_what_it_is_expected_to() {
@@ -281,7 +280,7 @@ fn every_committed_fixture_reports_what_it_is_expected_to() {
             "gdal_multilayer_1_4.gpkg",
             &["NoSpatialIndex", "NoSpatialIndex", "NoSpatialIndex"],
         ),
-        // A 1.2 file, so it carries the pre-1.4 RTree trigger set.
+        // A 1.2 file, so it has the pre-1.4 RTree trigger set.
         ("gdal_points_1_2.gpkg", &["LegacySpatialIndexTriggers"]),
         ("gdal_tiles.gpkg", &[]),
         // GP10 in the header, which is the point of this one.
@@ -431,7 +430,7 @@ fn every_finding_renders_as_a_sentence_naming_its_subject() {
             rendered.contains(expected_fragment),
             "{finding:?} rendered as {rendered:?}, which does not mention {expected_fragment:?}"
         );
-        // A finding's own line carries neither its severity nor its repair:
+        // A finding's own line includes neither its severity nor its repair:
         // those are separate accessors so a caller arranges them itself.
         assert!(!rendered.contains("Severity"), "{rendered:?}");
         assert!(!rendered.is_empty());

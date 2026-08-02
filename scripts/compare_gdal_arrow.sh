@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #
-# Compare this crate's Arrow read path against GDAL's, like for like
-# (M3 acceptance criterion 3).
+# Compare this crate's Arrow read path against GDAL's, like for like.
 #
 # Both arms are handed the same file and asked for the same thing: consume every
 # Arrow batch of the whole layer, and nothing else. The GDAL arm is a small C

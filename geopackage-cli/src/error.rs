@@ -7,7 +7,7 @@
 /// Anything a subcommand can fail with.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The library refused or could not do something.
+    /// The library rejected or could not do something.
     #[error("{0}")]
     Gpkg(#[from] geopackage::Error),
     /// Reading or writing a file outside the GeoPackage failed, such as the
