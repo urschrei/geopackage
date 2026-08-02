@@ -952,10 +952,17 @@ The items the sense-check produced, in rough order of consumer value:
       code, both definitions, and the epoch as NaN when absent. Strings are
       all converted before any is written, so a failure hands the caller
       nothing partial to free.)*
-- [ ] **The fail-fast pair over C** (F4): enumerate extension rows with
+- [x] **The fail-fast pair over C** (F4): enumerate extension rows with
       their support level, and surface `validate()`'s findings. The
       catalogue exists so a client can fail fast; a C caller currently
       cannot ask.
+      *(Done 2026-08-02. `gpkg_extensions_count` and `gpkg_extension_at`
+      walk the catalogue with the support level as its `Display` phrase, so
+      a C consumer can decline a file before writing to it. `gpkg_validate`
+      returns an owned `gpkg_findings_t`, walked by count and index with
+      severity, description and repair advice; it borrows nothing, so it is
+      the one handle that does not block a close, which its test
+      demonstrates by reading the findings after the container is gone.)*
 - [ ] **A pyramid cursor over C** (F9): walk stored tiles rather than
       probing the declared grid, which on a sparse pyramid is O(grid)
       against the cursor's O(stored).
