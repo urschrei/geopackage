@@ -155,7 +155,8 @@
 //!   [`gpkg_open`], [`gpkg_open_read_only`] or [`gpkg_create`] is destroyed by
 //!   [`gpkg_close`]; `gpkg_layer_t` from [`gpkg_layer_open`] or
 //!   [`gpkg_attributes_open`] by [`gpkg_layer_free`]; `gpkg_tiles_t` from
-//!   [`gpkg_tiles_open`] by [`gpkg_tiles_free`]. Using a handle after its
+//!   [`gpkg_tiles_open`] by [`gpkg_tiles_free`]; `gpkg_findings_t` from
+//!   [`gpkg_validate`] by [`gpkg_findings_free`]. Using a handle after its
 //!   destructor is undefined behaviour.
 //!
 //! # Handle lifetime
@@ -241,6 +242,7 @@ pub mod schema;
 pub mod stream;
 pub mod tiles;
 pub mod util;
+pub mod validate;
 pub mod value;
 pub mod writer;
 
@@ -274,6 +276,9 @@ pub use tiles::{
     gpkg_tiles_t, gpkg_tiles_zoom_level_count,
 };
 pub use util::gpkg_string_free;
+pub use validate::{
+    gpkg_finding_at, gpkg_findings_count, gpkg_findings_free, gpkg_findings_t, gpkg_validate,
+};
 pub use value::{
     ValueKind, gpkg_blob_t, gpkg_date_t, gpkg_datetime_t, gpkg_value_payload, gpkg_value_t,
 };

@@ -35,6 +35,12 @@ While the version is below 1.0 the API may change in any release.
   level this library claims for each, which is what lets a C consumer fail
   fast instead of meeting an `UnsupportedExtension` refusal mid-write.
 
+- **`geopackage-ffi`: `gpkg_validate`.** The library's file checks from C:
+  an owned `gpkg_findings_t` holding the findings most severe first, walked
+  with `gpkg_findings_count` and `gpkg_finding_at` (severity, description,
+  repair advice where repair exists). The handle borrows nothing, so it does
+  not block `gpkg_close` and outlives the container harmlessly.
+
 - **`geopackage-ffi`: `gpkg_srs`.** The spatial reference system behind the
   id `gpkg_layer_srs_id` reports: name, organization and code, the WKT
   definition, the WKT2 definition where the CRS WKT extension carries one,
