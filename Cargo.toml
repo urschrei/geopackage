@@ -84,6 +84,9 @@ missing_docs = "warn"
 # `cast_precision_loss`, `cast_possible_truncation`, since the read path widens
 # integers to f64 deliberately and documents it).
 [workspace.lints.clippy]
+# Structure: a directory module is rooted at mod.rs, so the module is one
+# atomic unit to read, move and rename.
+self_named_module_files = "warn"
 # Don't panic.
 string_slice = "warn"
 indexing_slicing = "warn"

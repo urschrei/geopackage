@@ -7,3 +7,14 @@ allow-panic-in-tests = true
 allow-indexing-slicing-in-tests = true
 allow-dbg-in-tests = true
 allow-print-in-tests = true
+
+# for_each hides side effects inside a combinator where a scanning reader
+# skips them; a plain loop shows the mutation. TileStream::for_each is a
+# method on a lending stream, not this path, and stays.
+[[disallowed-methods]]
+path = "std::iter::Iterator::for_each"
+reason = "use a for loop: side effects belong in statements, not combinators"
+
+[[disallowed-methods]]
+path = "std::iter::Iterator::try_for_each"
+reason = "use a for loop: side effects belong in statements, not combinators"

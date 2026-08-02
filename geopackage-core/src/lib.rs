@@ -71,6 +71,8 @@
 // planned `geopackage-ffi` crate (M3) is the sole intended exception, and will
 // opt out of the workspace lints rather than relax them here.
 
+mod error;
+
 pub mod curve;
 pub mod datetime;
 pub mod ddl;
@@ -87,27 +89,10 @@ pub mod triggers;
 pub mod types;
 pub mod version;
 
+pub use error::Error;
 pub use geometry::{GeometryError, GpbGeometry};
 pub use gpb::{Envelope, GpbError, GpbHeader};
 pub use srs::SrsDefinition;
 pub use tiles::{TileCoord, TileError, TileFormat, TileMatrix, TileMatrixSet};
 pub use types::{ColumnType, GeometryType, GeometryTypeSet, ZmFlag};
 pub use version::GpkgVersion;
-
-/// Errors produced by this crate.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum Error {
-    /// Invalid GeoPackage Binary blob.
-    #[error(transparent)]
-    Gpb(#[from] GpbError),
-    /// A GeoPackage geometry that could not be parsed or read.
-    #[error(transparent)]
-    Geometry(#[from] GeometryError),
-    /// A tile pyramid that does not satisfy the spec's consistency rules.
-    #[error(transparent)]
-    Tile(#[from] TileError),
-    /// An SQL identifier that cannot be safely quoted.
-    #[error("invalid SQL identifier: {0}")]
-    InvalidIdentifier(String),
-}
