@@ -20,8 +20,9 @@ use rusqlite::{Connection, OptionalExtension};
 /// 'gpkg_crs_wkt_1_1' WHERE extension_name = 'gpkg_crs_wkt'`), so a 1.1 file
 /// from GDAL has the two rows this crate writes and no `gpkg_crs_wkt` row.
 /// The ETS agrees, since its `gpkg_crs_wkt` check is "not testable" on an
-/// empty result set. This crate follows GDAL: interoperating with the files
-/// that exist beats matching a table no widespread implementation produces.
+/// empty result set. This crate writes the same two rows: interoperating with
+/// the files that exist beats matching a table no widespread implementation
+/// produces.
 const CRS_WKT_EXTENSION: &str = "gpkg_crs_wkt_1_1";
 const CRS_WKT_DEFINITION: &str = "http://www.geopackage.org/spec/#extension_crs_wkt";
 

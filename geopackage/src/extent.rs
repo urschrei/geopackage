@@ -58,10 +58,10 @@
 //!
 //! [`Layer::extent`] records what it measures, so **reading the extent of a
 //! file whose recorded extent is unusable modifies that file**: its content and
-//! its modification time both change. This mirrors GDAL, whose `GetExtent`
-//! persists through `SaveExtent` on any dataset open for update, and it is why
-//! a file improves by being read: the next reader, here or anywhere else, finds
-//! a usable box and no longer has to scan.
+//! its modification time both change. The point is that a file improves by
+//! being read: the next reader, here or anywhere else, finds a usable box and
+//! no longer has to scan. GDAL behaves the same way: its `GetExtent` persists
+//! through `SaveExtent` on any dataset open for update.
 //!
 //! The cost is that a pipeline checksumming its inputs will see them change. If
 //! that matters, open read-only, which suppresses the write entirely, or read
@@ -96,18 +96,17 @@ impl Layer<'_> {
     ///
     /// `None` when the layer contains no geometry to measure. The recorded
     /// bounds are usable when all four are present and neither axis is
-    /// inverted, which is the same test GDAL applies; a recorded box that
-    /// passes it is returned as it stands, so this inherits whatever
-    /// inexactness the file records. Use [`Self::recompute_extent`] for an
-    /// answer that does not.
+    /// inverted, which is as much as any reader can check, since no
+    /// requirement governs the values; a recorded box that passes it is
+    /// returned as it stands, so this inherits whatever inexactness the file
+    /// records. Use [`Self::recompute_extent`] for an answer that does not.
     ///
     /// # This can modify the file
     ///
     /// When the recorded bounds are unusable and the connection can write, the
     /// measurement is recorded before it is returned, so **this method changes
-    /// the file's contents and modification time**. It mirrors GDAL, which
-    /// persists an extent it had to compute; the point is that the file stops
-    /// being wrong, for every later reader rather than only this one.
+    /// the file's contents and modification time**. The point is that the file
+    /// stops being wrong, for every later reader rather than only this one.
     ///
     /// Nothing is written when the recorded bounds are already usable, which is
     /// the ordinary case, nor on a read-only connection, nor when there is
@@ -154,10 +153,10 @@ impl Layer<'_> {
     /// or not it could be recorded.
     fn measure_and_record(&self) -> Result<Option<BoundingBox>> {
         let conn = self.gpkg().connection();
-        // GDAL's `GetUpdate()` gate. A read-only connection has nothing to
-        // record and nothing has gone wrong, so this is not a failure to
-        // report. One call covers both a read-only open and a file the process
-        // cannot write, since SQLite downgrades the latter on open.
+        // A read-only connection has nothing to record and nothing has gone
+        // wrong, so this is not a failure to report. One call covers both a
+        // read-only open and a file the process cannot write, since SQLite
+        // downgrades the latter on open.
         if conn.is_readonly(rusqlite::MAIN_DB)? {
             return self.measure_extent(conn);
         }

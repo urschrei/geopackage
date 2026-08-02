@@ -465,8 +465,8 @@ impl GeoPackage {
 /// Creates both tables and registers the extension, once.
 ///
 /// Both are registered even when only one is about to gain rows: the extension
-/// is the pair, and GDAL writes a row for each, which is what Annex F.8's test
-/// for the extension expects to find.
+/// is the pair, and Annex F.8's test for it expects to find a row for each.
+/// GDAL writes both rows too.
 fn ensure_tables(conn: &Connection) -> Result<()> {
     if table_exists(conn, METADATA_TABLE)? {
         return Ok(());

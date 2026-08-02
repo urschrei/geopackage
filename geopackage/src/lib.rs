@@ -475,9 +475,9 @@
 //! | [`TilePyramid::writer`] | on its tile methods and its commit, not on the call | opens; the first tile written fails |
 //!
 //! Reading an extent therefore modifies the file when the recorded bounds are
-//! unusable, which is deliberate and matches GDAL: the file stops being wrong
-//! for every later reader rather than only for this one. [`Layer::extent`]
-//! documents why, and the two ways to avoid it.
+//! unusable, which is deliberate: the file stops being wrong for every later
+//! reader rather than only for this one. [`Layer::extent`] documents why, and
+//! the two ways to avoid it.
 //!
 //! ## What can fail, and why
 //!

@@ -1,9 +1,9 @@
 //! Arrow schema derivation: GeoPackage column types to Arrow field types.
 //!
-//! This is the type mapping the columnar read and write paths share. It is the
-//! "impedance mismatch" the GDAL developers report in their write-up of the
-//! same exercise, so each choice below is stated with its reason rather than
-//! left to be inferred from the code.
+//! This is the type mapping the columnar read and write paths share. SQLite's
+//! declared types and Arrow's do not line up, so several entries below are a
+//! judgement rather than a translation, and each is stated with its reason
+//! rather than left to be inferred from the code.
 //!
 //! # Attribute types
 //!

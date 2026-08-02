@@ -1,8 +1,8 @@
 /// Default number of rows per [`RecordBatch`](arrow_array::RecordBatch).
 ///
-/// The same default GDAL's driver uses (`MAX_FEATURES_IN_BATCH`). Large enough
-/// that per-batch overhead disappears, small enough that a batch of wide rows
-/// stays a sensible allocation.
+/// Large enough that per-batch overhead disappears, small enough that a batch
+/// of wide rows stays a sensible allocation. GDAL's driver defaults to the same
+/// figure (`MAX_FEATURES_IN_BATCH`).
 pub const DEFAULT_BATCH_SIZE: usize = 65_536;
 
 /// The default ceiling on the geometry bytes one [`RecordBatch`](arrow_array::RecordBatch) may contain.
@@ -15,23 +15,25 @@ pub const DEFAULT_BATCH_SIZE: usize = 65_536;
 /// are large enough to reach it.
 ///
 /// This is the hard ceiling, and no setting can raise a batch past it. The
-/// default a read actually uses is [`default_max_batch_bytes`], which follows
-/// GDAL in taking `min(INT32_MAX, RAM / 4)`; a caller can set its own with
+/// default a read actually uses is [`default_max_batch_bytes`], which takes
+/// `min(INT32_MAX, RAM / 4)`; a caller can set its own with
 /// [`ArrowReadOptions::with_max_batch_bytes`].
 ///
 /// The alternative was Arrow `LargeBinary`, whose `i64` offsets have no such
 /// ceiling. It was rejected because it would give every consumer 64-bit
 /// offsets to solve a problem only very large geometries have, and because
-/// matching GDAL keeps these batches interchangeable with the encoding the
-/// ecosystem already reads. The `geoarrow.wkb` encoding permits either.
+/// `Binary` is the encoding the ecosystem already exchanges for this data,
+/// GDAL's driver included, so these batches need no conversion. The
+/// `geoarrow.wkb` encoding permits either.
 pub const DEFAULT_MAX_BATCH_BYTES: usize = i32::MAX as usize;
 
-/// The byte ceiling a read uses when the caller sets none: GDAL's
+/// The byte ceiling a read uses when the caller sets none:
 /// `min(INT32_MAX, RAM / 4)`.
 ///
 /// The memory term only binds below about 8 GB of RAM, since a quarter of
 /// anything larger already exceeds [`DEFAULT_MAX_BATCH_BYTES`]. It is there so
-/// a small machine does not spend a quarter of itself on a single batch.
+/// a small machine does not spend a quarter of itself on a single batch. GDAL's
+/// driver picks its ceiling the same way.
 ///
 /// The system's memory is read once and cached. It is queried to choose a
 /// default, not to track a machine whose memory changes while we run.
@@ -54,9 +56,9 @@ pub fn default_max_batch_bytes() -> usize {
 
 /// Ceiling on the automatically chosen thread count.
 ///
-/// GDAL's driver uses the same `min(4, cpus)` for the same path. Beyond a few
-/// readers the work is bounded by how fast SQLite can pull pages rather than by
-/// cores.
+/// Beyond a few readers the work is bounded by how fast SQLite can pull pages
+/// rather than by cores, so further threads buy nothing. GDAL's driver caps the
+/// same path at `min(4, cpus)`.
 const DEFAULT_MAX_THREADS: usize = 4;
 
 /// Options for the columnar read path.
@@ -70,8 +72,7 @@ pub struct ArrowReadOptions {
     /// short, and the rows that did not fit begin the next one.
     pub max_batch_bytes: usize,
     /// How many threads may read at once. `0` chooses
-    /// `min(4, available parallelism)`, matching GDAL's default for the same
-    /// path; `1` reads on the calling thread.
+    /// `min(4, available parallelism)`; `1` reads on the calling thread.
     ///
     /// More than one thread is only possible under the conditions in
     /// [`crate::Layer::read_arrow`]; when they do not hold, the read is single-threaded
