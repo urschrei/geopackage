@@ -59,6 +59,17 @@ pub mod geopackage_ffi::extensions
 #[no_mangle] pub unsafe c fn geopackage_ffi::extensions::gpkg_extension_at(*const geopackage_ffi::handle::Container, usize, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::extensions::gpkg_extensions_count(*const geopackage_ffi::handle::Container, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 pub mod geopackage_ffi::handle
+pub enum geopackage_ffi::handle::CursorScan
+pub geopackage_ffi::handle::CursorScan::All
+pub geopackage_ffi::handle::CursorScan::At(i64)
+pub geopackage_ffi::handle::CursorScan::In(i64, geopackage::layer::BoundingBox)
+impl core::marker::Freeze for geopackage_ffi::handle::CursorScan
+impl core::marker::Send for geopackage_ffi::handle::CursorScan
+impl core::marker::Sync for geopackage_ffi::handle::CursorScan
+impl core::marker::Unpin for geopackage_ffi::handle::CursorScan
+impl core::marker::UnsafeUnpin for geopackage_ffi::handle::CursorScan
+impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::handle::CursorScan
+impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::handle::CursorScan
 pub struct geopackage_ffi::handle::ChildToken
 impl core::ops::drop::Drop for geopackage_ffi::handle::ChildToken
 pub fn geopackage_ffi::handle::ChildToken::drop(&mut self)
@@ -99,9 +110,21 @@ impl core::marker::Unpin for geopackage_ffi::handle::LayerHandle
 impl core::marker::UnsafeUnpin for geopackage_ffi::handle::LayerHandle
 impl !core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::handle::LayerHandle
 impl !core::panic::unwind_safe::UnwindSafe for geopackage_ffi::handle::LayerHandle
+pub struct geopackage_ffi::handle::TileCursorHandle
+impl geopackage_ffi::handle::TileCursorHandle
+pub fn geopackage_ffi::handle::TileCursorHandle::next(&mut self) -> geopackage::error::Result<core::option::Option<geopackage::tiles::Tile<'_>>>
+impl core::marker::Freeze for geopackage_ffi::handle::TileCursorHandle
+impl !core::marker::Send for geopackage_ffi::handle::TileCursorHandle
+impl !core::marker::Sync for geopackage_ffi::handle::TileCursorHandle
+impl core::marker::Unpin for geopackage_ffi::handle::TileCursorHandle
+impl core::marker::UnsafeUnpin for geopackage_ffi::handle::TileCursorHandle
+impl !core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::handle::TileCursorHandle
+impl !core::panic::unwind_safe::UnwindSafe for geopackage_ffi::handle::TileCursorHandle
 pub struct geopackage_ffi::handle::TilesHandle
 impl geopackage_ffi::handle::TilesHandle
+pub fn geopackage_ffi::handle::TilesHandle::cursor(&self, &geopackage_ffi::handle::CursorScan) -> geopackage::error::Result<geopackage_ffi::handle::TileCursorHandle>
 pub fn geopackage_ffi::handle::TilesHandle::pyramid(&self) -> &geopackage::tiles::TilePyramid<'static>
+pub fn geopackage_ffi::handle::TilesHandle::token(&self) -> geopackage_ffi::handle::ChildToken
 impl core::marker::Freeze for geopackage_ffi::handle::TilesHandle
 impl !core::marker::Send for geopackage_ffi::handle::TilesHandle
 impl !core::marker::Sync for geopackage_ffi::handle::TilesHandle
@@ -155,8 +178,13 @@ pub mod geopackage_ffi::stream
 #[no_mangle] pub unsafe c fn geopackage_ffi::stream::gpkg_layer_write_arrow(*const geopackage_ffi::handle::LayerHandle, *mut arrow_array::ffi_stream::FFI_ArrowArrayStream, usize, *mut u64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 pub mod geopackage_ffi::tiles
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_bytes_free(*mut u8, usize)
+#[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tile_cursor_free(*mut geopackage_ffi::tiles::gpkg_tile_cursor_t)
+#[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tile_cursor_next(*mut geopackage_ffi::tiles::gpkg_tile_cursor_t, *mut i64, *mut i64, *mut i64, *mut *const u8, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_count(*const geopackage_ffi::tiles::gpkg_tiles_t, *mut i64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_count_at(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, *mut i64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_cursor(*const geopackage_ffi::tiles::gpkg_tiles_t, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::tiles::gpkg_tile_cursor_t
+#[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_cursor_at(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::tiles::gpkg_tile_cursor_t
+#[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_cursor_in(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, f64, f64, f64, f64, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::tiles::gpkg_tile_cursor_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_delete(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, i64, i64, *mut bool, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_extent(*const geopackage_ffi::tiles::gpkg_tiles_t, *mut f64, *mut f64, *mut f64, *mut f64, *mut i32, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_free(*mut geopackage_ffi::tiles::gpkg_tiles_t)
@@ -170,6 +198,7 @@ pub mod geopackage_ffi::tiles
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_open(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::tiles::gpkg_tiles_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_put(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, i64, i64, *const u8, usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::tiles::gpkg_tiles_zoom_level_count(*const geopackage_ffi::tiles::gpkg_tiles_t, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+pub type geopackage_ffi::tiles::gpkg_tile_cursor_t = geopackage_ffi::handle::TileCursorHandle
 pub type geopackage_ffi::tiles::gpkg_tiles_t = geopackage_ffi::handle::TilesHandle
 pub mod geopackage_ffi::util
 #[no_mangle] pub unsafe c fn geopackage_ffi::util::gpkg_string_free(*mut core::ffi::primitives::c_char)
@@ -500,8 +529,13 @@ impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_value_
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_rollback(*mut geopackage_ffi::container::gpkg_t, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_srs(*const geopackage_ffi::handle::Container, i32, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut i32, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut f64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_string_free(*mut core::ffi::primitives::c_char)
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tile_cursor_free(*mut geopackage_ffi::tiles::gpkg_tile_cursor_t)
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tile_cursor_next(*mut geopackage_ffi::tiles::gpkg_tile_cursor_t, *mut i64, *mut i64, *mut i64, *mut *const u8, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_count(*const geopackage_ffi::tiles::gpkg_tiles_t, *mut i64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_count_at(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, *mut i64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_cursor(*const geopackage_ffi::tiles::gpkg_tiles_t, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::tiles::gpkg_tile_cursor_t
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_cursor_at(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::tiles::gpkg_tile_cursor_t
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_cursor_in(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, f64, f64, f64, f64, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::tiles::gpkg_tile_cursor_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_delete(*const geopackage_ffi::tiles::gpkg_tiles_t, i64, i64, i64, *mut bool, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_extent(*const geopackage_ffi::tiles::gpkg_tiles_t, *mut f64, *mut f64, *mut f64, *mut f64, *mut i32, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_tiles_free(*mut geopackage_ffi::tiles::gpkg_tiles_t)
@@ -526,5 +560,6 @@ impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_value_
 pub type geopackage_ffi::gpkg_findings_t = geopackage_ffi::validate::FindingsHandle
 pub type geopackage_ffi::gpkg_layer_t = geopackage_ffi::handle::LayerHandle
 pub type geopackage_ffi::gpkg_t = geopackage_ffi::handle::Container
+pub type geopackage_ffi::gpkg_tile_cursor_t = geopackage_ffi::handle::TileCursorHandle
 pub type geopackage_ffi::gpkg_tiles_t = geopackage_ffi::handle::TilesHandle
 pub type geopackage_ffi::gpkg_writer_t = geopackage_ffi::handle::WriterHandle

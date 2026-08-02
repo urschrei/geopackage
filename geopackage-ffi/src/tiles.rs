@@ -115,10 +115,11 @@
 
 use std::ffi::c_char;
 
+use geopackage::BoundingBox;
 use geopackage::core::tiles::TileCoord;
 
 use crate::error::{Status, gpkg_error_t, set_error, set_library_error};
-use crate::handle::{Container, TilesHandle};
+use crate::handle::{Container, CursorScan, TileCursorHandle, TilesHandle};
 use crate::util::{borrow_str, out_string};
 
 /// A tile pyramid of an open GeoPackage. Opaque; created by `gpkg_tiles_open`
@@ -890,4 +891,234 @@ pub unsafe extern "C" fn gpkg_tiles_get_into(
     // distinct allocation, so the two cannot overlap.
     unsafe { std::ptr::copy_nonoverlapping(scratch.as_ptr(), buffer, len) };
     Status::Ok
+}
+
+/// One scan over a pyramid's stored tiles. Opaque; created by
+/// `gpkg_tiles_cursor`, `gpkg_tiles_cursor_at` or `gpkg_tiles_cursor_in`,
+/// and destroyed by `gpkg_tile_cursor_free`.
+#[expect(
+    non_camel_case_types,
+    reason = "the C name is the type's name; cbindgen emits it verbatim"
+)]
+pub type gpkg_tile_cursor_t = TileCursorHandle;
+
+/// Walk every stored tile, in matrix order.
+///
+/// The cursor visits what the pyramid stores rather than probing the declared
+/// grid with `gpkg_tiles_has`, which on a sparse pyramid is the difference
+/// between O(stored) and O(grid). One pass per cursor: at the end of the scan
+/// open a new one.
+///
+/// The cursor counts against the *container*, like an Arrow stream: the
+/// container refuses to close while the cursor is alive, and the tiles handle
+/// it came from may be freed first.
+///
+/// ```c
+/// gpkg_tile_cursor_t *cursor = gpkg_tiles_cursor(tiles, &error);
+/// if (!cursor) {
+///     return fail("gpkg_tiles_cursor", &error);
+/// }
+/// for (;;) {
+///     int64_t zoom = 0, column = 0, row = 0;
+///     const uint8_t *data = NULL;
+///     size_t len = 0;
+///     if (gpkg_tile_cursor_next(cursor, &zoom, &column, &row, &data, &len,
+///                               &error) != GPKG_STATUS_OK) {
+///         gpkg_tile_cursor_free(cursor);
+///         return fail("gpkg_tile_cursor_next", &error);
+///     }
+///     if (data == NULL) {
+///         break;   // the scan is done
+///     }
+///     // `data` is borrowed: valid until the next call on the cursor.
+///     fwrite(data, 1, len, out);
+/// }
+/// gpkg_tile_cursor_free(cursor);
+/// ```
+///
+/// Returns NULL on failure.
+///
+/// # Safety
+///
+/// `tiles` must be a live pyramid handle and `error` NULL or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_tiles_cursor(
+    tiles: *const gpkg_tiles_t,
+    error: *mut gpkg_error_t,
+) -> *mut gpkg_tile_cursor_t {
+    // SAFETY: forwarded to this function's contract.
+    unsafe { open_cursor(tiles, &CursorScan::All, error) }
+}
+
+/// Walk the stored tiles of one zoom level, in matrix order.
+///
+/// As `gpkg_tiles_cursor`, narrowed to `zoom`. A zoom level the pyramid does
+/// not declare scans nothing, since nothing is stored at it; only
+/// `gpkg_tiles_cursor_in` refuses an unknown level, because it needs the
+/// level's grid to turn the box into tile indices.
+///
+/// # Safety
+///
+/// As [`gpkg_tiles_cursor`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_tiles_cursor_at(
+    tiles: *const gpkg_tiles_t,
+    zoom: i64,
+    error: *mut gpkg_error_t,
+) -> *mut gpkg_tile_cursor_t {
+    // SAFETY: forwarded to this function's contract.
+    unsafe { open_cursor(tiles, &CursorScan::At(zoom), error) }
+}
+
+/// Walk the stored tiles of one zoom level that a bounding box touches.
+///
+/// The box is in the pyramid's own spatial reference system; nothing is
+/// transformed. A box outside the pyramid's extent scans nothing, which is
+/// the answer rather than an error.
+///
+/// # Safety
+///
+/// As [`gpkg_tiles_cursor`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_tiles_cursor_in(
+    tiles: *const gpkg_tiles_t,
+    zoom: i64,
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+    error: *mut gpkg_error_t,
+) -> *mut gpkg_tile_cursor_t {
+    let bbox = BoundingBox::new(min_x, min_y, max_x, max_y);
+    // SAFETY: forwarded to this function's contract.
+    unsafe { open_cursor(tiles, &CursorScan::In(zoom, bbox), error) }
+}
+
+/// The body of the three cursor constructors.
+///
+/// # Safety
+///
+/// As [`gpkg_tiles_cursor`].
+unsafe fn open_cursor(
+    tiles: *const gpkg_tiles_t,
+    scan: &CursorScan,
+    error: *mut gpkg_error_t,
+) -> *mut gpkg_tile_cursor_t {
+    if tiles.is_null() {
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::BadArgument, "tiles handle is NULL") };
+        return std::ptr::null_mut();
+    }
+    // SAFETY: the caller guarantees a live pyramid handle.
+    match unsafe { (*tiles).cursor(scan) } {
+        Ok(handle) => Box::into_raw(Box::new(handle)),
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// The next stored tile, or the end of the scan.
+///
+/// On `GPKG_STATUS_OK`, either `out_data` points at the tile's payload with
+/// its length in `out_len` and the address in the coordinate out-parameters,
+/// or the scan is done, which is `out_data` NULL with `out_len` zero and the
+/// coordinates untouched.
+///
+/// **The payload is borrowed, not owned**: it is valid until the next call on
+/// this cursor, or its free, whichever comes first. Copy it to keep it. This
+/// is what makes the cursor cheaper than `gpkg_tiles_get` for a caller
+/// walking many tiles: nothing is allocated or copied per tile on this side
+/// of the boundary.
+///
+/// The coordinate out-parameters may each be NULL to skip them; `out_data`
+/// and `out_len` may not, since a scan whose payloads are discarded unread
+/// has cheaper ways to count.
+///
+/// # Safety
+///
+/// `cursor` must be a live cursor handle, `out_data` and `out_len` writable,
+/// the coordinate out-parameters NULL or writable, and `error` NULL or
+/// writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_tile_cursor_next(
+    cursor: *mut gpkg_tile_cursor_t,
+    out_zoom: *mut i64,
+    out_column: *mut i64,
+    out_row: *mut i64,
+    out_data: *mut *const u8,
+    out_len: *mut usize,
+    error: *mut gpkg_error_t,
+) -> Status {
+    if cursor.is_null() || out_data.is_null() || out_len.is_null() {
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe {
+            set_error(
+                error,
+                Status::BadArgument,
+                "cursor handle, out_data or out_len is NULL",
+            );
+        }
+        return Status::BadArgument;
+    }
+    // SAFETY: the caller guarantees a live cursor handle, used from one thread
+    // as the crate's threading rule requires.
+    let handle = unsafe { &mut *cursor };
+    match handle.next() {
+        Ok(Some(tile)) => {
+            let coord = tile.coord();
+            let data = tile.data();
+            if !out_zoom.is_null() {
+                // SAFETY: the caller guarantees non-NULL out-parameters are
+                // writable.
+                unsafe { *out_zoom = coord.zoom_level };
+            }
+            if !out_column.is_null() {
+                // SAFETY: as above.
+                unsafe { *out_column = coord.column };
+            }
+            if !out_row.is_null() {
+                // SAFETY: as above.
+                unsafe { *out_row = coord.row };
+            }
+            // SAFETY: the caller guarantees `out_data` and `out_len` are
+            // writable. The pointer stays valid until the statement steps
+            // again, which is the documented contract.
+            unsafe { *out_data = data.as_ptr() };
+            // SAFETY: as above.
+            unsafe { *out_len = data.len() };
+            Status::Ok
+        }
+        Ok(None) => {
+            // SAFETY: as above.
+            unsafe { *out_data = std::ptr::null() };
+            // SAFETY: as above.
+            unsafe { *out_len = 0 };
+            Status::Ok
+        }
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            Status::from(&err)
+        }
+    }
+}
+
+/// Release a tile cursor. Passing NULL does nothing.
+///
+/// # Safety
+///
+/// `cursor` must be NULL, or a handle from one of the cursor constructors
+/// that has not already been freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_tile_cursor_free(cursor: *mut gpkg_tile_cursor_t) {
+    if cursor.is_null() {
+        return;
+    }
+    // SAFETY: the caller guarantees the pointer came from `Box::into_raw` in
+    // `open_cursor` and has not been freed. Dropping it decrements the
+    // container's child count, which is what later permits a close.
+    drop(unsafe { Box::from_raw(cursor) });
 }

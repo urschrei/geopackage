@@ -5,10 +5,12 @@ use std::path::PathBuf;
 
 use geopackage_ffi::{
     Status, gpkg_bytes_free, gpkg_close, gpkg_error_clear, gpkg_error_t, gpkg_open,
-    gpkg_open_read_only, gpkg_string_free, gpkg_t, gpkg_tiles_count, gpkg_tiles_count_at,
-    gpkg_tiles_delete, gpkg_tiles_extent, gpkg_tiles_free, gpkg_tiles_get, gpkg_tiles_has,
-    gpkg_tiles_matrix_at, gpkg_tiles_name, gpkg_tiles_name_at, gpkg_tiles_names_count,
-    gpkg_tiles_open, gpkg_tiles_put, gpkg_tiles_t, gpkg_tiles_zoom_level_count,
+    gpkg_open_read_only, gpkg_string_free, gpkg_t, gpkg_tile_cursor_free, gpkg_tile_cursor_next,
+    gpkg_tiles_count, gpkg_tiles_count_at, gpkg_tiles_cursor, gpkg_tiles_cursor_at,
+    gpkg_tiles_cursor_in, gpkg_tiles_delete, gpkg_tiles_extent, gpkg_tiles_free, gpkg_tiles_get,
+    gpkg_tiles_has, gpkg_tiles_matrix_at, gpkg_tiles_name, gpkg_tiles_name_at,
+    gpkg_tiles_names_count, gpkg_tiles_open, gpkg_tiles_put, gpkg_tiles_t,
+    gpkg_tiles_zoom_level_count,
 };
 
 fn error_slot() -> gpkg_error_t {
@@ -507,6 +509,217 @@ fn the_pyramid_list_can_be_walked_by_index() {
     unsafe { gpkg_error_clear(&raw mut error) };
 
     // SAFETY: enumerating took no handles, so nothing blocks the close.
+    let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(closed, Status::Ok);
+}
+
+#[test]
+fn the_cursor_walks_stored_tiles_without_probing_the_grid() {
+    let (gpkg, mut error) = open();
+    let tiles = pyramid(gpkg, &mut error);
+
+    // SAFETY: a live pyramid handle.
+    let cursor = unsafe { gpkg_tiles_cursor(tiles, &raw mut error) };
+    assert!(!cursor.is_null(), "{:?}", message(&error));
+
+    // The reference payload, through the owning reader.
+    let mut expected: *mut u8 = std::ptr::null_mut();
+    let mut expected_len = 0usize;
+    // SAFETY: a live pyramid handle and writable out-parameters.
+    let status = unsafe {
+        gpkg_tiles_get(
+            tiles,
+            0,
+            0,
+            0,
+            &raw mut expected,
+            &raw mut expected_len,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+
+    // The fixture stores exactly one tile, so the scan is one lend and done.
+    let mut zoom = -1i64;
+    let mut column = -1i64;
+    let mut row = -1i64;
+    let mut data: *const u8 = std::ptr::null();
+    let mut len = 0usize;
+    // SAFETY: a live cursor handle and writable out-parameters.
+    let status = unsafe {
+        gpkg_tile_cursor_next(
+            cursor,
+            &raw mut zoom,
+            &raw mut column,
+            &raw mut row,
+            &raw mut data,
+            &raw mut len,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+    assert_eq!((zoom, column, row), (0, 0, 0));
+    assert!(!data.is_null());
+    assert_eq!(len, expected_len);
+    // SAFETY: the cursor lent `len` readable bytes at `data`.
+    let lent = unsafe { std::slice::from_raw_parts(data, len) };
+    // SAFETY: the owning reader wrote `expected_len` readable bytes.
+    let owned = unsafe { std::slice::from_raw_parts(expected, expected_len) };
+    assert_eq!(lent, owned, "the cursor must lend the stored bytes");
+    // SAFETY: the buffer came from `gpkg_tiles_get` with this length.
+    unsafe { gpkg_bytes_free(expected, expected_len) };
+
+    // SAFETY: as the first call; the coordinate out-parameters are NULL,
+    // which is documented as "skip them".
+    let status = unsafe {
+        gpkg_tile_cursor_next(
+            cursor,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut data,
+            &raw mut len,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+    assert!(data.is_null(), "the end of the scan is a NULL payload");
+    assert_eq!(len, 0);
+
+    // SAFETY: a live cursor handle, freed exactly once.
+    unsafe { gpkg_tile_cursor_free(cursor) };
+
+    // The per-level scan of the one declared level walks the same tile.
+    // SAFETY: a live pyramid handle.
+    let at_zero = unsafe { gpkg_tiles_cursor_at(tiles, 0, &raw mut error) };
+    assert!(!at_zero.is_null(), "{:?}", message(&error));
+    // SAFETY: a live cursor handle and writable out-parameters.
+    let status = unsafe {
+        gpkg_tile_cursor_next(
+            at_zero,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut data,
+            &raw mut len,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+    assert!(!data.is_null());
+    assert_eq!(len, expected_len);
+    // SAFETY: a live cursor handle, freed exactly once.
+    unsafe { gpkg_tile_cursor_free(at_zero) };
+
+    // SAFETY: a live pyramid handle, freed exactly once.
+    unsafe { gpkg_tiles_free(tiles) };
+    // SAFETY: nothing borrows the container.
+    let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(closed, Status::Ok);
+}
+
+#[test]
+fn a_live_cursor_blocks_a_close_even_after_its_pyramid_handle_is_freed() {
+    // The cursor counts against the container, as the Arrow stream does, and
+    // independently of the tiles handle it came from: its statement borrows
+    // the container's connection, not the pyramid handle.
+    let (gpkg, mut error) = open();
+    let tiles = pyramid(gpkg, &mut error);
+
+    // SAFETY: a live pyramid handle.
+    let cursor = unsafe { gpkg_tiles_cursor(tiles, &raw mut error) };
+    assert!(!cursor.is_null(), "{:?}", message(&error));
+
+    // SAFETY: a live pyramid handle, freed exactly once; the cursor survives.
+    unsafe { gpkg_tiles_free(tiles) };
+
+    // SAFETY: a live container handle; the close is expected to be refused.
+    let refused = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(
+        refused,
+        Status::HandleInUse,
+        "a live cursor must block a close"
+    );
+    // SAFETY: an error slot this library filled in.
+    unsafe { gpkg_error_clear(&raw mut error) };
+
+    // The cursor still works after its pyramid handle is gone.
+    let mut data: *const u8 = std::ptr::null();
+    let mut len = 0usize;
+    // SAFETY: a live cursor handle and writable out-parameters.
+    let status = unsafe {
+        gpkg_tile_cursor_next(
+            cursor,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut data,
+            &raw mut len,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+    assert!(!data.is_null());
+
+    // SAFETY: a live cursor handle, freed exactly once.
+    unsafe { gpkg_tile_cursor_free(cursor) };
+    // SAFETY: nothing borrows the container now.
+    let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(closed, Status::Ok);
+}
+
+#[test]
+fn a_cursor_over_an_unknown_zoom_level_is_refused() {
+    let (gpkg, mut error) = open();
+    let tiles = pyramid(gpkg, &mut error);
+
+    // A box over an unknown zoom level is refused: the box cannot become tile
+    // indices without that level's grid.
+    // SAFETY: a live pyramid handle; the zoom level is the case under test.
+    let cursor = unsafe { gpkg_tiles_cursor_in(tiles, 99, 0.0, 0.0, 1.0, 1.0, &raw mut error) };
+    assert!(cursor.is_null());
+    assert_eq!(error.code, Status::NotFound);
+    // SAFETY: an error slot this library filled in.
+    unsafe { gpkg_error_clear(&raw mut error) };
+
+    // A box outside the extent scans nothing, which is an empty scan rather
+    // than an error. The pyramid is web mercator, in metres, so outside means
+    // beyond the projection's edge.
+    // SAFETY: a live pyramid handle.
+    let empty = unsafe {
+        gpkg_tiles_cursor_in(
+            tiles,
+            0,
+            30_000_000.0,
+            30_000_000.0,
+            30_000_001.0,
+            30_000_001.0,
+            &raw mut error,
+        )
+    };
+    assert!(!empty.is_null(), "{:?}", message(&error));
+    let mut data: *const u8 = std::ptr::null();
+    let mut len = 0usize;
+    // SAFETY: a live cursor handle and writable out-parameters.
+    let status = unsafe {
+        gpkg_tile_cursor_next(
+            empty,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut data,
+            &raw mut len,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+    assert!(data.is_null());
+
+    // SAFETY: a live cursor handle, freed exactly once.
+    unsafe { gpkg_tile_cursor_free(empty) };
+    // SAFETY: a live pyramid handle, freed exactly once.
+    unsafe { gpkg_tiles_free(tiles) };
+    // SAFETY: nothing borrows the container.
     let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
     assert_eq!(closed, Status::Ok);
 }

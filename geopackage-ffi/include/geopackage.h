@@ -224,6 +224,16 @@ typedef struct FindingsHandle FindingsHandle;
 typedef struct gpkg_layer_t gpkg_layer_t;
 
 /**
+ * A `gpkg_tile_cursor_t`: one scan over a pyramid's stored tiles.
+ *
+ * Owns the whole borrow chain: the stream borrows the boxed cursor, the
+ * cursor's statement borrows the container's connection, and the token is
+ * what stops the container closing underneath both. Field order matters:
+ * the stream is declared first so it drops before the cursor it borrows.
+ */
+typedef struct TileCursorHandle TileCursorHandle;
+
+/**
  * A `gpkg_tiles_t`: a tile pyramid, and the container it borrows.
  */
 typedef struct gpkg_tiles_t gpkg_tiles_t;
@@ -400,6 +410,13 @@ typedef struct {
  * and destroyed by `gpkg_tiles_free`.
  */
 typedef gpkg_tiles_t gpkg_tiles_t;
+
+/**
+ * One scan over a pyramid's stored tiles. Opaque; created by
+ * `gpkg_tiles_cursor`, `gpkg_tiles_cursor_at` or `gpkg_tiles_cursor_in`,
+ * and destroyed by `gpkg_tile_cursor_free`.
+ */
+typedef TileCursorHandle gpkg_tile_cursor_t;
 
 /**
  * The findings of one validation run. Opaque; created by `gpkg_validate` and
@@ -1780,6 +1797,126 @@ gpkg_status gpkg_tiles_get_into(const gpkg_tiles_t *tiles,
                                 size_t capacity,
                                 size_t *out_len,
                                 gpkg_error_t *error);
+
+/**
+ * Walk every stored tile, in matrix order.
+ *
+ * The cursor visits what the pyramid stores rather than probing the declared
+ * grid with `gpkg_tiles_has`, which on a sparse pyramid is the difference
+ * between O(stored) and O(grid). One pass per cursor: at the end of the scan
+ * open a new one.
+ *
+ * The cursor counts against the *container*, like an Arrow stream: the
+ * container refuses to close while the cursor is alive, and the tiles handle
+ * it came from may be freed first.
+ *
+ * ```c
+ * gpkg_tile_cursor_t *cursor = gpkg_tiles_cursor(tiles, &error);
+ * if (!cursor) {
+ *     return fail("gpkg_tiles_cursor", &error);
+ * }
+ * for (;;) {
+ *     int64_t zoom = 0, column = 0, row = 0;
+ *     const uint8_t *data = NULL;
+ *     size_t len = 0;
+ *     if (gpkg_tile_cursor_next(cursor, &zoom, &column, &row, &data, &len,
+ *                               &error) != GPKG_STATUS_OK) {
+ *         gpkg_tile_cursor_free(cursor);
+ *         return fail("gpkg_tile_cursor_next", &error);
+ *     }
+ *     if (data == NULL) {
+ *         break;   // the scan is done
+ *     }
+ *     // `data` is borrowed: valid until the next call on the cursor.
+ *     fwrite(data, 1, len, out);
+ * }
+ * gpkg_tile_cursor_free(cursor);
+ * ```
+ *
+ * Returns NULL on failure.
+ *
+ * # Safety
+ *
+ * `tiles` must be a live pyramid handle and `error` NULL or writable.
+ */
+gpkg_tile_cursor_t *gpkg_tiles_cursor(const gpkg_tiles_t *tiles, gpkg_error_t *error);
+
+/**
+ * Walk the stored tiles of one zoom level, in matrix order.
+ *
+ * As `gpkg_tiles_cursor`, narrowed to `zoom`. A zoom level the pyramid does
+ * not declare scans nothing, since nothing is stored at it; only
+ * `gpkg_tiles_cursor_in` refuses an unknown level, because it needs the
+ * level's grid to turn the box into tile indices.
+ *
+ * # Safety
+ *
+ * As [`gpkg_tiles_cursor`].
+ */
+gpkg_tile_cursor_t *gpkg_tiles_cursor_at(const gpkg_tiles_t *tiles,
+                                         int64_t zoom,
+                                         gpkg_error_t *error);
+
+/**
+ * Walk the stored tiles of one zoom level that a bounding box touches.
+ *
+ * The box is in the pyramid's own spatial reference system; nothing is
+ * transformed. A box outside the pyramid's extent scans nothing, which is
+ * the answer rather than an error.
+ *
+ * # Safety
+ *
+ * As [`gpkg_tiles_cursor`].
+ */
+gpkg_tile_cursor_t *gpkg_tiles_cursor_in(const gpkg_tiles_t *tiles,
+                                         int64_t zoom,
+                                         double min_x,
+                                         double min_y,
+                                         double max_x,
+                                         double max_y,
+                                         gpkg_error_t *error);
+
+/**
+ * The next stored tile, or the end of the scan.
+ *
+ * On `GPKG_STATUS_OK`, either `out_data` points at the tile's payload with
+ * its length in `out_len` and the address in the coordinate out-parameters,
+ * or the scan is done, which is `out_data` NULL with `out_len` zero and the
+ * coordinates untouched.
+ *
+ * **The payload is borrowed, not owned**: it is valid until the next call on
+ * this cursor, or its free, whichever comes first. Copy it to keep it. This
+ * is what makes the cursor cheaper than `gpkg_tiles_get` for a caller
+ * walking many tiles: nothing is allocated or copied per tile on this side
+ * of the boundary.
+ *
+ * The coordinate out-parameters may each be NULL to skip them; `out_data`
+ * and `out_len` may not, since a scan whose payloads are discarded unread
+ * has cheaper ways to count.
+ *
+ * # Safety
+ *
+ * `cursor` must be a live cursor handle, `out_data` and `out_len` writable,
+ * the coordinate out-parameters NULL or writable, and `error` NULL or
+ * writable.
+ */
+gpkg_status gpkg_tile_cursor_next(gpkg_tile_cursor_t *cursor,
+                                  int64_t *out_zoom,
+                                  int64_t *out_column,
+                                  int64_t *out_row,
+                                  const uint8_t **out_data,
+                                  size_t *out_len,
+                                  gpkg_error_t *error);
+
+/**
+ * Release a tile cursor. Passing NULL does nothing.
+ *
+ * # Safety
+ *
+ * `cursor` must be NULL, or a handle from one of the cursor constructors
+ * that has not already been freed.
+ */
+void gpkg_tile_cursor_free(gpkg_tile_cursor_t *cursor);
 
 /**
  * Release a string this library returned.
