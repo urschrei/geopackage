@@ -945,8 +945,13 @@ The items the sense-check produced, in rough order of consumer value:
       `gpkg_attributes_open_with_columns`, with an unknown column refused at
       the open. The correction is recorded on F2 in
       [09-c-api-sense-check.md](09-c-api-sense-check.md).)*
-- [ ] **The SRS definition over C** (F3): what `srs()` reads, past the bare
+- [x] **The SRS definition over C** (F3): what `srs()` reads, past the bare
       id that `gpkg_layer_srs_id` hands over today.
+      *(Done 2026-08-02 as `gpkg_srs`, one call with NULL-skippable
+      out-parameters on `gpkg_tiles_extent`'s pattern: name, organization and
+      code, both definitions, and the epoch as NaN when absent. Strings are
+      all converted before any is written, so a failure hands the caller
+      nothing partial to free.)*
 - [ ] **The fail-fast pair over C** (F4): enumerate extension rows with
       their support level, and surface `validate()`'s findings. The
       catalogue exists so a client can fail fast; a C caller currently
