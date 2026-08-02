@@ -518,6 +518,8 @@
 
 #[cfg(feature = "arrow")]
 pub mod arrow;
+#[cfg(doctest)]
+mod book;
 mod bulk;
 mod create;
 mod data_columns;

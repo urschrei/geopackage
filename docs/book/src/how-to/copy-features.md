@@ -27,6 +27,7 @@ are easy to leave at their defaults and then fail on the first row: the
 geometry type, the `z` and `m` flags, and the SRS.
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use geopackage::core::types::ColumnType;
 use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, TableSchemaBuilder};
 
@@ -63,6 +64,7 @@ for column in &source.schema().columns {
     builder = builder.column(ColumnSpec::new(column.name.clone(), column_type));
 }
 dst.create_layer(&builder)?;
+# Ok(()) }
 ```
 
 Leaving `z` and `m` at their defaults declares the dimension prohibited, and
@@ -78,6 +80,7 @@ and `FeatureWriter::insert_wkb` copies the body into the new blob rather than
 re-serialising it. Nothing parses the geometry at any point.
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use geopackage::core::gpb;
 
 # use geopackage::GeoPackage;
@@ -104,6 +107,7 @@ for feature in cursor.features()? {
     }
 }
 writer.commit()?;
+# Ok(()) }
 ```
 
 `Feature::values` yields borrowed `ValueRef`s, so text and blob cells bind
@@ -120,6 +124,7 @@ copy` does every 10,000 rows. Add a counter to the loop above and end each
 batch with:
 
 ```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 # use geopackage::GeoPackage;
 # let dst = GeoPackage::create("subset.gpkg")?;
 # let target = dst.layer("points")?;
@@ -132,6 +137,7 @@ if in_batch >= BATCH {
     writer = target.writer()?;
     in_batch = 0;
 }
+# Ok(()) }
 ```
 
 A failure part-way then rolls back only the batch it was in, rather than the

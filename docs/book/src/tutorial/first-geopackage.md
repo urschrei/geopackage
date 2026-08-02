@@ -37,7 +37,7 @@ a minute or so. Every later one is quick.
 
 Let's open `src/main.rs` and replace it entirely with this:
 
-```rust
+```rust,no_run
 use geopackage::GeoPackage;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -83,7 +83,7 @@ EPSG:4326.
 Add the two new `use` lines and the `create_layer` call, so that `main.rs`
 reads:
 
-```rust
+```rust,no_run
 use geopackage::core::types::{ColumnType, GeometryType};
 use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, TableSchemaBuilder};
 
@@ -125,7 +125,7 @@ size, where `0` means one transaction for all of them.
 Add the `geo_types::Point` import, extend the `geopackage` import, and append
 the write:
 
-```rust
+```rust,no_run
 use geo_types::Point;
 use geopackage::core::types::{ColumnType, GeometryType};
 use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value};
@@ -192,7 +192,7 @@ box, in the layer's own coordinates.
 
 Add `BoundingBox` to the import list and the loop after the write:
 
-```rust
+```rust,no_run
 use geo_types::Point;
 use geopackage::core::types::{ColumnType, GeometryType};
 use geopackage::{
