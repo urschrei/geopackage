@@ -150,6 +150,118 @@ unsafe fn open_layer(
     }
 }
 
+/// Open a feature layer that reads only the named columns.
+///
+/// `gpkg_layer_open`, projected: a read of the returned handle carries the
+/// feature id, the named value columns, and the geometry only if its column
+/// is named. On a layer whose geometries are large, reading one attribute
+/// through a projected handle touches none of the geometry blobs, which is
+/// most of the read on such layers. The Arrow schema narrows to match, so a
+/// stream from this handle carries exactly these fields.
+///
+/// Columns come back in the table's order whatever order they are named in,
+/// and naming one twice selects it once. The feature id need not be named. A
+/// name that is neither a value column nor the geometry column is
+/// `GPKG_STATUS_NOT_FOUND`, naming the column, so a typo fails at the open
+/// rather than quietly selecting nothing.
+///
+/// A bounding-box read still works when the geometry is not named: each
+/// candidate is still tested exactly against its true envelope, and the
+/// geometry simply reaches no batch. Writing through the handle is
+/// unaffected: a writer writes the layer's whole column list, so a partial
+/// row cannot be inserted by accident.
+///
+/// ```c
+/// const char *columns[] = {"name", "population"};
+/// gpkg_layer_t *narrow =
+///     gpkg_layer_open_with_columns(gpkg, "cities", columns, 2, &error);
+/// ```
+///
+/// # Safety
+///
+/// As [`gpkg_layer_open`], and additionally: `columns` must be NULL (only
+/// when `columns_len` is 0) or point at `columns_len` readable pointers, each
+/// a NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_layer_open_with_columns(
+    gpkg: *const Container,
+    name: *const c_char,
+    columns: *const *const c_char,
+    columns_len: usize,
+    error: *mut gpkg_error_t,
+) -> *mut gpkg_layer_t {
+    // SAFETY: forwarded to this function's contract.
+    unsafe { open_layer_with_columns(gpkg, name, columns, columns_len, error, false) }
+}
+
+/// Open an attribute (non-spatial) layer that reads only the named columns.
+///
+/// `gpkg_attributes_open` with `gpkg_layer_open_with_columns`'s projection,
+/// on the same terms; there is no geometry column to name.
+///
+/// # Safety
+///
+/// As [`gpkg_layer_open_with_columns`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_attributes_open_with_columns(
+    gpkg: *const Container,
+    name: *const c_char,
+    columns: *const *const c_char,
+    columns_len: usize,
+    error: *mut gpkg_error_t,
+) -> *mut gpkg_layer_t {
+    // SAFETY: forwarded to this function's contract.
+    unsafe { open_layer_with_columns(gpkg, name, columns, columns_len, error, true) }
+}
+
+/// The body of both projected opens.
+///
+/// # Safety
+///
+/// As [`gpkg_layer_open_with_columns`].
+unsafe fn open_layer_with_columns(
+    gpkg: *const Container,
+    name: *const c_char,
+    columns: *const *const c_char,
+    columns_len: usize,
+    error: *mut gpkg_error_t,
+    attributes: bool,
+) -> *mut gpkg_layer_t {
+    if gpkg.is_null() || (columns.is_null() && columns_len != 0) {
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::BadArgument, "gpkg handle or columns is NULL") };
+        return std::ptr::null_mut();
+    }
+    // SAFETY: forwarded to the caller's guarantee on `name`.
+    let Some(name) = (unsafe { borrow_str(name, error, "layer name") }) else {
+        return std::ptr::null_mut();
+    };
+    let mut names = Vec::with_capacity(columns_len);
+    for index in 0..columns_len {
+        // SAFETY: the caller guarantees `columns_len` readable pointers, so
+        // every offset below `columns_len` is in bounds.
+        let slot = unsafe { columns.add(index) };
+        // SAFETY: `slot` is in bounds per the line above, and readable.
+        let column = unsafe { *slot };
+        // SAFETY: forwarded to the caller's guarantee on each column string.
+        let Some(text) = (unsafe { borrow_str(column, error, "column name") }) else {
+            return std::ptr::null_mut();
+        };
+        names.push(text);
+    }
+
+    // SAFETY: the caller guarantees a live container handle.
+    let container = unsafe { &*gpkg };
+    match container.layer_with_columns(name, &names, attributes) {
+        Ok(handle) => Box::into_raw(Box::new(handle)),
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// Release a layer handle.
 ///
 /// The container it came from can be closed once every handle taken from it has
