@@ -263,19 +263,6 @@ typedef struct {
 typedef gpkg_layer_t gpkg_layer_t;
 
 /**
- * A tile pyramid of an open GeoPackage. Opaque; created by `gpkg_tiles_open`
- * and destroyed by `gpkg_tiles_free`.
- */
-typedef gpkg_tiles_t gpkg_tiles_t;
-
-/**
- * A write transaction over one layer. Opaque; created by
- * `gpkg_layer_writer`, and destroyed by `gpkg_writer_commit` or
- * `gpkg_writer_free`.
- */
-typedef gpkg_writer_t gpkg_writer_t;
-
-/**
  * Binary data the caller owns: a pointer and a length.
  *
  * A length of zero is an empty blob, for which `data` may be NULL.
@@ -401,6 +388,19 @@ typedef struct {
    */
   gpkg_value_payload value;
 } gpkg_value_t;
+
+/**
+ * A tile pyramid of an open GeoPackage. Opaque; created by `gpkg_tiles_open`
+ * and destroyed by `gpkg_tiles_free`.
+ */
+typedef gpkg_tiles_t gpkg_tiles_t;
+
+/**
+ * A write transaction over one layer. Opaque; created by
+ * `gpkg_layer_writer`, and destroyed by `gpkg_writer_commit` or
+ * `gpkg_writer_free`.
+ */
+typedef gpkg_writer_t gpkg_writer_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -1084,6 +1084,62 @@ gpkg_status gpkg_layer_read_arrow_in(const gpkg_layer_t *layer,
                                      double max_y,
                                      struct ArrowArrayStream *out,
                                      gpkg_error_t *error);
+
+/**
+ * Read the rows matching a SQL `WHERE` clause, a bounding box, or both, as an
+ * Arrow stream.
+ *
+ * The general form of the three readers: `bbox` is NULL or four doubles
+ * (`min_x`, `min_y`, `max_x`, `max_y`) on the terms of
+ * `gpkg_layer_read_arrow_in`, and `where_clause` is NULL or a SQL clause on
+ * the terms below. With both NULL this is `gpkg_layer_read_arrow`; with both
+ * set the stream carries the rows satisfying the two together.
+ *
+ * The clause is **raw SQL, trusted from the caller**: it is appended
+ * (parenthesised) to the query, not parsed or sanitised, exactly as the Rust
+ * crate's `Layer::select` treats it. Its placeholders are `?1` to `?N` and
+ * `params` bind them in array order; the machinery the read adds around the
+ * clause never collides with that numbering. `params` reuses the writer's
+ * `gpkg_value_t`, borrowed for the duration of this call only.
+ *
+ * Reading one row by feature id is the clause `fid = ?1` with the id as its
+ * parameter:
+ *
+ * ```c
+ * gpkg_value_t fid = {GPKG_VALUE_INTEGER, {.integer = 17}};
+ * struct ArrowArrayStream stream;
+ * memset(&stream, 0, sizeof(stream));
+ * if (gpkg_layer_read_arrow_filtered(layer, NULL, "fid = ?1", &fid, 1,
+ *                                    &stream, &error) != GPKG_STATUS_OK) {
+ *     return fail("gpkg_layer_read_arrow_filtered", &error);
+ * }
+ * // Pulled and released exactly as gpkg_layer_read_arrow's stream is.
+ * ```
+ *
+ * A clause SQLite cannot prepare surfaces the interface's way, through the
+ * stream's first `get_next` and `get_last_error`, because each batch is its
+ * own query; the `error` out-parameter here covers only opening the stream.
+ * Passing `params` without a clause for them is
+ * `GPKG_STATUS_INVALID_ARGUMENT`, and a bounding box on a layer with no
+ * geometry column is `GPKG_STATUS_NOT_FOUND`, as for
+ * `gpkg_layer_read_arrow_in`.
+ *
+ * # Safety
+ *
+ * As [`gpkg_layer_read_arrow`], and additionally: `bbox` must be NULL or
+ * point at four readable doubles; `where_clause` must be NULL or a
+ * NUL-terminated UTF-8 string; `params` must be NULL (only when `params_len`
+ * is 0) or point at `params_len` readable `gpkg_value_t` values, each with
+ * the payload its kind promises, borrowed only for the duration of this
+ * call.
+ */
+gpkg_status gpkg_layer_read_arrow_filtered(const gpkg_layer_t *layer,
+                                           const double *bbox,
+                                           const char *where_clause,
+                                           const gpkg_value_t *params,
+                                           size_t params_len,
+                                           struct ArrowArrayStream *out,
+                                           gpkg_error_t *error);
 
 /**
  * Write an Arrow C Data Interface stream into a layer.

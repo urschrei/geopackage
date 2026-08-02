@@ -1,9 +1,10 @@
 //! The Arrow C Data Interface data plane.
 //!
 //! Feature data crosses the boundary as Arrow record batches, in both
-//! directions. [`gpkg_layer_read_arrow`] and [`gpkg_layer_read_arrow_in`] fill
-//! in an `ArrowArrayStream` the caller owns and pulls from;
-//! [`gpkg_layer_write_arrow`] consumes one. The geometry is a GeoArrow WKB
+//! directions. [`gpkg_layer_read_arrow`], [`gpkg_layer_read_arrow_in`] and
+//! [`gpkg_layer_read_arrow_filtered`] fill in an `ArrowArrayStream` the caller
+//! owns and pulls from; [`gpkg_layer_write_arrow`] consumes one. The geometry
+//! is a GeoArrow WKB
 //! column whose Arrow metadata carries the coordinate reference system, which
 //! is what lets [`gpkg_create_layer_from_arrow_schema`] build a destination
 //! layer out of a source stream's schema, with no schema-description API on
@@ -146,11 +147,12 @@ use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use arrow_schema::Schema;
 use arrow_schema::ffi::FFI_ArrowSchema;
 use geopackage::arrow::{ArrowBatches, ArrowReadOptions};
-use geopackage::{BoundingBox, TableSchemaBuilder};
+use geopackage::{BoundingBox, TableSchemaBuilder, ValueRef};
 
 use crate::error::{Status, gpkg_error_t, set_error, set_library_error};
 use crate::handle::{ChildToken, Container, LayerHandle};
 use crate::util::borrow_str;
+use crate::value::{borrow_values, gpkg_value_t};
 
 /// What a stream owns for as long as C holds it.
 ///
@@ -367,7 +369,7 @@ pub unsafe extern "C" fn gpkg_layer_read_arrow(
     error: *mut gpkg_error_t,
 ) -> Status {
     // SAFETY: forwarded to this function's contract.
-    unsafe { read_arrow_inner(layer, None, out, error) }
+    unsafe { read_arrow_inner(layer, None, None, out, error) }
 }
 
 /// Read the rows of a layer intersecting a bounding box, as an Arrow stream.
@@ -410,10 +412,108 @@ pub unsafe extern "C" fn gpkg_layer_read_arrow_in(
 ) -> Status {
     let bbox = BoundingBox::new(min_x, min_y, max_x, max_y);
     // SAFETY: forwarded to this function's contract.
-    unsafe { read_arrow_inner(layer, Some(bbox), out, error) }
+    unsafe { read_arrow_inner(layer, Some(bbox), None, out, error) }
 }
 
-/// The body of both readers.
+/// Read the rows matching a SQL `WHERE` clause, a bounding box, or both, as an
+/// Arrow stream.
+///
+/// The general form of the three readers: `bbox` is NULL or four doubles
+/// (`min_x`, `min_y`, `max_x`, `max_y`) on the terms of
+/// `gpkg_layer_read_arrow_in`, and `where_clause` is NULL or a SQL clause on
+/// the terms below. With both NULL this is `gpkg_layer_read_arrow`; with both
+/// set the stream carries the rows satisfying the two together.
+///
+/// The clause is **raw SQL, trusted from the caller**: it is appended
+/// (parenthesised) to the query, not parsed or sanitised, exactly as the Rust
+/// crate's `Layer::select` treats it. Its placeholders are `?1` to `?N` and
+/// `params` bind them in array order; the machinery the read adds around the
+/// clause never collides with that numbering. `params` reuses the writer's
+/// `gpkg_value_t`, borrowed for the duration of this call only.
+///
+/// Reading one row by feature id is the clause `fid = ?1` with the id as its
+/// parameter:
+///
+/// ```c
+/// gpkg_value_t fid = {GPKG_VALUE_INTEGER, {.integer = 17}};
+/// struct ArrowArrayStream stream;
+/// memset(&stream, 0, sizeof(stream));
+/// if (gpkg_layer_read_arrow_filtered(layer, NULL, "fid = ?1", &fid, 1,
+///                                    &stream, &error) != GPKG_STATUS_OK) {
+///     return fail("gpkg_layer_read_arrow_filtered", &error);
+/// }
+/// // Pulled and released exactly as gpkg_layer_read_arrow's stream is.
+/// ```
+///
+/// A clause SQLite cannot prepare surfaces the interface's way, through the
+/// stream's first `get_next` and `get_last_error`, because each batch is its
+/// own query; the `error` out-parameter here covers only opening the stream.
+/// Passing `params` without a clause for them is
+/// `GPKG_STATUS_INVALID_ARGUMENT`, and a bounding box on a layer with no
+/// geometry column is `GPKG_STATUS_NOT_FOUND`, as for
+/// `gpkg_layer_read_arrow_in`.
+///
+/// # Safety
+///
+/// As [`gpkg_layer_read_arrow`], and additionally: `bbox` must be NULL or
+/// point at four readable doubles; `where_clause` must be NULL or a
+/// NUL-terminated UTF-8 string; `params` must be NULL (only when `params_len`
+/// is 0) or point at `params_len` readable `gpkg_value_t` values, each with
+/// the payload its kind promises, borrowed only for the duration of this
+/// call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_layer_read_arrow_filtered(
+    layer: *const LayerHandle,
+    bbox: *const f64,
+    where_clause: *const c_char,
+    params: *const gpkg_value_t,
+    params_len: usize,
+    out: *mut FFI_ArrowArrayStream,
+    error: *mut gpkg_error_t,
+) -> Status {
+    let bbox = if bbox.is_null() {
+        None
+    } else {
+        // SAFETY: the caller guarantees four readable doubles when non-NULL.
+        // Read unaligned because C makes no alignment promise about an array
+        // on its own stack.
+        let [min_x, min_y, max_x, max_y] =
+            unsafe { std::ptr::read_unaligned(bbox.cast::<[f64; 4]>()) };
+        Some(BoundingBox::new(min_x, min_y, max_x, max_y))
+    };
+    let clause = if where_clause.is_null() {
+        if params_len != 0 {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe {
+                set_error(
+                    error,
+                    Status::InvalidArgument,
+                    "params were passed without a where clause to bind them",
+                )
+            };
+            return Status::InvalidArgument;
+        }
+        None
+    } else {
+        // SAFETY: forwarded to the caller's guarantee on `where_clause`.
+        let Some(text) = (unsafe { borrow_str(where_clause, error, "where clause") }) else {
+            return Status::BadArgument;
+        };
+        Some(text)
+    };
+    let values = match clause {
+        // SAFETY: forwarded to the caller's guarantee on `params`.
+        Some(_) => match unsafe { borrow_values(params, params_len, error) } {
+            Some(values) => values,
+            None => return Status::BadArgument,
+        },
+        None => Vec::new(),
+    };
+    // SAFETY: forwarded to this function's contract.
+    unsafe { read_arrow_inner(layer, bbox, clause.map(|text| (text, values)), out, error) }
+}
+
+/// The body of the three readers.
 ///
 /// # Safety
 ///
@@ -421,6 +521,7 @@ pub unsafe extern "C" fn gpkg_layer_read_arrow_in(
 unsafe fn read_arrow_inner(
     layer: *const LayerHandle,
     bbox: Option<BoundingBox>,
+    sql_filter: Option<(&str, Vec<ValueRef<'_>>)>,
     out: *mut FFI_ArrowArrayStream,
     error: *mut gpkg_error_t,
 ) -> Status {
@@ -435,9 +536,13 @@ unsafe fn read_arrow_inner(
     // A single thread: the stream is pulled by C on the caller's thread, and
     // the threaded reader would need a connection per worker.
     let options = ArrowReadOptions::default().with_threads(1);
-    let opened = match bbox {
-        Some(bbox) => handle.layer().read_arrow_in(bbox, options),
-        None => handle.layer().read_arrow(options),
+    let opened = match (bbox, &sql_filter) {
+        (Some(bbox), Some((clause, params))) => handle
+            .layer()
+            .read_arrow_in_where(bbox, clause, params, options),
+        (Some(bbox), None) => handle.layer().read_arrow_in(bbox, options),
+        (None, Some((clause, params))) => handle.layer().read_arrow_where(clause, params, options),
+        (None, None) => handle.layer().read_arrow(options),
     };
     let batches = match opened {
         Ok(batches) => batches,

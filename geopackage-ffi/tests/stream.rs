@@ -11,8 +11,9 @@ use std::path::PathBuf;
 use arrow_array::RecordBatchReader;
 use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use geopackage_ffi::{
-    Status, gpkg_close, gpkg_error_clear, gpkg_error_t, gpkg_layer_free, gpkg_layer_open,
-    gpkg_layer_read_arrow, gpkg_layer_read_arrow_in, gpkg_open_read_only, gpkg_t,
+    Status, ValueKind, gpkg_close, gpkg_error_clear, gpkg_error_t, gpkg_layer_free,
+    gpkg_layer_open, gpkg_layer_read_arrow, gpkg_layer_read_arrow_filtered,
+    gpkg_layer_read_arrow_in, gpkg_open_read_only, gpkg_t, gpkg_value_payload, gpkg_value_t,
 };
 
 fn error_slot() -> gpkg_error_t {
@@ -237,6 +238,124 @@ fn many_streams_can_be_opened_and_released() {
     // SAFETY: a live layer handle, freed exactly once.
     unsafe { gpkg_layer_free(layer) };
     // SAFETY: every stream was drained and released.
+    let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(closed, Status::Ok);
+}
+
+fn text_value(s: &CStr) -> gpkg_value_t {
+    gpkg_value_t {
+        kind: ValueKind::Text,
+        value: gpkg_value_payload { text: s.as_ptr() },
+    }
+}
+
+#[test]
+fn a_filtered_stream_returns_the_matching_rows() {
+    let (gpkg, mut error) = open();
+    let name = CString::new("points").expect("no interior NUL");
+    // SAFETY: a live container handle and a valid name.
+    let layer = unsafe { gpkg_layer_open(gpkg, name.as_ptr(), &raw mut error) };
+    assert!(!layer.is_null());
+
+    // One row by name, through a bound parameter, including non-ASCII text.
+    let wanted = CString::new("béta ☃").expect("no interior NUL");
+    let clause = CString::new("name = ?1").expect("no interior NUL");
+    let param = text_value(&wanted);
+    let mut stream = FFI_ArrowArrayStream::empty();
+    // SAFETY: a live layer handle, a valid clause with one matching value, and
+    // writable out-parameters.
+    let status = unsafe {
+        gpkg_layer_read_arrow_filtered(
+            layer,
+            std::ptr::null(),
+            clause.as_ptr(),
+            &raw const param,
+            1,
+            &raw mut stream,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+    assert_eq!(drain(stream).0, 1);
+
+    // Both filters NULL: the general form degenerates to the whole layer.
+    let mut all = FFI_ArrowArrayStream::empty();
+    // SAFETY: as above, with no filters at all.
+    let status = unsafe {
+        gpkg_layer_read_arrow_filtered(
+            layer,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            &raw mut all,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+    assert_eq!(drain(all).0, 3);
+
+    // Composed with a bounding box covering everything, the clause still
+    // decides; composed with one covering nothing, nothing survives it.
+    for (bbox, expected) in [
+        ([-180.0, -90.0, 180.0, 90.0], 1),
+        ([500.0, 500.0, 501.0, 501.0], 0),
+    ] {
+        let mut composed = FFI_ArrowArrayStream::empty();
+        // SAFETY: as above, with four readable doubles.
+        let status = unsafe {
+            gpkg_layer_read_arrow_filtered(
+                layer,
+                bbox.as_ptr(),
+                clause.as_ptr(),
+                &raw const param,
+                1,
+                &raw mut composed,
+                &raw mut error,
+            )
+        };
+        assert_eq!(status, Status::Ok, "{:?}", message(&error));
+        assert_eq!(drain(composed).0, expected, "{bbox:?}");
+    }
+
+    // SAFETY: a live layer handle, freed exactly once.
+    unsafe { gpkg_layer_free(layer) };
+    // SAFETY: every stream was drained and released.
+    let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(closed, Status::Ok);
+}
+
+#[test]
+fn params_without_a_clause_are_refused() {
+    let (gpkg, mut error) = open();
+    let name = CString::new("points").expect("no interior NUL");
+    // SAFETY: a live container handle and a valid name.
+    let layer = unsafe { gpkg_layer_open(gpkg, name.as_ptr(), &raw mut error) };
+    assert!(!layer.is_null());
+
+    let text = CString::new("alpha").expect("no interior NUL");
+    let param = text_value(&text);
+    let mut stream = FFI_ArrowArrayStream::empty();
+    // SAFETY: a live layer handle; the argument combination is deliberately
+    // invalid, which the call must report rather than dereference into.
+    let status = unsafe {
+        gpkg_layer_read_arrow_filtered(
+            layer,
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw const param,
+            1,
+            &raw mut stream,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::InvalidArgument);
+    // SAFETY: an error slot this library filled in.
+    unsafe { gpkg_error_clear(&raw mut error) };
+
+    // SAFETY: a live layer handle, freed exactly once.
+    unsafe { gpkg_layer_free(layer) };
+    // SAFETY: the failed open registered no stream, so nothing blocks a close.
     let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
     assert_eq!(closed, Status::Ok);
 }

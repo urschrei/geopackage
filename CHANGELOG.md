@@ -21,6 +21,14 @@ While the version is below 1.0 the API may change in any release.
   page-advance accounting. Both decline the aggregate and threaded paths, as
   the bbox read does. Reading a single row is `fid = ?1`.
 
+- **`geopackage-ffi`: `gpkg_layer_read_arrow_filtered`.** The general form of
+  the Arrow readers: a bounding box (NULL or four doubles), a SQL `WHERE`
+  clause (NULL or `select`'s raw-SQL contract, placeholders `?1` to `?N`
+  bound from an array of the writer's `gpkg_value_t`), or both together.
+  Reading one row by feature id is the clause `fid = ?1`. This closes the
+  sense-check's largest gap (F1): attribute filters, subset strings and
+  by-FID access over C are all this one entry point.
+
 - **`geopackage-ffi`: tile pyramids can be enumerated.**
   `gpkg_tiles_names_count` and `gpkg_tiles_name_at` walk a file's pyramids by
   table name, mirroring the layer pair, so a C consumer no longer has to know
