@@ -859,6 +859,44 @@ out to matter to someone.
 added to the C ABI, since the sequence a C caller would reasonably write would
 finally work.
 
+### The C API sense-check
+
+Added 2026-08-02, before the API review rather than inside it, because any
+finding that needs a Rust change is breaking after the freeze and additive
+before it.
+
+The phase 9 scope decision was "the C API mirrors the Rust API". That
+validates the C surface against this crate's shape, not against what C
+consumers of the format do. The two are not the same thing, and the gap
+closed on 2026-08-02 is a small instance of the difference: pyramids could be
+opened by name but not enumerated, which no consumer modelled on our Rust API
+would notice (Rust has `tile_pyramids()`) and any consumer modelled on GDAL
+would (subdataset listing is how GDAL presents a multi-pyramid file). The
+concern this item exists to settle: whether the surface reflects what
+GeoPackage users need in ergonomics and performance, checked outward rather
+than inward.
+
+- [ ] **Compare against GDAL's C API**, since that is what nearly every
+      GeoPackage consumer programs against today. For each call such a
+      consumer would use, record whether this ABI has an equivalent, a
+      deliberate omission with its reasoning, or a gap. The vector side:
+      `GDALOpenEx` and dataset capability queries, the `OGR_L_*` calls
+      (attribute and spatial filters, extent, feature count, field
+      introspection), `OGR_L_GetArrowStream`, dataset transactions and
+      `ExecuteSQL`. The raster side: subdataset listing, band and block
+      access, overview selection. The output is a table, committed here, so
+      the omissions are decisions rather than accidents.
+- [ ] **Ask what QGIS would need** to sit on this ABI in place of its GDAL
+      provider, as the most demanding realistic consumer: capability probing,
+      subset strings, request-scoped column and geometry subsets, editing
+      sessions, unique-value and aggregate queries, and bounding-box requests
+      at interactive rates, which is the access pattern the handle-lifetime
+      measurements were taken for. #6 already plans QGIS interop CI; this is
+      the API-shape half of the same question.
+- [ ] **Decide what follows**: C API additions, Rust changes that inform new
+      C API items, or a recorded conclusion that the surface stands. New work
+      becomes unticked items here rather than silent scope growth.
+
 - [ ] **API review.** Audit every `pub` item; `#[non_exhaustive]` where growth
       is plausible; error variants stabilised; rusqlite kept out of the public
       API except through documented escape hatches.
