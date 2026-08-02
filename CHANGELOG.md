@@ -8,6 +8,37 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-02
+
+### Changed
+
+- **Documentation restyled across all four crates** on the model of the
+  georust `geo` and `geo-types` crates: verb-led first sentences, plain
+  wording in place of the container metaphor ("holds", "carries") and the
+  refusal register, crate roots presenting the API surface as categorised
+  catalogues, doctests on `geopackage-core`'s pure functions, and missing
+  `# Errors` sections filled in. Module docs keep design rationale and
+  measurements in compressed form. The C header is regenerated from the
+  restyled FFI docs; its diff is comments only.
+- **Error message wording follows the same style**: a column now "contains"
+  an incompatible value rather than "holds" one, and the `ZmViolation`
+  message says a geometry "has" a dimension rather than "carries" it. Codes
+  and error types are unchanged.
+- Milestone markers (M0 to M5, acceptance-criterion references) are removed
+  from all non-markdown files; the roadmap documents remain the record.
+- The `geopackage` crate docs now signpost the `gpkg` command-line tool up
+  front, and `gpkg index` and `gpkg info` gained long `--help` text
+  (creation steps and the already-indexed failure; the lenient read-only
+  open).
+
+### Fixed
+
+- The `OpenOptions` builder documentation and its example were attached to
+  `DEFAULT_BUSY_TIMEOUT`, and the constant's documentation to the struct;
+  each is now on the right item.
+- A dangling `value_to_sql` documentation link now points at
+  `value_ref_to_sql`.
+
 ## [0.7.0] - 2026-08-02
 
 ### Added
@@ -1030,7 +1061,9 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/urschrei/geopackage/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/urschrei/geopackage/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/urschrei/geopackage/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/urschrei/geopackage/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/urschrei/geopackage/compare/v0.3.0...v0.4.0
