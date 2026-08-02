@@ -68,3 +68,39 @@ closes. Two conditions would reopen it, in order:
 The bench stays in the tree (`cargo bench -p geopackage --features arrow
 --bench filtered`), so the figures can be reproduced when either condition
 is met.
+
+## Follow-up, same day: the single-threaded gap is closed
+
+Reopening condition 1 was taken up immediately. The filtered read's page
+query carried an `IN (SELECT id FROM rtree ...)` subquery, so SQLite
+re-evaluated the RTree scan once per page. The read now scans the RTree
+exactly once at construction, sorts the candidate ids, folds them into key
+ranges (gaps up to 64 keys included, the over-fetched rows dropped by the
+exact re-test that already ran on every candidate), and pages each range
+with an ordinary `key <= ?` bound. A dense candidate set thereby degenerates
+to the unfiltered query shape plus the re-test.
+
+Same bench, same machine, same day:
+
+| Selectivity | Before | After | Change |
+|---|---|---|---|
+| 1% | 597 us | 481 us | -19% |
+| 10% | 5.77 ms | 4.46 ms | -23% |
+| 50% | 42.4 ms | 22.5 ms | -47% |
+| 100% | 138.6 ms | 44.8 ms | -68% |
+
+At full selectivity the filtered read (44.8 ms) now sits at parity with the
+unfiltered sequential read of the same rows (46.6 ms, interval 42.3 to
+50.0), with the one-time RTree scan and the per-candidate exact re-test
+inside that figure. The 3x gap is gone.
+
+## The decision, revisited on the new figures
+
+**Still not built, on one condition instead of two.** With the overhead
+removed, threads would now parallelise necessary work, and the unfiltered
+references suggest roughly 2x is available at high selectivity. But the
+selectivities where filtering earns its keep are faster still than before
+(0.5 ms to 4.5 ms at 1% to 10%), and a caller reading most of a layer
+through a bounding box has the unfiltered threaded read available at the
+same cost. What remains of the reopening case is condition 2 alone: a
+profile showing large-selectivity filtered reads bounding a real workload.

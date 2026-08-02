@@ -8,6 +8,20 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Changed
+
+- **The filtered columnar reads scan the spatial index once.** The bbox
+  variants (`read_arrow_in`, `read_arrow_in_where`, and the C
+  `gpkg_layer_read_arrow_filtered`) used to re-evaluate an RTree subquery on
+  every page; the index is now scanned once when the read is opened and its
+  candidates walked as key ranges, which removes most of the filtered read's
+  overhead: at full selectivity it now runs at parity with the unfiltered
+  sequential read (previously three times slower), and 19% to 47% faster at
+  lower selectivities. See
+  `roadmap/benchmarks/2026-08-02-threaded-filtered-read.md`. Behaviour
+  consequence, now documented: the candidate set is fixed at open, so a row
+  inserted while batches are still being pulled is not returned.
+
 ### Added
 
 - **`Layer::read_arrow_where` and `Layer::read_arrow_in_where`: filtered
