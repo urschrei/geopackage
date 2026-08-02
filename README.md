@@ -13,7 +13,7 @@ through Apache Arrow. Pre-1.0: the API will change without notice.
 
 ```toml
 [dependencies]
-geopackage = "0.6"
+geopackage = "0.7"
 geo-types = "0.7"  # any geo-traits implementation works; this is the common one
 ```
 
@@ -21,7 +21,7 @@ Columnar read and write through Apache Arrow is behind an off-by-default
 feature, which adds the `arrow-array` and `arrow-schema` dependencies:
 
 ```toml
-geopackage = { version = "0.6", features = ["arrow"] }
+geopackage = { version = "0.7", features = ["arrow"] }
 ```
 
 SQLite is bundled and built from source, so a C compiler is required and there
@@ -311,9 +311,14 @@ compiles and links against it through `pkg-config --cflags --libs geopackage`.
 
 The conventions:
 
-- **Handles are opaque**, each with exactly one destructor. `gpkg_t` is an open
-  file, `gpkg_layer_t` a feature or attribute layer, and `gpkg_tiles_t` a tile
-  pyramid, whose tiles are read, written, tested for and deleted by address.
+- **Handles are opaque.** `gpkg_t` is an open file, `gpkg_layer_t` a feature
+  or attribute layer (opened plain or projected to a column subset),
+  `gpkg_tiles_t` a tile pyramid (opened by name or created, on the web
+  mercator quad or any grid), `gpkg_tile_cursor_t` a scan over a pyramid's
+  stored tiles, `gpkg_writer_t` a row-at-a-time write transaction, and
+  `gpkg_findings_t` the result of validation. Each has one destructor,
+  except the writer, whose two ends mean different things: commit keeps its
+  work, free discards it.
 - **Strings are NUL-terminated UTF-8 in both directions.** One this library
   returns is owned by the caller and released with `gpkg_string_free`; one the
   caller passes in is borrowed for the duration of the call.
@@ -322,14 +327,27 @@ The conventions:
   does not want the detail. A function returning a pointer fails with NULL, and
   one returning a status with a value other than `GPKG_STATUS_OK`.
 - **The data plane is the Arrow C Data Interface**, both ways.
-  `gpkg_layer_read_arrow` and `gpkg_layer_read_arrow_in` fill in an
-  `ArrowArrayStream` the caller owns, and `gpkg_layer_write_arrow` takes one.
+  `gpkg_layer_read_arrow` fills in an `ArrowArrayStream` the caller owns,
+  `gpkg_layer_read_arrow_filtered` does the same for a bounding box, a raw
+  SQL `WHERE` clause with bound parameters, or both at once (one row is the
+  clause `fid = ?1`), and `gpkg_layer_write_arrow` takes a stream.
   `gpkg_create_layer_from_arrow_schema` builds a layer from a stream's own
   schema, so a C consumer can copy a layer without describing its columns at
   all; the geometry column comes out declared as `GEOMETRY` rather than the
   source's specific type, because the GeoArrow WKB encoding does not carry one.
-  [`examples/roundtrip.c`](https://github.com/urschrei/geopackage/blob/main/geopackage-ffi/examples/roundtrip.c)
-  is a complete copy program on that basis.
+- **A file can be interrogated before it is touched.** Layer and pyramid
+  enumeration, schema introspection, `gpkg_srs` for a coordinate reference
+  system's definition, the `gpkg_extensions` catalogue with the support level
+  this library claims per row, and `gpkg_validate` for everything the
+  library's checks can find, with severities and repair advice.
+
+Five worked C programs ship in
+[`geopackage-ffi/examples/`](https://github.com/urschrei/geopackage/tree/main/geopackage-ffi/examples),
+each compiled against the committed header and run by CI, so they cannot
+drift from the ABI: first contact (`smoke.c`), the fail-fast inspection
+pattern (`inspect.c`), the interactive read loop (`query.c`), a complete
+layer copy through Arrow (`roundtrip.c`), and a tile pipeline built from
+nothing (`tilepipe.c`).
 
 ```c
 #include "geopackage.h"
@@ -357,16 +375,18 @@ what gives SQLite its own per-connection state.
 
 **Closing a container is refused while any handle taken from it is alive.**
 `gpkg_close` returns `GPKG_STATUS_HANDLE_IN_USE` and leaves the file open while
-a layer handle, a tile handle or an Arrow stream from it is unfreed. Those
-handles hold a borrow of the container that C has no way to express, so the
-count is checked at runtime rather than left to the caller to keep track of;
-the Rust API gets the same guarantee from the borrow checker, since `close`
-takes `self`.
+a layer handle, a tile handle, a tile cursor, a writer or an Arrow stream from
+it is unfreed. Those handles hold a borrow of the container that C has no way
+to express, so the count is checked at runtime rather than left to the caller
+to keep track of; the Rust API gets the same guarantee from the borrow
+checker, since `close` takes `self`. The one exemption is `gpkg_findings_t`,
+which owns plain data, borrows nothing, and stays readable after a close.
 
-`begin` and `commit` are not exposed, deliberately: the write paths and the bulk
-index build open transactions of their own, and SQLite does not nest them, so an
-explicit transaction around them fails. Rows per transaction are set through the
-`batch_size` argument the write calls already take.
+Transactions are the caller's when wanted: `gpkg_begin`, `gpkg_commit`,
+`gpkg_rollback` and `gpkg_in_transaction`, with every write path joining a
+transaction the caller has open rather than fighting it. A program that never
+calls `gpkg_begin` has each write durable when its call returns, with rows per
+transaction set through the `batch_size` argument the bulk write calls take.
 
 `geopackage-ffi` is the only crate in the workspace containing `unsafe`. Every
 other crate sets `unsafe_code = "forbid"`.

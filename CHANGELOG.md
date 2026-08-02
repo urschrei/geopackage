@@ -8,6 +8,8 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-02
+
 ### Added
 
 - **`geopackage-ffi`: three new worked C programs**, each compiled against
@@ -18,32 +20,6 @@ While the version is below 1.0 the API may change in any release.
   resolved to a definition, and the filtered read's three shapes), and
   `tilepipe.c` (a pyramid created from nothing, filled, and copied through
   the lending cursor). The crate docs open with the five-program map.
-
-### Fixed
-
-- **`geopackage-ffi` crate docs told C consumers things that stopped being
-  true.** The claim that nothing in the ABI updates or deletes a feature
-  (false since the row writer landed), the claim that validation is not
-  exposed, a destructor list and handle-lifetime section missing the tile
-  cursor and writer, a module map missing `extensions` and `validate`, and,
-  caught by compiling `query.c`, doc examples using `GPKG_VALUE_TEXT` and
-  friends where the header's constants are `GPKG_VALUE_KIND_*`.
-
-### Changed
-
-- **The filtered columnar reads scan the spatial index once.** The bbox
-  variants (`read_arrow_in`, `read_arrow_in_where`, and the C
-  `gpkg_layer_read_arrow_filtered`) used to re-evaluate an RTree subquery on
-  every page; the index is now scanned once when the read is opened and its
-  candidates walked as key ranges, which removes most of the filtered read's
-  overhead: at full selectivity it now runs at parity with the unfiltered
-  sequential read (previously three times slower), and 19% to 47% faster at
-  lower selectivities. See
-  `roadmap/benchmarks/2026-08-02-threaded-filtered-read.md`. Behaviour
-  consequence, now documented: the candidate set is fixed at open, so a row
-  inserted while batches are still being pulled is not returned.
-
-### Added
 
 - **`Layer::read_arrow_where` and `Layer::read_arrow_in_where`: filtered
   columnar reads.** The columnar counterparts of `select`, alone and composed
@@ -117,6 +93,30 @@ While the version is below 1.0 the API may change in any release.
   `gpkg_tiles_names_count` and `gpkg_tiles_name_at` walk a file's pyramids by
   table name, mirroring the layer pair, so a C consumer no longer has to know
   a pyramid's name before opening it.
+
+### Changed
+
+- **The filtered columnar reads scan the spatial index once.** The bbox
+  variants (`read_arrow_in`, `read_arrow_in_where`, and the C
+  `gpkg_layer_read_arrow_filtered`) used to re-evaluate an RTree subquery on
+  every page; the index is now scanned once when the read is opened and its
+  candidates walked as key ranges, which removes most of the filtered read's
+  overhead: at full selectivity it now runs at parity with the unfiltered
+  sequential read (previously three times slower), and 19% to 47% faster at
+  lower selectivities. See
+  `roadmap/benchmarks/2026-08-02-threaded-filtered-read.md`. Behaviour
+  consequence, now documented: the candidate set is fixed at open, so a row
+  inserted while batches are still being pulled is not returned.
+
+### Fixed
+
+- **`geopackage-ffi` crate docs told C consumers things that stopped being
+  true.** The claim that nothing in the ABI updates or deletes a feature
+  (false since the row writer landed), the claim that validation is not
+  exposed, a destructor list and handle-lifetime section missing the tile
+  cursor and writer, a module map missing `extensions` and `validate`, and,
+  caught by compiling `query.c`, doc examples using `GPKG_VALUE_TEXT` and
+  friends where the header's constants are `GPKG_VALUE_KIND_*`.
 
 ## [0.6.0] - 2026-07-29
 

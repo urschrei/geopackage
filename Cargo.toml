@@ -4,7 +4,7 @@ exclude = ["geopackage-core/fuzz"]
 resolver = "3"
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 # 1.95 is forced by libsqlite3-sys 0.38 (via rusqlite 0.40), whose build
 # script uses cfg_select!, stabilised in 1.95. Revisit lowering once upstream
@@ -22,8 +22,8 @@ keywords = ["geopackage", "gpkg", "gis", "geospatial", "ogc"]
 categories = ["science::geo", "database"]
 
 [workspace.dependencies]
-geopackage-core = { version = "0.6.0", path = "geopackage-core", default-features = false }
-geopackage = { version = "0.6.0", path = "geopackage" }
+geopackage-core = { version = "0.7.0", path = "geopackage-core", default-features = false }
+geopackage = { version = "0.7.0", path = "geopackage" }
 thiserror = "2"
 # `limits` is for SQLITE_LIMIT_FUNCTION_ARG: the Arrow read path passes one
 # function argument per column, so it has to know when a table is too wide.
