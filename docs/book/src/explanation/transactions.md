@@ -29,12 +29,9 @@ The atomicity is unchanged. The statements are still grouped, they still
 commit together, and a failure still rolls them back together. What changes is
 who decides when that happens, and that passes to whoever issued the `BEGIN`.
 
-This was not a new idea when it was made general. `Layer::extent` had worked
-this way since it was written, because measuring an extent and recording it
-have to share a transaction: two statements in autocommit would leave a window
-for another connection to commit a row between them, and the box recorded
-would then exclude it. The shared type is that branch made reusable, and every
-write path in the library now works the same way.
+Every write path in the library behaves this way, from a single
+`FeatureWriter` insert to a bulk `write_all` and the extent recording
+described in [the extent chapter](extent.md).
 
 ## Why not savepoints
 
