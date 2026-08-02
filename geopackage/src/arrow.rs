@@ -540,20 +540,83 @@ impl Layer<'_> {
                 table_name: self.table_name().to_owned(),
             });
         }
-        self.read_arrow_filtered(options, Some(bbox))
+        self.read_arrow_filtered(options, Some(bbox), None)
+    }
+
+    /// Read the rows matching a caller-supplied `WHERE` clause as Arrow record
+    /// batches.
+    ///
+    /// The columnar counterpart of [`Layer::select`], with the same contract:
+    /// `where_clause` is appended (parenthesised) to the query and is **raw
+    /// SQL, trusted from the caller**; this crate does not parse or sanitise
+    /// it. Its placeholders are `?1` to `?N` and `params` bind in slice order,
+    /// exactly as [`Layer::select`] binds them; the pagination this read adds
+    /// around the clause is numbered after `N` and never collides with it.
+    ///
+    /// This is also the columnar read for a single row: `fid = ?1` with the
+    /// key as its parameter.
+    ///
+    /// The filter runs inside SQLite, so unlike [`Layer::read_arrow_in`] there
+    /// is no client-side re-test and a batch under-fills only at the byte
+    /// ceiling. Single-threaded, like every filtered read: the parallel path
+    /// assigns key windows to workers on the assumption that a window's key
+    /// span implies its row count, and a filter voids that.
+    ///
+    /// # Errors
+    ///
+    /// As [`Layer::read_arrow`]; a clause SQLite cannot prepare surfaces
+    /// through the iterator's first item, since each batch is its own query.
+    pub fn read_arrow_where(
+        &self,
+        where_clause: &str,
+        params: &[crate::ValueRef<'_>],
+        options: ArrowReadOptions,
+    ) -> Result<ArrowBatches<'_>> {
+        self.read_arrow_filtered(options, None, Some((where_clause, params)))
+    }
+
+    /// Read the rows intersecting `bbox` **and** matching a caller-supplied
+    /// `WHERE` clause, as Arrow record batches.
+    ///
+    /// The two filters compose: the rows are
+    /// [`Layer::features_in`]'s intersected with [`Layer::select`]'s, in
+    /// primary-key order. The bounding box uses the RTree index on
+    /// [`Layer::read_arrow_in`]'s terms, including the exact re-test; the
+    /// clause carries [`Layer::read_arrow_where`]'s contract, including its
+    /// `?1` to `?N` placeholder numbering.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoGeometryColumn`] if the layer has none; otherwise as
+    /// [`Layer::read_arrow_where`].
+    pub fn read_arrow_in_where(
+        &self,
+        bbox: BoundingBox,
+        where_clause: &str,
+        params: &[crate::ValueRef<'_>],
+        options: ArrowReadOptions,
+    ) -> Result<ArrowBatches<'_>> {
+        if self.geometry_column().is_none() {
+            return Err(Error::NoGeometryColumn {
+                table_name: self.table_name().to_owned(),
+            });
+        }
+        self.read_arrow_filtered(options, Some(bbox), Some((where_clause, params)))
     }
 
     /// The single-threaded reader, which the threaded one falls back to and its
     /// workers are built from.
     fn read_arrow_sequential(&self, options: ArrowReadOptions) -> Result<ArrowBatches<'_>> {
-        self.read_arrow_filtered(options, None)
+        self.read_arrow_filtered(options, None, None)
     }
 
-    /// The single-threaded reader, optionally filtered to a bounding box.
+    /// The single-threaded reader, optionally filtered to a bounding box and a
+    /// caller-supplied `WHERE` clause.
     fn read_arrow_filtered(
         &self,
         options: ArrowReadOptions,
         filter: Option<BoundingBox>,
+        sql_filter: Option<(&str, &[crate::ValueRef<'_>])>,
     ) -> Result<ArrowBatches<'_>> {
         let schema = self.arrow_schema()?;
         // The pagination key: the declared primary key, or SQLite's rowid for a
@@ -590,12 +653,25 @@ impl Layer<'_> {
             ),
         };
         let table = quote(self.table_name())?;
+        // The caller's `WHERE` clause keeps [`Layer::select`]'s contract: its
+        // placeholders are `?1` to `?N` and its params bind in slice order. The
+        // key, limit and rtree bounds are numbered explicitly after `N`, so
+        // with no clause the text degenerates to the unfiltered one (`?1` key,
+        // `?2` limit, `?3` to `?6` bounds) and every path binds the same way:
+        // user params first, then key, limit and bounds.
+        let base = sql_filter.map_or(0, |(_, params)| params.len());
+        let (key_slot, limit_slot) = (base + 1, base + 2);
+        let user_params: Vec<rusqlite::types::Value> = sql_filter
+            .map(|(_, params)| params.iter().map(crate::value::value_ref_to_sql).collect())
+            .unwrap_or_default();
+        let user_and = match sql_filter {
+            Some((clause, _)) => format!("({clause}) AND "),
+            None => String::new(),
+        };
         // The spatial predicate, when there is one and the layer has an index
         // to answer it with. A subquery against the RTree rather than a join,
         // so the select list stays unqualified and the surrounding query is
-        // unchanged; SQLite drives the same index lookup either way. The key
-        // and limit keep `?1` and `?2` so the unfiltered path binds as before,
-        // and the four widened bounds follow as `?3` to `?6`.
+        // unchanged; SQLite drives the same index lookup either way.
         let (spatial_sql, filter_params) = match filter {
             Some(bbox) if self.has_spatial_index()? => {
                 let geom = self
@@ -614,7 +690,11 @@ impl Layer<'_> {
                 (
                     format!(
                         " AND {id} IN (SELECT id FROM {rtree} \
-                          WHERE minx <= ?3 AND maxx >= ?4 AND miny <= ?5 AND maxy >= ?6)"
+                          WHERE minx <= ?{} AND maxx >= ?{} AND miny <= ?{} AND maxy >= ?{})",
+                        base + 3,
+                        base + 4,
+                        base + 5,
+                        base + 6
                     ),
                     vec![
                         rusqlite::types::Value::Real(crate::layer::widen_up(bbox.max_x)),
@@ -630,7 +710,8 @@ impl Layer<'_> {
             _ => (String::new(), Vec::new()),
         };
         let rows_sql = format!(
-            "SELECT {row_columns} FROM {table} WHERE {key} >= ?1{spatial_sql} ORDER BY {key} LIMIT ?2"
+            "SELECT {row_columns} FROM {table} WHERE {user_and}{key} >= ?{key_slot}{spatial_sql} \
+             ORDER BY {key} LIMIT ?{limit_slot}"
         );
         let sql = rows_sql.clone();
         let geometry_index = self.geometry_column().and_then(|geom| {
@@ -654,37 +735,42 @@ impl Layer<'_> {
         // maintain and the case is rare.
         let arg_count =
             i32::try_from(names.len() + usize::from(key_field.is_none())).unwrap_or(i32::MAX);
-        // A filtered read declines the aggregate and takes the direct loop. The
-        // aggregate builds the columns inside SQLite's own scan, where the
-        // exact re-test against each geometry's true envelope has nowhere to
-        // run; the direct loop can drop a candidate between reading it and
-        // appending it. Declining rather than failing is what the threaded path
-        // does for each of its own conditions.
-        let aggregate =
-            if filter.is_none() && arg_count <= conn.limit(Limit::SQLITE_LIMIT_FUNCTION_ARG)? {
-                Some(AggregateState::register(
-                    conn,
-                    arg_count,
-                    BatchFiller {
-                        names: names.clone(),
-                        types: schema
-                            .fields()
-                            .iter()
-                            .map(|field| field.data_type().clone())
-                            .collect(),
-                        key_argument: key_field.unwrap_or(0),
-                        field_offset: usize::from(key_field.is_none()),
-                        geometry_index,
-                        datetime,
-                        capacity: options.batch_size.clamp(1, DEFAULT_BATCH_SIZE),
-                        max_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
-                        output: Arc::new(Mutex::new(None)),
-                        failure: Arc::new(Mutex::new(None)),
-                    },
-                )?)
-            } else {
-                None
-            };
+        // A filtered read declines the aggregate and takes the direct loop. For
+        // a bounding box the reason is structural: the aggregate builds the
+        // columns inside SQLite's own scan, where the exact re-test against
+        // each geometry's true envelope has nowhere to run; the direct loop can
+        // drop a candidate between reading it and appending it. A `WHERE`
+        // clause is exact SQL and could keep the aggregate; it declines anyway
+        // until a measurement shows the aggregate paying on filtered reads,
+        // so both filters take one path. Declining rather than failing is what
+        // the threaded path does for each of its own conditions.
+        let aggregate = if filter.is_none()
+            && sql_filter.is_none()
+            && arg_count <= conn.limit(Limit::SQLITE_LIMIT_FUNCTION_ARG)?
+        {
+            Some(AggregateState::register(
+                conn,
+                arg_count,
+                BatchFiller {
+                    names: names.clone(),
+                    types: schema
+                        .fields()
+                        .iter()
+                        .map(|field| field.data_type().clone())
+                        .collect(),
+                    key_argument: key_field.unwrap_or(0),
+                    field_offset: usize::from(key_field.is_none()),
+                    geometry_index,
+                    datetime,
+                    capacity: options.batch_size.clamp(1, DEFAULT_BATCH_SIZE),
+                    max_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
+                    output: Arc::new(Mutex::new(None)),
+                    failure: Arc::new(Mutex::new(None)),
+                },
+            )?)
+        } else {
+            None
+        };
 
         // The batch has to be bounded by the inner query. An aggregate collapses
         // its input to a single result row, so a LIMIT beside it would bound the
@@ -717,6 +803,7 @@ impl Layer<'_> {
                 last_batch_rows: 0,
                 next_key: i64::MIN,
                 exhausted: false,
+                user_params,
                 filter: filter.map(|bbox| {
                     Box::new(SpatialFilter {
                         bbox,
@@ -1187,6 +1274,9 @@ struct SequentialBatches<'a> {
     /// Rows with a key at or above this are still to be read.
     next_key: i64,
     exhausted: bool,
+    /// The caller's `WHERE` parameters, bound first (`?1` to `?N`) on every
+    /// page. Empty for a reader with no `WHERE` clause.
+    user_params: Vec<rusqlite::types::Value>,
     /// The spatial filter, set only by `read_arrow_in`. Boxed so an unfiltered
     /// reader, which is every reader the threaded path builds, carries one
     /// pointer rather than the whole of it.
@@ -1351,10 +1441,15 @@ impl SequentialBatches<'_> {
         let mut candidates = 0usize;
         {
             let mut stmt = self.conn.prepare_cached(&self.sql)?;
-            let mut params: Vec<rusqlite::types::Value> = vec![
-                rusqlite::types::Value::Integer(self.next_key),
-                rusqlite::types::Value::Integer(i64::try_from(self.batch_size).unwrap_or(i64::MAX)),
-            ];
+            // Binding is positional, so the order here is the placeholder
+            // numbering: the caller's params take `?1` to `?N`, then the key,
+            // the limit and the widened bounds follow, as the query text
+            // numbered them.
+            let mut params: Vec<rusqlite::types::Value> = self.user_params.clone();
+            params.push(rusqlite::types::Value::Integer(self.next_key));
+            params.push(rusqlite::types::Value::Integer(
+                i64::try_from(self.batch_size).unwrap_or(i64::MAX),
+            ));
             if let Some(filter) = &self.filter {
                 params.extend(filter.params.iter().cloned());
             }

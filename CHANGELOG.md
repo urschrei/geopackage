@@ -10,6 +10,17 @@ While the version is below 1.0 the API may change in any release.
 
 ### Added
 
+- **`Layer::read_arrow_where` and `Layer::read_arrow_in_where`: filtered
+  columnar reads.** The columnar counterparts of `select`, alone and composed
+  with a bounding box, with `select`'s contract: the clause is raw SQL trusted
+  from the caller, its placeholders are `?1` to `?N`, and parameters bind in
+  slice order. The pagination and rtree bounds the read adds around the
+  clause are numbered after `N`, so a clause written for `select` works
+  unchanged. The clause runs inside SQLite, so the plain variant needs no
+  client-side re-test; the composed variant keeps the bbox re-test and its
+  page-advance accounting. Both decline the aggregate and threaded paths, as
+  the bbox read does. Reading a single row is `fid = ?1`.
+
 - **`geopackage-ffi`: tile pyramids can be enumerated.**
   `gpkg_tiles_names_count` and `gpkg_tiles_name_at` walk a file's pyramids by
   table name, mirroring the layer pair, so a C consumer no longer has to know
