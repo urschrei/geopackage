@@ -30,6 +30,13 @@ While the version is below 1.0 the API may change in any release.
   threaded path declines on a projected layer, since its workers rebuild the
   layer by name and would read every column.
 
+- **`geopackage-ffi`: projected opens.** `gpkg_layer_open_with_columns` and
+  `gpkg_attributes_open_with_columns` open a handle that reads only the named
+  columns, on `Layer::with_columns`'s terms: the feature id always, the
+  geometry only if named, an unknown name refused at the open. The Arrow
+  stream narrows to match, and a bounding-box read on a handle whose
+  projection excludes the geometry still re-tests candidates exactly.
+
 - **`geopackage-ffi`: `gpkg_layer_read_arrow_filtered`.** The general form of
   the Arrow readers: a bounding box (NULL or four doubles), a SQL `WHERE`
   clause (NULL or `select`'s raw-SQL contract, placeholders `?1` to `?N`

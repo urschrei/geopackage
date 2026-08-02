@@ -128,6 +128,29 @@ impl Container {
         Ok(self.adopt(layer))
     }
 
+    /// Open a layer projected to the named columns, as a child handle.
+    ///
+    /// `attributes` picks which open runs underneath, since the two entry
+    /// points differ only there.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the open returns, or [`geopackage::Error::NoSuchColumn`] from
+    /// the projection.
+    pub fn layer_with_columns(
+        &self,
+        name: &str,
+        columns: &[&str],
+        attributes: bool,
+    ) -> geopackage::Result<LayerHandle> {
+        let layer = if attributes {
+            self.gpkg.attributes(name)?
+        } else {
+            self.gpkg.layer(name)?
+        };
+        Ok(self.adopt(layer.with_columns(columns)?))
+    }
+
     /// Erase a layer's borrow and count it as a child.
     ///
     /// The lifetime `'_` on the way in is a borrow of `*self.gpkg`, which lives

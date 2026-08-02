@@ -250,8 +250,9 @@ pub use container::{
 };
 pub use error::{Status, gpkg_error_clear, gpkg_error_t};
 pub use layer::{
-    gpkg_attributes_open, gpkg_layer_count, gpkg_layer_free, gpkg_layer_name, gpkg_layer_name_at,
-    gpkg_layer_names_count, gpkg_layer_open, gpkg_layer_t,
+    gpkg_attributes_open, gpkg_attributes_open_with_columns, gpkg_layer_count, gpkg_layer_free,
+    gpkg_layer_name, gpkg_layer_name_at, gpkg_layer_names_count, gpkg_layer_open,
+    gpkg_layer_open_with_columns, gpkg_layer_t,
 };
 pub use schema::{
     gpkg_layer_column_count, gpkg_layer_column_is_primary_key, gpkg_layer_column_name,

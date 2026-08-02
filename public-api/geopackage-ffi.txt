@@ -71,6 +71,7 @@ pub fn geopackage_ffi::handle::Container::attributes(&self, &str) -> geopackage:
 pub fn geopackage_ffi::handle::Container::close(self) -> geopackage::error::Result<()>
 pub fn geopackage_ffi::handle::Container::gpkg(&self) -> &geopackage::GeoPackage
 pub fn geopackage_ffi::handle::Container::layer(&self, &str) -> geopackage::error::Result<geopackage_ffi::handle::LayerHandle>
+pub fn geopackage_ffi::handle::Container::layer_with_columns(&self, &str, &[&str], bool) -> geopackage::error::Result<geopackage_ffi::handle::LayerHandle>
 pub fn geopackage_ffi::handle::Container::new(geopackage::GeoPackage) -> Self
 pub fn geopackage_ffi::handle::Container::outstanding_children(&self) -> usize
 pub fn geopackage_ffi::handle::Container::tiles(&self, &str) -> geopackage::error::Result<geopackage_ffi::handle::TilesHandle>
@@ -117,12 +118,14 @@ impl !core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::handle::Writer
 impl !core::panic::unwind_safe::UnwindSafe for geopackage_ffi::handle::WriterHandle
 pub mod geopackage_ffi::layer
 #[no_mangle] pub unsafe c fn geopackage_ffi::layer::gpkg_attributes_open(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::layer::gpkg_layer_t
+#[no_mangle] pub unsafe c fn geopackage_ffi::layer::gpkg_attributes_open_with_columns(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *const *const core::ffi::primitives::c_char, usize, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::layer::gpkg_layer_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::layer::gpkg_layer_count(*const geopackage_ffi::layer::gpkg_layer_t, *mut u64, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::layer::gpkg_layer_free(*mut geopackage_ffi::layer::gpkg_layer_t)
 #[no_mangle] pub unsafe c fn geopackage_ffi::layer::gpkg_layer_name(*const geopackage_ffi::layer::gpkg_layer_t, *mut geopackage_ffi::error::gpkg_error_t) -> *mut core::ffi::primitives::c_char
 #[no_mangle] pub unsafe c fn geopackage_ffi::layer::gpkg_layer_name_at(*const geopackage_ffi::handle::Container, usize, *mut geopackage_ffi::error::gpkg_error_t) -> *mut core::ffi::primitives::c_char
 #[no_mangle] pub unsafe c fn geopackage_ffi::layer::gpkg_layer_names_count(*const geopackage_ffi::handle::Container, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::layer::gpkg_layer_open(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::layer::gpkg_layer_t
+#[no_mangle] pub unsafe c fn geopackage_ffi::layer::gpkg_layer_open_with_columns(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *const *const core::ffi::primitives::c_char, usize, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::layer::gpkg_layer_t
 pub type geopackage_ffi::layer::gpkg_layer_t = geopackage_ffi::handle::LayerHandle
 pub mod geopackage_ffi::schema
 #[no_mangle] pub unsafe c fn geopackage_ffi::schema::gpkg_layer_column_count(*const geopackage_ffi::handle::LayerHandle, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
@@ -432,6 +435,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for geopackage_ffi::value::gpkg_val
 impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_value_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_add_epsg_srs(*const geopackage_ffi::handle::Container, i32, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_attributes_open(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::layer::gpkg_layer_t
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_attributes_open_with_columns(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *const *const core::ffi::primitives::c_char, usize, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::layer::gpkg_layer_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_begin(*mut geopackage_ffi::container::gpkg_t, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_bytes_free(*mut u8, usize)
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_close(*mut geopackage_ffi::container::gpkg_t, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
@@ -457,6 +461,7 @@ impl core::panic::unwind_safe::UnwindSafe for geopackage_ffi::value::gpkg_value_
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_layer_name_at(*const geopackage_ffi::handle::Container, usize, *mut geopackage_ffi::error::gpkg_error_t) -> *mut core::ffi::primitives::c_char
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_layer_names_count(*const geopackage_ffi::handle::Container, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_layer_open(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::layer::gpkg_layer_t
+#[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_layer_open_with_columns(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *const *const core::ffi::primitives::c_char, usize, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::layer::gpkg_layer_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_layer_read_arrow(*const geopackage_ffi::handle::LayerHandle, *mut arrow_array::ffi_stream::FFI_ArrowArrayStream, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_layer_read_arrow_filtered(*const geopackage_ffi::handle::LayerHandle, *const f64, *const core::ffi::primitives::c_char, *const geopackage_ffi::value::gpkg_value_t, usize, *mut arrow_array::ffi_stream::FFI_ArrowArrayStream, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::gpkg_layer_read_arrow_in(*const geopackage_ffi::handle::LayerHandle, f64, f64, f64, f64, *mut arrow_array::ffi_stream::FFI_ArrowArrayStream, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status

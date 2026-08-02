@@ -12,8 +12,9 @@ use arrow_array::RecordBatchReader;
 use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use geopackage_ffi::{
     Status, ValueKind, gpkg_close, gpkg_error_clear, gpkg_error_t, gpkg_layer_free,
-    gpkg_layer_open, gpkg_layer_read_arrow, gpkg_layer_read_arrow_filtered,
-    gpkg_layer_read_arrow_in, gpkg_open_read_only, gpkg_t, gpkg_value_payload, gpkg_value_t,
+    gpkg_layer_open, gpkg_layer_open_with_columns, gpkg_layer_read_arrow,
+    gpkg_layer_read_arrow_filtered, gpkg_layer_read_arrow_in, gpkg_open_read_only, gpkg_t,
+    gpkg_value_payload, gpkg_value_t,
 };
 
 fn error_slot() -> gpkg_error_t {
@@ -356,6 +357,81 @@ fn params_without_a_clause_are_refused() {
     // SAFETY: a live layer handle, freed exactly once.
     unsafe { gpkg_layer_free(layer) };
     // SAFETY: the failed open registered no stream, so nothing blocks a close.
+    let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(closed, Status::Ok);
+}
+
+#[test]
+fn a_projected_open_narrows_the_stream() {
+    let (gpkg, mut error) = open();
+    let name = CString::new("points").expect("no interior NUL");
+    let column = CString::new("name").expect("no interior NUL");
+    let columns = [column.as_ptr()];
+    // SAFETY: a live container handle, a valid name and one readable column
+    // pointer.
+    let layer = unsafe {
+        gpkg_layer_open_with_columns(gpkg, name.as_ptr(), columns.as_ptr(), 1, &raw mut error)
+    };
+    assert!(!layer.is_null(), "{:?}", message(&error));
+
+    let mut stream = FFI_ArrowArrayStream::empty();
+    // SAFETY: a live layer handle and writable out-parameters.
+    let status = unsafe { gpkg_layer_read_arrow(layer, &raw mut stream, &raw mut error) };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+    let (rows, names) = drain(stream);
+    assert_eq!(rows, 3);
+    assert_eq!(
+        names,
+        vec!["fid".to_owned(), "name".to_owned()],
+        "the geometry was not named, so the stream must not carry it"
+    );
+
+    // A bounding-box read still works: the hidden geometry feeds the exact
+    // re-test without reaching the batches.
+    let mut in_box = FFI_ArrowArrayStream::empty();
+    // SAFETY: as above.
+    let status = unsafe {
+        gpkg_layer_read_arrow_in(
+            layer,
+            -180.0,
+            -90.0,
+            180.0,
+            90.0,
+            &raw mut in_box,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, Status::Ok, "{:?}", message(&error));
+    let (rows, names) = drain(in_box);
+    assert_eq!(rows, 3);
+    assert_eq!(names, vec!["fid".to_owned(), "name".to_owned()]);
+
+    // SAFETY: a live layer handle, freed exactly once.
+    unsafe { gpkg_layer_free(layer) };
+
+    // A column the table does not have fails at the open, naming it.
+    let wrong = CString::new("nope").expect("no interior NUL");
+    let wrong_columns = [wrong.as_ptr()];
+    // SAFETY: as the successful open; the column name is the case under test.
+    let refused = unsafe {
+        gpkg_layer_open_with_columns(
+            gpkg,
+            name.as_ptr(),
+            wrong_columns.as_ptr(),
+            1,
+            &raw mut error,
+        )
+    };
+    assert!(refused.is_null());
+    assert_eq!(error.code, Status::NotFound);
+    assert!(
+        message(&error).is_some_and(|text| text.contains("nope")),
+        "the refusal should name the column"
+    );
+    // SAFETY: an error slot this library filled in.
+    unsafe { gpkg_error_clear(&raw mut error) };
+
+    // SAFETY: every handle and stream is released.
     let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
     assert_eq!(closed, Status::Ok);
 }

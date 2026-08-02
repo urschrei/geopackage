@@ -723,6 +723,62 @@ gpkg_layer_t *gpkg_layer_open(const gpkg_t *gpkg, const char *name, gpkg_error_t
 gpkg_layer_t *gpkg_attributes_open(const gpkg_t *gpkg, const char *name, gpkg_error_t *error);
 
 /**
+ * Open a feature layer that reads only the named columns.
+ *
+ * `gpkg_layer_open`, projected: a read of the returned handle carries the
+ * feature id, the named value columns, and the geometry only if its column
+ * is named. On a layer whose geometries are large, reading one attribute
+ * through a projected handle touches none of the geometry blobs, which is
+ * most of the read on such layers. The Arrow schema narrows to match, so a
+ * stream from this handle carries exactly these fields.
+ *
+ * Columns come back in the table's order whatever order they are named in,
+ * and naming one twice selects it once. The feature id need not be named. A
+ * name that is neither a value column nor the geometry column is
+ * `GPKG_STATUS_NOT_FOUND`, naming the column, so a typo fails at the open
+ * rather than quietly selecting nothing.
+ *
+ * A bounding-box read still works when the geometry is not named: each
+ * candidate is still tested exactly against its true envelope, and the
+ * geometry simply reaches no batch. Writing through the handle is
+ * unaffected: a writer writes the layer's whole column list, so a partial
+ * row cannot be inserted by accident.
+ *
+ * ```c
+ * const char *columns[] = {"name", "population"};
+ * gpkg_layer_t *narrow =
+ *     gpkg_layer_open_with_columns(gpkg, "cities", columns, 2, &error);
+ * ```
+ *
+ * # Safety
+ *
+ * As [`gpkg_layer_open`], and additionally: `columns` must be NULL (only
+ * when `columns_len` is 0) or point at `columns_len` readable pointers, each
+ * a NUL-terminated UTF-8 string.
+ */
+gpkg_layer_t *gpkg_layer_open_with_columns(const gpkg_t *gpkg,
+                                           const char *name,
+                                           const char *const *columns,
+                                           size_t columns_len,
+                                           gpkg_error_t *error);
+
+/**
+ * Open an attribute (non-spatial) layer that reads only the named columns.
+ *
+ * `gpkg_attributes_open` with `gpkg_layer_open_with_columns`'s projection,
+ * on the same terms; there is no geometry column to name.
+ *
+ * # Safety
+ *
+ * As [`gpkg_layer_open_with_columns`].
+ */
+gpkg_layer_t *gpkg_attributes_open_with_columns(const gpkg_t *gpkg,
+                                                const char *name,
+                                                const char *const *columns,
+                                                size_t columns_len,
+                                                gpkg_error_t *error);
+
+/**
  * Release a layer handle.
  *
  * The container it came from can be closed once every handle taken from it has
