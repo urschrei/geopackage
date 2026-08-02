@@ -1,6 +1,6 @@
 [package]
 name = "geopackage"
-description = "Read and write OGC GeoPackage (.gpkg) files: pure-Rust container handling over bundled SQLite, with spec-correct spatial indexing"
+description = "Read and write OGC GeoPackage (.gpkg) files"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
