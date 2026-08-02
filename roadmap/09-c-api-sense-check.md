@@ -71,7 +71,7 @@ needs survive the model difference, not about matching calls.
 | dataset geotransform and size | georeference the grid | `gpkg_tiles_extent`, `gpkg_tiles_matrix_at` | equivalent |
 | `GDALGetOverviewCount` / `GetOverview` | pick a zoom level | `gpkg_tiles_zoom_level_count`, `gpkg_tiles_matrix_at` | equivalent |
 | `GDALRasterIO` | pixels | `gpkg_tiles_get` / `_get_into`: stored bytes, never pixels | omission: by design; a renderer decodes on its side of the boundary, and every consumer with an opinion about image formats already owns a decoder |
-| `GDALCreateCopy` to write a pyramid | write tiles | `gpkg_tiles_put` / `_delete`, checked against the grid and the declared format | equivalent |
+| `GDALCreateCopy` to write a pyramid | write tiles | `gpkg_tiles_put` / `_delete`, checked against the grid and the declared format | equivalent for filling; **corrected 2026-08-02**: creating the pyramid itself has no C entry point, found while building F9's cursor, and is now its own item in 07 |
 | walking what a sparse pyramid actually stores | copy or audit a pyramid | none: C probes the declared grid with `gpkg_tiles_has`, which is O(grid) where Rust's `TileCursor` is O(stored) | gap, F9 |
 
 ## What QGIS would need
