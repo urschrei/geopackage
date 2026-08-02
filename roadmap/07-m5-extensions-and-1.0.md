@@ -963,9 +963,26 @@ The items the sense-check produced, in rough order of consumer value:
       severity, description and repair advice; it borrows nothing, so it is
       the one handle that does not block a close, which its test
       demonstrates by reading the findings after the container is gone.)*
-- [ ] **A pyramid cursor over C** (F9): walk stored tiles rather than
+- [x] **A pyramid cursor over C** (F9): walk stored tiles rather than
       probing the declared grid, which on a sparse pyramid is O(grid)
       against the cursor's O(stored).
+      *(Done 2026-08-02. `gpkg_tile_cursor_t` from `gpkg_tiles_cursor`,
+      `_at` and `_in`; `gpkg_tile_cursor_next` lends each payload until the
+      next call, the same contract as the Rust lending cursor, so nothing is
+      allocated or copied per tile. The handle owns the whole borrow chain,
+      stream over boxed statement, and counts against the container the way
+      an Arrow stream does, so it outlives the tiles handle it came from and
+      blocks the close until freed, both pinned by tests. One correction
+      found while testing: an unknown zoom level refuses only the bbox form,
+      which needs the level's grid; the plain per-level scan of an unknown
+      level is empty rather than an error, matching the Rust API.)*
+- [ ] **Pyramid creation over C**, found while building F9's cursor: the
+      write side has `gpkg_tiles_put` and `_delete`, but no C caller can
+      create a pyramid, so C consumers can only fill pyramids that already
+      exist. The sense-check's raster table called the write side equivalent
+      to `GDALCreateCopy` and missed this. Needs a C representation of
+      `TilePyramidBuilder`'s required parts: the matrix set, a zoom ladder
+      and the extent.
 
 - [ ] **API review.** Audit every `pub` item; `#[non_exhaustive]` where growth
       is plausible; error variants stabilised; rusqlite kept out of the public
