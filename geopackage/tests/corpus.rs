@@ -205,9 +205,21 @@ fn flatten_geo(g: &geo_types::Geometry<f64>, out: &mut Vec<[f64; 2]>) {
         Geometry::LineString(ls) => line(ls, out),
         Geometry::Polygon(p) => polygon(p, out),
         Geometry::MultiPoint(mp) => out.extend(mp.0.iter().map(|p| [p.x(), p.y()])),
-        Geometry::MultiLineString(mls) => mls.0.iter().for_each(|ls| line(ls, out)),
-        Geometry::MultiPolygon(mp) => mp.0.iter().for_each(|p| polygon(p, out)),
-        Geometry::GeometryCollection(gc) => gc.0.iter().for_each(|m| flatten_geo(m, out)),
+        Geometry::MultiLineString(mls) => {
+            for ls in &mls.0 {
+                line(ls, out);
+            }
+        }
+        Geometry::MultiPolygon(mp) => {
+            for p in &mp.0 {
+                polygon(p, out);
+            }
+        }
+        Geometry::GeometryCollection(gc) => {
+            for m in &gc.0 {
+                flatten_geo(m, out);
+            }
+        }
         Geometry::Rect(r) => out.extend([[r.min().x, r.min().y], [r.max().x, r.max().y]]),
         Geometry::Triangle(t) => out.extend(t.to_array().map(|c| [c.x, c.y])),
     }

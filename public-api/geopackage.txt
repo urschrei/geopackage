@@ -158,7 +158,7 @@ pub geopackage::Error::ColumnConstraintViolation::constraint: alloc::string::Str
 pub geopackage::Error::ColumnConstraintViolation::constraint_name: alloc::string::String
 pub geopackage::Error::ColumnConstraintViolation::table_name: alloc::string::String
 pub geopackage::Error::ColumnConstraintViolation::value: alloc::string::String
-pub geopackage::Error::Core(geopackage_core::Error)
+pub geopackage::Error::Core(geopackage_core::error::Error)
 pub geopackage::Error::DuplicateUpdateColumn
 pub geopackage::Error::DuplicateUpdateColumn::column_name: alloc::string::String
 pub geopackage::Error::DuplicateUpdateColumn::table_name: alloc::string::String
@@ -272,8 +272,8 @@ pub geopackage::Error::ZoomOtherNotEnabled
 pub geopackage::Error::ZoomOtherNotEnabled::table_name: alloc::string::String
 impl core::convert::From<arrow_schema::error::ArrowError> for geopackage::Error
 pub fn geopackage::Error::from(arrow_schema::error::ArrowError) -> Self
-impl core::convert::From<geopackage_core::Error> for geopackage::Error
-pub fn geopackage::Error::from(geopackage_core::Error) -> Self
+impl core::convert::From<geopackage_core::error::Error> for geopackage::Error
+pub fn geopackage::Error::from(geopackage_core::error::Error) -> Self
 impl core::convert::From<geopackage_core::tiles::TileError> for geopackage::Error
 pub fn geopackage::Error::from(geopackage_core::tiles::TileError) -> Self
 impl core::convert::From<rusqlite::error::Error> for geopackage::Error
