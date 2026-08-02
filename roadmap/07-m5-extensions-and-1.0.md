@@ -976,13 +976,22 @@ The items the sense-check produced, in rough order of consumer value:
       found while testing: an unknown zoom level refuses only the bbox form,
       which needs the level's grid; the plain per-level scan of an unknown
       level is empty rather than an error, matching the Rust API.)*
-- [ ] **Pyramid creation over C**, found while building F9's cursor: the
+- [x] **Pyramid creation over C**, found while building F9's cursor: the
       write side has `gpkg_tiles_put` and `_delete`, but no C caller can
       create a pyramid, so C consumers can only fill pyramids that already
       exist. The sense-check's raster table called the write side equivalent
       to `GDALCreateCopy` and missed this. Needs a C representation of
       `TilePyramidBuilder`'s required parts: the matrix set, a zoom ladder
       and the extent.
+      *(Done 2026-08-02, without a builder handle: the required parts flatten
+      into one call. `gpkg_tiles_create` takes the SRS, the extent and the
+      ladder (zoom range, base grid, tile size, zeros meaning the defaults),
+      and `gpkg_tiles_create_web_mercator` fixes everything but the zoom
+      range to the XYZ quad. Both return the ordinary pyramid handle.
+      Identifier, description and `allow_zoom_other` stay Rust-only until
+      asked for. The test creates, fills and cursor-walks a pyramid entirely
+      from the C surface, in both the quad and a custom-grid geographic
+      form.)*
 
 - [ ] **API review.** Audit every `pub` item; `#[non_exhaustive]` where growth
       is plausible; error variants stabilised; rusqlite kept out of the public
