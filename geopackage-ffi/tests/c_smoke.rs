@@ -334,3 +334,34 @@ fn a_c_program_runs_the_interactive_read_loop() {
     assert!(stdout.contains("selected by fid: 1 rows"), "{stdout}");
     assert!(stdout.contains("ok"), "{stdout}");
 }
+
+#[test]
+fn a_c_program_builds_and_copies_a_pyramid() {
+    // The tile pipeline from nothing: create, fill, and cursor-copy, with no
+    // pre-existing file involved at all.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Some(binary) = build_c_example(dir.path(), "tilepipe") else {
+        return;
+    };
+
+    let run = Command::new(&binary)
+        .arg(dir.path().join("new.gpkg"))
+        .arg(dir.path().join("copy.gpkg"))
+        .output()
+        .expect("failed to run the compiled C program");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        run.status.success(),
+        "tilepipe.c failed:\nstdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(stdout.contains("stored 1 tile"), "{stdout}");
+    assert!(stdout.contains("copied 1 tiles"), "{stdout}");
+    assert!(stdout.contains("ok"), "{stdout}");
+
+    // And what the C program built is a GeoPackage this crate is happy with.
+    let copied = geopackage::GeoPackage::open_read_only(dir.path().join("copy.gpkg"))
+        .expect("the copy should open");
+    let pyramid = copied.tiles("basemap").expect("the pyramid should exist");
+    assert_eq!(pyramid.tile_count().expect("count"), 1);
+}
