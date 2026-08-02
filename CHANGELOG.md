@@ -30,6 +30,12 @@ While the version is below 1.0 the API may change in any release.
   threaded path declines on a projected layer, since its workers rebuild the
   layer by name and would read every column.
 
+- **`geopackage-ffi`: `gpkg_srs`.** The spatial reference system behind the
+  id `gpkg_layer_srs_id` reports: name, organization and code, the WKT
+  definition, the WKT2 definition where the CRS WKT extension carries one,
+  and the coordinate epoch (NaN when absent). Every out-parameter may be
+  NULL to skip it, and a failure writes none of them.
+
 - **`geopackage-ffi`: projected opens.** `gpkg_layer_open_with_columns` and
   `gpkg_attributes_open_with_columns` open a handle that reads only the named
   columns, on `Layer::with_columns`'s terms: the feature id always, the
