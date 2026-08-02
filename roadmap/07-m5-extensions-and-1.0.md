@@ -932,8 +932,19 @@ The items the sense-check produced, in rough order of consumer value:
       `gpkg_layer_read_arrow` with both absent. The aggregate path declines
       under a clause for uniformity rather than necessity; revisit with a
       measurement if filtered reads show up in one.)*
-- [ ] **Column projection over C** (F2): open a layer with a column subset.
+- [x] **Column projection over C** (F2): open a layer with a column subset.
       The library side (`with_columns`, `without_geometry`) already exists.
+      *(Done 2026-08-02, and the premise was wrong in an instructive way: the
+      projection existed on the row path only, and the Arrow path, which is
+      the C data plane, ignored it. So the library moved first after all:
+      `arrow_schema()` and every Arrow read now narrow to the projection, a
+      bbox read whose projection excludes the geometry feeds the exact
+      re-test through a hidden trailing column that reaches no batch, and the
+      threaded path declines on a projected layer, since its workers rebuild
+      the layer by name. Over C: `gpkg_layer_open_with_columns` and
+      `gpkg_attributes_open_with_columns`, with an unknown column refused at
+      the open. The correction is recorded on F2 in
+      [09-c-api-sense-check.md](09-c-api-sense-check.md).)*
 - [ ] **The SRS definition over C** (F3): what `srs()` reads, past the bare
       id that `gpkg_layer_srs_id` hands over today.
 - [ ] **The fail-fast pair over C** (F4): enumerate extension rows with
