@@ -656,13 +656,23 @@ FFI merely surfaces, so it sits before phase 9 rather than inside it.
       *windows* to workers on a density rule (`max - min + 1 == count`), and a
       filter voids it: matching rows scatter, so equal key windows carry
       unequal work.
-- [ ] **Only then decide whether a threaded filtered read pays.** M3 chose the
+- [x] **Only then decide whether a threaded filtered read pays.** M3 chose the
       design already (one thread runs the rtree scan and hands candidate ids to
       workers in blocks, so the scan happens once and no feature is returned
       twice) and recorded the open question with it: whether bbox results are
       typically large enough for any of it to pay, given that fetching an
       arbitrary id list is index lookups rather than a rowid range scan. Answer
       that with a measurement against the single-threaded path, not in advance.
+      *(Measured 2026-08-02, decision: **not built**, and the item closes. The
+      design's own premise survives, the rtree scan is only 5% to 12% of the
+      filtered read, but the measurement found a better reason to decline:
+      at full selectivity the filtered read does three times the work of the
+      unfiltered sequential read over the same rows, so threads would
+      parallelise that overhead rather than remove it, and at the 1% to 10%
+      selectivities where filtering matters the read is already at
+      interactive latency. Figures, the two reopening conditions and the
+      reproducible bench are in
+      [benchmarks/2026-08-02-threaded-filtered-read.md](benchmarks/2026-08-02-threaded-filtered-read.md).)*
 
 ### The handle-lifetime question, and what it costs
 
