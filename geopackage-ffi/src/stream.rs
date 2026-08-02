@@ -435,7 +435,7 @@ pub unsafe extern "C" fn gpkg_layer_read_arrow_in(
 /// parameter:
 ///
 /// ```c
-/// gpkg_value_t fid = {GPKG_VALUE_INTEGER, {.integer = 17}};
+/// gpkg_value_t fid = {GPKG_VALUE_KIND_INTEGER, {.integer = 17}};
 /// struct ArrowArrayStream stream;
 /// memset(&stream, 0, sizeof(stream));
 /// if (gpkg_layer_read_arrow_filtered(layer, NULL, "fid = ?1", &fid, 1,

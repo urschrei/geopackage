@@ -9,10 +9,10 @@
 //! readable at the call site:
 //!
 //! ```c
-//! gpkg_value_t name = {GPKG_VALUE_TEXT, {.text = "Dublin"}};
-//! gpkg_value_t population = {GPKG_VALUE_INTEGER, {.integer = 592713}};
-//! gpkg_value_t founded = {GPKG_VALUE_DATE, {.date = {988, 1, 1}}};
-//! gpkg_value_t missing = {GPKG_VALUE_NULL, {0}};
+//! gpkg_value_t name = {GPKG_VALUE_KIND_TEXT, {.text = "Dublin"}};
+//! gpkg_value_t population = {GPKG_VALUE_KIND_INTEGER, {.integer = 592713}};
+//! gpkg_value_t founded = {GPKG_VALUE_KIND_DATE, {.date = {988, 1, 1}}};
+//! gpkg_value_t missing = {GPKG_VALUE_KIND_NULL, {0}};
 //! ```
 //!
 //! Text and binary point at the caller's memory and are read during the call
