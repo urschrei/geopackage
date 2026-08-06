@@ -57,6 +57,19 @@ pub enum Error {
     /// `create` was asked to overwrite an existing non-empty file.
     #[error("refusing to create GeoPackage over existing non-empty file: {0}")]
     AlreadyExists(std::path::PathBuf),
+    /// The linked SQLite was compiled without the RTree module
+    /// (`SQLITE_ENABLE_RTREE`), which the GeoPackage spatial index requires.
+    ///
+    /// Reachable only when linking a system SQLite: the `bundled` feature
+    /// compiles an amalgamation that always includes the module. Checked once
+    /// per connection at open, where the remedy can be named, rather than
+    /// surfacing later as SQLite's own "no such module: rtree".
+    #[error(
+        "the linked SQLite was built without SQLITE_ENABLE_RTREE, which the \
+         spatial index requires; link an RTree-enabled SQLite or build with \
+         this crate's `bundled` feature"
+    )]
+    RtreeUnavailable,
     /// An EPSG code outside the vendored definition subset.
     #[error(
         "EPSG:{code} is not in the vendored definition subset; \
