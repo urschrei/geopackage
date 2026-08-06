@@ -28,7 +28,7 @@ $ cargo add geopackage geo-types
 The output ends with a summary of what was added:
 
 ```console
-      Adding geopackage v0.7.1 to dependencies
+      Adding geopackage v0.8.0 to dependencies
       Adding geo-types v0.7.20 to dependencies
 ```
 
