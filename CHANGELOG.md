@@ -11,8 +11,11 @@ While the version is below 1.0 the API may change in any release.
 ### Changed
 
 - The WKB byte scanner reads coordinate sequences as whole regions with
-  loops specialised per byte order and stride, raising its throughput 2.5x
-  to 6x depending on geometry shape. Both envelope paths now use it for
+  loops specialised per byte order and stride, and folds long sequences
+  with a branch-free min/max the compiler can vectorise (short ones keep
+  the branchy fold, which wins below the vectorisation threshold). Scanner
+  throughput rises 2.5x on small-feature data and up to 9x on long
+  coordinate runs. Both envelope paths now use it for
   every Annex G type: `encode_gpb_from_wkb` (the GeoArrow write path) and
   the traversal fallback behind the `ST_MinX` family and the bulk index
   build previously read linear bodies through the `wkb` crate's reader,
