@@ -253,20 +253,17 @@ pub fn geometry_type_matches(actual: GeometryType, declared: GeometryType) -> bo
 
 /// Traverses a GPB blob's body for its XY bounds, non-linear types included.
 ///
-/// The one place the curve/linear decision is made, so the `ST_*` functions,
-/// the bulk index build and the layer read path cannot drift apart on it. A
-/// non-linear body is walked by [`crate::curve`], which reads the WKB bytes
-/// directly; everything else goes through [`GpbGeometry`] and the `wkb`
-/// reader.
+/// Every body is walked by [`crate::curve`], which reads all the Annex G
+/// types directly from the WKB bytes and is the faster reader over
+/// coordinate runs. One consequence: a core-typed container holding a
+/// non-linear member, which this crate's writer refuses and the `wkb`-reader
+/// read path cannot return, still yields its bounds here, so a file another
+/// tool wrote that way can be indexed.
 fn body_xy_bounds(blob: &[u8]) -> Result<Option<[f64; 4]>, GeometryError> {
     let (_, offset) = gpb::parse_header(blob)?;
     // `parse_header` guarantees `offset <= blob.len()`.
     let body = blob.get(offset..).unwrap_or_default();
-    if wkb_geometry_type(body)?.is_extension() {
-        crate::curve::xy_envelope(body)
-    } else {
-        Ok(GpbGeometry::parse(blob)?.xy_envelope())
-    }
+    crate::curve::xy_envelope(body)
 }
 
 /// Returns the XY bounds `[min_x, max_x, min_y, max_y]` of a GPB blob, or
