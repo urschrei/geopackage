@@ -12,8 +12,8 @@
 //! A command-line companion, `gpkg`, is built by the `geopackage-cli` crate:
 //! `gpkg info`, `gpkg validate`, `gpkg index`, `gpkg repair`, `gpkg copy` and
 //! `gpkg tiles` inspect, check and convert files without writing any code.
-//! Install it with `cargo install geopackage-cli` (on Windows, add
-//! `--features bundled`; see [Cargo features](#cargo-features)).
+//! Install it with `cargo install geopackage-cli`; unlike this library it
+//! vendors SQLite by default (see [Cargo features](#cargo-features)).
 //!
 //! # Quick start
 //!

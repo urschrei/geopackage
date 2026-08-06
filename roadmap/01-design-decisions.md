@@ -20,7 +20,12 @@ cannot probe the system, and it collapses to which side is the default. The
 system library won: smaller builds, no C compiler, distribution packaging,
 and OS-managed security updates. The costs are borne where they arise:
 Windows (no system SQLite) and any host without the development files build
-with `--features bundled`.
+with `--features bundled`. The one exception is `geopackage-cli`, whose
+default *is* `bundled`: a binary is judged by whether `cargo install`
+produces a working tool on a bare host. Feature unification then means a
+whole-workspace build inherits `bundled` through that default, which is why
+the system-linked CI leg excludes the CLI and tests it separately with
+`--no-default-features`.
 
 **Rationale.** The RTree extension's triggers call `ST_IsEmpty`/`ST_MinX`/…,
 functions SQLite does not have. Any connection that writes to an indexed table
