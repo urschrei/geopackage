@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the version is below 1.0 the API may change in any release.
 
+## [Unreleased]
+
+### Changed
+
+- The WKB byte scanner reads coordinate sequences as whole regions with
+  loops specialised per byte order and stride, raising its throughput 2.5x
+  to 6x depending on geometry shape. Both envelope paths now use it for
+  every Annex G type: `encode_gpb_from_wkb` (the GeoArrow write path) and
+  the traversal fallback behind the `ST_MinX` family and the bulk index
+  build previously read linear bodies through the `wkb` crate's reader,
+  which the scanner now outpaces by 1.5x to 3.5x.
+- Two behavioural consequences of that unification. A structurally
+  malformed linear body given to `encode_gpb_from_wkb` reports the
+  scanner's `GeometryError` variants (`TruncatedAt`, `UnknownWkbType`, and
+  so on) instead of `GeometryError::Body`. And the `ST_*` fallback now
+  computes bounds for a core-typed container holding a non-linear member
+  (for example a `GEOMETRYCOLLECTION` containing a `CIRCULARSTRING`), so
+  files other tools wrote that way can be indexed; writing such a body is
+  still refused with `GeometryError::NonLinearMember`, since the feature
+  read path cannot return it.
+
+### Added
+
+- An `envelope` benchmark isolating envelope computation from SQLite,
+  comparing the byte scanner against the `wkb`-reader visitor path over
+  local benchmark data when present and synthetic bodies otherwise.
+
 ## [0.8.0] - 2026-08-06
 
 ### Added
@@ -1091,6 +1118,7 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.8.0...HEAD
 [Unreleased]: https://github.com/urschrei/geopackage/compare/v0.8.0...HEAD
 [0.8.0]: https://github.com/urschrei/geopackage/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/urschrei/geopackage/compare/v0.7.0...v0.7.1
