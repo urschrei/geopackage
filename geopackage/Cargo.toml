@@ -79,6 +79,10 @@ name = "tiles"
 harness = false
 
 [[bench]]
+name = "envelope"
+harness = false
+
+[[bench]]
 name = "handles"
 harness = false
 
