@@ -9,21 +9,38 @@ diverge from his choices it's deliberate and documented as such.
 
 ## D1. SQLite driver: rusqlite, sync core
 
-**Decision.** rusqlite with `bundled` + `functions`. No sqlx. Async, if ever,
-as a `spawn_blocking` wrapper crate.
+**Decision.** rusqlite with `functions`, linking the system SQLite by
+default; a `bundled` feature (forwarded through every crate) opts into the
+vendored amalgamation. No sqlx. Async, if ever, as a `spawn_blocking` wrapper
+crate.
+
+Originally `bundled` was unconditional. Revisited 2026-08-06: rusqlite's
+features decide the linkage before any build script runs, so the choice
+cannot probe the system, and it collapses to which side is the default. The
+system library won: smaller builds, no C compiler, distribution packaging,
+and OS-managed security updates. The costs are borne where they arise:
+Windows (no system SQLite) and any host without the development files build
+with `--features bundled`.
 
 **Rationale.** The RTree extension's triggers call `ST_IsEmpty`/`ST_MinX`/…,
 functions SQLite does not have. Any connection that writes to an indexed table
 must register them or writes fail ([HY26] hit this too; it is why geozero's
 sqlx-based gpkg support cannot maintain spatial indexes –
 [sqlx has no custom-function API](https://github.com/launchbadge/sqlx/discussions/1418)).
-`bundled` guarantees `SQLITE_ENABLE_RTREE`; system-SQLite builds (feature)
-must runtime-check `sqlite3_compileoption_used("ENABLE_RTREE")`.
+`bundled` guarantees `SQLITE_ENABLE_RTREE`; the system-linked default
+runtime-checks `sqlite_compileoption_used('SQLITE_ENABLE_RTREE')` once per
+open and fails with a remedy-naming error rather than SQLite's later "no such
+module: rtree".
 
 **Consequences.** We own `ST_*` implementations, which means we own WKB
 envelope computation (D6). rusqlite stays out of the public API except via
 explicit escape hatches (`connection()`, `from_connection()`), so major-version
-churn doesn't cascade.
+churn doesn't cascade. Linking whatever SQLite the OS ships also means
+absorbing hardened builds: Apple turns on defensive mode (lifted, scoped, for
+the bulk build's direct shadow-table writes) and persist-WAL (leftover
+`-wal`/`-shm` sidecars are removed after the close path's journal reset).
+CI tests the system-linked default on Linux and macOS alongside the bundled
+matrix.
 
 ## D2. Geometry API: geo-traits + georust wkb
 

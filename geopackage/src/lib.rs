@@ -12,7 +12,8 @@
 //! A command-line companion, `gpkg`, is built by the `geopackage-cli` crate:
 //! `gpkg info`, `gpkg validate`, `gpkg index`, `gpkg repair`, `gpkg copy` and
 //! `gpkg tiles` inspect, check and convert files without writing any code.
-//! Install it with `cargo install geopackage-cli`.
+//! Install it with `cargo install geopackage-cli` (on Windows, add
+//! `--features bundled`; see [Cargo features](#cargo-features)).
 //!
 //! # Quick start
 //!
@@ -370,6 +371,14 @@
 //! - **`arrow`** (off by default): the columnar paths above. It pulls in
 //!   `arrow-array` and `arrow-schema`, which a caller using only the scalar API
 //!   does not need.
+//! - **`bundled`** (off by default): compile a vendored SQLite amalgamation
+//!   and link it statically, instead of linking the system SQLite. The
+//!   default, system-linked build requires the development files
+//!   (`libsqlite3-dev` on Debian/Ubuntu; the macOS SDK suffices) and an
+//!   `SQLITE_ENABLE_RTREE` build, which every open checks
+//!   ([`Error::RtreeUnavailable`]). `bundled` needs a C compiler, always has
+//!   the RTree module, and is the only option on Windows, which has no system
+//!   SQLite.
 //!
 //! # Configuration
 //!
