@@ -449,8 +449,9 @@ other crate sets `unsafe_code = "forbid"`.
 
 ## Performance
 
-Measured over three public datasets. Apple M2 Pro, 12 cores, 16 GB, release build,
-warm page cache, medians over repeated runs.
+Measured over three public datasets. Apple M2 Pro, 12 cores, 16 GB, release
+build with bundled SQLite, warm page cache, medians over repeated runs on an
+otherwise idle host;
 
 | | `buildings` | `rivers` | `admin` |
 |---|---|---|---|
@@ -462,31 +463,36 @@ warm page cache, medians over repeated runs.
 
 | operation | `buildings` | `rivers` | `admin` |
 |---|---|---|---|
-| columnar read, `read_arrow` | 2.1 s | 1.9 s | ~2.9 s |
-| scalar read, `cursor` | 4.3 s | 6.9 s | 2.4 s |
-| write from Arrow batches | 12.7 s | 12.9 s | 8.4 s |
-| the same write, index built as it goes | 31.0 s | 21.7 s | 8.9 s |
-| `create_spatial_index` afterwards instead | 26.0 s | 14.6 s | 8.5 s |
-| bounding-box query, indexed | 80 ms | 199 ms | 178 ms |
-| the same query with no index | 1.7 s | 2.2 s | 1.3 s |
+| columnar read, `read_arrow` | 1.7 s | ~2.2 s | ~2.0 s |
+| scalar read, `cursor` | 3.9 s | 6.2 s | 2.4 s |
+| write from Arrow batches | 10.0 s | 9.7 s | 4.8 s |
+| the same write, index built as it goes | 13.8 s | 12.7 s | 7.2 s |
+| `create_spatial_index` afterwards instead | 8.8 s | 5.6 s | 6.3 s |
+| bounding-box query, indexed | 76 ms | 181 ms | 157 ms |
+| the same query with no index | 1.6 s | 2.1 s | 1.2 s |
 | features that query returned | 70,130 | 180,544 | 36,556 |
 
-Reading is bound by bytes, not rows: the columnar path varies between 0.95 to 1.13 GB/s
-across three layers whose rows differ by a factor of 37 in size. The index is
-the other way round, tracking row count at 42,000 to 581,000 rows/s built and
-about 40 bytes per row stored, whatever the geometry. Building it during the
-write rather than afterwards between 20% and 47%, because the bulk path reuses the
-envelopes it computed while encoding; that is why `create_layer` leaves an empty
-index in place for `write_all` to fill.
+Reading is bound by bytes, not rows: the columnar path runs at 0.9 to 1.4 GB/s
+across three layers whose rows differ by a factor of 37 in size. The index
+stores about 40 bytes per row whatever the geometry, and its build time
+follows row count while the geometries are small (the 11.5M `buildings` rows
+build in 8.8 s) and the blob bytes once they are not (the 356k large `admin`
+multipolygons take 6.3 s). Building it during the write rather than afterwards
+is 17% to 35% cheaper than the two steps run separately, because the bulk path
+reuses the envelopes it computed while encoding; that is why `create_layer`
+leaves an empty index in place for `write_all` to fill.
 
-The `admin` columnar read is given as approximate because it is: 7.7 kB rows
-produce six batches of roughly 450 MB, and with the default four reader threads
-holding one each, the figure follows host memory rather than the read path
-(1.7 s to 5.1 s observed here). `ArrowReadOptions::with_batch_size` and
-`with_max_batch_bytes` bound what is in flight.
+The two approximate read figures are approximate for different reasons. The
+`admin` columnar read holds batches of roughly 450 MB, and with the default
+four reader threads holding one each, the figure follows host memory rather
+than the read path (1.3 s to 5 s observed); `ArrowReadOptions::with_batch_size`
+and `with_max_batch_bytes` bound what is in flight. And the threaded read in
+general assumes the host is otherwise idle: under concurrent I/O load it falls
+behind the single-threaded read (2.4 s, 3.4 s and 1.7 s here), which is the
+dependable floor.
 
 Method, per-dataset detail and the rest of the caveats are in
-[the benchmark write-up](https://github.com/urschrei/geopackage/blob/main/roadmap/benchmarks/2026-07-25-real-datasets.md);
+[the benchmark write-up](https://github.com/urschrei/geopackage/blob/main/roadmap/benchmarks/2026-07-25-real-datasets.md),
 [`scripts/bench_datasets.sh`](https://github.com/urschrei/geopackage/blob/main/scripts/bench_datasets.sh)
 fetches the datasets and reproduces the table.
 
