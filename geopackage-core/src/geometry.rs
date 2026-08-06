@@ -539,6 +539,25 @@ impl XyBounds {
         self.seen = true;
     }
 
+    /// [`Self::add`] without the skip branch: a non-finite pair is mapped to
+    /// NaN, which `min` and `max` ignore by definition (they return the other
+    /// operand), so it contributes nothing, exactly as the early return does.
+    ///
+    /// Straight-line code is what lets the compiler vectorise a fold over a
+    /// long coordinate run, but it costs a little more per coordinate than
+    /// the branch when the run is too short to vectorise, so the scanner
+    /// chooses per sequence and everything else uses [`Self::add`].
+    pub(crate) fn add_branchless(&mut self, x: f64, y: f64) {
+        let finite = x.is_finite() & y.is_finite();
+        let x = if finite { x } else { f64::NAN };
+        let y = if finite { y } else { f64::NAN };
+        self.min_x = self.min_x.min(x);
+        self.max_x = self.max_x.max(x);
+        self.min_y = self.min_y.min(y);
+        self.max_y = self.max_y.max(y);
+        self.seen |= finite;
+    }
+
     pub(crate) fn finish(self) -> Option<[f64; 4]> {
         self.seen
             .then_some([self.min_x, self.max_x, self.min_y, self.max_y])
@@ -576,6 +595,20 @@ impl XyzBounds {
             self.min_z = self.min_z.min(z);
             self.max_z = self.max_z.max(z);
             self.seen_z = true;
+        }
+    }
+
+    /// [`Self::add`] built on [`XyBounds::add_branchless`], for the scanner's
+    /// long-sequence fold. The `Some` test constant-folds away there, where
+    /// the coordinate layout fixes `z` one way or the other.
+    pub(crate) fn add_branchless(&mut self, x: f64, y: f64, z: Option<f64>) {
+        self.xy.add_branchless(x, y);
+        if let Some(z) = z {
+            let finite = z.is_finite();
+            let z = if finite { z } else { f64::NAN };
+            self.min_z = self.min_z.min(z);
+            self.max_z = self.max_z.max(z);
+            self.seen_z |= finite;
         }
     }
 

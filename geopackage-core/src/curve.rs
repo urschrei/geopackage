@@ -385,19 +385,47 @@ fn read_word<const LITTLE_ENDIAN: bool>(word: [u8; 8]) -> f64 {
     }
 }
 
-/// Folds a coordinate region into `bounds`, one loop per coordinate layout so
-/// each iterates over fixed-size arrays with no per-coordinate checks. An M
-/// ordinate is skipped; a Z is kept when the layout has one.
+/// Word count at or above which [`add_coords`] folds with
+/// [`XyzBounds::add_branchless`] rather than [`XyzBounds::add`].
+///
+/// The branch-free fold is what the compiler can vectorise, but the
+/// vectorised loop carries setup cost that a short run never amortises, and
+/// there the branchy fold wins. 32 words is 16 XY coordinates. Small-feature
+/// data (buildings, river segments) sits well under that and the shapes that
+/// gain from vectorisation (large polygons, long lines) sit far over it, so
+/// the exact value is not delicate.
+const BRANCHLESS_MIN_WORDS: usize = 32;
+
+/// Folds a coordinate region into `bounds`, choosing the fold form by the
+/// region's length (see [`BRANCHLESS_MIN_WORDS`]).
 fn add_coords<const LITTLE_ENDIAN: bool>(
     words: &[[u8; 8]],
     coord: CoordLayout,
     bounds: &mut XyzBounds,
 ) {
+    if words.len() >= BRANCHLESS_MIN_WORDS {
+        fold_coords::<LITTLE_ENDIAN>(words, coord, bounds, XyzBounds::add_branchless);
+    } else {
+        fold_coords::<LITTLE_ENDIAN>(words, coord, bounds, XyzBounds::add);
+    }
+}
+
+/// Folds a coordinate region into `bounds` through `add`, one loop per
+/// coordinate layout so each iterates over fixed-size arrays with no
+/// per-coordinate checks. An M ordinate is skipped; a Z is kept when the
+/// layout has one.
+fn fold_coords<const LITTLE_ENDIAN: bool>(
+    words: &[[u8; 8]],
+    coord: CoordLayout,
+    bounds: &mut XyzBounds,
+    add: impl Fn(&mut XyzBounds, f64, f64, Option<f64>),
+) {
     match (coord.stride, coord.has_z) {
         (3, true) => {
             let (chunks, _) = words.as_chunks::<3>();
             for &[x, y, z] in chunks {
-                bounds.add(
+                add(
+                    bounds,
                     read_word::<LITTLE_ENDIAN>(x),
                     read_word::<LITTLE_ENDIAN>(y),
                     Some(read_word::<LITTLE_ENDIAN>(z)),
@@ -407,7 +435,8 @@ fn add_coords<const LITTLE_ENDIAN: bool>(
         (3, false) => {
             let (chunks, _) = words.as_chunks::<3>();
             for &[x, y, _m] in chunks {
-                bounds.add(
+                add(
+                    bounds,
                     read_word::<LITTLE_ENDIAN>(x),
                     read_word::<LITTLE_ENDIAN>(y),
                     None,
@@ -417,7 +446,8 @@ fn add_coords<const LITTLE_ENDIAN: bool>(
         (4, _) => {
             let (chunks, _) = words.as_chunks::<4>();
             for &[x, y, z, _m] in chunks {
-                bounds.add(
+                add(
+                    bounds,
                     read_word::<LITTLE_ENDIAN>(x),
                     read_word::<LITTLE_ENDIAN>(y),
                     Some(read_word::<LITTLE_ENDIAN>(z)),
@@ -429,7 +459,8 @@ fn add_coords<const LITTLE_ENDIAN: bool>(
         _ => {
             let (chunks, _) = words.as_chunks::<2>();
             for &[x, y] in chunks {
-                bounds.add(
+                add(
+                    bounds,
                     read_word::<LITTLE_ENDIAN>(x),
                     read_word::<LITTLE_ENDIAN>(y),
                     None,
