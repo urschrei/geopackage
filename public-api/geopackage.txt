@@ -218,6 +218,7 @@ pub geopackage::Error::NotAGeoPackage::reason: &'static str
 pub geopackage::Error::NotAGeoPackage::user_version: u32
 pub geopackage::Error::ReservedTablePrefix
 pub geopackage::Error::ReservedTablePrefix::table_name: alloc::string::String
+pub geopackage::Error::RtreeUnavailable
 pub geopackage::Error::SelfParentedMetadata
 pub geopackage::Error::SelfParentedMetadata::md_file_id: i64
 pub geopackage::Error::SpatialIndexExists

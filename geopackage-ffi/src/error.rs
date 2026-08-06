@@ -127,7 +127,8 @@ impl From<&Error> for Status {
             | Error::UnsupportedArrowType { .. }
             | Error::GeometryValueUnsupported { .. }
             | Error::ZoomOtherNotEnabled { .. }
-            | Error::TileFormatNotAllowed { .. } => Self::Unsupported,
+            | Error::TileFormatNotAllowed { .. }
+            | Error::RtreeUnavailable => Self::Unsupported,
             Error::ColumnConstraintViolation { .. }
             | Error::ZmViolation { .. }
             | Error::GeometryTypeMismatch { .. }

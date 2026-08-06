@@ -613,7 +613,10 @@ impl GeoPackage {
     ///
     /// # Errors
     ///
-    /// [`Error::AlreadyExists`] if `path` already exists and is non-empty.
+    /// - [`Error::AlreadyExists`] if `path` already exists and is non-empty.
+    /// - [`Error::RtreeUnavailable`] if the linked SQLite lacks the RTree
+    ///   module (possible only when linking a system SQLite; the `bundled`
+    ///   feature always includes it). Every open path checks this.
     pub fn create<P: AsRef<Path>>(path: P) -> Result<Self> {
         OpenOptions::new().create(path)
     }
@@ -675,6 +678,7 @@ impl GeoPackage {
             tx.execute(stmt, [])?;
         }
         tx.commit()?;
+        ensure_rtree_available(&conn)?;
         functions::register(&conn)?;
         Ok(Self {
             conn: Some(conn),
@@ -735,6 +739,7 @@ impl GeoPackage {
             Vec::new()
         };
         let journal_mode = apply_open_options(&conn, options, apply_journal)?;
+        ensure_rtree_available(&conn)?;
         functions::register(&conn)?;
         Ok(Self {
             conn: Some(conn),
@@ -872,6 +877,21 @@ fn finalize_wal_to_delete(conn: &Connection) -> Result<()> {
     // the WAL to zero; the mode switch then removes the sidecar files.
     conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
     conn.query_row("PRAGMA journal_mode = DELETE", [], |_| Ok(()))?;
+    // Apple's system SQLite enables persist-WAL by default, which leaves the
+    // sidecar files behind after the mode switch (stock SQLite deletes them
+    // here). The switch above succeeds only when no other connection is still
+    // using WAL, so removing a leftover is safe, and it is what a stock build
+    // would already have done. rusqlite exposes no `sqlite3_file_control`, so
+    // the flag itself cannot be turned off without `unsafe`, which this crate
+    // forbids. Best-effort: a missing file is the common case.
+    if let Some(path) = conn.path() {
+        for suffix in ["-wal", "-shm"] {
+            if std::fs::remove_file(format!("{path}{suffix}")).is_err() {
+                // Already absent (every non-Apple build), or unremovable, in
+                // which case the file is stale but harmless.
+            }
+        }
+    }
     Ok(())
 }
 
@@ -887,6 +907,30 @@ fn finalize_wal_to_delete(conn: &Connection) -> Result<()> {
 )]
 pub(crate) fn read_header_u32(conn: &Connection, pragma: &str) -> rusqlite::Result<u32> {
     Ok(conn.pragma_query_value(None, pragma, |r| r.get::<_, i64>(0))? as u32)
+}
+
+/// Verifies the linked SQLite has the RTree module compiled in.
+///
+/// The GeoPackage spatial index is an `rtree` virtual table; without
+/// `SQLITE_ENABLE_RTREE`, every indexed layer fails at first use with
+/// SQLite's own "no such module: rtree". The bundled build always includes
+/// the module; a system SQLite may not, so this runs once per connection, up
+/// front, where [`Error::RtreeUnavailable`] can name the remedy. A build
+/// under `SQLITE_OMIT_COMPILEOPTION_DIAGS` cannot answer the question and is
+/// taken as capable; the later operations then report the truth.
+fn ensure_rtree_available(conn: &Connection) -> Result<()> {
+    let enabled = conn
+        .query_row(
+            "SELECT sqlite_compileoption_used('SQLITE_ENABLE_RTREE')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap_or(true);
+    if enabled {
+        Ok(())
+    } else {
+        Err(Error::RtreeUnavailable)
+    }
 }
 
 pub(crate) fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
