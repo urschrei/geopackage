@@ -58,6 +58,7 @@ use geopackage_core::geometry;
 use geopackage_core::ident::quote;
 use geopackage_core::triggers;
 use rusqlite::Connection;
+use rusqlite::config::DbConfig;
 use rusqlite::types::ValueRef;
 
 use crate::Result;
@@ -321,6 +322,46 @@ fn node_size(conn: &Connection, rtree: &str) -> Result<usize> {
         |r| r.get(0),
     )?;
     Ok(usize::try_from(size).unwrap_or(0))
+}
+
+/// Lifts SQLite's defensive flag for the duration of the direct shadow-table
+/// writes, restoring the value found on drop.
+///
+/// Stock SQLite ships with the flag off, and the packed build was written
+/// against that: [`write_packed`] inserts into `rtree_*_node` / `_rowid` /
+/// `_parent` directly, which defensive mode rejects with "table ... may not
+/// be modified". Apple's system SQLite turns the flag on by default, so a
+/// system-linked build on macOS cannot bulk-build an index without lifting
+/// it. Scoped to the packed write rather than cleared at open, so a hardened
+/// connection keeps its hardening everywhere else.
+struct DefensiveOff<'conn> {
+    conn: &'conn Connection,
+    /// The flag as found; only a lifted flag is restored.
+    was_on: bool,
+}
+
+impl<'conn> DefensiveOff<'conn> {
+    fn lift(conn: &'conn Connection) -> Result<Self> {
+        let was_on = conn.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE)?;
+        if was_on {
+            conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, false)?;
+        }
+        Ok(Self { conn, was_on })
+    }
+}
+
+impl Drop for DefensiveOff<'_> {
+    fn drop(&mut self) {
+        if self.was_on
+            && self
+                .conn
+                .set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)
+                .is_err()
+        {
+            // Restoration fails only on a connection that is already unusable,
+            // where the flag no longer guards anything.
+        }
+    }
 }
 
 /// Clears the three shadow tables and streams a freshly packed tree into
@@ -627,7 +668,10 @@ where
     conn.execute_batch(&create_vtab)?;
 
     let node_size = node_size(conn, rtree)?;
-    write_packed(conn, rtree, &accumulated, node_size, options.fill_factor)?;
+    {
+        let _defensive = DefensiveOff::lift(conn)?;
+        write_packed(conn, rtree, &accumulated, node_size, options.fill_factor)?;
+    }
     fault(conn, rtree)?;
 
     let path = if gate(conn, rtree, accumulated, options.verification)? {
