@@ -10,6 +10,9 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  # `--all-features` includes `bundled`, so this matrix builds the vendored
+  # SQLite amalgamation everywhere, which is also the only way Windows can
+  # build at all (it has no system SQLite).
   test:
     strategy:
       fail-fast: false
@@ -21,6 +24,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
+
+  # The default build links the system SQLite, so it needs its own leg: the
+  # bundled matrix above never exercises the linked path, the ENABLE_RTREE
+  # check, or Apple's defensive-mode and persist-WAL divergences (macOS ships
+  # a hardened SQLite build, which is exactly what makes this leg valuable).
+  test-system-sqlite:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      # The linker needs the unversioned libsqlite3.so, which only the dev
+      # package provides; installed explicitly rather than trusted to the
+      # runner image. macOS links the SDK's libsqlite3.tbd with no extra step.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
 
   msrv:
     runs-on: ubuntu-latest
@@ -36,12 +60,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # For the default-features pass below, which links the system SQLite.
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # The default feature set compiles different code (no `arrow`, system
+      # SQLite), so it gets its own pass; a lint clean under `--all-features`
+      # says nothing about items that are only dead without them.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
   docs:
     runs-on: ubuntu-latest
@@ -140,8 +170,10 @@ jobs:
           components: rust-src
       - uses: Swatinem/rust-cache@v2
       # The target has to be named explicitly for the sanitizer to apply to the
-      # test binary rather than only to its dependencies.
-      - run: cargo +nightly test -p geopackage-ffi --target x86_64-unknown-linux-gnu
+      # test binary rather than only to its dependencies. `bundled` because the
+      # leak suppression above is calibrated against the bundled build, and an
+      # uninstrumented system library would hide half of what ASan is here for.
+      - run: cargo +nightly test -p geopackage-ffi --features bundled --target x86_64-unknown-linux-gnu
 
   # The recorded public API surface, so a change to what a crate exports shows
   # up as a diff in review rather than only to whoever it breaks later.
@@ -174,4 +206,6 @@ jobs:
         with:
           components: miri
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +nightly miri test -p geopackage-ffi --test boundary
+      # `bundled` keeps the job independent of the runner image's SQLite; miri
+      # never calls into the C library either way.
+      - run: cargo +nightly miri test -p geopackage-ffi --features bundled --test boundary
