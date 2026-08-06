@@ -4,8 +4,10 @@ In this tutorial we will start from an empty directory and finish with a
 GeoPackage file containing four cities, which we will query by bounding box
 from Rust and then inspect from the shell with the `gpkg` command-line tool.
 
-Everything we need is a Rust toolchain of 1.95 or newer and a C compiler,
-which the bundled SQLite needs.
+Everything we need is a Rust toolchain of 1.95 or newer and an SQLite to link
+against: the system library on Linux (install `libsqlite3-dev` or your
+distribution's equivalent) or macOS, or the vendored copy via the `bundled`
+feature on Windows (see the [introduction](../introduction.md#installation)).
 
 ## Create the project
 

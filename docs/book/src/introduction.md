@@ -34,8 +34,19 @@ Install the command-line tool:
 $ cargo install geopackage-cli
 ```
 
-SQLite is bundled and built from source, so a C compiler is required and there
-is no system SQLite dependency. The minimum supported Rust version is 1.95.
+The default build links the system SQLite, which must have been compiled with
+`SQLITE_ENABLE_RTREE` (Linux distributions and macOS both satisfy this; on
+Linux the development package is required, `libsqlite3-dev` on Debian/Ubuntu).
+The `bundled` feature compiles a vendored SQLite amalgamation and links it
+statically instead, which requires a C compiler and is the only option on
+Windows:
+
+```console
+$ cargo add geopackage --features bundled
+$ cargo install geopackage-cli --features bundled
+```
+
+The minimum supported Rust version is 1.95.
 
 ## How this book is organised
 

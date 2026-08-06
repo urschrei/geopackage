@@ -21,6 +21,27 @@ geopackage = "0.7"
 geo-types = "0.7"  # any geo-traits implementation works; this is the common one
 ```
 
+### SQLite: system by default, bundled on request
+
+The default build links your system's SQLite library, which must have been
+compiled with `SQLITE_ENABLE_RTREE` (checked at open; Linux distributions and
+macOS both satisfy this). On Linux the development package is required
+(`libsqlite3-dev` on Debian/Ubuntu, `sqlite-devel` on Fedora); macOS needs
+nothing beyond the SDK.
+
+The `bundled` feature compiles a vendored SQLite amalgamation and links it
+statically instead. It requires a C compiler, removes the system dependency,
+and is the only option on Windows, which has no system SQLite:
+
+```toml
+geopackage = { version = "0.7", features = ["bundled"] }
+```
+
+The same choice applies to the `gpkg` command-line tool: on Windows, install
+it with `cargo install geopackage-cli --features bundled`.
+
+### Other Cargo features
+
 Columnar read and write through Apache Arrow is behind an off-by-default
 feature, which adds the `arrow-array` and `arrow-schema` dependencies:
 
@@ -28,8 +49,7 @@ feature, which adds the `arrow-array` and `arrow-schema` dependencies:
 geopackage = { version = "0.7", features = ["arrow"] }
 ```
 
-SQLite is bundled and built from source, so a C compiler is required and there
-is no system SQLite dependency. The minimum supported Rust version is 1.95.
+The minimum supported Rust version is 1.95.
 
 ## Example
 
@@ -400,7 +420,7 @@ other crate sets `unsafe_code = "forbid"`.
 | Crate | Purpose |
 |---|---|
 | [`geopackage-core`](geopackage-core) | Format primitives, no IO or SQLite: GeoPackage Binary (GPB) header codec, normative table DDL, version-aware RTree trigger SQL, identifier quoting, `application_id`/`user_version` handling. |
-| [`geopackage`](geopackage) | The container: create/open over [rusqlite](https://github.com/rusqlite/rusqlite) with bundled SQLite, the feature and attribute read and write paths, columnar read and write through Apache Arrow (feature `arrow`), the RTree spatial-index lifecycle, and the `ST_*` SQL functions the index triggers require. |
+| [`geopackage`](geopackage) | The container: create/open over [rusqlite](https://github.com/rusqlite/rusqlite) (system SQLite by default, vendored via the `bundled` feature), the feature and attribute read and write paths, columnar read and write through Apache Arrow (feature `arrow`), the RTree spatial-index lifecycle, and the `ST_*` SQL functions the index triggers require. |
 | [`geopackage-cli`](geopackage-cli) | The `gpkg` binary: inspect, validate, index, repair and copy a file from a shell, plus the tile pyramid commands. |
 | [`geopackage-ffi`](geopackage-ffi) | The C ABI: opaque handles over the same library, the Arrow C Data Interface as the data plane, and cargo-c packaging (header, pkg-config file, versioned soname). The one crate in the workspace containing `unsafe`. |
 | `geopackage-core/fuzz` | cargo-fuzz targets for the GPB parser and the tile payload probe. |

@@ -1,7 +1,7 @@
 # Development roadmap
 
 Roadmap for the georust `geopackage` workspace: a production-quality, pure-Rust
-(modulo bundled SQLite) implementation of [OGC GeoPackage 1.4](https://www.geopackage.org/spec140/),
+(modulo SQLite, system-linked or bundled) implementation of [OGC GeoPackage 1.4](https://www.geopackage.org/spec140/),
 usable from Rust and from higher-level languages via a C ABI with the Arrow C
 Data Interface as the bulk data plane.
 

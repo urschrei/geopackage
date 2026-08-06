@@ -8,6 +8,27 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: the default build now links the system SQLite** instead of
+  compiling the vendored amalgamation. The new `bundled` feature (on
+  `geopackage`, `geopackage-cli` and `geopackage-ffi`) restores the previous
+  behaviour and remains the only option on Windows, which has no system
+  SQLite: `cargo install geopackage-cli --features bundled`. The system
+  library must have been compiled with `SQLITE_ENABLE_RTREE`; every open now
+  checks this and reports the new `Error::RtreeUnavailable` (FFI status:
+  `Unsupported`) instead of failing later with SQLite's "no such module:
+  rtree". On Linux the SQLite development package is required
+  (`libsqlite3-dev` on Debian/Ubuntu).
+- Two divergences of Apple's hardened system SQLite are absorbed, so the
+  system-linked build behaves identically on macOS: defensive mode is lifted,
+  scoped to the bulk index build's direct shadow-table writes, and the
+  `-wal`/`-shm` sidecars that persist-WAL leaves behind are removed after the
+  close path's journal reset.
+- CI covers both linkings: the existing three-OS matrix builds with
+  `--all-features` (which now includes `bundled`), and a new Linux and macOS
+  leg tests the system-linked default.
+
 ## [0.7.1] - 2026-08-02
 
 ### Changed
