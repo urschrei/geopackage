@@ -9,6 +9,14 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
+# A force-push (restacking a PR stack rewrites every branch above the edit)
+# otherwise leaves the superseded push's runs burning beside the new ones.
+# For pull_request events the ref is per-PR, so each stack level cancels only
+# its own stale runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # `--all-features` includes `bundled`, so this matrix builds the vendored
   # SQLite amalgamation everywhere, which is also the only way Windows can
@@ -96,6 +104,8 @@ jobs:
       - run: mdbook build docs/book
 
   fuzz-build:
+    # Top-of-stack only; see c-abi.
+    if: github.event.pull_request.stack == null || github.event.pull_request.stack.position == github.event.pull_request.stack.size
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -113,7 +123,14 @@ jobs:
   # of the workspace does not. `GPKG_FFI_REQUIRE_C_TESTS` turns the tests'
   # skip-if-missing behaviour into a failure, so a missing tool here is a red
   # build rather than a gate that quietly stopped running.
+  # Like the other slow jobs below, gated to the top of a PR stack: an atomic
+  # stack merge lands exactly the top PR's tree, so runs on the intermediate
+  # trees verify states that never reach main. Null-first so ordinary PRs,
+  # pushes to main, and repos without stack metadata run everything. The fast
+  # jobs above stay ungated at every level; they are what localises a failure
+  # to its commit.
   c-abi:
+    if: github.event.pull_request.stack == null || github.event.pull_request.stack.position == github.event.pull_request.stack.size
     strategy:
       fail-fast: false
       matrix:
@@ -160,6 +177,8 @@ jobs:
   # with the close refusal removed, ASan reports a heap-use-after-free, so this
   # job is the thing standing between that design and a silent regression.
   sanitizers:
+    # Top-of-stack only; see c-abi.
+    if: github.event.pull_request.stack == null || github.event.pull_request.stack.position == github.event.pull_request.stack.size
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-D warnings -Zsanitizer=address"
@@ -187,6 +206,8 @@ jobs:
   # ordinary test run. Until 1.0 a diff here is a prompt to confirm the change
   # was meant, not a refusal.
   public-api:
+    # Top-of-stack only; see c-abi.
+    if: github.event.pull_request.stack == null || github.event.pull_request.stack.position == github.event.pull_request.stack.size
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -203,6 +224,8 @@ jobs:
   # covering argument validation and string ownership. The rest is the
   # sanitizer's job above; neither tool covers the other's ground.
   miri:
+    # Top-of-stack only; see c-abi.
+    if: github.event.pull_request.stack == null || github.event.pull_request.stack.position == github.event.pull_request.stack.size
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
