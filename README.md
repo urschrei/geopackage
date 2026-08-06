@@ -13,6 +13,9 @@ through Apache Arrow. Pre-1.0: the API will change without notice.
 how-to guides for common tasks, and the design reasoning. API reference lives
 on [docs.rs](https://docs.rs/geopackage).
 
+> [!NOTE]  
+> These crates are a testbed for LLM-assisted Rust development and have been produced with the substantial assistance of Claude's Fable and Opus 5 models. Issues will be answered by the author.
+
 ## Install
 
 ```toml
