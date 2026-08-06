@@ -25,10 +25,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
 
-  # The default build links the system SQLite, so it needs its own leg: the
-  # bundled matrix above never exercises the linked path, the ENABLE_RTREE
-  # check, or Apple's defensive-mode and persist-WAL divergences (macOS ships
-  # a hardened SQLite build, which is exactly what makes this leg valuable).
+  # The library's default build links the system SQLite, so it needs its own
+  # leg: the bundled matrix above never exercises the linked path, the
+  # ENABLE_RTREE check, or Apple's defensive-mode and persist-WAL divergences
+  # (macOS ships a hardened SQLite build, which is exactly what makes this leg
+  # valuable). `geopackage-cli` defaults to `bundled`, and feature unification
+  # would spread that through a plain `--workspace` build, so the CLI is
+  # excluded here and tested system-linked in a second step.
   test-system-sqlite:
     strategy:
       fail-fast: false
@@ -44,7 +47,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - run: cargo test --workspace --exclude geopackage-cli
+      - run: cargo test -p geopackage-cli --no-default-features
 
   msrv:
     runs-on: ubuntu-latest
@@ -60,17 +64,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # For the default-features pass below, which links the system SQLite.
-      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      # The default feature set compiles different code (no `arrow`, system
-      # SQLite), so it gets its own pass; a lint clean under `--all-features`
-      # says nothing about items that are only dead without them.
+      # The default feature set compiles different code (no `arrow`), so it
+      # gets its own pass; a lint clean under `--all-features` says nothing
+      # about items that are only dead without them. The CLI's `bundled`
+      # default makes this a bundled build; linkage does not change what
+      # clippy sees of this workspace's code.
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   docs:

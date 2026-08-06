@@ -37,8 +37,10 @@ and is the only option on Windows, which has no system SQLite:
 geopackage = { version = "0.7", features = ["bundled"] }
 ```
 
-The same choice applies to the `gpkg` command-line tool: on Windows, install
-it with `cargo install geopackage-cli --features bundled`.
+The `gpkg` command-line tool defaults the other way: `cargo install
+geopackage-cli` vendors SQLite, so it works on any host with a C compiler,
+Windows included. Pass `--no-default-features` to link the system library
+instead (the form distribution packagers want).
 
 ### Other Cargo features
 
