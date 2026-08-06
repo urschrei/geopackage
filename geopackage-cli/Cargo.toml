@@ -11,6 +11,11 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Documentation is built with `bundled` so the docs.rs host does not need
+# SQLite development files.
+[package.metadata.docs.rs]
+features = ["bundled"]
+
 # The binary is `gpkg`; the crate is `geopackage-cli` so it sits beside
 # `geopackage` and `geopackage-core` on crates.io under the same name stem.
 [[bin]]
@@ -24,6 +29,13 @@ workspace = true
 geopackage.workspace = true
 clap.workspace = true
 thiserror.workspace = true
+
+[features]
+## Forward `geopackage`'s `bundled` feature: compile and statically link the
+## vendored SQLite amalgamation instead of linking the system library.
+## `cargo install geopackage-cli --features bundled` is the working form on
+## hosts with no system SQLite, such as Windows.
+bundled = ["geopackage/bundled"]
 
 [dev-dependencies]
 tempfile.workspace = true

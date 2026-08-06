@@ -43,6 +43,12 @@ geo-types = ["geopackage-core/geo-types"]
 ## `arrow-schema` crates, which a caller using only the scalar API does not
 ## need.
 arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:serde_json", "dep:sysinfo"]
+## Compile and statically link the vendored SQLite amalgamation instead of
+## linking the system library. Off by default; the default build needs the
+## system SQLite development files and an `SQLITE_ENABLE_RTREE` build, which
+## is checked at open time. Required on hosts with no system SQLite (Windows),
+## and needs a C compiler.
+bundled = ["rusqlite/bundled"]
 
 [dev-dependencies]
 tempfile.workspace = true

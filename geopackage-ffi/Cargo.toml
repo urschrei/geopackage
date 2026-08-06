@@ -11,6 +11,11 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Documentation is built with `bundled` so the docs.rs host does not need
+# SQLite development files.
+[package.metadata.docs.rs]
+features = ["bundled"]
+
 [lib]
 name = "geopackage_ffi"
 # `cdylib` for a shared library C links against, `staticlib` for a static one,
@@ -72,6 +77,11 @@ allow_attributes_without_reason = "warn"
 # `cargo cbuild` insists on passing it.
 [features]
 capi = []
+## Forward `geopackage`'s `bundled` feature: compile and statically link the
+## vendored SQLite amalgamation into the C library instead of linking the
+## system SQLite. This is what CI packages, so the installed library is
+## self-contained.
+bundled = ["geopackage/bundled"]
 
 [dependencies]
 geopackage = { workspace = true, features = ["arrow"] }
