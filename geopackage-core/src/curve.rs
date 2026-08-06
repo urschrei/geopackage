@@ -354,6 +354,12 @@ fn read_geometry(
 }
 
 /// Reads a counted coordinate sequence into `bounds`.
+///
+/// The whole sequence is taken from the cursor in one step (one bounds check
+/// per sequence rather than several per coordinate) and folded by a loop
+/// monomorphised over the byte order, so the endianness decision sits outside
+/// the loop. This is the hottest loop in the scanner; the structure is what
+/// lets the compiler unroll it.
 fn read_coords(
     cursor: &mut Cursor<'_>,
     little_endian: bool,
@@ -361,11 +367,76 @@ fn read_coords(
     bounds: &mut XyzBounds,
 ) -> Result<(), GeometryError> {
     let count = cursor.read_u32(little_endian)?;
-    for _ in 0..count {
-        let ([x, y], z) = cursor.read_coord(little_endian, coord)?;
-        bounds.add(x, y, z);
+    let words = cursor.take_coord_words(count, coord)?;
+    if little_endian {
+        add_coords::<true>(words, coord, bounds);
+    } else {
+        add_coords::<false>(words, coord, bounds);
     }
     Ok(())
+}
+
+/// Decodes one 8-byte word as an `f64` of the monomorphised byte order.
+fn read_word<const LITTLE_ENDIAN: bool>(word: [u8; 8]) -> f64 {
+    if LITTLE_ENDIAN {
+        f64::from_le_bytes(word)
+    } else {
+        f64::from_be_bytes(word)
+    }
+}
+
+/// Folds a coordinate region into `bounds`, one loop per coordinate layout so
+/// each iterates over fixed-size arrays with no per-coordinate checks. An M
+/// ordinate is skipped; a Z is kept when the layout has one.
+fn add_coords<const LITTLE_ENDIAN: bool>(
+    words: &[[u8; 8]],
+    coord: CoordLayout,
+    bounds: &mut XyzBounds,
+) {
+    match (coord.stride, coord.has_z) {
+        (3, true) => {
+            let (chunks, _) = words.as_chunks::<3>();
+            for &[x, y, z] in chunks {
+                bounds.add(
+                    read_word::<LITTLE_ENDIAN>(x),
+                    read_word::<LITTLE_ENDIAN>(y),
+                    Some(read_word::<LITTLE_ENDIAN>(z)),
+                );
+            }
+        }
+        (3, false) => {
+            let (chunks, _) = words.as_chunks::<3>();
+            for &[x, y, _m] in chunks {
+                bounds.add(
+                    read_word::<LITTLE_ENDIAN>(x),
+                    read_word::<LITTLE_ENDIAN>(y),
+                    None,
+                );
+            }
+        }
+        (4, _) => {
+            let (chunks, _) = words.as_chunks::<4>();
+            for &[x, y, z, _m] in chunks {
+                bounds.add(
+                    read_word::<LITTLE_ENDIAN>(x),
+                    read_word::<LITTLE_ENDIAN>(y),
+                    Some(read_word::<LITTLE_ENDIAN>(z)),
+                );
+            }
+        }
+        // [`decode_type`] constructs no other layout, so what remains is the
+        // XY stride of 2.
+        _ => {
+            let (chunks, _) = words.as_chunks::<2>();
+            for &[x, y] in chunks {
+                bounds.add(
+                    read_word::<LITTLE_ENDIAN>(x),
+                    read_word::<LITTLE_ENDIAN>(y),
+                    None,
+                );
+            }
+        }
+    }
 }
 
 /// Reads a counted coordinate sequence as a chain of circular arcs, adding
@@ -382,12 +453,35 @@ fn read_circular_string(
     bounds: &mut XyzBounds,
 ) -> Result<(), GeometryError> {
     let count = cursor.read_u32(little_endian)?;
+    let words = cursor.take_coord_words(count, coord)?;
     let mut start: Option<[f64; 2]> = None;
     let mut middle: Option<[f64; 2]> = None;
 
-    for _ in 0..count {
-        let (point, z) = cursor.read_coord(little_endian, coord)?;
-        let [x, y] = point;
+    for chunk in words.chunks_exact(coord.stride) {
+        // Every layout has a stride of at least 2, so this always binds; the
+        // `else` is an unreachable, panic-free fallback. Endianness stays a
+        // per-word branch here: the arc arithmetic below dominates this path.
+        let &[xw, yw, ref rest @ ..] = chunk else {
+            continue;
+        };
+        let x = if little_endian {
+            f64::from_le_bytes(xw)
+        } else {
+            f64::from_be_bytes(xw)
+        };
+        let y = if little_endian {
+            f64::from_le_bytes(yw)
+        } else {
+            f64::from_be_bytes(yw)
+        };
+        let z = coord.has_z.then(|| rest.first()).flatten().map(|&zw| {
+            if little_endian {
+                f64::from_le_bytes(zw)
+            } else {
+                f64::from_be_bytes(zw)
+            }
+        });
+        let point = [x, y];
         bounds.add(x, y, z);
         match (start, middle) {
             (None, _) => start = Some(point),
@@ -505,6 +599,30 @@ impl<'a> Cursor<'a> {
         } else {
             f64::from_be_bytes(bytes)
         })
+    }
+
+    /// Takes the region holding `count` coordinates of the given layout,
+    /// returning it as 8-byte words.
+    ///
+    /// One truncation check covers the whole sequence, reported at the
+    /// region's start rather than at the first missing double. A hostile
+    /// count that cannot fit in memory fails the same check, since no
+    /// remaining slice can satisfy it.
+    fn take_coord_words(
+        &mut self,
+        count: u32,
+        coord: CoordLayout,
+    ) -> Result<&'a [[u8; 8]], GeometryError> {
+        let len = (count as usize)
+            .checked_mul(coord.stride)
+            .and_then(|words| words.checked_mul(8))
+            .ok_or(GeometryError::TruncatedAt {
+                offset: self.offset,
+            })?;
+        let (words, remainder) = self.take(len)?.as_chunks::<8>();
+        // `len` is a multiple of 8 by construction.
+        debug_assert!(remainder.is_empty());
+        Ok(words)
     }
 
     /// Reads one coordinate, keeping X, Y and any Z, and skipping an M.
