@@ -41,20 +41,20 @@ pub enum GeometryError {
     /// types (`CIRCULARSTRING`, `CURVEPOLYGON`, …) that the `wkb` crate does
     /// not yet support, as well as structurally malformed bodies.
     ///
-    /// [`encode_gpb_from_wkb`] separates the one case where those two are
-    /// confusable: see [`Self::NonLinearMember`].
+    /// Raised by paths that read a body through the `wkb` reader, such as
+    /// [`GpbGeometry`]. [`encode_gpb_from_wkb`] reads bodies with
+    /// [`crate::curve`] instead and reports structural problems with that
+    /// scanner's variants.
     #[error("WKB body is unreadable (unsupported curve type or malformed geometry)")]
     Body(#[from] wkb::error::WkbError),
     /// A body whose own type is one of the core ones but which contains a
     /// non-linear member, such as a `GEOMETRYCOLLECTION` containing a
     /// `CIRCULARSTRING`.
     ///
-    /// Reading a non-linear geometry goes through [`crate::curve`] rather than
-    /// the `wkb` reader, and which reader a body gets is decided from its own
-    /// type code. A core-typed container therefore reaches the `wkb` reader,
-    /// which cannot read the member. Reported separately from [`Self::Body`]
-    /// because the body is not malformed and the distinction is not one a
-    /// caller can otherwise draw.
+    /// The byte scanner reads such a body, but reading it back as a geometry
+    /// goes through the `wkb` reader, which is chosen by the body's own type
+    /// code and cannot read the member. Writing one would produce a blob this
+    /// crate's own read path cannot return, so the write path rejects it.
     #[error(
         "a {container} containing a {member} cannot be written: a non-linear geometry is writable only as a body's own type"
     )]
@@ -418,75 +418,42 @@ pub fn write_envelope<G: GeometryTrait<T = f64>>(geom: &G) -> (gpb::Envelope, bo
 /// dimensions, so the caller can check them against the column's `z`/`m`
 /// constraints without a second parse.
 ///
-/// A non-linear body is read by [`crate::curve`] rather than the `wkb`
-/// reader, which cannot parse one, and its header sets the extended flag.
-/// Writing one still needs the matching `gpkg_geom_<TYPE>` row in
-/// `gpkg_extensions`; registering it is the caller's responsibility, since
-/// this function sees a body, not a table.
+/// Every body is parsed by [`crate::curve::scan`], which reads all the
+/// Annex G types. A non-linear body's header sets the extended flag, per
+/// Annex F.1 Requirement 68. Writing one still needs the matching
+/// `gpkg_geom_<TYPE>` row in `gpkg_extensions`; registering it is the
+/// caller's responsibility, since this function sees a body, not a table.
 ///
 /// # Errors
 ///
-/// [`GeometryError`] if `wkb_body` is not a geometry the `wkb` reader accepts,
-/// or, for a non-linear type, one [`crate::curve::scan`] accepts.
+/// [`GeometryError`] if `wkb_body` is not a body [`crate::curve::scan`]
+/// accepts, or is a core-typed container holding a non-linear member
+/// ([`GeometryError::NonLinearMember`]).
 pub fn encode_gpb_from_wkb(wkb_body: &[u8], srs_id: i32) -> Result<EncodedGpb, GeometryError> {
-    // A non-linear body cannot go through the `wkb` reader at all, so its
-    // envelope, dimensions and extent come from `curve`, which walks the bytes.
-    // The header's extended flag is set for it, per Annex F.1 Requirement 68.
-    if wkb_geometry_type(wkb_body)?.is_extension() {
-        let scan = crate::curve::scan(wkb_body)?;
-        let body = wkb_body.get(..scan.len).unwrap_or(wkb_body);
-        let mut blob = Vec::with_capacity(gpb::header_len(&scan.envelope) + body.len());
-        gpb::encode_header_into(&mut blob, srs_id, &scan.envelope, scan.empty, true);
-        blob.extend_from_slice(body);
-        return Ok(EncodedGpb {
-            blob,
-            xy_envelope: scan.xy_envelope,
-            dimensions: scan.dimensions,
-            extension_types: scan.extension_types,
+    let own_type = wkb_geometry_type(wkb_body)?;
+    let scan = crate::curve::scan(wkb_body)?;
+    let extended = own_type.is_extension();
+    // The scanner reads a core-typed container with non-linear members, but
+    // the `wkb`-reader read path cannot, so writing one is refused rather
+    // than producing a blob this crate cannot read back.
+    if !extended && let Some(member) = scan.extension_types.iter().next() {
+        return Err(GeometryError::NonLinearMember {
+            container: own_type,
+            member,
         });
     }
-
-    let geometry = match Wkb::try_new(wkb_body) {
-        Ok(geometry) => geometry,
-        // The reader reports a type code it did not expect, which for a
-        // container says nothing about where in the body it was. Naming the
-        // member costs a second walk, on a path that is already failing.
-        Err(error) => return Err(non_linear_member(wkb_body).unwrap_or_else(|| error.into())),
-    };
-    let (envelope, empty) = write_envelope(&geometry);
-    let xy_envelope = envelope
-        .xy_bounds()
-        .map(|(min_x, max_x, min_y, max_y)| [min_x, max_x, min_y, max_y]);
-    let body = geometry.buf();
+    let body = wkb_body.get(..scan.len).unwrap_or(wkb_body);
     // Sized for header and body together, so the blob is one allocation per
     // row rather than an exactly-sized header that the body then grows.
-    let mut blob = Vec::with_capacity(gpb::header_len(&envelope) + body.len());
-    gpb::encode_header_into(&mut blob, srs_id, &envelope, empty, false);
+    let mut blob = Vec::with_capacity(gpb::header_len(&scan.envelope) + body.len());
+    gpb::encode_header_into(&mut blob, srs_id, &scan.envelope, scan.empty, extended);
     blob.extend_from_slice(body);
     Ok(EncodedGpb {
         blob,
-        xy_envelope,
-        dimensions: geometry.dim(),
-        // Empty by construction: a body the `wkb` reader accepts contains no
-        // non-linear type, since it cannot read one.
-        extension_types: GeometryTypeSet::new(),
+        xy_envelope: scan.xy_envelope,
+        dimensions: scan.dimensions,
+        extension_types: scan.extension_types,
     })
-}
-
-/// Returns the error to report when the `wkb` reader failed on a body because
-/// of a non-linear member rather than malformation.
-///
-/// `None` when the body fails for any other reason, in which case the reader's
-/// own error is the one to report. The curve walk reads every GeoPackage type,
-/// so a body it accepts is well formed; it only reached the wrong reader.
-fn non_linear_member(wkb_body: &[u8]) -> Option<GeometryError> {
-    let container = wkb_geometry_type(wkb_body).ok()?;
-    let member = crate::curve::scan(wkb_body)
-        .ok()?
-        .extension_types
-        .iter()
-        .next()?;
-    Some(GeometryError::NonLinearMember { container, member })
 }
 
 /// The result of [`encode_gpb_from_wkb`].
