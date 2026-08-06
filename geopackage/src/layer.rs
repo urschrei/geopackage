@@ -446,6 +446,7 @@ impl<'a> Layer<'a> {
     /// Returns `true` if a projection is set, whatever it selects. The
     /// parallel Arrow path is not used on a projected layer, since its workers
     /// rebuild the layer from the table name and would read every column.
+    #[cfg(feature = "arrow")]
     pub(crate) fn is_projected(&self) -> bool {
         self.projection.is_some()
     }
