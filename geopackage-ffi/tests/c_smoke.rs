@@ -38,7 +38,7 @@ fn skip(reason: &str) {
 /// does not shell out to cargo recursively; if a dependency changes them, this
 /// test fails at the link step and the list wants updating.
 fn native_libs() -> Vec<&'static str> {
-    if cfg!(target_os = "macos") {
+    let mut libs = if cfg!(target_os = "macos") {
         vec![
             "-framework",
             "IOKit",
@@ -50,7 +50,16 @@ fn native_libs() -> Vec<&'static str> {
         vec!["-lm", "-ldl", "-lpthread"]
     } else {
         Vec::new()
+    };
+    // The default build links the system SQLite, so the static library does
+    // not contain it and the C link line has to supply it; `bundled` compiles
+    // the amalgamation into the library instead. This assumes the library
+    // artefact was built with the same feature set as this test run; a stale
+    // artefact from the other configuration still fails at the link step.
+    if !cfg!(feature = "bundled") {
+        libs.push("-lsqlite3");
     }
+    libs
 }
 
 /// Where cargo put the build artefacts, walking up from the test binary.
