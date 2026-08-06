@@ -146,4 +146,7 @@ mod write_all;
 
 pub use feature_writer::FeatureWriter;
 pub use row::NewFeature;
+// Re-exported for the Arrow write path; `write_all` names the trait through
+// `super::row` directly.
+#[cfg(feature = "arrow")]
 pub(crate) use row::WritableRow;
