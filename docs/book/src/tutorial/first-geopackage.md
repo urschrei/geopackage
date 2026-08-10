@@ -270,6 +270,99 @@ latitude north of 53, and Dublin is the only city we wrote that falls inside
 it. The query was served by the spatial index that `create_layer` built for
 us; a layer without one returns exactly the same rows from a full scan.
 
+## Read the geometries back
+
+So far we have read the name and population back, but not the point itself.
+The geometry comes back too. A feature hands it over lazily:
+`feature.geometry()` parses the stored blob into a wrapper over its bytes, and
+`to_geo` on that wrapper converts to an owned
+[`geo_types::Geometry`](https://docs.rs/geo-types/latest/geo_types/geometry/enum.Geometry.html).
+The conversion is the mirror of the write side, which accepted our
+`geo_types::Point` values directly. `to_geo` returns an `Option` because a
+GeoPackage can hold curve types that `geo-types` cannot represent; our points
+are not among them.
+
+Extend the loop body to fetch the location:
+
+```rust,no_run
+use geo_types::Point;
+use geopackage::core::types::{ColumnType, GeometryType};
+use geopackage::{
+    BoundingBox, ColumnSpec, GeoPackage, GeometrySpec, NewFeature, TableSchemaBuilder, Value,
+};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let gpkg = GeoPackage::create("cities.gpkg")?;
+    println!("created cities.gpkg");
+
+    gpkg.create_layer(
+        &TableSchemaBuilder::new("cities")
+            .column(ColumnSpec::new("name", ColumnType::Text(None)))
+            .column(ColumnSpec::new("population", ColumnType::Integer))
+            .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+    )?;
+    println!("created layer \"cities\"");
+
+    let layer = gpkg.layer("cities")?;
+    layer.write_all(
+        vec![
+            NewFeature::new(
+                Point::new(-6.26, 53.35),
+                vec![Value::Text("Dublin".into()), Value::Integer(592_713)],
+            ),
+            NewFeature::new(
+                Point::new(-0.13, 51.51),
+                vec![Value::Text("London".into()), Value::Integer(8_866_180)],
+            ),
+            NewFeature::new(
+                Point::new(2.35, 48.86),
+                vec![Value::Text("Paris".into()), Value::Integer(2_048_472)],
+            ),
+            NewFeature::new(
+                Point::new(13.40, 52.52),
+                vec![Value::Text("Berlin".into()), Value::Integer(3_662_381)],
+            ),
+        ],
+        0,
+    )?;
+    println!("wrote {} features", layer.features()?.len());
+
+    println!("features in the box:");
+    for feature in layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))? {
+        let feature = feature?;
+        let name = feature.value("name").and_then(|v| v.as_str()).unwrap_or("");
+        let population = feature
+            .value("population")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let location = match feature.geometry()?.and_then(|g| g.to_geo()) {
+            Some(geo_types::Geometry::Point(p)) => format!("{}, {}", p.x(), p.y()),
+            _ => "no location".into(),
+        };
+        println!("  {name}: {population} at {location}");
+    }
+
+    gpkg.close()?;
+    Ok(())
+}
+```
+
+Run it again:
+
+```console
+$ rm -f cities.gpkg && cargo run
+created cities.gpkg
+created layer "cities"
+wrote 4 features
+features in the box:
+  Dublin: 592713 at -6.26, 53.35
+```
+
+The point comes back exactly as we wrote it. Converting is a choice, not a
+toll: an algorithm written against the `geo-traits` interfaces can read
+coordinates straight out of the wrapper without an owned geometry ever
+existing, which the [geometry chapter](../explanation/geometry.md) covers.
+
 ## Look at the file from outside
 
 Everything so far has been our own program describing its own work. Let's
@@ -321,8 +414,8 @@ cities.gpkg
 ## What we have built
 
 We wrote a program that creates a GeoPackage, declares an indexed point layer,
-writes features into it and answers a spatial query, and we confirmed the
-result with a separate tool. `cities.gpkg` is an ordinary GeoPackage: QGIS,
+writes features into it, answers a spatial query and reads the geometries back
+as `geo-types` values, and we confirmed the result with a separate tool. `cities.gpkg` is an ordinary GeoPackage: QGIS,
 GDAL and anything else that reads the format will open it.
 
 From here:
