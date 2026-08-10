@@ -58,8 +58,10 @@ The minimum supported Rust version is 1.95.
 
 ## Example
 
-Create a file, declare a point layer, write features, and query by bounding
-box.
+Create a file, declare a point layer, write features, query by bounding box,
+and read the geometries back as `geo-types` values. Writing takes any
+`geo_traits::GeometryTrait` implementor, which every `geo-types` geometry is,
+so no conversion is needed on the way in; reading back is one call.
 
 ```rust
 use geo_types::Point;
@@ -90,7 +92,12 @@ layer.write_all(
 
 // Uses the RTree index when one is present, a full scan otherwise.
 for feature in layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))? {
-    println!("{:?}", feature?.value("name"));
+    let feature = feature?;
+    // `geometry()` parses the stored blob lazily; `to_geo` converts it to
+    // an owned `geo_types::Geometry`. Points written as `geo_types::Point`
+    // come back the same way.
+    let geom = feature.geometry()?.and_then(|g| g.to_geo());
+    println!("{:?} at {:?}", feature.value("name"), geom);
 }
 ```
 

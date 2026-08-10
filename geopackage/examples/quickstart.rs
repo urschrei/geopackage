@@ -1,5 +1,6 @@
 //! The README quickstart, kept compilable: create a file, declare a point
-//! layer, write features, and query by bounding box.
+//! layer, write features, query by bounding box, and read the geometries
+//! back as `geo-types` values.
 
 use geo_types::Point;
 use geopackage::core::types::{ColumnType, GeometryType};
@@ -33,7 +34,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Uses the RTree index when one is present, a full scan otherwise.
     for feature in layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))? {
-        println!("{:?}", feature?.value("name"));
+        let feature = feature?;
+        // `geometry()` parses the stored blob lazily; `to_geo` converts it to
+        // an owned `geo_types::Geometry`. Points written as `geo_types::Point`
+        // come back the same way.
+        let geom = feature.geometry()?.and_then(|g| g.to_geo());
+        println!("{:?} at {:?}", feature.value("name"), geom);
     }
 
     Ok(())
