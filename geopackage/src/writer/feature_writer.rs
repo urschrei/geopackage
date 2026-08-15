@@ -299,6 +299,7 @@ impl<'conn> FeatureWriter<'conn> {
     /// As [`Self::insert_returning_envelope`], plus [`Error::Core`] if the bytes
     /// are not a geometry the `wkb` reader accepts.
     #[cfg(feature = "arrow")]
+    #[hotpath::measure(label = "FeatureWriter::insert_wkb_bound")]
     pub(crate) fn insert_wkb_bound(
         &mut self,
         fid: Option<i64>,
@@ -348,6 +349,7 @@ impl<'conn> FeatureWriter<'conn> {
 
     /// [`Self::insert_wkb_bound`] for a row with no geometry.
     #[cfg(feature = "arrow")]
+    #[hotpath::measure(label = "FeatureWriter::insert_row_bound")]
     pub(crate) fn insert_row_bound(
         &mut self,
         fid: Option<i64>,

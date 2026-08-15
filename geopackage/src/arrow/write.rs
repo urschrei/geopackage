@@ -53,6 +53,7 @@ impl crate::writer::WritableRow for ArrowRowResult {
 }
 
 impl crate::writer::WritableRow for ArrowRow {
+    #[hotpath::measure(label = "arrow::ArrowRow::write")]
     fn write(self, writer: &mut crate::FeatureWriter<'_>) -> Result<(i64, Option<[f64; 4]>)> {
         let fid = match self
             .layout
@@ -189,6 +190,7 @@ impl Layer<'_> {
 ///
 /// The layout is computed once per batch and shared, so a row stores two `Arc`
 /// handles rather than a copy of anything.
+#[hotpath::measure(label = "arrow::layout_of")]
 fn layout_of(
     batch: &RecordBatch,
     primary_key: Option<&str>,

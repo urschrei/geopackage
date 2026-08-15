@@ -237,6 +237,7 @@ impl<'a> Layer<'a> {
 
     /// The `write_all_with` core, taking a [`bulk::TestFault`] so that a test
     /// can force the index build to fail after the rows have been staged.
+    #[hotpath::measure(label = "write_all_impl")]
     pub(crate) fn write_all_impl<R, I>(
         &self,
         features: I,
@@ -330,6 +331,7 @@ impl<'a> Layer<'a> {
 
     /// The per-batch triggered write path: one committed transaction per
     /// `batch_size` rows (`0` = a single transaction for the whole iterator).
+    #[hotpath::measure(label = "write_all_batched")]
     fn write_all_batched<R, I>(&self, features: I, batch_size: usize) -> Result<Vec<i64>>
     where
         R: WritableRow,
@@ -368,6 +370,7 @@ impl<'a> Layer<'a> {
     ///
     /// On any failure after the triggers are dropped, the index is restored to a
     /// consistent, trigger-maintained state before the error is returned.
+    #[hotpath::measure(label = "write_all_bulk")]
     fn write_all_bulk<R, I>(
         &self,
         features: I,
