@@ -60,14 +60,19 @@ export CARGO_HOME=/data/rust/cargo
 export PATH="/data/rust/cargo/bin:$PATH"
 export TMPDIR=/data/tmp
 mkdir -p /data/tmp /data/logs
-if [[ ! -f /data/.bootstrapped ]]; then
-    echo "bootstrapping build dependencies"
+# Two state layers with different lifetimes: apt packages live on the
+# machine's throwaway rootfs, the toolchain on the persistent volume. Each
+# is tested directly, since a marker file cannot span both.
+if ! command -v git >/dev/null 2>&1; then
+    echo "installing system packages onto this machine's rootfs"
     apt-get update -q
     apt-get install -q -y build-essential curl git unzip ca-certificates \
         gdal-bin python3
+fi
+if [[ ! -x /data/rust/cargo/bin/cargo ]]; then
+    echo "installing the Rust toolchain onto the volume"
     curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal \
         --default-toolchain stable
-    touch /data/.bootstrapped
 fi
 EOF
 }

@@ -45,7 +45,9 @@ for tool in gdalinfo; do
 done
 
 echo "building the tile_bench example (release)"
-cargo build --release -p geopackage --example tile_bench >/dev/null 2>&1
+# Bundled SQLite, explicitly: the published figures use the vendored
+# amalgamation, and a Linux host has no reason to carry the dev headers.
+cargo build --release -p geopackage --features bundled --example tile_bench >/dev/null 2>&1
 BENCH="$REPO_ROOT/target/release/examples/tile_bench"
 
 FIXTURE="$WORK/fixture.gpkg"
