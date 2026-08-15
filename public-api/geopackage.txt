@@ -794,6 +794,8 @@ impl core::clone::Clone for geopackage::Feature
 pub fn geopackage::Feature::clone(&self) -> geopackage::Feature
 impl core::fmt::Debug for geopackage::Feature
 pub fn geopackage::Feature::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for geopackage::Feature
+pub fn geopackage::Feature::drop(&mut self)
 impl core::marker::Freeze for geopackage::Feature
 impl core::marker::Send for geopackage::Feature
 impl core::marker::Sync for geopackage::Feature

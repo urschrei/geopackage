@@ -1000,9 +1000,14 @@ impl RowContext {
         // sixteen- and fifty-four-column ones. Rows in a layer are usually
         // close in size, so the estimate is normally right, and being wrong
         // costs a growth rather than a wrong answer.
-        let mut buf: Vec<u8> =
-            Vec::with_capacity(geometry.map_or(0, <[u8]>::len) + self.value_bytes_hint.get());
-        let mut slots = Vec::with_capacity(self.value_columns.len());
+        // Storage comes from the spare pool when a previously read row has
+        // been dropped, so a drop-as-you-go scan allocates only until the
+        // capacities settle; `reserve` on a pooled buffer is then a no-op.
+        let (mut buf, mut slots) = SPARE_ROWS
+            .with(|pool| pool.borrow_mut().pop())
+            .unwrap_or_default();
+        buf.reserve(geometry.map_or(0, <[u8]>::len) + self.value_bytes_hint.get());
+        slots.reserve(self.value_columns.len());
         let geometry_end = geometry.filter(|_| self.store_geometry).map(|blob| {
             buf.extend_from_slice(blob);
             // SQLite's own value length is an i32, so a row's bytes cannot
@@ -1046,7 +1051,7 @@ impl RowContext {
             // so its rows answer `Ok(None)` as they always did; only a layer
             // that has one and did not select it makes `geometry` an error.
             geometry_projected: self.geometry_column.is_none() || self.store_geometry,
-            slots: slots.into_boxed_slice(),
+            slots,
             columns: Arc::clone(&self.value_column_names),
         })
     }
@@ -1166,6 +1171,10 @@ enum Slot {
 /// or `Vec<u8>` per cell was one plus one per variable-length cell: on a
 /// thirteen column layer with four text columns and a blob, seven.
 ///
+/// Dropping a feature returns both allocations to a small thread-local pool
+/// that later rows reuse, so a scan that drops each row before reading the
+/// next stops allocating once the capacities settle.
+///
 /// This is why the accessors return [`ValueRef`] rather than `&Value`: there
 /// is no `Value` stored in a feature; one is built on demand pointing into
 /// the buffer. [`ValueRef::to_value`] gives a `Value` where one is needed.
@@ -1181,8 +1190,51 @@ pub struct Feature {
     /// row from a projection that dropped it is distinguishable from one whose
     /// geometry is NULL.
     geometry_projected: bool,
-    slots: Box<[Slot]>,
+    slots: Vec<Slot>,
     columns: Arc<[String]>,
+}
+
+/// How many retired row storages a thread keeps, and the largest byte buffer
+/// it keeps. Both bounds exist so a burst of wide rows cannot pin memory for
+/// the rest of the thread's life: an oversized buffer is freed rather than
+/// pooled, and the pool never holds more than a handful of entries.
+const SPARE_ROWS_MAX: usize = 8;
+const SPARE_BUF_BYTES_MAX: usize = 1 << 20;
+
+thread_local! {
+    /// Spare row storage reclaimed from dropped [`Feature`]s and reused by
+    /// [`RowContext::feature_from_row`]. Thread-local rather than shared: a
+    /// `Feature` can cross threads, in which case its storage retires to the
+    /// pool of whichever thread drops it.
+    static SPARE_ROWS: std::cell::RefCell<Vec<(Vec<u8>, Vec<Slot>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl Drop for Feature {
+    /// Returns the row's storage to the thread's spare pool, so the next row
+    /// read on this thread starts from settled capacities instead of fresh
+    /// allocations.
+    fn drop(&mut self) {
+        if self.buf.capacity() > SPARE_BUF_BYTES_MAX
+            || (self.buf.capacity() == 0 && self.slots.capacity() == 0)
+        {
+            return;
+        }
+        let mut buf = std::mem::take(&mut self.buf);
+        let mut slots = std::mem::take(&mut self.slots);
+        buf.clear();
+        slots.clear();
+        // `try_with` fails only during thread teardown, when there is no pool
+        // left to put the spare in; it is then freed as normal.
+        SPARE_ROWS
+            .try_with(|pool| {
+                let mut pool = pool.borrow_mut();
+                if pool.len() < SPARE_ROWS_MAX {
+                    pool.push((buf, slots));
+                }
+            })
+            .unwrap_or_default();
+    }
 }
 
 impl std::fmt::Debug for Feature {
