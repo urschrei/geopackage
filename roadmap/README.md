@@ -33,8 +33,8 @@ Data Interface as the bulk data plane.
 
 Released: v0.1.0, v0.1.1, v0.1.2 (2026-07-24), v0.2.0 (2026-07-25), v0.3.0,
 v0.4.0, v0.5.0 (2026-07-26), v0.6.0 (2026-07-29), v0.7.0 and v0.7.1
-(2026-08-02), v0.8.0 (2026-08-06), v0.9.0 (2026-08-10). Workspace version is
-0.9.0.
+(2026-08-02), v0.8.0 (2026-08-06), v0.9.0 (2026-08-10), v0.9.1 (2026-08-15).
+Workspace version is 0.9.1.
 No release is planned for the rest of M5: its phases are an order of work, not a
 publication schedule.
 
