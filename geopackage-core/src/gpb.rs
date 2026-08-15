@@ -129,6 +129,7 @@ const HEADER_BASE_LEN: usize = 8;
 ///
 /// [`GpbError`] for a blob too short to hold the header it declares, a bad magic
 /// or version, or an envelope indicator outside 0-4.
+#[hotpath::measure(label = "gpb::body_offset")]
 pub fn body_offset(blob: &[u8]) -> Result<usize, GpbError> {
     let &[m0, m1, version, flags, ..] = blob else {
         return Err(GpbError::Truncated {
@@ -177,6 +178,7 @@ pub fn body_offset(blob: &[u8]) -> Result<usize, GpbError> {
 /// assert_eq!(body_offset, 40);
 /// # Ok::<(), geopackage_core::gpb::GpbError>(())
 /// ```
+#[hotpath::measure(label = "gpb::parse_header")]
 pub fn parse_header(blob: &[u8]) -> Result<(GpbHeader, usize), GpbError> {
     // Slice pattern for the fixed 8-byte header; `rest` is the envelope
     // region. A shorter blob has no complete header.
@@ -286,6 +288,7 @@ pub fn encode_header(srs_id: i32, envelope: &Envelope, empty: bool, extended: bo
 /// The write path builds one blob per geometry: sizing the buffer for the
 /// header and the body up front and appending both encodes a row in a single
 /// allocation.
+#[hotpath::measure(label = "gpb::encode_header_into")]
 pub fn encode_header_into(
     out: &mut Vec<u8>,
     srs_id: i32,

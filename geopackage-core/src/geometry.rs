@@ -121,6 +121,7 @@ impl<'a> GpbGeometry<'a> {
     ///
     /// [`GeometryError`] for a malformed header, a truncated or malformed
     /// body, or a geometry type the `wkb` crate cannot read.
+    #[hotpath::measure(label = "GpbGeometry::parse")]
     pub fn parse(blob: &'a [u8]) -> Result<Self, GeometryError> {
         let (header, offset) = gpb::parse_header(blob)?;
         // `parse_header` guarantees `offset <= blob.len()`; `get` keeps this
@@ -312,6 +313,7 @@ pub fn blob_is_empty(blob: &[u8]) -> Result<bool, GeometryError> {
 /// # Errors
 ///
 /// [`GeometryError`] if the header or the body cannot be read.
+#[hotpath::measure(label = "geometry::blob_envelope_and_empty")]
 pub fn blob_envelope_and_empty(blob: &[u8]) -> Result<(Option<[f64; 4]>, bool), GeometryError> {
     let (header, _) = gpb::parse_header(blob)?;
     if header.empty {
@@ -335,6 +337,7 @@ pub fn blob_envelope_and_empty(blob: &[u8]) -> Result<(Option<[f64; 4]>, bool), 
 /// `CURVEPOLYGON` body in a column declared `POLYGON` must be detectable.
 /// GeoPackage bodies are ISO WKB; an extended-WKB (EWKB) type flag is handled
 /// defensively but is not expected in a GPB blob.
+#[hotpath::measure(label = "geometry::wkb_geometry_type")]
 pub fn wkb_geometry_type(wkb_body: &[u8]) -> Result<GeometryType, GeometryError> {
     // Byte-order marker plus the four-byte type code; a shorter body is
     // truncated. `..` ignores any coordinate bytes that follow.
@@ -426,6 +429,7 @@ pub fn write_envelope<G: GeometryTrait<T = f64>>(geom: &G) -> (gpb::Envelope, bo
 /// [`GeometryError`] if `wkb_body` is not a body [`crate::curve::scan`]
 /// accepts, or is a core-typed container holding a non-linear member
 /// ([`GeometryError::NonLinearMember`]).
+#[hotpath::measure(label = "geometry::encode_gpb_from_wkb")]
 pub fn encode_gpb_from_wkb(wkb_body: &[u8], srs_id: i32) -> Result<EncodedGpb, GeometryError> {
     let own_type = wkb_geometry_type(wkb_body)?;
     let scan = crate::curve::scan(wkb_body)?;
@@ -485,6 +489,7 @@ pub struct EncodedGpb {
 ///
 /// [`GeometryError::EncodeWkb`] if the `wkb` writer cannot serialise the
 /// geometry.
+#[hotpath::measure(label = "geometry::encode_gpb")]
 pub fn encode_gpb<G: GeometryTrait<T = f64>>(
     geom: &G,
     srs_id: i32,
