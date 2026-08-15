@@ -456,9 +456,14 @@ other crate sets `unsafe_code = "forbid"`.
 
 ## Performance
 
-Measured over three public datasets. Apple M2 Pro, 12 cores, 16 GB, release
-build with bundled SQLite, warm page cache, medians over repeated runs on an
-otherwise idle host;
+Measured over three public datasets on a rented, dedicated-CPU machine, so
+the environment is reproducible on demand: a Fly.io `performance-8x` Machine
+(8 dedicated AMD EPYC vCPUs, 16 GB), Ubuntu 24.04, release build with
+bundled SQLite, warm page cache, medians over repeated runs.
+[`scripts/bench_fly.sh`](https://github.com/urschrei/geopackage/blob/main/scripts/bench_fly.sh)
+provisions the machine and reproduces the table. Earlier revisions of this
+table were measured on an Apple M2 Pro, whose cores are 1.5x to 3x faster
+single-threaded; figures are comparable only within one machine type.
 
 | | `buildings` | `rivers` | `admin` |
 |---|---|---|---|
@@ -470,45 +475,50 @@ otherwise idle host;
 
 | operation | `buildings` | `rivers` | `admin` |
 |---|---|---|---|
-| columnar read, `read_arrow` | 1.7 s | ~2.2 s | ~2.0 s |
-| scalar read, `cursor` | 3.9 s | 6.2 s | 2.4 s |
-| write from Arrow batches | 10.0 s | 9.7 s | 4.8 s |
-| the same write, index built as it goes | 13.8 s | 12.7 s | 7.2 s |
-| `create_spatial_index` afterwards instead | 8.8 s | 5.6 s | 6.3 s |
-| bounding-box query, indexed | 76 ms | 181 ms | 157 ms |
-| the same query with no index | 1.6 s | 2.1 s | 1.2 s |
+| columnar read, `read_arrow` | 2.7 s | 3.1 s | 3.6 s |
+| scalar read, `cursor` | 5.8 s | 9.5 s | 3.3 s |
+| write from Arrow batches | 30.2 s | 30.0 s | 23.1 s |
+| the same write, index built as it goes | 39.6 s | 35.9 s | 23.6 s |
+| `create_spatial_index` afterwards instead | 17.6 s | 12.9 s | 2.0 s |
+| bounding-box query, indexed | 134 ms | 289 ms | 230 ms |
+| the same query with no index | 2.6 s | 3.5 s | 1.9 s |
 | features that query returned | 70,130 | 180,544 | 36,556 |
 
-Reading is bound by bytes, not rows: the columnar path runs at 0.9 to 1.4 GB/s
-across three layers whose rows differ by a factor of 37 in size. The index
-stores about 40 bytes per row whatever the geometry, and its build time
-follows row count while the geometries are small (the 11.5M `buildings` rows
-build in 8.8 s) and the blob bytes once they are not (the 356k large `admin`
-multipolygons take 6.3 s). Building it during the write rather than afterwards
-is 17% to 35% cheaper than the two steps run separately, because the bulk path
-reuses the envelopes it computed while encoding; that is why `create_layer`
-leaves an empty index in place for `write_all` to fill.
+Reading is bound by bytes, not rows: the columnar path runs at 0.6 to
+0.9 GB/s across three layers whose rows differ by a factor of 37 in size. The
+index stores about 40 bytes per row whatever the geometry, and on this host
+its build time follows row count (the 11.5M `buildings` rows build in 17.6 s,
+the 356k `admin` multipolygons in 2.0 s); the envelope scan over the `admin`
+layer's large blobs, which dominated that build on other hardware, does not
+here. Building the index during the write rather than afterwards is 6% to
+17% cheaper than the two steps run separately, because the bulk path reuses
+the envelopes it computed while encoding; that is why `create_layer` leaves
+an empty index in place for `write_all` to fill.
 
-The two approximate read figures are approximate for different reasons. The
-`admin` columnar read holds batches of roughly 450 MB, and with the default
-four reader threads holding one each, the figure follows host memory rather
-than the read path (1.3 s to 5 s observed); `ArrowReadOptions::with_batch_size`
-and `with_max_batch_bytes` bound what is in flight. And the threaded read in
-general assumes the host is otherwise idle: under concurrent I/O load it falls
-behind the single-threaded read (2.4 s, 3.4 s and 1.7 s here), which is the
-dependable floor.
+Two caveats on the threaded columnar read. The `admin` read holds batches of
+several hundred MB, one per reader thread, so its figure follows host memory
+as much as the read path; `ArrowReadOptions::with_batch_size` and
+`with_max_batch_bytes` bound what is in flight. And the threaded figures
+assume the host is otherwise idle: under concurrent load the threaded read
+falls behind the single-threaded read (3.8 s, 7.0 s and 4.6 s here), which
+is the dependable floor.
 
-Method, per-dataset detail and the rest of the caveats are in
-[the benchmark write-up](https://github.com/urschrei/geopackage/blob/main/roadmap/benchmarks/2026-07-25-real-datasets.md),
+Method, the interleaved A/B protocol for regression questions, and the rest
+of the caveats are in
+[the re-baseline write-up](https://github.com/urschrei/geopackage/blob/main/roadmap/benchmarks/2026-08-15-fly-baseline.md);
+per-dataset detail is in
+[the original write-up](https://github.com/urschrei/geopackage/blob/main/roadmap/benchmarks/2026-07-25-real-datasets.md).
 [`scripts/bench_datasets.sh`](https://github.com/urschrei/geopackage/blob/main/scripts/bench_datasets.sh)
-fetches the datasets and reproduces the table.
+runs the measurements and
+[`scripts/bench_fly.sh`](https://github.com/urschrei/geopackage/blob/main/scripts/bench_fly.sh)
+provides the machine to run them on.
 
 Tiles, over a full web mercator ladder to zoom 7 (21,845 tiles of 4 KiB,
-101 MB): about 146,000 tiles/s read by address, 108,000 streamed in matrix
-order, and 131,000 written through `write_all`. GDAL reads the same file at
-about 2,700 tiles/s, but that is a different operation and not a comparison:
+101 MB): about 90,000 tiles/s streamed in matrix order, 61,000 read by
+address, and 69,000 written through `write_all`. GDAL reads the same file at
+about 1,000 tiles/s, but that is a different operation and not a comparison:
 GDAL returns pixels, decoding each PNG, and this crate returns the stored
-bytes. See
+bytes. Method in
 [the tile write-up](https://github.com/urschrei/geopackage/blob/main/roadmap/benchmarks/2026-07-27-tiles.md).
 
 ## Conformance
