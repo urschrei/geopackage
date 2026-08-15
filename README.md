@@ -9,9 +9,9 @@ A Rust implementation of the
 features, attribute tables, spatial indexing, tile pyramids, and columnar I/O
 through Apache Arrow. Pre-1.0: the API will change without notice.
 
-[The book](https://urschrei.github.io/geopackage/) is the guide: a tutorial,
-how-to guides for common tasks, and the design reasoning. API reference lives
-on [docs.rs](https://docs.rs/geopackage).
+API reference: [docs.rs](https://docs.rs/geopackage)
+
+[Book (WIP)](https://urschrei.github.io/geopackage/)
 
 > [!NOTE]  
 > These crates are a testbed for LLM-assisted Rust development and have been produced with the substantial assistance of Claude's Fable and Opus 5 models. Issues will be answered by the author.
@@ -34,16 +34,15 @@ nothing beyond the SDK.
 
 The `bundled` feature compiles a vendored SQLite amalgamation and links it
 statically instead. It requires a C compiler, removes the system dependency,
-and is the only option on Windows, which has no system SQLite:
+and is the only option on Windows:
 
 ```toml
 geopackage = { version = "0.7", features = ["bundled"] }
 ```
 
-The `gpkg` command-line tool defaults the other way: `cargo install
-geopackage-cli` vendors SQLite, so it works on any host with a C compiler,
+The `gpkg` command-line tool vendors SQLite, so it works on any host with a C compiler,
 Windows included. Pass `--no-default-features` to link the system library
-instead (the form distribution packagers want).
+instead.
 
 ### Other Cargo features
 
@@ -103,7 +102,7 @@ for feature in layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))? {
 
 ### Tiles
 
-A GeoPackage can also hold pre-rendered raster tiles, addressed by zoom level,
+A GeoPackage can also contain pre-rendered raster tiles, addressed by zoom level,
 column and row. `GeoPackage::create_tile_pyramid` writes a pyramid,
 `GeoPackage::tiles` opens one, and the payloads are stored and returned as they
 are:
@@ -126,18 +125,18 @@ tiles.put_tile(TileCoord::new(12, 2048, 1362), &png_bytes)?;
 let tile = tiles.get_tile(TileCoord::new(12, 2048, 1362))?;
 ```
 
-**This crate decodes no images.** It stores, indexes and validates tiles, and
-depends on no image codec: what it reads of a payload is its header, which is
-how a tile of the wrong pixel size, or in a format the table may not hold, is
+**This crate does not decode images.** It stores, indexes and validates tiles;
+it reads of a payload is its header, which is
+how a tile of the wrong pixel size, or in a format the table may not contain, is
 rejected on write rather than stored. Turning tiles into pixels, or a source
-raster into a pyramid, needs an image library or GDAL on top of this one.
+raster into a pyramid, requires an image library or GDAL on top of this one.
 
 Writing a tile checks its address against the zoom level's grid and its header
-against the declared tile size; a WebP payload registers `gpkg_webp` as it
-lands. Rows count from the top of the extent downwards (the WMTS and XYZ sense,
+against the declared tile size; a WebP payload registers `gpkg_webp`. Rows count
+from the top of the extent downwards (the WMTS and XYZ sense,
 not TMS), and the indices are relative to the pyramid's own extent rather than
-a global grid, so the XYZ conversion refuses on a pyramid that is not the
-standard web mercator quad instead of quietly pointing somewhere else.
+a global grid, so the XYZ conversion will fail on a pyramid that is not the
+standard web mercator quad.
 
 ### Columnar read and write
 
@@ -152,23 +151,16 @@ schema.
 ### Extensions
 
 `gpkg_extensions` is where a file declares what it uses beyond the core spec.
-`GeoPackage::extensions` reads that catalogue, and every row says what this
-crate can do with it: read and write it, identify it and leave it alone,
-tolerate it as one of the two extensions OGC removed in 2016, or not recognise
-it at all.
+`GeoPackage::extensions` reads that catalogue, and each row lists capabilities.
 
-Writing to a table covered by an extension this crate cannot identify is
-refused, because such an extension may constrain the rows, triggers or
-encodings of the table it covers, and writing beside it could produce a file
-its own producer can no longer read. Reading is never refused for this reason,
-and `OpenOptions::allow_unsupported_extension_writes` overrides the refusal for
-a caller who knows the extension is harmless.
+Writing to a table covered by an extension this crate cannot identify will fail.
+Reading should always succeed, and `OpenOptions::allow_unsupported_extension_writes` overrides
+a failed read for a caller who knows the extension is harmless.
 
 Several extensions appear in the model rather than only as catalogue rows.
 `gpkg_crs_wkt` puts a WKT2 definition and a coordinate epoch on `Srs`, which is
-how a CRS with no WKT1 form is carried at all. `gpkg_metadata` stores documents
-and attaches them to the file, a table, a column, a row or a cell, leaving the
-payloads as written and interpreting no metadata profile. The Related Tables
+how a CRS with no WKT1 form can be stored. `gpkg_metadata` stores documents
+and attaches them to the file, a table, a column, a row or a cell. The Related Tables
 Extension (OGC 18-000) relates two tables through a mapping table, readable for
 any relation type and writable for the requirements classes the spec defines.
 The non-linear geometry types register themselves as `gpkg_geom_<TYPE>` when a
@@ -198,17 +190,15 @@ let checked = OpenOptions::new()
     .open("sites.gpkg")?;
 ```
 
-A column's description reaches `Column::data_column`, so reading a layer's
+A column's description includes `Column::data_column`, so reading a layer's
 schema shows it without a second lookup. Enforcement covers every write path,
-the columnar one included, and costs about 31% on a write with two constrained
-columns. The `glob` constraint form is evaluated by SQLite itself rather than
-reimplemented here: its pattern language has no definition beyond what SQLite
-does with it, and this crate bundles SQLite.
+the columnar one included. The `glob` constraint form is evaluated by SQLite itself:
+its pattern language has no definition beyond what SQLite does with it.
 
 ### Checking a file
 
 `GeoPackage::validate` makes one pass over a file and returns what is wrong
-with it: catalogue rows naming tables that are not there, spatial indexes that
+with it: e.g. catalogue rows naming tables that are not there, spatial indexes that
 no longer describe their rows, pre-1.4 index triggers, extensions this crate
 cannot identify, tile pyramids that break the matrix rules, and metadata or
 relation rows pointing at things that have gone. Each finding has a
@@ -217,11 +207,8 @@ exists. Nothing is modified.
 
 Severity is about consequence: an error means a reader can get a wrong answer,
 a warning means the file is out of step with the current spec but reads
-correctly, and an advisory is a remark rather than a defect. A file with no
+correctly, and an advisory is a remark rather than a defect. For example, a file with no
 spatial index reads correctly, so it is the third of those.
-
-This reports what this crate can see, not conformance in every respect the
-spec defines; the OGC executable test suite remains the authority.
 
 ### More examples
 
@@ -277,20 +264,16 @@ from a shell.
 | `gpkg tiles get <file> <pyramid> <zoom> <column> <row>` | Writes one tile's stored bytes to `--out` or to standard output. |
 
 Every command opens the file leniently, so one with something wrong with it is
-reported or repaired rather than refused: an inspection tool that will not open
-the files worth inspecting is not much use, and the files worth repairing are by
-definition ones something is wrong with.
+reported or repaired.
 
 `validate` exits non-zero when a finding is an error, the severity meaning a
 reader can get a wrong answer from the file. Warnings and advisories exit zero,
-and `--strict` promotes warnings to a failing exit as well; that is what makes
-the command usable in a script or a CI job.
+and `--strict` promotes warnings to a failing exit for use in scripts or CI.
 
 `copy` copies feature and attribute layers: their schemas, their spatial
 reference systems, their rows, and a spatial index wherever the source had one.
-Tiles and the extension tables are not copied, and whatever was left behind is
-named at the end, so a copy is not mistaken for the whole file. Geometry crosses
-as WKB rather than through `geo-types`, so the non-linear curve types survive a
+Tiles and the extension tables are **not** copied, and whatever was left behind is
+named at the end. Geometry is stored as WKB rather than through `geo-types`, so the non-linear curve types survive a
 copy byte for byte.
 
 `tiles get` writes the bytes the file contains and decodes nothing, whatever
@@ -358,7 +341,7 @@ The conventions:
 - **Strings are NUL-terminated UTF-8 in both directions.** One this library
   returns is owned by the caller and released with `gpkg_string_free`; one the
   caller passes in is borrowed for the duration of the call.
-- **Errors go through a `gpkg_error_t *` out-parameter**, carrying a code and a
+- **Errors go through a `gpkg_error_t *` out-parameter**, containing a code and a
   message, and released with `gpkg_error_clear`. Passing NULL means the caller
   does not want the detail. A function returning a pointer fails with NULL, and
   one returning a status with a value other than `GPKG_STATUS_OK`.
@@ -401,28 +384,19 @@ gpkg_layer_free(layer);   /* before the close, which would otherwise refuse */
 gpkg_close(gpkg, &error);
 ```
 
-Two rules a C caller has to know:
+### Important for C callers:
 
 **One handle per thread.** `GeoPackage` is `Send` but not `Sync`, because
 `rusqlite::Connection` is, so a handle may be created on one thread and used on
 another, but never used from two at once. Nothing here is internally locked: a
-caller wanting concurrent access opens the file once per thread, which is also
-what gives SQLite its own per-connection state.
+caller wanting concurrent access opens the file once per thread.
 
-**Closing a container is refused while any handle taken from it is alive.**
+**You cannot close a container while any handle taken from it is alive.**
 `gpkg_close` returns `GPKG_STATUS_HANDLE_IN_USE` and leaves the file open while
 a layer handle, a tile handle, a tile cursor, a writer or an Arrow stream from
 it is unfreed. Those handles hold a borrow of the container that C has no way
-to express, so the count is checked at runtime rather than left to the caller
-to keep track of; the Rust API gets the same guarantee from the borrow
-checker, since `close` takes `self`. The one exemption is `gpkg_findings_t`,
-which owns plain data, borrows nothing, and stays readable after a close.
-
-Transactions are the caller's when wanted: `gpkg_begin`, `gpkg_commit`,
-`gpkg_rollback` and `gpkg_in_transaction`, with every write path joining a
-transaction the caller has open rather than fighting it. A program that never
-calls `gpkg_begin` has each write durable when its call returns, with rows per
-transaction set through the `batch_size` argument the bulk write calls take.
+to express, so the count is checked at runtime. The one exemption is `gpkg_findings_t`,
+which owns plain data.
 
 `geopackage-ffi` is the only crate in the workspace containing `unsafe`. Every
 other crate sets `unsafe_code = "forbid"`.
@@ -456,14 +430,9 @@ other crate sets `unsafe_code = "forbid"`.
 
 ## Performance
 
-Measured over three public datasets on a rented, dedicated-CPU machine, so
-the environment is reproducible on demand: a Fly.io `performance-8x` Machine
-(8 dedicated AMD EPYC vCPUs, 16 GB), Ubuntu 24.04, release build with
+Measured on a machine with 8 dedicated AMD EPYC vCPUs, 16 GB, Ubuntu 24.04, release build with
 bundled SQLite, warm page cache, medians over repeated runs.
-[`scripts/bench_fly.sh`](https://github.com/urschrei/geopackage/blob/main/scripts/bench_fly.sh)
-provisions the machine and reproduces the table. Earlier revisions of this
-table were measured on an Apple M2 Pro, whose cores are 1.5x to 3x faster
-single-threaded; figures are comparable only within one machine type.
+See [`scripts/bench_fly.sh`](https://github.com/urschrei/geopackage/blob/main/scripts/bench_fly.sh) for details.
 
 | | `buildings` | `rivers` | `admin` |
 |---|---|---|---|
@@ -484,24 +453,14 @@ single-threaded; figures are comparable only within one machine type.
 | the same query with no index | 2.6 s | 3.5 s | 1.9 s |
 | features that query returned | 70,130 | 180,544 | 36,556 |
 
-Reading is bound by bytes, not rows: the columnar path runs at 0.6 to
+Reading is bound by bytes: the columnar path runs at 0.6 to
 0.9 GB/s across three layers whose rows differ by a factor of 37 in size. The
 index stores about 40 bytes per row whatever the geometry, and on this host
 its build time follows row count (the 11.5M `buildings` rows build in 17.6 s,
-the 356k `admin` multipolygons in 2.0 s); the envelope scan over the `admin`
-layer's large blobs, which dominated that build on other hardware, does not
-here. Building the index during the write rather than afterwards is 6% to
-17% cheaper than the two steps run separately, because the bulk path reuses
+the 356k `admin` multipolygons in 2.0 s). Building the index during the write rather than
+afterwards is 6% to 17% cheaper than the two steps run separately, because the bulk path reuses
 the envelopes it computed while encoding; that is why `create_layer` leaves
 an empty index in place for `write_all` to fill.
-
-Two caveats on the threaded columnar read. The `admin` read holds batches of
-several hundred MB, one per reader thread, so its figure follows host memory
-as much as the read path; `ArrowReadOptions::with_batch_size` and
-`with_max_batch_bytes` bound what is in flight. And the threaded figures
-assume the host is otherwise idle: under concurrent load the threaded read
-falls behind the single-threaded read (3.8 s, 7.0 s and 4.6 s here), which
-is the dependable floor.
 
 Method, the interleaved A/B protocol for regression questions, and the rest
 of the caveats are in
@@ -515,10 +474,8 @@ provides the machine to run them on.
 
 Tiles, over a full web mercator ladder to zoom 7 (21,845 tiles of 4 KiB,
 101 MB): about 90,000 tiles/s streamed in matrix order, 61,000 read by
-address, and 69,000 written through `write_all`. GDAL reads the same file at
-about 1,000 tiles/s, but that is a different operation and not a comparison:
-GDAL returns pixels, decoding each PNG, and this crate returns the stored
-bytes. Method in
+address, and 69,000 written through `write_all`. Note that this is not meaningfully comparable to GDAL
+as GDAL decodes the bytes to PNG. Method in
 [the tile write-up](https://github.com/urschrei/geopackage/blob/main/roadmap/benchmarks/2026-07-27-tiles.md).
 
 ## Conformance
@@ -560,7 +517,7 @@ contains, probing each payload against the size its zoom level declares.
   `Feature::geometry_bytes` hands back the WKB and `Feature::geometry` is the
   one call that fails.
 - **Tiles are bytes, not images.** A tile pyramid can be created, read, written
-  and validated, but no payload is ever decoded: there is no way to get pixels,
+  and validated, but no payload is decoded: there is currently no way to get pixels,
   reproject a pyramid, or build one from a source raster from here.
 - **Tiled gridded coverage** (elevation and other gridded data, which stores
   values rather than pictures in its tiles) is not implemented: a TIFF payload
