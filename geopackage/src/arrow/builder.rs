@@ -180,6 +180,7 @@ impl ColumnBuilder {
     }
 
     /// Finishes the array.
+    #[hotpath::measure(label = "arrow::ColumnBuilder::finish")]
     pub(crate) fn finish(mut self) -> ArrayRef {
         match &mut self {
             Self::Boolean(builder) => Arc::new(builder.finish()),

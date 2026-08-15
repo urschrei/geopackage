@@ -158,6 +158,7 @@ impl Drop for ParallelBatches {
     clippy::too_many_arguments,
     reason = "a worker's whole context, passed once at spawn; a struct would be used by this call site alone"
 )]
+#[hotpath::measure(label = "arrow::run_worker")]
 fn run_worker(
     path: &std::path::Path,
     table: &str,

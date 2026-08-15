@@ -80,6 +80,7 @@ impl SequentialBatches<'_> {
     /// offsets assigned to them rather than walking the layer in sequence.
     /// `limit` is what remains of the worker's window: the byte ceiling can
     /// cut a batch short, and the rest of that window still has to be read.
+    #[hotpath::measure(label = "arrow::read_batch_at")]
     pub(crate) fn read_batch_at(&mut self, key: i64, limit: usize) -> Result<Option<RecordBatch>> {
         self.next_key = key;
         self.exhausted = false;
@@ -99,6 +100,7 @@ impl SequentialBatches<'_> {
     }
 
     /// The aggregate path: one function call per row, inside SQLite's own loop.
+    #[hotpath::measure(label = "arrow::next_batch_aggregate")]
     fn next_batch_aggregate(&mut self) -> Result<Option<RecordBatch>> {
         let queried = self.conn.query_row(
             &self.aggregate_sql,
@@ -193,6 +195,7 @@ impl SequentialBatches<'_> {
 
     /// The direct path: step the rows and fetch each value. Kept as the
     /// fallback for a table too wide for the aggregate's argument list.
+    #[hotpath::measure(label = "arrow::next_batch_direct")]
     fn next_batch_direct(&mut self) -> Result<Option<RecordBatch>> {
         // Looped rather than recursive: under a selective filter many pages in
         // a row can come back with every candidate dropped, and one stack frame
@@ -209,6 +212,7 @@ impl SequentialBatches<'_> {
 
     /// One page of candidates: a batch, nothing left, or a page whose rows were
     /// all filtered out and which the caller should follow with another.
+    #[hotpath::measure(label = "arrow::next_batch_page")]
     fn next_batch_page(&mut self) -> Result<Page> {
         // Pre-size the arrays so a batch does not spend its time growing them.
         // Capped rather than taken from `batch_size` directly, so an enormous

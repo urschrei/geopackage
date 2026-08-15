@@ -116,6 +116,7 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
         })
     }
 
+    #[hotpath::measure(label = "arrow::BatchFiller::step")]
     fn step(&self, ctx: &mut Context<'_>, acc: &mut FilledBatch) -> rusqlite::Result<()> {
         // SQLite has already been asked for this row, so the cheapest correct
         // response once the ceiling is reached is to drop it and let the next

@@ -104,6 +104,7 @@ impl Layer<'_> {
     /// [`Error`] if the schema cannot be introspected or the query cannot be
     /// prepared, or if a worker connection cannot be opened. Per-batch failures
     /// surface through the iterator.
+    #[hotpath::measure(label = "Layer::read_arrow")]
     pub fn read_arrow(&self, options: ArrowReadOptions) -> Result<ArrowBatches<'_>> {
         let sequential = self.read_arrow_sequential(options)?;
         // A projected layer declines the parallel path: its workers rebuild
@@ -237,6 +238,7 @@ impl Layer<'_> {
 
     /// The single-threaded reader, optionally filtered to a bounding box and a
     /// caller-supplied `WHERE` clause.
+    #[hotpath::measure(label = "arrow::read_arrow_filtered")]
     fn read_arrow_filtered(
         &self,
         options: ArrowReadOptions,
