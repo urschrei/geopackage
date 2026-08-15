@@ -8,6 +8,38 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-15
+
+### Changed
+
+- The scalar read path stops allocating per row once its buffer capacities
+  settle: a dropped `Feature` returns its byte buffer and slot vector to a
+  small thread-local pool, and the next row read on that thread reuses
+  them. A scan that drops each feature before reading the next runs about
+  7% faster on attribute-heavy layers, and per-row allocator traffic
+  disappears entirely. `Feature` now implements `Drop`; its API is
+  otherwise unchanged.
+- The README benchmark tables are re-measured on a rented dedicated-CPU
+  machine (Fly.io `performance-8x`), so the published environment is
+  reproducible on demand. The absolute figures are larger than the
+  retired workstation numbers because the rented cores are slower;
+  an interleaved A/B confirmed the change of figures is the host, not a
+  regression. Method and raw numbers are in
+  `roadmap/benchmarks/2026-08-15-fly-baseline.md`.
+
+### Added
+
+- Opt-in profiling with [hotpath](https://hotpath.rs) behind new `hotpath`
+  and `hotpath-alloc` features on `geopackage` and `geopackage-core`,
+  instrumenting the GPB codec, the scalar read and write paths, and the
+  Arrow read and write paths. Both features are off by default; when off,
+  every macro expands to a noop and no third-party dependencies are
+  compiled. The `bulk_load` and `dataset_bench` examples print the timing
+  report on exit when built with `--features hotpath`.
+- `scripts/bench_fly.sh`: provision a dedicated-CPU Fly.io machine and a
+  persistent dataset volume, run the dataset benchmarks on it, and run
+  interleaved A/B comparisons for regression questions.
+
 ## [0.9.0] - 2026-08-10
 
 ### Changed
@@ -1123,7 +1155,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/urschrei/geopackage/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/urschrei/geopackage/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/urschrei/geopackage/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/urschrei/geopackage/compare/v0.7.0...v0.7.1
