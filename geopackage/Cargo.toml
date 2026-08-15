@@ -24,6 +24,7 @@ workspace = true
 [dependencies]
 epsg-utils.workspace = true
 geopackage-core.workspace = true
+hotpath.workspace = true
 geo-traits.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
@@ -49,6 +50,13 @@ arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:serde_json", "dep:sysinfo"]
 ## is checked at open time. Required on hosts with no system SQLite (Windows),
 ## and needs a C compiler.
 bundled = ["rusqlite/bundled"]
+## Activate the hotpath timing instrumentation in this crate and in
+## `geopackage-core`. Off by default: without it, every hotpath macro is a
+## noop.
+hotpath = ["hotpath/hotpath", "geopackage-core/hotpath"]
+## Track allocations per instrumented function as well as timings. Use
+## together with `hotpath`.
+hotpath-alloc = ["hotpath/hotpath-alloc"]
 
 [dev-dependencies]
 tempfile.workspace = true

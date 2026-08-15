@@ -64,6 +64,10 @@ arrow-schema = "59"
 # because it pulls a terminal-width dependency to reflow help text, which a
 # handful of subcommands do not need.
 clap = { version = "4", features = ["derive"] }
+# Opt-in profiling. Unless a member's `hotpath` feature is enabled, every
+# macro expands to a noop and the crate compiles no third-party dependencies,
+# so the default build carries no overhead.
+hotpath = "0.23"
 
 # Inherited by every member via `[lints] workspace = true`. The
 # `geopackage-ffi` crate is the sole exception: it does not inherit these
