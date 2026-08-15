@@ -9,8 +9,10 @@
 //! not outlive the SQLite cursor, so each [`Feature`] owns its geometry blob
 //! and its converted column values rather than borrowing the row. The values
 //! are stored in one buffer with a range recorded per value and read back as
-//! [`crate::ValueRef`]s, so a row costs two allocations regardless of its
-//! width. Neither the geometry nor the primary key is among those values: they
+//! [`crate::ValueRef`]s, so a row costs at most two allocations regardless of
+//! its width, and a dropped feature returns both to a small thread-local pool
+//! that later rows reuse.
+//! Neither the geometry nor the primary key is among those values: they
 //! are reached through [`Feature::geometry`] and [`Feature::fid`], and the
 //! write path takes exactly the same value set.
 //!
@@ -24,8 +26,8 @@
 //! iterator owning both would be self-referential, which this crate's
 //! `#![forbid(unsafe_code)]` rules out without a helper crate. Handing the
 //! statement to the caller keeps the borrow one-way, the shape rusqlite itself
-//! uses. Measured over 100k features, streaming reads in 18.8 ms against
-//! 29.5 ms materialised, with peak memory bounded by one row rather than by
+//! uses. Measured over 100k features, streaming reads in 13.5 ms against
+//! 17.8 ms materialised, with peak memory bounded by one row rather than by
 //! the result set. Both paths build the same [`Feature`]s through the same
 //! code, so the choice affects memory, not results.
 
@@ -131,7 +133,7 @@ impl std::fmt::Display for LayerKind {
 /// and [`Layer::cursor_select`] stream, reading one row at a time through a
 /// [`FeatureCursor`]. Both paths build the same [`Feature`]s through the same
 /// code, so the choice affects memory, not results: measured over 100k
-/// features, streaming reads in 18.8 ms against 29.5 ms materialised, with
+/// features, streaming reads in 13.5 ms against 17.8 ms materialised, with
 /// peak memory bounded by one row rather than by the result set.
 pub struct Layer<'a> {
     gpkg: &'a GeoPackage,
