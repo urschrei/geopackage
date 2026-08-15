@@ -27,6 +27,9 @@ fn coord(i: usize) -> (f64, f64) {
     )
 }
 
+// A noop unless the `hotpath` feature is enabled; then it prints a profiling
+// report when `main` returns.
+#[hotpath::main]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let rows: usize = args.next().and_then(|v| v.parse().ok()).unwrap_or(200_000);

@@ -144,6 +144,7 @@ impl<'conn> FeatureWriter<'conn> {
     /// - [`Error::ZmViolation`] if the geometry's `z`/`m` presence breaks the
     ///   column's constraint.
     /// - [`Error::ValueCountMismatch`] if `values` has the wrong length.
+    #[hotpath::measure(label = "FeatureWriter::insert")]
     pub fn insert<G: GeometryTrait<T = f64>>(
         &mut self,
         fid: Option<i64>,
@@ -178,6 +179,7 @@ impl<'conn> FeatureWriter<'conn> {
     /// As [`Self::insert`], plus [`Error::Core`] if the bytes are not a
     /// geometry that can be read: malformed, EWKB rather than ISO WKB, or one
     /// of the abstract supertypes, which have no encoding.
+    #[hotpath::measure(label = "FeatureWriter::insert_wkb")]
     pub fn insert_wkb(
         &mut self,
         fid: Option<i64>,
@@ -373,6 +375,7 @@ impl<'conn> FeatureWriter<'conn> {
     /// # Errors
     ///
     /// [`Error::ValueCountMismatch`] if `values` has the wrong length.
+    #[hotpath::measure(label = "FeatureWriter::insert_row")]
     pub fn insert_row(&mut self, fid: Option<i64>, values: &[CellRef<'_>]) -> Result<i64> {
         self.check_constraints(values)?;
         self.insert_row_binds(
@@ -647,6 +650,7 @@ impl<'conn> FeatureWriter<'conn> {
     /// It follows that dropping such a writer without calling this does not
     /// roll anything back, so an error part-way through a sequence of writes
     /// leaves what preceded it staged for the caller to discard.
+    #[hotpath::measure(label = "FeatureWriter::commit")]
     pub fn commit(self) -> Result<()> {
         self.flush()?.commit()?;
         Ok(())

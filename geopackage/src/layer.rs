@@ -492,6 +492,7 @@ impl<'a> Layer<'a> {
     /// The iterator is fallible per row: a value that does not fit its declared
     /// column type surfaces as an `Err` for that row without stopping the scan.
     /// Rows are read in the table's natural order.
+    #[hotpath::measure(label = "Layer::features")]
     pub fn features(&self) -> Result<Features> {
         let (sql, geom_idx) = self.base_select(self.reads_geometry())?;
         self.execute(&sql, Vec::new(), geom_idx, None)
@@ -519,6 +520,7 @@ impl<'a> Layer<'a> {
     /// # Errors
     ///
     /// [`Error::NoGeometryColumn`] if the layer has no geometry column.
+    #[hotpath::measure(label = "Layer::features_in")]
     pub fn features_in(&self, bbox: BoundingBox) -> Result<Features> {
         let (sql, geom_idx, uses_rtree) = self.features_in_plan()?;
         let params = if uses_rtree {
@@ -965,6 +967,7 @@ struct RowContext {
 impl RowContext {
     /// Builds one owned [`Feature`]. The single implementation shared by the
     /// materialising read methods and the streaming cursor.
+    #[hotpath::measure(label = "RowContext::feature_from_row")]
     fn feature_from_row(
         &self,
         row: &rusqlite::Row<'_>,
@@ -1072,6 +1075,7 @@ impl RowContext {
 /// Returns `true` if the row's true `f64` geometry envelope intersects
 /// `bbox`, read straight from the raw blob. A NULL geometry cell, or an empty geometry (no
 /// finite coordinate), never matches.
+#[hotpath::measure(label = "layer::row_in_box")]
 pub(crate) fn row_in_box(
     row: &rusqlite::Row<'_>,
     geom_idx: Option<usize>,

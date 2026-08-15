@@ -598,6 +598,7 @@ fn gate(
     clippy::too_many_arguments,
     reason = "internal build entry point threading the whole build context; a parameter struct would be used by these two call sites alone"
 )]
+#[hotpath::measure(label = "bulk::fill_index")]
 pub(crate) fn fill_index<F>(
     conn: &Connection,
     table: &str,
@@ -642,6 +643,7 @@ where
     clippy::too_many_arguments,
     reason = "internal build entry point threading the whole build context; a parameter struct would be used by these two call sites alone"
 )]
+#[hotpath::measure(label = "bulk::fill_index_in_transaction")]
 pub(crate) fn fill_index_in_transaction<F>(
     conn: &Connection,
     table: &str,

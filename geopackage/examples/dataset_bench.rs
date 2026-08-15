@@ -273,6 +273,9 @@ fn noop(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// A noop unless the `hotpath` feature is enabled; then it prints a profiling
+// report when `main` returns.
+#[hotpath::main]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let usage = "usage: dataset_bench <info|scan|arrow|index|bbox|write|noop> <file> <layer> [...]";

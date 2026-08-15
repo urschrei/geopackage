@@ -343,6 +343,7 @@ impl GeoPackage {
     /// # Errors
     ///
     /// [`crate::Error`] if the file cannot be read far enough to check it.
+    #[hotpath::measure(label = "GeoPackage::validate")]
     pub fn validate(&self) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
         self.validate_container(&mut findings)?;
