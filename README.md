@@ -114,8 +114,10 @@ Details are in the [changelog](CHANGELOG.md) and
 [`roadmap/08-testing-conformance.md`](roadmap/08-testing-conformance.md).
 
 Benchmarks on three multi-gigabyte datasets, with method and caveats, are in
-[`roadmap/benchmarks`](roadmap/benchmarks); the scripts that produce them are
-in [`scripts`](scripts).
+[the current baseline write-up](roadmap/benchmarks/2026-08-15-fly-baseline.md).
+[`scripts/bench_datasets.sh`](scripts/bench_datasets.sh) runs the measurements
+and [`scripts/bench_fly.sh`](scripts/bench_fly.sh) provides the machine to run
+them on. Earlier write-ups in that directory predate the current method.
 
 ## License
 
