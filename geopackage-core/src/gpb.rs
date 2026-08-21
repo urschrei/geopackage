@@ -248,16 +248,11 @@ fn read_doubles<const N: usize>(
         });
     };
     let mut vals = [0f64; N];
-    for (slot, bytes) in vals.iter_mut().zip(region.chunks_exact(8)) {
-        // `chunks_exact(8)` only yields 8-byte slices, so this destructure
-        // always binds; the `else` is an unreachable, panic-free fallback.
-        let &[b0, b1, b2, b3, b4, b5, b6, b7] = bytes else {
-            continue;
-        };
-        let word = [b0, b1, b2, b3, b4, b5, b6, b7];
+    let (words, _) = region.as_chunks::<8>();
+    for (slot, word) in vals.iter_mut().zip(words) {
         *slot = match byte_order {
-            ByteOrder::Big => f64::from_be_bytes(word),
-            ByteOrder::Little => f64::from_le_bytes(word),
+            ByteOrder::Big => f64::from_be_bytes(*word),
+            ByteOrder::Little => f64::from_le_bytes(*word),
         };
     }
     Ok(vals)
