@@ -97,6 +97,110 @@ Same logic applies to `geo` (algorithms): nothing in the container
 layer needs planar predicates; anything that does (future `ST_*` extensions
 beyond the required five) should be feature-gated.
 
+## TIFF and GeoTIFF: assessed 2026-09-12, no dependency adopted
+
+The tiled gridded coverage extension is the one place a TIFF can legally
+appear in a GeoPackage, so "should we support GeoTIFF?" is three
+questions, and the first finding is that only the third is about GeoTIFF at
+all.
+
+**The coverage payload is not a GeoTIFF.** Georeferencing comes from
+`gpkg_tile_matrix_set`, and the extension does not use GeoKeys,
+`ModelPixelScale` or `ModelTiepoint`. The
+[migrated spec source](https://github.com/opengeospatial/geopackage/tree/master/spec/2d-gridded-coverage)
+specifies a small profile of baseline TIFF:
+
+| Requirement | Constraint |
+|---|---|
+| 15 | Conforms to the TIFF specification (baseline) |
+| 16 | `SamplesPerPixel` = 1: "one sample per grid cell" |
+| 17 | 32-bit float, **or** `SampleFormat` 1 (unsigned) or 2 (signed) with `BitsPerSample` 8, 16 or 32 |
+| 18 | LZW compression *MAY* be used; clients "are expected to support" it |
+| 19 | One image per file: "Multiple image files are not allowed" |
+| 20 | *SHALL NOT* contain internal tiles (TIFF section 15) |
+| 21 | Every pixel valid; `data_null` marks missing; "NaN and Inf SHALL NOT be used" |
+
+with Requirement 13 sending `datatype` = *integer* to `image/png` (16-bit
+greyscale) or `image/tiff`, and Requirement 14 sending *float* to
+`image/tiff`. GDAL writes into the middle of that profile:
+`gdalgeopackagerasterband.cpp` creates float tiles through the GTiff driver
+with `COMPRESS=LZW` and a single strip for tiles up to 512x512, and its
+float-tile *read* driver list is literally `{"GTiff"}`.
+
+### Upstream status, which M5 asked us to re-assess
+
+Answered, and the answer has changed since M4. The revision is finished:
+`opengeospatial/geopackage-tiled-gridded-coverage` was archived on 2026-08-04
+with its text migrated into
+`opengeospatial/geopackage/spec/2d-gridded-coverage`, and **17-066r2**
+(version 1.1) is published. r2 is *wider* than the r1 this workspace's
+extension catalogue cites: it admits integer TIFF alongside float32, which is
+the change [issue #680](https://github.com/opengeospatial/geopackage/issues/680)
+asked for. So "the extension is under revision" is no longer a reason to keep
+it out; the only remaining reason is that nobody has implemented it here.
+
+### The crates, measured
+
+Downloads and dates from crates.io on 2026-09-12.
+
+| Crate | Latest | Updated | Recent dl | Owner | Read | Write | Notes |
+|---|---|---|---|---|---|---|---|
+| [`tiff`](https://github.com/image-rs/image-tiff) | 0.11.3 | 2026-02-10 | 31.3M | image-rs | yes | yes | The only load-bearing crate in the space. Pure Rust, MSRV 1.85, two `unsafe` blocks (slice casts in `bytecast.rs`) |
+| [`geotiff`](https://github.com/georust/geotiff) | 0.1.0 | 2025-06-10 | 7.1k | georust | yes | no | "read GeoTIFFs, nothing else"; still on `tiff` 0.9, warns of breaking changes post-0.1 |
+| [`async-tiff`](https://github.com/developmentseed/async-tiff) | 0.3.0 | 2026-04-01 | 10.7k | kylebarron | yes (async) | no | COG over `object_store`; default features pull `reqwest` and `object_store`; optional `jpeg2k`/`lerc`/`webp` bind C |
+| [`georaster`](https://github.com/pka/georaster) | 0.2.0 | 2025-01-11 | 1.3k | pka | yes | no | Dormant about 20 months |
+| `geotiff-reader`, `geotiff-writer`, `tiff-writer` ([roteiro-gis](https://github.com/roteiro-gis/geotiff-rust)) | 0.8.1 | 2026-08-13 | 5-9k | i-norden | yes | yes | Claims BigTIFF, COG, overviews, LERC/ZSTD, float predictor, GDAL-parity tests. First release 2026-03, 13 stars. Unaudited |
+| [`oxigdal-geotiff`](https://github.com/cool-japan/oxigdal) | 0.1.7 | 2026-07-20 | 988 | cool-japan | yes | yes | "Pure Rust GDAL reimplementation". Very new, very low usage; unproven |
+| [`wbgeotiff`](https://github.com/jblindsay/whitebox_next_gen) | 0.1.2 | 2026-05-07 | 175 | jblindsay | yes | yes | Internal engine for Whitebox's rewrite, not pitched as a general dependency |
+| [`gdal`](https://github.com/georust/gdal) | 0.19.0 | 2025-12-23 | 419k | georust | yes | yes | C dependency, against D1's posture |
+
+The state of the ecosystem in one line: **one mature TIFF codec, and no mature
+pure-Rust GeoTIFF writer.** The georust crate is read-only by charter and a
+`tiff` major behind; the three write-capable newcomers all appeared within six
+months and have no adoption to speak of. Reading GeoTIFF *metadata* is the
+small gap it looks like, because `tiff` already contains the tag constants
+(`ModelPixelScaleTag` 33550, `ModelTiepointTag` 33922, `GeoKeyDirectoryTag`
+34735 and its two companions) and `write_tag` emits arbitrary tags.
+
+### What `tiff` 0.11.3 would give us, read from its source rather than its docs
+
+- Encoder colour types include `Gray8`, `GrayI8`, `Gray16`, `GrayI16`,
+  `Gray32`, `GrayI32` and `Gray32Float`: exactly Requirement 17's matrix.
+- Encoder compressions: uncompressed, LZW, Deflate, PackBits. LZW is
+  Requirement 18.
+- The encoder is **strip-only**; there is no `TileWidth`/`TileLength` write
+  path. Requirement 20 forbids internal tiles, so the missing feature is the
+  required behaviour.
+- Encoder predictors: `Horizontal` only, and the encoder rejects it for `IEEEFP`;
+  `FloatingPoint` returns `UsageError::PredictorUnavailable`. Irrelevant on
+  write, and the *decoder* handles both, so a GDAL-written tile reads either
+  way.
+- The decoder reads strip and tile chunks alike, so files in the wild read.
+- Trimmable to `default-features = false, features = ["lzw"]`, which drops
+  `flate2`, `fax` and `zune-jpeg`. MSRV 1.85 is under this workspace's 1.95,
+  so it applies no MSRV pressure.
+
+### Decision
+
+1. **Coverage payload validation: no dependency.** Requirements 16 to 20 are
+   answered by walking the first IFD, which is a header read of the kind
+   `probe` already does and about 200 lines with no new crate. This keeps M4's
+   "bytes in, bytes out, no decode in core" line intact, and is what a
+   conformance check can assert. Planned as phase 1 of a coverage
+   milestone.
+2. **Pixel access: `tiff`, if and when the API needs to hand back values.**
+   Off by default, and in `geopackage` or a `geopackage-coverage` crate rather
+   than `-core`, whose stated line is header inspection and never a decode.
+   Not scheduled.
+3. **GeoTIFF ingest and export** (`gpkg tiles import dem.tif`) is a resampling
+   and reprojection question, not a codec question, and reprojection is D3's
+   line. If it is ever wanted, the CLI shelling out to `gdal_translate -of
+   GPKG` costs no library surface and matches how `gdal_interop.rs` already
+   works. `oxigdal-geotiff` and the roteiro-gis crates are not adoptable on
+   current evidence; revisit if either grows users and an audit.
+4. **`gdal` in the library: no**, for D1's reasons and because it would make
+   this crate's purpose circular.
+
 ## Code adaptation policy (geozero, gpkg-rs, GDAL, …)
 
 Licences: geozero, wkb, gpkg-rs are MIT OR Apache-2.0; GDAL is MIT. So
