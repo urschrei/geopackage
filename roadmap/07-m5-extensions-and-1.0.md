@@ -1112,9 +1112,20 @@ a moving one.
 
 ## Explicit non-goals
 
-- **Tiled gridded coverage.** Re-assess upstream status once during this
-  milestone and record the answer. If it is still under revision, it stays out
-  and the TIFF rejection M4 added stands.
+- **Tiled gridded coverage.** Re-assessed on 2026-09-12, and the answer is
+  recorded in [02-ecosystem.md](02-ecosystem.md#tiff-and-geotiff-assessed-2026-09-12-no-dependency-adopted):
+  the revision is **finished**. `opengeospatial/geopackage-tiled-gridded-coverage`
+  was archived on 2026-08-04 and its text now lives in
+  `opengeospatial/geopackage/spec/2d-gridded-coverage`; 17-066r2 (version 1.1)
+  is published, and it widens the TIFF encoding to integer samples
+  (`SampleFormat` 1 or 2, `BitsPerSample` 8, 16 or 32) beside float32. So the
+  condition this non-goal was written against no longer holds, and "it is
+  under revision" is no longer the reason it stays out of M5: the reason is
+  that the extension is a milestone of its own (two ancillary tables, a
+  payload profile to validate, its own ETS classes) and M5 is full. The TIFF
+  rejection M4 added stands until that milestone lands, and the extension
+  catalogue's `GriddedCoverage` doc comment should cite r2 rather than r1 when
+  it does.
 - **Curve envelopes** (#5). No longer a non-goal: phase 6 was revised on
   2026-07-27 and arc extrema are computed exactly, so curve geometries index
   like any other. What stays out is reading a curve back as a geometry object,
