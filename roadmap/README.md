@@ -19,6 +19,7 @@ Data Interface as the bulk data plane.
 | [07-m5-extensions-and-1.0.md](07-m5-extensions-and-1.0.md) | M5: extensions, then the CLI and C ABI M3 left unbuilt, then the API freeze |
 | [08-testing-conformance.md](08-testing-conformance.md) | Cross-cutting: conformance harness, fuzzing, benchmarks, corpus |
 | [09-c-api-sense-check.md](09-c-api-sense-check.md) | The C surface compared against GDAL's C API and QGIS's provider needs, with findings and the decision |
+| [10-coverage.md](10-coverage.md) | M6: tiled gridded coverage, starting with the payload profile a header read can check |
 
 ## Status snapshot (2026-08-02)
 
