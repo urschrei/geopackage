@@ -1122,7 +1122,8 @@ a moving one.
   condition this non-goal was written against no longer holds, and "it is
   under revision" is no longer the reason it stays out of M5: the reason is
   that the extension is a milestone of its own (two ancillary tables, a
-  payload profile to validate, its own ETS classes) and M5 is full. The TIFF
+  payload profile to validate, its own ETS classes) and M5 is full. Planned as
+  M6 in [10-coverage.md](10-coverage.md). The TIFF
   rejection M4 added stands until that milestone lands, and the extension
   catalogue's `GriddedCoverage` doc comment should cite r2 rather than r1 when
   it does.
