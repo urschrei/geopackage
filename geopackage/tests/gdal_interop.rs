@@ -18,6 +18,9 @@
 //! - [`gdal_roundtrip_wkb_and_values`] writes a file, copies it with `ogr2ogr`,
 //!   reads the copy back with this crate, and byte-compares the geometry WKB
 //!   bodies and every attribute value (criterion 2).
+//! - [`gdal_reads_a_coverage_we_wrote`] writes a tiled gridded coverage with a
+//!   payload that GDAL encoded, and GDAL then reads the samples from it. This
+//!   workspace does not decode pixels, so it cannot do this check itself.
 
 #![expect(
     clippy::unwrap_used,
@@ -31,13 +34,15 @@ use std::process::Command;
 
 use geo_types::{Geometry, LineString, Point, Polygon};
 use geopackage::core::TileFormat;
+use geopackage::core::coverage::CoverageDatatype;
 use geopackage::core::datetime::{Date, DateTime};
 use geopackage::core::gpb::{Envelope, encode_header, parse_header};
+use geopackage::core::tiles::TileMatrix;
 use geopackage::core::tiles::{TileCoord, TileMatrixSet, ZoomLadder};
 use geopackage::core::types::{ColumnType, GeometryType, ZmFlag};
 use geopackage::{
-    ColumnSpec, Feature, GeoPackage, GeometrySpec, TableSchemaBuilder, TilePyramidBuilder, Value,
-    ValueRef,
+    ColumnSpec, CoverageBuilder, Feature, GeoPackage, GeometrySpec, TableSchemaBuilder,
+    TilePyramidBuilder, Value, ValueRef,
 };
 
 // --- external-tool guards ---------------------------------------------------
@@ -803,4 +808,98 @@ fn column_constraints_round_trip_as_gdal_field_domains() {
         .find(|d| d.column_name == "year")
         .expect("the year column is still described");
     assert_eq!(years.constraint_name.as_deref(), Some("years"));
+}
+
+/// The float32 tile of the committed coverage fixture: a payload that GDAL
+/// encoded, not a header only, as in the unit tests.
+fn fixture_coverage_tile() -> Vec<u8> {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gdal_coverage.gpkg");
+    let gpkg = GeoPackage::open_read_only(fixture).unwrap();
+    gpkg.coverage("coverage")
+        .unwrap()
+        .get_tile(TileCoord::new(0, 0, 0))
+        .unwrap()
+        .expect("the fixture contains one tile")
+}
+
+#[test]
+#[ignore = "requires GDAL (gdalinfo, gdallocationinfo); reads a coverage we wrote"]
+fn gdal_reads_a_coverage_we_wrote() {
+    if !tool_available("gdalinfo") || !tool_available("gdallocationinfo") {
+        eprintln!("skipping: gdalinfo or gdallocationinfo not found");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ours.gpkg");
+    let tile = fixture_coverage_tile();
+    {
+        let gpkg = GeoPackage::create(&path).unwrap();
+        gpkg.add_epsg_srs(3857).unwrap();
+        // The tile of the fixture is 64 pixels square, so the grid is one tile
+        // of 64 pixels over a 64-unit extent: one pixel is one ground unit.
+        let matrix_set = TileMatrixSet::new(3857, 0.0, 0.0, 64.0, 64.0);
+        let coverage = gpkg
+            .create_coverage(
+                &CoverageBuilder::new("elevation", matrix_set, CoverageDatatype::Float)
+                    .matrix(TileMatrix::new(0, 1, 1, 64, 64, 1.0, 1.0))
+                    .data_null(-9999.0)
+                    .uom("m"),
+            )
+            .unwrap();
+        coverage.put_tile(TileCoord::new(0, 0, 0), &tile).unwrap();
+        gpkg.close().unwrap();
+    }
+
+    let out = Command::new("gdalinfo")
+        .arg("-json")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "gdalinfo failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let info: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(info["driverShortName"], "GPKG");
+    assert_eq!(info["size"], serde_json::json!([64, 64]));
+    let band = &info["bands"][0];
+    // Another implementation reads what the coverage states about its
+    // samples: the type from the payload, and the null from the ancillary row
+    // that this crate wrote.
+    assert_eq!(band["type"], "Float32");
+    assert_eq!(band["noDataValue"], serde_json::json!(-9999.0));
+
+    // The samples, which this crate did not decode on either side of the
+    // write.
+    for (x, y) in [(0, 0), (10, 3), (63, 63)] {
+        let ours = gdal_pixel(&path, x, y);
+        let theirs = gdal_pixel(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gdal_coverage.gpkg"),
+            x,
+            y,
+        );
+        assert_eq!(
+            ours, theirs,
+            "pixel ({x}, {y}) differs after the round trip"
+        );
+    }
+    eprintln!("gdalinfo read our coverage: 64x64 Float32, null -9999, pixels identical");
+}
+
+/// One pixel of a raster, as GDAL reads it.
+fn gdal_pixel(path: &Path, x: u32, y: u32) -> String {
+    let out = Command::new("gdallocationinfo")
+        .arg("-valonly")
+        .arg(path)
+        .arg(x.to_string())
+        .arg(y.to_string())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "gdallocationinfo failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
