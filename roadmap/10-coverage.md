@@ -77,6 +77,39 @@ also uses. The checker returns its own type instead. That type and the
 sample-type enum are `#[non_exhaustive]` from the start, because r2 already
 widened this profile once.
 
+### C6. A coverage is its own thing, not a kind of tile pyramid
+
+Settled 2026-09-20, after phase 1 raised the question. A coverage declares
+`gpkg_contents.data_type` as `2d-gridded-coverage` (Requirement 5), not
+`tiles`, and the spec gives it a separate data type for a reason: its tiles
+contain measurements, not images, each tile needs a
+`gpkg_2d_gridded_tile_ancillary` row (Requirement 10), and a reader needs
+values with a scale, an offset and a null, not bytes for a decoder. So a
+coverage gets its own handle, not a flag on `TilePyramid`.
+
+What follows from it:
+
+- `GeoPackage::coverage(name)` and `GeoPackage::coverages()`, returning a
+  `Coverage` handle that contains the ancillary metadata (`datatype`,
+  `data_null`, `scale`, `offset`, `precision`, `grid_cell_encoding`, `uom`).
+  Internals shared with `TilePyramid` (`TileSql`, the cursor, the matrix
+  model) are extracted rather than duplicated.
+- **`tiles()` and `tile_pyramids()` do not change.** They stay about tile
+  pyramids, still reject a coverage with `WrongDataType`, and still reject a
+  TIFF payload on write. A caller who needs both makes two calls. That is the
+  cost of this decision, and in exchange no coverage reaches a writer that does
+  not know about its ancillary rows.
+- `ContentsDataType` gains a `Coverage` variant. It is `#[non_exhaustive]`,
+  so that is additive rather than breaking, but it *does* change the answer
+  existing code gets: anything matching `Other("2d-gridded-coverage")` stops
+  matching, including the coverage sweep phase 1 added to
+  `corpus_external.rs`. That call site is the one to fix with the variant.
+- The CLI gets `gpkg coverage info` rather than a widened `gpkg tiles info`,
+  and `gpkg info`'s contents listing (which filters to
+  `ContentsDataType::Tiles`) grows a coverage line.
+- No C ABI consequence: `geopackage-ffi` does not expose `ContentsDataType`
+  today, so a C surface for coverages is a later decision of its own.
+
 ## Phase 1: the profile checker
 
 New module `geopackage-core/src/coverage.rs`. Not inside `tiles.rs`: phase 2
@@ -193,8 +226,9 @@ A coverage declares `gpkg_contents.data_type` as `2d-gridded-coverage`, not
 `tiles`, so `GeoPackage::tiles` rejects it with `WrongDataType` and
 `tile_pyramids` does not list it. Its payloads are reachable only through the
 SQL escape hatch, which both the fixture test and the corpus sweep use. The
-first question of phase 2 is larger than the payload profile: should a
-coverage be a `TilePyramid` with a flag, or a type of its own?
+first question of phase 2 was larger than the payload profile: should a
+coverage be a `TilePyramid` with a flag, or a type of its own? C6 above settles
+it: a type of its own.
 
 ## Phase 2: the extension proper (not scheduled)
 
