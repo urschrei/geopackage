@@ -368,17 +368,38 @@ ended up, written against `Coverage` rather than against raw SQL.
 
 ### Phase 2d: interop and conformance
 
+**What the abstract tests found.** Requirement 3 specifies that a coverage
+file contains the EPSG:4979 row (WGS 84 3D, the geographic 3D CRS that vertical
+values refer to), whether or not the coverage uses it. TEST003 tests that
+requirement. `create_coverage` did not write the row, so a file from this crate
+failed the test on its first run; the GDAL fixture passed, because GDAL writes
+the row. Fixed: the creation of a coverage now adds EPSG:4979 if the file does
+not have it. A geographic 3D CRS has no WKT1 form, so this also adds the
+`gpkg_crs_wkt` extension column. GDAL does the same, and the files agree.
+
+This answers the question of whether the suite was worth the work: the crate
+did not meet one requirement in twelve, and nothing reported it. Neither
+`validate()` nor the GDAL round trip would have found it, because GDAL reads a
+file without that row.
+
 - [x] GDAL round trip in `gdal_interop.rs`: a coverage this crate wrote, read
       back by `gdalinfo` with its elevations intact. *(A payload GDAL encoded,
       in a container this crate wrote, read back by GDAL: Float32, the
       `data_null` from our ancillary row, and `gdallocationinfo` returning
       the values of the source file, pixel for pixel. This workspace cannot do
       that check itself, because it does not decode pixels.)*
-- [ ] The twelve abstract tests of
+- [x] The twelve abstract tests of
       [annex-a](https://github.com/opengeospatial/geopackage/blob/master/spec/2d-gridded-coverage/annex-a.adoc)
       implemented by hand. There is no ETS for this extension: `ets-gpkg12`
       validates the 1.2 core and tiles, and skips the rest. The abstract test
       suite is the nearest equivalent.
+      *(`geopackage/tests/coverage_abstract_tests.rs`: each test follows the
+      method the standard states, as SQL against the file rather than through
+      this crate's API, and each test runs over two subjects: the GDAL
+      fixture as a control, and a coverage this crate wrote. TEST005's manual
+      step is run as far as a test can take it and the remainder is stated in
+      the test. **TEST003 failed on first run**, and a finding of that kind is
+      the purpose of the suite: see above.)*
 - [x] `Extension::GriddedCoverage` cites r2 rather than r1. *(Landed with 2b,
       beside the support-level change it sits next to.)*
 
