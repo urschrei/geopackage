@@ -17,6 +17,8 @@
 //! - [`ddl`]: normative `CREATE TABLE` SQL and required `gpkg_spatial_ref_sys` seed rows
 //! - [`srs`]: vendored EPSG WKT1 subset for `gpkg_spatial_ref_sys` seeding
 //! - [`tiles`]: tile pyramid user table SQL and the tile matrix model
+//! - [`coverage`]: the payload profile of the tiled gridded coverage
+//!   extension, checked from the header without a decode of the samples
 //! - [`triggers`]: RTree spatial index virtual table and trigger SQL (version-aware)
 //! - [`version`]: `application_id` / `user_version` handling
 //! - [`ident`]: SQL identifier quoting
@@ -76,6 +78,7 @@
 
 mod error;
 
+pub mod coverage;
 pub mod curve;
 pub mod datetime;
 pub mod ddl;

@@ -4,7 +4,9 @@
 //! whatever larger, third-party GeoPackages happen to be present under `corpus/`
 //! (git-ignored; populate it with `scripts/fetch_corpus.sh`). For each file it
 //! opens leniently, enumerates every `features`/`attributes` layer, iterates all
-//! features, walks every tile of every pyramid probing its payload, and tallies
+//! features, walks every tile of every pyramid probing its payload, checks the
+//! payloads of every tiled gridded coverage against the coverage TIFF profile,
+//! and tallies
 //! read errors -- a broad "does our reader survive real files written by other
 //! tools, at other spec versions" check rather than a value-for-value
 //! comparison. It is `#[ignore]`d and the downloads are never committed, so the
@@ -21,7 +23,12 @@
 
 use std::path::PathBuf;
 
+use geopackage::core::coverage::coverage_tiff;
+use geopackage::core::ident::quote;
 use geopackage::{ContentsDataType, ConversionOptions, Extension, GeoPackage};
+
+/// The `gpkg_contents.data_type` a tiled gridded coverage declares.
+const COVERAGE_DATA_TYPE: &str = "2d-gridded-coverage";
 
 fn corpus_dir() -> PathBuf {
     match std::env::var_os("GEOPACKAGE_CORPUS_DIR") {
@@ -56,6 +63,11 @@ struct Tally {
     pyramids: usize,
     tiles: usize,
     tile_errors: usize,
+    coverages: usize,
+    coverage_tiles: usize,
+    /// Coverage payloads that the TIFF profile rejects, or that could not be
+    /// read.
+    coverage_errors: usize,
     /// `validate()` findings, as `(variant name, count)` sorted by name.
     ///
     /// Counted rather than listed: a sixteen-layer file with no indexes
@@ -113,6 +125,10 @@ fn sweep(path: &std::path::Path) -> Tally {
     for entry in contents {
         if entry.data_type == ContentsDataType::Tiles {
             sweep_pyramid(&gpkg, &entry.table_name, &mut tally);
+            continue;
+        }
+        if entry.data_type == ContentsDataType::Other(COVERAGE_DATA_TYPE.to_owned()) {
+            sweep_coverage(&gpkg, &entry.table_name, &mut tally);
             continue;
         }
         let layer = match entry.data_type {
@@ -199,6 +215,47 @@ fn sweep_pyramid(gpkg: &GeoPackage, table_name: &str, tally: &mut Tally) {
     }
 }
 
+/// Walk one tiled gridded coverage: every tile, against the coverage TIFF
+/// profile (OGC 17-066r2 Requirements 15 to 20).
+///
+/// Not through `TilePyramid`: a coverage declares `gpkg_contents.data_type` as
+/// `2d-gridded-coverage` rather than `tiles`, and this crate does not open one
+/// as a pyramid, so the payloads come through the SQL escape hatch. What is
+/// asked of them is the header check alone, which is all this crate implements
+/// of the extension.
+fn sweep_coverage(gpkg: &GeoPackage, table_name: &str, tally: &mut Tally) {
+    tally.coverages += 1;
+    let Ok(quoted) = quote(table_name) else {
+        tally.coverage_errors += 1;
+        return;
+    };
+    let mut stmt = match gpkg
+        .connection()
+        .prepare(&format!("SELECT tile_data FROM {quoted}"))
+    {
+        Ok(stmt) => stmt,
+        Err(_) => {
+            tally.coverage_errors += 1;
+            return;
+        }
+    };
+    let Ok(rows) = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)) else {
+        tally.coverage_errors += 1;
+        return;
+    };
+    for row in rows {
+        tally.coverage_tiles += 1;
+        match row {
+            Ok(payload) => {
+                if coverage_tiff(&payload).is_err() {
+                    tally.coverage_errors += 1;
+                }
+            }
+            Err(_) => tally.coverage_errors += 1,
+        }
+    }
+}
+
 #[test]
 #[ignore = "needs scripts/fetch_corpus.sh to populate corpus/ with external files"]
 fn sweep_external_corpus() {
@@ -221,7 +278,8 @@ fn sweep_external_corpus() {
         let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
         println!(
             "{:40} layers={:<3} features={:<7} row_errors={:<4} geometry_errors={:<4} \
-             pyramids={:<3} tiles={:<6} tile_errors={:<4} unclassified_extensions={} \
+             pyramids={:<3} tiles={:<6} tile_errors={:<4} coverages={:<3} \
+             coverage_tiles={:<6} coverage_errors={:<4} unclassified_extensions={} \
              findings={:?}",
             file_name,
             t.layers,
@@ -231,6 +289,9 @@ fn sweep_external_corpus() {
             t.pyramids,
             t.tiles,
             t.tile_errors,
+            t.coverages,
+            t.coverage_tiles,
+            t.coverage_errors,
             t.unclassified.len(),
             t.findings,
         );

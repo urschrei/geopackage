@@ -688,6 +688,69 @@ def build_gdal_tiles(tmp: Path) -> Path:
     return out
 
 
+def build_gdal_coverage(tmp: Path) -> Path:
+    """A GDAL-written tiled gridded coverage: one float32 TIFF tile.
+
+    The interop reference for the coverage payload profile
+    (``geopackage-core::coverage``). GDAL writes Float32 samples, LZW
+    compression, and strips, not internal tiles, which is what Requirements
+    17, 18 and 20 specify. Asserted in ``geopackage/tests/tiles.rs``; as with
+    the other raster fixture, there is no ``ogrinfo`` snapshot for it.
+
+    64 pixels square, not 256, so that the tile is a few kilobytes: the
+    profile is a statement about the header, and one tile tests it as well as
+    a pyramid.
+    """
+    out = FIXTURES / "gdal_coverage.gpkg"
+    out.unlink(missing_ok=True)
+
+    # An ASCII grid written by hand, so that GDAL is the only tool needed.
+    # The values are fractional, so the source is float, not integer, and the
+    # pattern compresses but is not uniform.
+    side = 64
+    source = tmp / "dem.asc"
+    header = [
+        f"ncols {side}",
+        f"nrows {side}",
+        "xllcorner 0.0",
+        "yllcorner 0.0",
+        "cellsize 100.0",
+        "NODATA_value -9999",
+    ]
+    rows = [
+        " ".join(f"{(x * 3 + y * 5) % 97 + 0.5:.1f}" for x in range(side))
+        for y in range(side)
+    ]
+    write(source, "\n".join(header + rows) + "\n")
+
+    run(
+        [
+            "gdal_translate",
+            "-q",
+            "-ot",
+            "Float32",
+            "-of",
+            "GPKG",
+            "-a_srs",
+            "EPSG:3857",
+            "-co",
+            "TILE_FORMAT=TIFF",
+            "-co",
+            "RASTER_TABLE=coverage",
+            "-co",
+            f"BLOCKSIZE={side}",
+            "-co",
+            "METADATA_TABLES=NO",
+            "-co",
+            "ADD_GPKG_OGR_CONTENTS=NO",
+            str(source),
+            str(out),
+        ]
+    )
+    finalise(out)
+    return out
+
+
 # One layer per non-linear type (Annex F.1), each as (layer, -nlt type, WKT).
 #
 # The arcs are chosen so a control-point bounding box is visibly wrong. The
@@ -1086,7 +1149,11 @@ def main() -> None:
         # whose geometry GeoJSON cannot express (see build_gdal_curves). What a
         # reader should see is asserted in geopackage/tests/tiles.rs and
         # geopackage/tests/curves.rs respectively.
-        unsnapshotted = [build_gdal_tiles(tmp), build_gdal_curves(tmp)]
+        unsnapshotted = [
+            build_gdal_tiles(tmp),
+            build_gdal_coverage(tmp),
+            build_gdal_curves(tmp),
+        ]
         if osgeo_available():
             unsnapshotted.append(build_gdal_related(tmp))
         else:

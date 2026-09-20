@@ -265,6 +265,20 @@ pub enum TileError {
         /// The header reader's error message.
         reason: String,
     },
+    /// A coverage tile payload that does not conform to an encoding requirement
+    /// of the tiled gridded coverage extension (OGC 17-066r2).
+    ///
+    /// The checks in [`crate::coverage`] read the header of a payload and not
+    /// its samples, so they do not check Requirement 21.
+    #[error(
+        "coverage tile payload breaks tiled gridded coverage Requirement {requirement}: {detail}"
+    )]
+    CoverageProfileViolation {
+        /// The requirement number, in the numbering of OGC 17-066r2.
+        requirement: u8,
+        /// What the payload declares, and what the requirement specifies.
+        detail: String,
+    },
     /// A tile payload whose pixel dimensions are not the ones its zoom level
     /// declares.
     #[error(
@@ -356,6 +370,11 @@ pub struct TilePayload {
 /// cannot catch, which is why the size is returned with the format
 /// ([`TileMatrix::check_payload`]).
 ///
+/// The dimensions of a TIFF come from [`crate::coverage`], which reads the
+/// first IFD for the coverage profile check. The crate has one parser for each
+/// format, because two readers of the same bytes can disagree on a malformed
+/// payload.
+///
 /// # Errors
 ///
 /// [`TileError::UnreadablePayload`] when the bytes are not a recognisable
@@ -371,6 +390,14 @@ pub fn probe(bytes: &[u8]) -> Result<TilePayload, TileError> {
         imagesize::ImageType::Tiff => TileFormat::Tiff,
         _ => TileFormat::Other,
     };
+    if format == TileFormat::Tiff {
+        let (width, height) = crate::coverage::dimensions(bytes)?;
+        return Ok(TilePayload {
+            format,
+            width,
+            height,
+        });
+    }
     let size = imagesize::blob_size(bytes).map_err(unreadable)?;
     let (Ok(width), Ok(height)) = (i64::try_from(size.width), i64::try_from(size.height)) else {
         return Err(TileError::UnreadablePayload {
