@@ -1,5 +1,20 @@
 pub mod geopackage_core
 pub mod geopackage_core::coverage
+#[non_exhaustive] pub enum geopackage_core::coverage::CoverageDatatype
+pub geopackage_core::coverage::CoverageDatatype::Float
+pub geopackage_core::coverage::CoverageDatatype::Integer
+impl geopackage_core::coverage::CoverageDatatype
+pub fn geopackage_core::coverage::CoverageDatatype::as_str(self) -> &'static str
+pub fn geopackage_core::coverage::CoverageDatatype::check_payload(self, &geopackage_core::coverage::CoveragePayload) -> core::result::Result<(), geopackage_core::tiles::TileError>
+pub fn geopackage_core::coverage::CoverageDatatype::parse(&str) -> core::option::Option<Self>
+#[non_exhaustive] pub enum geopackage_core::coverage::CoveragePayload
+pub geopackage_core::coverage::CoveragePayload::Png(geopackage_core::coverage::CoveragePng)
+pub geopackage_core::coverage::CoveragePayload::Tiff(geopackage_core::coverage::CoverageTiff)
+impl geopackage_core::coverage::CoveragePayload
+pub fn geopackage_core::coverage::CoveragePayload::height(self) -> i64
+pub fn geopackage_core::coverage::CoveragePayload::mime_type(self) -> &'static str
+pub fn geopackage_core::coverage::CoveragePayload::sample_type(self) -> geopackage_core::coverage::SampleType
+pub fn geopackage_core::coverage::CoveragePayload::width(self) -> i64
 #[non_exhaustive] pub enum geopackage_core::coverage::SampleType
 pub geopackage_core::coverage::SampleType::Float32
 pub geopackage_core::coverage::SampleType::Signed(u8)
@@ -12,11 +27,22 @@ pub geopackage_core::coverage::TiffCompression::Lzw
 pub geopackage_core::coverage::TiffCompression::None
 impl geopackage_core::coverage::TiffCompression
 pub fn geopackage_core::coverage::TiffCompression::is_baseline(self) -> bool
+#[non_exhaustive] pub struct geopackage_core::coverage::CoveragePng
+pub geopackage_core::coverage::CoveragePng::height: i64
+pub geopackage_core::coverage::CoveragePng::width: i64
 #[non_exhaustive] pub struct geopackage_core::coverage::CoverageTiff
 pub geopackage_core::coverage::CoverageTiff::compression: geopackage_core::coverage::TiffCompression
 pub geopackage_core::coverage::CoverageTiff::height: i64
 pub geopackage_core::coverage::CoverageTiff::sample_type: geopackage_core::coverage::SampleType
 pub geopackage_core::coverage::CoverageTiff::width: i64
+pub const geopackage_core::coverage::COVERAGE_ANCILLARY_TABLE: &str
+pub const geopackage_core::coverage::COVERAGE_DATA_TYPE: &str
+pub const geopackage_core::coverage::COVERAGE_EXTENSION_DEFINITION: &str
+pub const geopackage_core::coverage::COVERAGE_EXTENSION_NAME: &str
+pub const geopackage_core::coverage::COVERAGE_EXTENSION_SCOPE: &str
+pub const geopackage_core::coverage::TILE_ANCILLARY_TABLE: &str
+pub fn geopackage_core::coverage::coverage_payload(&[u8]) -> core::result::Result<geopackage_core::coverage::CoveragePayload, geopackage_core::tiles::TileError>
+pub fn geopackage_core::coverage::coverage_png(&[u8]) -> core::result::Result<geopackage_core::coverage::CoveragePng, geopackage_core::tiles::TileError>
 pub fn geopackage_core::coverage::coverage_tiff(&[u8]) -> core::result::Result<geopackage_core::coverage::CoverageTiff, geopackage_core::tiles::TileError>
 pub mod geopackage_core::curve
 pub struct geopackage_core::curve::BodyScan

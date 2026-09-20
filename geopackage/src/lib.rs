@@ -530,6 +530,7 @@ pub mod arrow;
 #[cfg(doctest)]
 mod book;
 mod bulk;
+mod coverage;
 mod create;
 mod data_columns;
 mod error;
@@ -552,6 +553,7 @@ mod value;
 mod writer;
 
 pub use bulk::{BulkIndexOptions, BulkVerification, DEFAULT_BULK_THRESHOLD, DEFAULT_FILL_FACTOR};
+pub use coverage::{Coverage, CoverageAncillary, TileAncillary};
 pub use create::{
     ColumnSpec, DEFAULT_GEOMETRY_COLUMN, DEFAULT_PRIMARY_KEY, GeometrySpec, TableSchemaBuilder,
 };
@@ -1003,6 +1005,12 @@ pub enum ContentsDataType {
     Features,
     /// Tile pyramid.
     Tiles,
+    /// Tiled gridded coverage: a tile pyramid with payloads that contain
+    /// measurements, not images (`2d-gridded-coverage`, OGC 17-066r2
+    /// Requirement 5).
+    ///
+    /// Open it with [`GeoPackage::coverage`], not with [`GeoPackage::tiles`].
+    Coverage,
     /// Non-spatial attributes.
     Attributes,
     /// Any other (extension-defined) data type.
@@ -1014,6 +1022,7 @@ impl ContentsDataType {
         match s {
             "features" => Self::Features,
             "tiles" => Self::Tiles,
+            geopackage_core::coverage::COVERAGE_DATA_TYPE => Self::Coverage,
             "attributes" => Self::Attributes,
             other => Self::Other(other.to_owned()),
         }

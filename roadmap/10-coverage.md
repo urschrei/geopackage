@@ -192,17 +192,6 @@ churny rename.
       accepts must also probe. Otherwise a conforming coverage tile would fail
       the tile size check.)*
 
-## Phase 1b: surface it
-
-- [ ] `GeoPackage::validate()` gains a finding: for a table registered under
-      `gpkg_2d_gridded_coverage`, every TIFF payload is checked and any
-      violation reported with its requirement number. Severity follows the
-      existing convention for "wrong but readable".
-- [ ] `gpkg tiles info` describes a TIFF payload as `TIFF, float32, LZW,
-      256x256` rather than `TIFF`.
-- [ ] `gpkg validate` picks the finding up for free, being a printer for
-      `validate()`.
-
 ### Found while doing it
 
 - [x] **A panic in `TileMatrixSet::tile_at`**, found by the first fuzz soak of
@@ -217,38 +206,153 @@ churny rename.
       Pre-existing: this path has been fuzzed since M4, and the corpus it was
       run against had never produced the values.
 - [ ] **`Extension::GriddedCoverage` cites 17-066r1** in its doc comment and
-      should cite r2. Left for phase 2, where the citation starts being
+      should cite r2. Left for phase 2d, where the citation starts being
       load-bearing.
 
 ### What phase 1 learned for phase 2
 
 A coverage declares `gpkg_contents.data_type` as `2d-gridded-coverage`, not
-`tiles`, so `GeoPackage::tiles` rejects it with `WrongDataType` and
-`tile_pyramids` does not list it. Its payloads are reachable only through the
-SQL escape hatch, which both the fixture test and the corpus sweep use. The
-first question of phase 2 was larger than the payload profile: should a
-coverage be a `TilePyramid` with a flag, or a type of its own? C6 above settles
-it: a type of its own.
+`tiles`, so nothing here opened one: `GeoPackage::tiles` rejected it and
+`tile_pyramids` did not list it, so its payloads were reachable only through
+the SQL escape hatch. That left a question larger than the payload profile:
+should a coverage be a `TilePyramid` with a flag, or a type of its own?
+Settled in C6 and built in phase 2a: a type of its own.
 
-## Phase 2: the extension proper (not scheduled)
+## Phase 1b: surface it
 
-Sketched so phase 1 is not orphaned, not planned here:
-`gpkg_2d_gridded_coverage_ancillary` and `gpkg_2d_gridded_tile_ancillary` DDL
-verbatim from the migrated spec source, the three `gpkg_extensions` rows
-(scope `read-write`), a coverage model with `datatype`, `data_null` and the
-two scale/offset pairs, Requirement 11's rule that a float coverage keeps the
-default scale and offset, Requirement 13's PNG-16 alternative for integer
-coverages, accepting TIFF on write, and the extension's ETS classes.
-The `Extension::GriddedCoverage` doc comment cites 17-066r1 and should cite r2
-when this lands.
+**Folded into phase 2c**, and the reason is the order 2a settled: a validate
+pass written before `Coverage` existed would have read payloads through the
+SQL escape hatch and been rewritten the moment it did. The findings, their
+severities and the cost question are planned in 2c below. What remains here
+is the one piece that never needed a coverage handle:
+
+- [ ] `gpkg tiles get --out` describes a TIFF payload it writes as
+      `TIFF, float32, LZW, 256x256` rather than `TIFF`. It already prints what
+      `probe` says, and a payload the profile can describe deserves the
+      fuller line whichever table it came from.
+
+*(Moved to 2c: the `validate()` findings, their severity split, and
+`gpkg coverage info`, which needs the handle 2a built. `gpkg tiles info`
+does not change (C6).)*
+
+## Phase 2: the extension proper
+
+Split into four. The order is read before
+write before report: a writer whose output nothing here can read back is a
+writer with no test, and a validator for files this crate cannot open is a
+validator written twice.
+
+### Phase 2a: the model and the read path
+
+- [x] `Coverage`, its own handle per C6, with a private `TilePyramid` for
+      the grid and the tile code. `GeoPackage::coverage(name)` and
+      `GeoPackage::coverages()`; `tiles()` and `tile_pyramids()` do not change
+      and still reject a coverage. The shared opener is `open_pyramid(name,
+      data_type)`, `pub(crate)` in the tiles module, so nothing is duplicated
+      and the public handles stay separate.
+- [x] `CoverageAncillary` (Requirements 1, 7, 8, 9) and `TileAncillary`
+      (Requirements 2, 10), read from the two ancillary tables. `datatype` is
+      kept as text and parsed on demand, because a read does not reject a file:
+      a value outside `integer`/`float` reads back as `None` rather than as an
+      error.
+- [x] `Error::NoCoverageAncillary`: `coverage()` rejects a coverage with no
+      ancillary row, and does not open it with guessed defaults. Without the
+      row there is no datatype, no scale or offset and no null, so a sample has
+      no meaning.
+- [x] `ContentsDataType::Coverage`, replacing the `Other("2d-gridded-coverage")`
+      the catalogue used to report. The two CLI sites that filter on
+      `ContentsDataType::Tiles` are unaffected, as C6 predicted, and the
+      corpus sweep moved onto the new variant and the new handle.
+- [x] Requirement 13's PNG alternative: `coverage_png` reads the `IHDR` header
+      to the same depth the TIFF walk reads an IFD (16-bit, colour type 0, and
+      nothing else), `coverage_payload` takes either encoding, and
+      `CoveragePayload::sample_type` makes the two comparable.
+- [x] `CoverageDatatype::check_payload`: Requirements 13 and 14, the rule that ties
+      a payload to the `datatype` its coverage declares. The float direction is
+      quoted from Requirement 14; the integer direction is a reading, and is
+      documented as one, since Requirement 13 does not spell out the TIFF
+      sample type and taking floating-point samples under `datatype = integer`
+      as conforming would make the column meaningless.
+- [x] `Coverage::value` and `Coverage::is_null`: the extension's scale/offset
+      arithmetic on a sample decoded elsewhere, and the sentinel comparison
+      that the scale and offset deliberately do not touch.
+- [x] Tests: nine over the GDAL fixture (opening, the ancillary columns, the
+      payload check in both directions, the per-tile row, the arithmetic, a
+      cursor walk), and the rejections: a pyramid opened as a coverage, a
+      coverage opened as a pyramid, a missing table, a coverage stripped of
+      its ancillary row.
+
+Not in 2a, and deliberately: nothing writes. A coverage reaches this crate
+only if another implementation wrote it.
+
+### Phase 2b: the write path
+
+- [ ] DDL for both ancillary tables, verbatim from
+      [annex-c](https://github.com/opengeospatial/geopackage/blob/master/spec/2d-gridded-coverage/annex-c.adoc),
+      including its single-quoted table name. GDAL's differs (it folds the
+      `CHECK` into the foreign-key constraint clause); ours follows the spec,
+      and a read accepts both because a read does not look at the DDL.
+- [ ] The three `gpkg_extensions` rows, with `definition` the r1 URL the r2
+      spec source still prints and GDAL still writes
+      (`COVERAGE_EXTENSION_DEFINITION`). Copied, not corrected.
+- [ ] `CoverageBuilder` and `create_coverage`, with Requirement 11 enforced:
+      a `float` coverage keeps both scale/offset pairs at their defaults.
+- [ ] **Requirement 10 per tile.** Every tile insert needs its row id back
+      (`RETURNING id`) and a second insert into
+      `gpkg_2d_gridded_tile_ancillary`; every tile delete needs both rows
+      gone, since the normative DDL has no `ON DELETE CASCADE`. Doubling the
+      statements per tile will show in the tile-write benchmark, which is
+      worth measuring rather than assuming. A Hegel property test over
+      insert/delete sequences pins the pairing, as the RTree one pins the
+      index.
+- [ ] Accept TIFF on write for a coverage table only, after
+      `Coverage::check_payload`. The ordinary tile path still rejects TIFF.
+- [ ] Say plainly in the docs what a writer with no codec cannot do: the four
+      per-tile statistics are left `NULL` unless the caller supplies them, and
+      Requirement 21 is unenforceable.
+
+### Phase 2c: validate and the CLI
+
+- [ ] `validate()`: Requirements 7, 8, 10 and 11 as SQL joins (an ancillary
+      row pointing at no coverage, a coverage with no row, a tile with no
+      ancillary row, a float coverage whose scale or offset is not the
+      default), plus the payload check over every tile. This is the pass
+      phase 1b was going to write against raw SQL and can now write against
+      `Coverage`.
+- [ ] Severity split: a profile violation is a warning, because the header
+      of the payload is correct; a payload that contradicts the `datatype` of
+      the coverage is an error, because a reader that uses the ancillary row
+      gets incorrect values.
+- [ ] The cost question `validate()` has never had to answer before: this is
+      the first check whose work scales with file size. Read whole payloads
+      first, document it, and revisit with a benchmark rather than sampling
+      tiles quietly.
+- [ ] `gpkg coverage info`, and a coverage line in `gpkg info`'s contents
+      listing.
+
+### Phase 2d: interop and conformance
+
+- [ ] GDAL round trip in `gdal_interop.rs`: a coverage this crate wrote, read
+      back by `gdalinfo` with its elevations intact.
+- [ ] The twelve abstract tests of
+      [annex-a](https://github.com/opengeospatial/geopackage/blob/master/spec/2d-gridded-coverage/annex-a.adoc)
+      implemented by hand. There is no ETS for this extension: `ets-gpkg12`
+      validates the 1.2 core and tiles, and skips the rest. The abstract test
+      suite is the nearest equivalent.
+- [ ] `Extension::GriddedCoverage` cites r2 rather than r1.
 
 ## Acceptance criteria
+
+These are phase 1's, and the milestone's as a whole; 2a adds none of its own,
+because reading a coverage is only worth having once something reports on it
+(2c) or writes one (2b).
 
 1. [ ] Every TIFF payload in the fetched corpus and in the committed GDAL
    fixture is judged, and each judgement is either conformant or a reported
    violation naming its requirement, with no payload unchecked. *(Half
-   met: the fixture is judged on every test run, and the corpus sweep is
-   written but has not been run against a fetched corpus.)*
+   met: the fixture is judged on every test run (through `Coverage` since
+   2a, which checks the `datatype` as well as the profile), and the corpus
+   sweep is written but has not been run against a fetched corpus.)*
 2. [x] The fuzz target runs the checker without a panic or a timeout over a
    soak of the length M4's tile fuzzing used. *(Seven minutes and about six
    million executions, seeded with the GDAL fixture's own tile. The first soak

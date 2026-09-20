@@ -23,12 +23,7 @@
 
 use std::path::PathBuf;
 
-use geopackage::core::coverage::coverage_tiff;
-use geopackage::core::ident::quote;
 use geopackage::{ContentsDataType, ConversionOptions, Extension, GeoPackage};
-
-/// The `gpkg_contents.data_type` a tiled gridded coverage declares.
-const COVERAGE_DATA_TYPE: &str = "2d-gridded-coverage";
 
 fn corpus_dir() -> PathBuf {
     match std::env::var_os("GEOPACKAGE_CORPUS_DIR") {
@@ -127,7 +122,7 @@ fn sweep(path: &std::path::Path) -> Tally {
             sweep_pyramid(&gpkg, &entry.table_name, &mut tally);
             continue;
         }
-        if entry.data_type == ContentsDataType::Other(COVERAGE_DATA_TYPE.to_owned()) {
+        if entry.data_type == ContentsDataType::Coverage {
             sweep_coverage(&gpkg, &entry.table_name, &mut tally);
             continue;
         }
@@ -215,43 +210,44 @@ fn sweep_pyramid(gpkg: &GeoPackage, table_name: &str, tally: &mut Tally) {
     }
 }
 
-/// Walk one tiled gridded coverage: every tile, against the coverage TIFF
-/// profile (OGC 17-066r2 Requirements 15 to 20).
+/// Walks one tiled gridded coverage, and checks every tile against the coverage
+/// payload profile and the `datatype` of the coverage (OGC 17-066r2
+/// Requirements 13 to 20).
 ///
-/// Not through `TilePyramid`: a coverage declares `gpkg_contents.data_type` as
-/// `2d-gridded-coverage` rather than `tiles`, and this crate does not open one
-/// as a pyramid, so the payloads come through the SQL escape hatch. What is
-/// asked of them is the header check alone, which is all this crate implements
-/// of the extension.
+/// Uses `Coverage`, the handle for this data type: a coverage is not a
+/// `TilePyramid`, and `gpkg.tiles()` rejects one. The sweep counts errors and
+/// does not stop on them, as everywhere in this sweep: the questions are
+/// whether the files can be read, and what is unusual about them.
 fn sweep_coverage(gpkg: &GeoPackage, table_name: &str, tally: &mut Tally) {
     tally.coverages += 1;
-    let Ok(quoted) = quote(table_name) else {
+    let Ok(coverage) = gpkg.coverage(table_name) else {
         tally.coverage_errors += 1;
         return;
     };
-    let mut stmt = match gpkg
-        .connection()
-        .prepare(&format!("SELECT tile_data FROM {quoted}"))
-    {
-        Ok(stmt) => stmt,
-        Err(_) => {
-            tally.coverage_errors += 1;
-            return;
-        }
-    };
-    let Ok(rows) = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)) else {
+    if coverage.validate().is_err() {
+        tally.coverage_errors += 1;
+    }
+    let Ok(mut cursor) = coverage.cursor() else {
         tally.coverage_errors += 1;
         return;
     };
-    for row in rows {
-        tally.coverage_tiles += 1;
-        match row {
-            Ok(payload) => {
-                if coverage_tiff(&payload).is_err() {
+    let Ok(mut stream) = cursor.tiles() else {
+        tally.coverage_errors += 1;
+        return;
+    };
+    loop {
+        match stream.next() {
+            Ok(Some(tile)) => {
+                tally.coverage_tiles += 1;
+                if coverage.check_payload(tile.data()).is_err() {
                     tally.coverage_errors += 1;
                 }
             }
-            Err(_) => tally.coverage_errors += 1,
+            Ok(None) => break,
+            Err(_) => {
+                tally.coverage_errors += 1;
+                break;
+            }
         }
     }
 }
