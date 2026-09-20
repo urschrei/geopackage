@@ -694,7 +694,7 @@ def build_gdal_coverage(tmp: Path) -> Path:
     The interop reference for the coverage payload profile
     (``geopackage-core::coverage``). GDAL writes Float32 samples, LZW
     compression, and strips, not internal tiles, which is what Requirements
-    17, 18 and 20 specify. Asserted in ``geopackage/tests/tiles.rs``; as with
+    17, 18 and 20 specify. Asserted in ``geopackage/tests/coverage.rs``; as with
     the other raster fixture, there is no ``ogrinfo`` snapshot for it.
 
     64 pixels square, not 256, so that the tile is a few kilobytes: the
