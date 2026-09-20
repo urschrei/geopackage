@@ -553,7 +553,7 @@ mod value;
 mod writer;
 
 pub use bulk::{BulkIndexOptions, BulkVerification, DEFAULT_BULK_THRESHOLD, DEFAULT_FILL_FACTOR};
-pub use coverage::{Coverage, CoverageAncillary, TileAncillary};
+pub use coverage::{Coverage, CoverageAncillary, CoverageBuilder, CoverageWriter, TileAncillary};
 pub use create::{
     ColumnSpec, DEFAULT_GEOMETRY_COLUMN, DEFAULT_PRIMARY_KEY, GeometrySpec, TableSchemaBuilder,
 };

@@ -15,10 +15,12 @@
 )]
 
 use geopackage::core::coverage::{CoverageDatatype, SampleType, TiffCompression};
-use geopackage::core::tiles::{TileCoord, TileMatrixSet, ZoomLadder};
+use geopackage::core::tiles::{TileCoord, TileMatrix, TileMatrixSet, ZoomLadder};
 use geopackage::{
-    ContentsDataType, Coverage, Error, GeoPackage, TilePyramidBuilder, core::TileError,
+    ContentsDataType, Coverage, CoverageBuilder, Error, GeoPackage, TileAncillary,
+    TilePyramidBuilder, core::TileError,
 };
+use hegel::generators;
 
 fn fixture() -> GeoPackage {
     let path =
@@ -263,4 +265,322 @@ fn a_coverage_with_no_ancillary_row_is_refused() {
     // The list of coverages also returns the error, and does not skip the
     // coverage.
     gpkg.coverages().unwrap_err();
+}
+
+// --- the write path -----------------------------------------------------------
+
+/// A payload that this crate can write: a conforming coverage TIFF header of
+/// the given size and sample type, built as the core tests build one.
+///
+/// The payload is a header only. The profile is about tags, and neither side of
+/// the write decodes a sample.
+fn tiff(width: u32, height: u32, sample_format: u16, bits: u16, compression: u16) -> Vec<u8> {
+    let entries: [(u16, u16, u32); 7] = [
+        (256, 3, u32::from(u16::try_from(width).unwrap())), // ImageWidth
+        (257, 3, u32::from(u16::try_from(height).unwrap())), // ImageLength
+        (258, 3, u32::from(bits)),                          // BitsPerSample
+        (259, 3, u32::from(compression)),                   // Compression
+        (277, 3, 1),                                        // SamplesPerPixel
+        (278, 3, u32::from(u16::try_from(height).unwrap())), // RowsPerStrip
+        (339, 3, u32::from(sample_format)),                 // SampleFormat
+    ];
+    let mut bytes = b"II\x2a\x00".to_vec();
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    bytes.extend_from_slice(&u16::try_from(entries.len()).unwrap().to_le_bytes());
+    for (tag, field_type, value) in entries {
+        bytes.extend_from_slice(&tag.to_le_bytes());
+        bytes.extend_from_slice(&field_type.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&u16::try_from(value).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&[0, 0]);
+    }
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes
+}
+
+/// A float32 LZW payload of the given size, for a float coverage.
+fn float_tile(side: u32) -> Vec<u8> {
+    tiff(side, side, 3, 32, 5)
+}
+
+/// A new file with one coverage over a 256-unit square, one zoom level of a
+/// single 256-pixel tile.
+fn new_coverage(datatype: CoverageDatatype) -> (tempfile::TempDir, GeoPackage, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("dem.gpkg")).unwrap();
+    gpkg.add_epsg_srs(3857).unwrap();
+    let set = TileMatrixSet::new(3857, 0.0, 0.0, 256.0, 256.0);
+    let coverage = gpkg
+        .create_coverage(
+            &CoverageBuilder::new("dem", set, datatype)
+                .matrix(TileMatrix::new(0, 1, 1, 256, 256, 1.0, 1.0))
+                .data_null(-9999.0)
+                .uom("m"),
+        )
+        .unwrap();
+    let name = coverage.table_name().to_owned();
+    (dir, gpkg, name)
+}
+
+/// Returns the tile ids in the file, and the `tpudt_id` values of the
+/// ancillary rows.
+fn pairing(gpkg: &GeoPackage, table: &str) -> (Vec<i64>, Vec<i64>) {
+    let conn = gpkg.connection();
+    let tiles: Vec<i64> = conn
+        .prepare(&format!("SELECT id FROM {table} ORDER BY id"))
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    let rows: Vec<i64> = conn
+        .prepare(
+            "SELECT tpudt_id FROM gpkg_2d_gridded_tile_ancillary \
+             WHERE tpudt_name = ?1 ORDER BY tpudt_id",
+        )
+        .unwrap()
+        .query_map([table], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    (tiles, rows)
+}
+
+#[test]
+fn a_coverage_this_crate_writes_reads_back_as_one() {
+    let (_dir, gpkg, name) = new_coverage(CoverageDatatype::Float);
+    let coverage = gpkg.coverage(&name).unwrap();
+
+    // The catalogue rows that the extension specifies (Requirements 1, 2, 5,
+    // 6, 7).
+    assert_eq!(
+        gpkg.contents().unwrap().first().map(|e| &e.data_type),
+        Some(&ContentsDataType::Coverage)
+    );
+    assert_eq!(coverage.datatype(), Some(CoverageDatatype::Float));
+    assert_eq!(coverage.ancillary().uom.as_deref(), Some("m"));
+    assert_eq!(coverage.ancillary().data_null, Some(-9999.0));
+    let registered: Vec<(Option<String>, Option<String>)> = gpkg
+        .extensions()
+        .unwrap()
+        .into_iter()
+        .filter(|row| row.name == "gpkg_2d_gridded_coverage")
+        .map(|row| (row.table_name, row.column_name))
+        .collect();
+    // In the order of `extensions()`, which is the catalogue order, not the
+    // order of the writes.
+    assert_eq!(
+        registered,
+        vec![
+            (Some("dem".to_owned()), Some("tile_data".to_owned())),
+            (Some("gpkg_2d_gridded_coverage_ancillary".to_owned()), None),
+            (Some("gpkg_2d_gridded_tile_ancillary".to_owned()), None),
+        ]
+    );
+    // And it is still not a pyramid.
+    assert!(gpkg.tile_pyramids().unwrap().is_empty());
+    coverage.validate().unwrap();
+    assert_eq!(gpkg.validate().unwrap(), Vec::new());
+}
+
+#[test]
+fn every_written_tile_gets_an_ancillary_row() {
+    // Requirement 10, on the path that writes one tile at a time.
+    let (_dir, gpkg, name) = new_coverage(CoverageDatatype::Float);
+    let coverage = gpkg.coverage(&name).unwrap();
+    coverage
+        .put_tile(TileCoord::new(0, 0, 0), &float_tile(256))
+        .unwrap();
+
+    let (tiles, rows) = pairing(&gpkg, &name);
+    assert_eq!(tiles.len(), 1);
+    assert_eq!(rows, tiles);
+    let ancillary = coverage
+        .tile_ancillary(TileCoord::new(0, 0, 0))
+        .unwrap()
+        .unwrap();
+    assert_eq!((ancillary.scale, ancillary.offset), (1.0, 0.0));
+    // No statistics: this crate does not decode samples, so it has no
+    // statistics to record.
+    assert_eq!(ancillary.min, None);
+    assert_eq!(gpkg.validate().unwrap(), Vec::new());
+}
+
+#[test]
+fn a_caller_that_decoded_the_samples_can_record_them() {
+    let (_dir, gpkg, name) = new_coverage(CoverageDatatype::Integer);
+    let coverage = gpkg.coverage(&name).unwrap();
+    let mut writer = coverage.writer().unwrap();
+    writer
+        .put_with_ancillary(
+            TileCoord::new(0, 0, 0),
+            &tiff(256, 256, 1, 16, 5),
+            &TileAncillary::new(0.5, 100.0).with_statistics(1.0, 9.0, 5.0, 2.0),
+        )
+        .unwrap();
+    writer.commit().unwrap();
+
+    let ancillary = coverage
+        .tile_ancillary(TileCoord::new(0, 0, 0))
+        .unwrap()
+        .unwrap();
+    assert_eq!((ancillary.scale, ancillary.offset), (0.5, 100.0));
+    assert_eq!(
+        (
+            ancillary.min,
+            ancillary.max,
+            ancillary.mean,
+            ancillary.std_dev
+        ),
+        (Some(1.0), Some(9.0), Some(5.0), Some(2.0))
+    );
+    // The arithmetic gives the result that the extension defines.
+    assert_eq!(coverage.value(&ancillary, 4.0), 102.0);
+}
+
+#[test]
+fn deleting_a_tile_deletes_its_ancillary_row() {
+    // The normative table definition has no ON DELETE CASCADE, so the writer
+    // keeps the two tables consistent.
+    let (_dir, gpkg, name) = new_coverage(CoverageDatatype::Float);
+    let coverage = gpkg.coverage(&name).unwrap();
+    coverage
+        .put_tile(TileCoord::new(0, 0, 0), &float_tile(256))
+        .unwrap();
+    assert!(coverage.delete_tile(TileCoord::new(0, 0, 0)).unwrap());
+
+    assert_eq!(pairing(&gpkg, &name), (Vec::new(), Vec::new()));
+    assert!(!coverage.delete_tile(TileCoord::new(0, 0, 0)).unwrap());
+    assert_eq!(gpkg.validate().unwrap(), Vec::new());
+}
+
+#[test]
+fn rewriting_a_tile_keeps_one_ancillary_row() {
+    let (_dir, gpkg, name) = new_coverage(CoverageDatatype::Float);
+    let coverage = gpkg.coverage(&name).unwrap();
+    for _ in 0..3 {
+        coverage
+            .put_tile(TileCoord::new(0, 0, 0), &float_tile(256))
+            .unwrap();
+    }
+    let (tiles, rows) = pairing(&gpkg, &name);
+    assert_eq!((tiles.len(), rows.len()), (1, 1));
+    assert_eq!(rows, tiles);
+}
+
+#[test]
+fn a_float_coverage_may_not_scale_its_samples() {
+    // Requirement 11, on the coverage row ...
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("dem.gpkg")).unwrap();
+    gpkg.add_epsg_srs(3857).unwrap();
+    let set = TileMatrixSet::new(3857, 0.0, 0.0, 256.0, 256.0);
+    assert!(matches!(
+        gpkg.create_coverage(
+            &CoverageBuilder::new("dem", set, CoverageDatatype::Float)
+                .matrix(TileMatrix::new(0, 1, 1, 256, 256, 1.0, 1.0))
+                .scale(2.0, 0.0),
+        ),
+        Err(Error::FloatCoverageScaled { .. })
+    ));
+
+    // ... and on a tile's.
+    let (_dir, gpkg, name) = new_coverage(CoverageDatatype::Float);
+    let coverage = gpkg.coverage(&name).unwrap();
+    let mut writer = coverage.writer().unwrap();
+    assert!(matches!(
+        writer.put_with_ancillary(
+            TileCoord::new(0, 0, 0),
+            &float_tile(256),
+            &TileAncillary::new(2.0, 0.0)
+        ),
+        Err(Error::FloatCoverageScaled { .. })
+    ));
+}
+
+#[test]
+fn a_payload_the_coverage_may_not_hold_is_refused_on_write() {
+    let (_dir, gpkg, name) = new_coverage(CoverageDatatype::Float);
+    let coverage = gpkg.coverage(&name).unwrap();
+    let mut writer = coverage.writer().unwrap();
+
+    // Requirement 14: a float coverage accepts float32 TIFF only.
+    assert!(matches!(
+        writer.put(TileCoord::new(0, 0, 0), &tiff(256, 256, 1, 16, 5)),
+        Err(Error::Tile(TileError::CoverageProfileViolation {
+            requirement: 14,
+            ..
+        }))
+    ));
+    // Requirement 16: one sample per grid cell.
+    let mut multi_band = float_tile(256);
+    // SamplesPerPixel is the fifth entry: 8 header + 2 count + 4 * 12.
+    multi_band.splice(66..68, 3u16.to_le_bytes());
+    assert!(matches!(
+        writer.put(TileCoord::new(0, 0, 0), &multi_band),
+        Err(Error::Tile(TileError::CoverageProfileViolation {
+            requirement: 16,
+            ..
+        }))
+    ));
+    // The zoom level's pixel size still applies.
+    assert!(matches!(
+        writer.put(TileCoord::new(0, 0, 0), &float_tile(128)),
+        Err(Error::Tile(TileError::PayloadSizeMismatch { .. }))
+    ));
+    // The writer wrote none of these payloads.
+    drop(writer);
+    assert_eq!(pairing(&gpkg, &name), (Vec::new(), Vec::new()));
+}
+
+#[test]
+fn deflate_is_read_but_not_written() {
+    // C2: Requirement 18 does not say "only LZW", so a read accepts a Deflate
+    // payload. Requirement 15 specifies baseline TIFF, so a write rejects it.
+    let (_dir, gpkg, name) = new_coverage(CoverageDatatype::Float);
+    let coverage = gpkg.coverage(&name).unwrap();
+    let deflate = tiff(256, 256, 3, 32, 8);
+    coverage.check_payload(&deflate).unwrap();
+
+    let mut writer = coverage.writer().unwrap();
+    assert!(matches!(
+        writer.put(TileCoord::new(0, 0, 0), &deflate),
+        Err(Error::UnwritableCoveragePayload { .. })
+    ));
+}
+
+/// For any sequence of writes and deletes, the two tables agree: each tile has
+/// exactly one ancillary row, and no row points to a tile that does not exist
+/// (Requirements 10 and 12).
+///
+/// The table definition has no `ON DELETE CASCADE`, so the writer must keep
+/// this invariant. The test checks it after each step, not only at the end, so
+/// a failing sequence shrinks to the step that broke it.
+#[hegel::test]
+fn the_two_tables_stay_in_step_through_write_ops(tc: hegel::TestCase) {
+    let (_dir, gpkg, name) = new_coverage(CoverageDatatype::Float);
+    let coverage = gpkg.coverage(&name).unwrap();
+    let payload = float_tile(256);
+
+    let ops = tc.draw(generators::integers::<usize>().min_value(0).max_value(12));
+    for _ in 0..ops {
+        // With one zoom level of one tile, every operation would use the same
+        // address. The test therefore uses a 2x2 address space that is larger
+        // than the matrix. The writer rejects a write outside the matrix, and
+        // the test covers that case too.
+        let column = tc.draw(generators::integers::<i64>().min_value(0).max_value(1));
+        let row = tc.draw(generators::integers::<i64>().min_value(0).max_value(1));
+        let coord = TileCoord::new(0, column, row);
+        // Both results are valid: the grid of this coverage is one tile, so
+        // three of the four addresses are outside it and the writer rejects
+        // them. The invariant below also checks that a rejected write leaves
+        // nothing.
+        if tc.draw(generators::booleans()) {
+            let _outcome = coverage.put_tile(coord, &payload);
+        } else {
+            let _outcome = coverage.delete_tile(coord);
+        }
+        let (tiles, rows) = pairing(&gpkg, &name);
+        assert_eq!(rows, tiles, "the ancillary rows diverged from the tiles");
+    }
 }

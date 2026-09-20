@@ -260,6 +260,24 @@ impl std::fmt::Debug for TilePyramid<'_> {
     }
 }
 
+/// The input for the creation of a tile table, for either kind of content.
+///
+/// A tile pyramid and a tiled gridded coverage have the same physical
+/// structure: the user table, the matrix set, the zoom levels and the
+/// `gpkg_contents` row. They differ in the `data_type` of that row, and in the
+/// other tables that they use. This struct is the shared part, so
+/// [`crate::Coverage`] does not duplicate it.
+pub(crate) struct PyramidSpec<'a> {
+    pub(crate) table_name: &'a str,
+    pub(crate) matrix_set: &'a TileMatrixSet,
+    pub(crate) matrices: &'a [TileMatrix],
+    pub(crate) identifier: Option<&'a str>,
+    pub(crate) description: Option<&'a str>,
+    /// `tiles`, or `2d-gridded-coverage` (Requirement 5).
+    pub(crate) data_type: &'static str,
+    pub(crate) allow_zoom_other: bool,
+}
+
 impl GeoPackage {
     /// Creates a tile pyramid from a [`TilePyramidBuilder`].
     ///
@@ -282,7 +300,29 @@ impl GeoPackage {
     ///   factors of two and [`TilePyramidBuilder::allow_zoom_other`] was not
     ///   set.
     pub fn create_tile_pyramid(&self, builder: &TilePyramidBuilder) -> Result<TilePyramid<'_>> {
-        let name = &builder.table_name;
+        let spec = PyramidSpec {
+            table_name: &builder.table_name,
+            matrix_set: &builder.matrix_set,
+            matrices: &builder.matrices,
+            identifier: builder.identifier.as_deref(),
+            description: builder.description.as_deref(),
+            data_type: "tiles",
+            allow_zoom_other: builder.allow_zoom_other,
+        };
+        let zoom_other = self.check_new_pyramid(&spec)?;
+        let tx = WriteTransaction::begin(self.connection())?;
+        self.write_pyramid(&spec, zoom_other)?;
+        tx.commit()?;
+        self.tiles(&builder.table_name)
+    }
+
+    /// Does all the checks that are possible before a write. Returns `true` if
+    /// the pyramid needs `gpkg_zoom_other`.
+    ///
+    /// Separate from [`Self::write_pyramid`], so that a failed check occurs
+    /// outside the transaction and does not cause a rollback.
+    pub(crate) fn check_new_pyramid(&self, spec: &PyramidSpec<'_>) -> Result<bool> {
+        let name = spec.table_name;
         // As with `create_layer`: a whole-GeoPackage extension we cannot
         // identify covers a table that does not exist yet.
         self.check_writable(name)?;
@@ -291,33 +331,39 @@ impl GeoPackage {
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("gpkg_"))
         {
             return Err(Error::ReservedTablePrefix {
-                table_name: name.clone(),
+                table_name: name.to_owned(),
             });
         }
         let conn = self.connection();
         if table_exists(conn, name)? {
             return Err(Error::TableAlreadyExists {
-                table_name: name.clone(),
+                table_name: name.to_owned(),
             });
         }
-        if self.srs(builder.matrix_set.srs_id)?.is_none() {
+        if self.srs(spec.matrix_set.srs_id)?.is_none() {
             return Err(Error::UnknownSrs {
-                srs_id: builder.matrix_set.srs_id,
+                srs_id: spec.matrix_set.srs_id,
             });
         }
-        builder.matrix_set.validate(&builder.matrices)?;
-        let zoom_other = !tiles::is_power_of_two_ladder(&builder.matrices);
-        if zoom_other && !builder.allow_zoom_other {
+        spec.matrix_set.validate(spec.matrices)?;
+        let zoom_other = !tiles::is_power_of_two_ladder(spec.matrices);
+        if zoom_other && !spec.allow_zoom_other {
             return Err(Error::ZoomOtherNotEnabled {
-                table_name: name.clone(),
+                table_name: name.to_owned(),
             });
         }
+        Ok(zoom_other)
+    }
 
-        let identifier = builder.identifier.clone().unwrap_or_else(|| name.clone());
-        let description = builder.description.clone().unwrap_or_default();
-        let set = &builder.matrix_set;
+    /// Writes the user table and the catalogue rows, in a transaction that the
+    /// caller owns.
+    pub(crate) fn write_pyramid(&self, spec: &PyramidSpec<'_>, zoom_other: bool) -> Result<()> {
+        let conn = self.connection();
+        let name = spec.table_name;
+        let set = spec.matrix_set;
+        let identifier = spec.identifier.unwrap_or(name);
+        let description = spec.description.unwrap_or("");
 
-        let tx = WriteTransaction::begin(conn)?;
         for (exists, sql) in [
             (
                 table_exists(conn, "gpkg_tile_matrix_set")?,
@@ -338,9 +384,10 @@ impl GeoPackage {
         conn.execute(
             "INSERT INTO gpkg_contents \
              (table_name, data_type, identifier, description, min_x, min_y, max_x, max_y, srs_id) \
-             VALUES (?1, 'tiles', ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 name,
+                spec.data_type,
                 identifier,
                 description,
                 set.min_x,
@@ -362,7 +409,7 @@ impl GeoPackage {
                   pixel_x_size, pixel_y_size) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             )?;
-            for matrix in &builder.matrices {
+            for matrix in spec.matrices {
                 stmt.execute(rusqlite::params![
                     name,
                     matrix.zoom_level,
@@ -385,8 +432,7 @@ impl GeoPackage {
                 tiles::TILE_EXTENSION_SCOPE,
             )?;
         }
-        tx.commit()?;
-        self.tiles(name)
+        Ok(())
     }
 
     /// Opens a tile pyramid by name.

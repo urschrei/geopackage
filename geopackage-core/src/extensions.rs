@@ -123,7 +123,12 @@ pub enum Extension {
     /// A file conforming to 1.1 registers both this and [`Extension::CrsWkt`].
     CrsWkt11,
     /// `gpkg_2d_gridded_coverage` (Annex F.11, published separately as OGC
-    /// 17-066r1): tile payloads holding gridded values rather than pictures.
+    /// 17-066r2): tile payloads that contain gridded values, not images.
+    ///
+    /// Version 1.1 of the extension, which added integer samples to the TIFF
+    /// encoding. The `gpkg_extensions.definition` value is still the r1 URL, as
+    /// in the r2 spec source; see
+    /// [`crate::coverage::COVERAGE_EXTENSION_DEFINITION`].
     ///
     /// Also matches the two earlier spellings, `gpkg_elevation_tiles` from
     /// before GeoPackage 1.2 and `2d_gridded_coverage` from before 17-066r1
@@ -235,8 +240,9 @@ impl Extension {
             | Self::GeometryType(_)
             | Self::Metadata
             | Self::Schema
+            | Self::GriddedCoverage
             | Self::RelatedTables => ExtensionSupport::Implemented,
-            Self::GriddedCoverage | Self::GdalAspatial => ExtensionSupport::Known,
+            Self::GdalAspatial => ExtensionSupport::Known,
             Self::GeometryTypeTrigger | Self::SrsIdTrigger => ExtensionSupport::Removed,
             Self::Other(_) => ExtensionSupport::Unrecognised,
         }

@@ -78,6 +78,10 @@ pub geopackage::Error::ExtentPersist
 pub geopackage::Error::ExtentPersist::extent: core::option::Option<geopackage::BoundingBox>
 pub geopackage::Error::ExtentPersist::source: alloc::boxed::Box<rusqlite::error::Error>
 pub geopackage::Error::ExtentPersist::table_name: alloc::string::String
+pub geopackage::Error::FloatCoverageScaled
+pub geopackage::Error::FloatCoverageScaled::offset: f64
+pub geopackage::Error::FloatCoverageScaled::scale: f64
+pub geopackage::Error::FloatCoverageScaled::table_name: alloc::string::String
 pub geopackage::Error::GeometryNotProjected
 pub geopackage::Error::GeometryTypeMismatch
 pub geopackage::Error::GeometryTypeMismatch::column_name: alloc::string::String
@@ -165,6 +169,9 @@ pub geopackage::Error::UnsupportedExtension
 pub geopackage::Error::UnsupportedExtension::extension_name: alloc::string::String
 pub geopackage::Error::UnsupportedExtension::scope: alloc::string::String
 pub geopackage::Error::UnsupportedExtension::table_name: alloc::string::String
+pub geopackage::Error::UnwritableCoveragePayload
+pub geopackage::Error::UnwritableCoveragePayload::reason: alloc::string::String
+pub geopackage::Error::UnwritableCoveragePayload::table_name: alloc::string::String
 pub geopackage::Error::ValueCountMismatch
 pub geopackage::Error::ValueCountMismatch::expected: usize
 pub geopackage::Error::ValueCountMismatch::found: usize
@@ -434,6 +441,10 @@ pub fn geopackage::Coverage<'a>::tile_count_at(&self, i64) -> geopackage::Result
 pub fn geopackage::Coverage<'a>::validate(&self) -> geopackage::Result<()>
 pub fn geopackage::Coverage<'a>::value(&self, &geopackage::TileAncillary, f64) -> f64
 pub fn geopackage::Coverage<'a>::zoom_levels(&self) -> alloc::vec::Vec<i64>
+impl<'a> geopackage::Coverage<'a>
+pub fn geopackage::Coverage<'a>::delete_tile(&self, geopackage_core::tiles::TileCoord) -> geopackage::Result<bool>
+pub fn geopackage::Coverage<'a>::put_tile(&self, geopackage_core::tiles::TileCoord, &[u8]) -> geopackage::Result<()>
+pub fn geopackage::Coverage<'a>::writer(&self) -> geopackage::Result<geopackage::CoverageWriter<'a>>
 impl core::fmt::Debug for geopackage::Coverage<'_>
 pub fn geopackage::Coverage<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct geopackage::CoverageAncillary
@@ -447,6 +458,30 @@ pub geopackage::CoverageAncillary::quantity_definition: core::option::Option<all
 pub geopackage::CoverageAncillary::scale: f64
 pub geopackage::CoverageAncillary::tile_matrix_set_name: alloc::string::String
 pub geopackage::CoverageAncillary::uom: core::option::Option<alloc::string::String>
+pub struct geopackage::CoverageBuilder
+impl geopackage::CoverageBuilder
+pub fn geopackage::CoverageBuilder::allow_zoom_other(self, bool) -> Self
+pub fn geopackage::CoverageBuilder::data_null(self, f64) -> Self
+pub fn geopackage::CoverageBuilder::description(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::CoverageBuilder::field_name(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::CoverageBuilder::grid_cell_encoding(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::CoverageBuilder::identifier(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::CoverageBuilder::matrices(self, impl core::iter::traits::collect::IntoIterator<Item = geopackage_core::tiles::TileMatrix>) -> Self
+pub fn geopackage::CoverageBuilder::matrix(self, geopackage_core::tiles::TileMatrix) -> Self
+pub fn geopackage::CoverageBuilder::new(impl core::convert::Into<alloc::string::String>, geopackage_core::tiles::TileMatrixSet, geopackage_core::coverage::CoverageDatatype) -> Self
+pub fn geopackage::CoverageBuilder::precision(self, f64) -> Self
+pub fn geopackage::CoverageBuilder::quantity_definition(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage::CoverageBuilder::scale(self, f64, f64) -> Self
+pub fn geopackage::CoverageBuilder::table_name(&self) -> &str
+pub fn geopackage::CoverageBuilder::uom(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub struct geopackage::CoverageWriter<'conn>
+impl<'conn> geopackage::CoverageWriter<'conn>
+pub fn geopackage::CoverageWriter<'conn>::commit(self) -> geopackage::Result<()>
+pub fn geopackage::CoverageWriter<'conn>::delete(&mut self, geopackage_core::tiles::TileCoord) -> geopackage::Result<bool>
+pub fn geopackage::CoverageWriter<'conn>::put(&mut self, geopackage_core::tiles::TileCoord, &[u8]) -> geopackage::Result<()>
+pub fn geopackage::CoverageWriter<'conn>::put_with_ancillary(&mut self, geopackage_core::tiles::TileCoord, &[u8], &geopackage::TileAncillary) -> geopackage::Result<()>
+impl core::fmt::Debug for geopackage::CoverageWriter<'_>
+pub fn geopackage::CoverageWriter<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct geopackage::ExtensionRow
 pub geopackage::ExtensionRow::column_name: core::option::Option<alloc::string::String>
 pub geopackage::ExtensionRow::definition: alloc::string::String
@@ -554,6 +589,8 @@ pub fn geopackage::GeoPackage::coverages(&self) -> geopackage::Result<alloc::vec
 impl geopackage::GeoPackage
 pub fn geopackage::GeoPackage::create_attributes_table(&self, &geopackage::TableSchemaBuilder) -> geopackage::Result<geopackage::Layer<'_>>
 pub fn geopackage::GeoPackage::create_layer(&self, &geopackage::TableSchemaBuilder) -> geopackage::Result<geopackage::Layer<'_>>
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::create_coverage(&self, &geopackage::CoverageBuilder) -> geopackage::Result<geopackage::Coverage<'_>>
 impl geopackage::GeoPackage
 pub fn geopackage::GeoPackage::create_tile_pyramid(&self, &geopackage::TilePyramidBuilder) -> geopackage::Result<geopackage::TilePyramid<'_>>
 pub fn geopackage::GeoPackage::tile_pyramids(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::TilePyramid<'_>>>
@@ -727,6 +764,10 @@ pub geopackage::TileAncillary::min: core::option::Option<f64>
 pub geopackage::TileAncillary::offset: f64
 pub geopackage::TileAncillary::scale: f64
 pub geopackage::TileAncillary::std_dev: core::option::Option<f64>
+impl geopackage::TileAncillary
+pub fn geopackage::TileAncillary::defaults() -> Self
+pub fn geopackage::TileAncillary::new(f64, f64) -> Self
+pub fn geopackage::TileAncillary::with_statistics(self, f64, f64, f64, f64) -> Self
 pub struct geopackage::TileCursor<'a>
 impl geopackage::TileCursor<'_>
 pub fn geopackage::TileCursor<'_>::tiles(&mut self) -> geopackage::Result<geopackage::TileStream<'_>>

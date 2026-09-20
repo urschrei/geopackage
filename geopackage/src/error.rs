@@ -182,6 +182,36 @@ pub enum Error {
     /// another implementation wrote opens whatever its matrices say.
     #[error(transparent)]
     Tile(#[from] geopackage_core::TileError),
+    /// A `float` coverage with a scale or offset other than the defaults.
+    ///
+    /// Requirement 11: "When the datatype of the corresponding
+    /// `gpkg_2d_gridded_coverage_ancillary` row is _float_, the `scale` and
+    /// `offset` values _SHALL_ be set to the defaults." Float samples are
+    /// values, so a scale has nothing to convert. A write of the coverage row
+    /// or of a tile row returns this error.
+    #[error(
+        "float coverage {table_name:?} cannot have scale {scale} and offset {offset}: Requirement 11 keeps both at their defaults"
+    )]
+    FloatCoverageScaled {
+        /// The coverage in the write.
+        table_name: String,
+        /// The scale in the request.
+        scale: f64,
+        /// The offset in the request.
+        offset: f64,
+    },
+    /// A coverage payload that this crate reads but does not write.
+    ///
+    /// Deflate compression is the only case. A read accepts it, because
+    /// Requirement 18 does not say "only LZW". A write rejects it, because
+    /// Requirement 15 specifies baseline TIFF.
+    #[error("payload for coverage {table_name:?} cannot be written: {reason}")]
+    UnwritableCoveragePayload {
+        /// The coverage in the write.
+        table_name: String,
+        /// The reason that the payload cannot be written.
+        reason: String,
+    },
     /// A tiled gridded coverage without a `gpkg_2d_gridded_coverage_ancillary`
     /// row, so the meaning of its samples is unknown.
     ///
