@@ -86,25 +86,35 @@ adds ancillary DDL and model types that want the same home, and
 `self_named_module_files` makes growing `tiles.rs` into a directory later a
 churny rename.
 
-- [ ] `SampleType` (`Float32`, `Unsigned(bits)`, `Signed(bits)`),
+- [x] `SampleType` (`Float32`, `Unsigned(bits)`, `Signed(bits)`),
       `TiffCompression` (`None`, `Lzw`, `Deflate`), `CoverageTiff`
       (sample type, compression, width, height), all `#[non_exhaustive]` per C5.
-- [ ] `coverage_tiff(bytes: &[u8]) -> Result<CoverageTiff, TileError>`, checking
+- [x] `coverage_tiff(bytes: &[u8]) -> Result<CoverageTiff, TileError>`, checking
       the tags below.
-- [ ] Bounded parsing, since a `tile_data` BLOB is input this crate did not
+- [x] Bounded parsing, since a `tile_data` BLOB is input this crate did not
       write: one pass, no recursion, nothing allocated from a file-declared
       count, entry count capped at the format's own `u16` bound, every offset
       bounds-checked against `bytes.len()` before use. Entries read from a
       `&[u8]` through `as_chunks::<12>()`, as the GPB envelope reader does.
       `get()` and `try_into()` throughout: `indexing_slicing` and `unwrap_used`
-      are workspace lints.
-- [ ] Both byte orders, chosen once from the header and threaded through as a
+      are workspace lints. *(One addition to the plan: a tag whose value does
+      not fit its entry is treated as unread rather than followed to its
+      offset, so the walk never dereferences a file-supplied pointer at all.
+      Every tag this profile constrains holds a single number, so declining to
+      follow one gives the same answer reading it would, and a tag that cannot
+      be read fails its own requirement rather than passing quietly.)*
+- [x] Both byte orders, chosen once from the header and threaded through as a
       reader pair rather than branched on per tag.
-- [ ] One new `TileError` variant carrying the requirement number, as the tile
+- [x] One new `TileError` variant carrying the requirement number, as the tile
       matrix errors already carry Requirement 45:
       `CoverageProfileViolation { requirement: u8, detail: String }`.
-- [ ] C3: `probe` routes TIFF through this walker.
-- [ ] C4: the doc comment states that Requirement 21 is not checked, and why.
+- [x] C3: `probe` routes TIFF through this walker. *(The Requirement 15 check
+      sits in `coverage_tiff` rather than in the walk itself, which is what
+      keeps the division honest: `imagesize` classifies a BigTIFF as a TIFF, so
+      the probe reaches the walker with one, and it has to come back unreadable
+      rather than as a coverage requirement the payload was never being judged
+      against.)*
+- [x] C4: the doc comment states that Requirement 21 is not checked, and why.
 
 ### What the walker checks, tag by tag
 
@@ -120,24 +130,37 @@ churny rename.
 
 ### Tests
 
-- [ ] Hand-built headers as byte literals, little- and big-endian, one per
+- [x] Hand-built headers as byte literals, little- and big-endian, one per
       violation: BigTIFF magic, a second IFD, `TileWidth` present,
       `SamplesPerPixel` 3, `BitsPerSample` absent/4/64, `SampleFormat` 3 with
       16 bits, JPEG compression. Each asserts the requirement number, not just
       that an error occurred.
-- [ ] Truncation sweep: for a valid payload, `coverage_tiff(&bytes[..n])`
+- [x] Truncation sweep: for a valid payload, `coverage_tiff(&bytes[..n])`
       errors rather than panics for every `n`.
-- [ ] Fixture: `scripts/generate_fixtures.py` gains a float32 DEM through
+- [x] Fixture: `scripts/generate_fixtures.py` gains a float32 DEM through
       `gdal_translate -of GPKG -co TILE_FORMAT=TIFF`, committed as
       `geopackage/tests/fixtures/gdal_coverage.gpkg`. LZW, single strip,
-      Float32: the centre of the profile, and the interop anchor.
-- [ ] Corpus: `corpus_external.rs` already walks tiles one at a time, so the
+      Float32: the centre of the profile, and the interop anchor. *(64 pixels
+      square rather than 256, which keeps the fixture at 32 KB. Written by
+      GDAL 3.8.4; the checker reads it back as `Float32`, `Lzw`, 64 by 64.
+      Cross-checked off to the side against two more GDAL-written TIFFs that
+      are not committed, a big-endian float32 and a big-endian uncompressed
+      int16, so the byte-order and integer paths are read against a third
+      party's encoder rather than only against this crate's test builder.)*
+- [x] Corpus: `corpus_external.rs` already walks tiles one at a time, so the
       checker runs over every TIFF payload in the NGA and GDAL sample sets, and
-      a violation there is reported rather than assumed absent.
-- [ ] Fuzz: `fuzz_targets/tile_payload.rs` calls `coverage_tiff` on the same
+      a violation there is reported rather than assumed absent. *(Not through
+      the tile walk in the end, for the reason in "What phase 1 learned"
+      below: the sweep reads a coverage's payloads through the SQL escape
+      hatch and tallies `coverages`, `coverage_tiles` and `coverage_errors`
+      beside the tile counts. Unrun here, since the fetched corpus is not part
+      of a default test run.)*
+- [x] Fuzz: `fuzz_targets/tile_payload.rs` calls `coverage_tiff` on the same
       bytes. No panic, and when both succeed its width and height equal
       `probe`'s (which C3 makes a tautology, and the assertion guards the day it
-      stops being one).
+      stops being one). *(Strengthened while writing it: a payload the profile
+      accepts must also probe, since the alternative is a conforming coverage
+      tile that the tile size check refuses.)*
 
 ## Phase 1b: surface it
 
@@ -149,6 +172,33 @@ churny rename.
       256x256` rather than `TIFF`.
 - [ ] `gpkg validate` picks the finding up for free, being a printer for
       `validate()`.
+
+### Found while doing it
+
+- [x] **A panic in `TileMatrixSet::tile_at`**, found by the first fuzz soak of
+      the extended target and unrelated to the coverage work: a `TileMatrix`
+      with `matrix_width` or `matrix_height` at zero or below reached
+      `i64::clamp(0, width - 1)` with `min > max`, which panics. Requirements
+      47 and 48 forbid that grid and `validate` refuses it, but `TileMatrix` is
+      constructible directly and one read from someone else's file has been
+      validated by nobody, so the panic was reachable through a public method
+      on ordinary input. A grid of no columns holds no tile for any position,
+      so `tile_at` now answers `None` and `tile_range` inherits it.
+      Pre-existing: this path has been fuzzed since M4, and the corpus it was
+      run against had never produced the values.
+- [ ] **`Extension::GriddedCoverage` cites 17-066r1** in its doc comment and
+      should cite r2. Left for phase 2, where the citation starts being
+      load-bearing.
+
+### What phase 1 learned for phase 2
+
+A coverage declares `gpkg_contents.data_type` as `2d-gridded-coverage` rather
+than `tiles`, so `GeoPackage::tiles` refuses it with `WrongDataType` and
+`tile_pyramids` does not list it. Its payloads are reachable today only
+through the SQL escape hatch, which is what both the fixture test and the
+corpus sweep do. Deciding what a coverage is in this crate's API -- a
+`TilePyramid` that knows it is one, or a type of its own -- is phase 2's first
+question, and a larger one than the payload profile was.
 
 ## Phase 2: the extension proper (not scheduled)
 
@@ -166,13 +216,17 @@ when this lands.
 
 1. [ ] Every TIFF payload in the fetched corpus and in the committed GDAL
    fixture is judged, and each judgement is either conformant or a reported
-   violation naming its requirement — no payload silently unchecked.
-2. [ ] The fuzz target runs the checker without a panic or a timeout over a
-   soak of the length M4's tile fuzzing used.
+   violation naming its requirement — no payload silently unchecked. *(Half
+   met: the fixture is judged on every test run, and the corpus sweep is
+   written but has not been run against a fetched corpus.)*
+2. [x] The fuzz target runs the checker without a panic or a timeout over a
+   soak of the length M4's tile fuzzing used. *(Seven minutes and about six
+   million executions, seeded with the GDAL fixture's own tile. The first soak
+   found the `tile_at` panic above; the soak after the fix is clean.)*
 3. [ ] `gpkg validate` reports a violation this workspace synthesised (a
    deliberately non-conformant payload written through raw SQLite) and stays
-   silent on the GDAL fixture.
-4. [ ] No new dependency in `Cargo.toml`, and `geopackage-core` still decodes
+   silent on the GDAL fixture. *(Phase 1b.)*
+4. [x] No new dependency in `Cargo.toml`, and `geopackage-core` still decodes
    no pixels.
 
 ## Explicit non-goals

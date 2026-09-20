@@ -265,6 +265,19 @@ pub enum TileError {
         /// The header reader's error message.
         reason: String,
     },
+    /// A TIFF tile payload that breaks the tiled gridded coverage extension's
+    /// TIFF encoding requirements (OGC 17-066r2, Requirements 15 to 20).
+    ///
+    /// Raised by [`crate::coverage::coverage_tiff`], which reads the payload's
+    /// header and never its samples: Requirement 21, which constrains the
+    /// sample values themselves, is out of its reach and is not checked.
+    #[error("TIFF tile payload breaks tiled gridded coverage Requirement {requirement}: {detail}")]
+    CoverageProfileViolation {
+        /// The requirement number, in the numbering of OGC 17-066r2.
+        requirement: u8,
+        /// What the payload declares, and what the requirement asks for.
+        detail: String,
+    },
     /// A tile payload whose pixel dimensions are not the ones its zoom level
     /// declares.
     #[error(
@@ -356,6 +369,11 @@ pub struct TilePayload {
 /// cannot catch, which is why the size is returned with the format
 /// ([`TileMatrix::check_payload`]).
 ///
+/// A TIFF's dimensions come from [`crate::coverage`], which walks the first
+/// IFD for the coverage profile check and so already reads them. One parser
+/// per format is the point: two readers of the same bytes can disagree on a
+/// malformed payload, and only one of them can be right.
+///
 /// # Errors
 ///
 /// [`TileError::UnreadablePayload`] when the bytes are not a recognisable
@@ -371,6 +389,14 @@ pub fn probe(bytes: &[u8]) -> Result<TilePayload, TileError> {
         imagesize::ImageType::Tiff => TileFormat::Tiff,
         _ => TileFormat::Other,
     };
+    if format == TileFormat::Tiff {
+        let (width, height) = crate::coverage::dimensions(bytes)?;
+        return Ok(TilePayload {
+            format,
+            width,
+            height,
+        });
+    }
     let size = imagesize::blob_size(bytes).map_err(unreadable)?;
     let (Ok(width), Ok(height)) = (i64::try_from(size.width), i64::try_from(size.height)) else {
         return Err(TileError::UnreadablePayload {

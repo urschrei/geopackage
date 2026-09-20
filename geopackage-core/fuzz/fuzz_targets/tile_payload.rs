@@ -1,18 +1,43 @@
-//! Fuzz the tile payload probe and the tile matrix rules: neither may panic on
-//! arbitrary input, and a probe that succeeds must agree with the size check
-//! built from its own answer.
+//! Fuzz the tile payload probe, the coverage TIFF profile check and the tile
+//! matrix rules: none may panic on arbitrary input, a probe that succeeds must
+//! agree with the size check built from its own answer, and the two readers of
+//! a TIFF header must agree with each other.
 //!
 //! A tile payload is the one part of a GeoPackage this crate reads without
 //! having written it and without a schema to constrain it: whatever bytes a
-//! `tile_data` column contains are handed to `probe` as they are.
+//! `tile_data` column contains are handed to `probe` as they are, and a
+//! coverage payload reaches `coverage_tiff` the same way.
 
 #![no_main]
 
-use geopackage_core::tiles::{self, TileMatrix, TileMatrixSet};
+use geopackage_core::coverage;
+use geopackage_core::tiles::{self, TileFormat, TileMatrix, TileMatrixSet};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    if let Ok(payload) = tiles::probe(data) {
+    // The profile check reads the same header the probe does, and refuses or
+    // accepts without panicking whatever the bytes are.
+    let coverage = coverage::coverage_tiff(data);
+    let probed = tiles::probe(data);
+
+    // A payload the coverage profile accepts is a TIFF the probe also reads,
+    // at the size the profile read from the same IFD. Two readers of one
+    // header disagreeing is the bug this assertion exists to catch: it would
+    // mean a conforming coverage tile that the tile size check refuses. The
+    // probe delegates TIFF to the profile's own walker, which is what makes
+    // the two agree by construction rather than by luck.
+    if let Ok(coverage) = &coverage {
+        let payload = probed
+            .as_ref()
+            .expect("a payload the coverage profile accepts is a readable TIFF");
+        assert_eq!(payload.format, TileFormat::Tiff);
+        assert_eq!(
+            (payload.width, payload.height),
+            (coverage.width, coverage.height)
+        );
+    }
+
+    if let Ok(payload) = probed {
         assert!(payload.width >= 0 && payload.height >= 0);
         // A matrix declaring exactly what the payload reports must accept it,
         // and one declaring a different width must not.
