@@ -275,6 +275,9 @@ fn every_committed_fixture_reports_what_it_is_expected_to() {
         ("case_mismatch.gpkg", &["TableNameCaseMismatch"]),
         // Written without indexes: the fixture is about relations.
         ("gdal_related.gpkg", &["NoSpatialIndex"]),
+        // A GDAL-written tiled gridded coverage: conformant, and the anchor
+        // for the coverage checks.
+        ("gdal_coverage.gpkg", &[]),
         ("gdal_curves.gpkg", &[]),
         (
             "gdal_multilayer_1_4.gpkg",
@@ -456,4 +459,153 @@ fn severity_renders_as_a_lowercase_word() {
     assert_eq!(Severity::Advisory.to_string(), "advisory");
     assert_eq!(Severity::Warning.to_string(), "warning");
     assert_eq!(Severity::Error.to_string(), "error");
+}
+
+/// Copies the coverage fixture, so that a test can break it, and opens the
+/// copy read-write.
+fn coverage_fixture() -> (TempDir, GeoPackage) {
+    open_fixture("gdal_coverage.gpkg")
+}
+
+/// Runs `sql` against the fixture, then validates the result.
+fn coverage_after(sql: &[&str]) -> Vec<Finding> {
+    let (dir, gpkg) = coverage_fixture();
+    for statement in sql {
+        gpkg.connection().execute(statement, []).unwrap();
+    }
+    let findings = gpkg.validate().unwrap();
+    drop(dir);
+    findings
+}
+
+#[test]
+fn a_tile_with_no_ancillary_row_is_reported_against_its_datatype() {
+    // Requirement 10. On a float coverage, a reader uses the defaults, which
+    // Requirement 11 specifies for that coverage, so this is a warning and not
+    // an error. On an integer coverage, the defaults would give incorrect
+    // values.
+    let findings = coverage_after(&["DELETE FROM gpkg_2d_gridded_tile_ancillary"]);
+    let finding = findings
+        .iter()
+        .find(|finding| matches!(finding, Finding::MissingTileAncillary { .. }))
+        .unwrap_or_else(|| panic!("{findings:?}"));
+    assert_eq!(finding.severity(), Severity::Warning);
+    assert_eq!(finding.table_name(), Some("coverage"));
+    assert!(finding.to_string().contains("1 tile(s)"), "{finding}");
+
+    let findings = coverage_after(&[
+        "UPDATE gpkg_2d_gridded_coverage_ancillary SET datatype = 'integer'",
+        "DELETE FROM gpkg_2d_gridded_tile_ancillary",
+    ]);
+    let finding = findings
+        .iter()
+        .find(|finding| matches!(finding, Finding::MissingTileAncillary { .. }))
+        .unwrap_or_else(|| panic!("{findings:?}"));
+    assert_eq!(finding.severity(), Severity::Error);
+}
+
+#[test]
+fn an_ancillary_row_matching_no_tile_is_a_warning() {
+    // Requirement 12: tpudt_id refers to the id column of the tile table.
+    let findings = coverage_after(&["UPDATE gpkg_2d_gridded_tile_ancillary SET tpudt_id = 99"]);
+    let finding = findings
+        .iter()
+        .find(|finding| matches!(finding, Finding::DanglingTileAncillary { .. }))
+        .unwrap_or_else(|| panic!("{findings:?}"));
+    assert_eq!(finding.severity(), Severity::Warning);
+    assert!(finding.to_string().contains("match no tile"), "{finding}");
+}
+
+#[test]
+fn a_float_coverage_that_scales_its_samples_is_reported() {
+    // Requirement 11: for a float coverage both pairs are the defaults.
+    let findings = coverage_after(&["UPDATE gpkg_2d_gridded_coverage_ancillary SET scale = 2.5"]);
+    let finding = findings
+        .iter()
+        .find(|finding| matches!(finding, Finding::CoverageScaleNotDefault { .. }))
+        .unwrap_or_else(|| panic!("{findings:?}"));
+    assert_eq!(finding.severity(), Severity::Warning);
+    assert!(finding.to_string().contains("scale 2.5"), "{finding}");
+
+    // The per-tile pair is the same requirement, counted separately.
+    let findings = coverage_after(&["UPDATE gpkg_2d_gridded_tile_ancillary SET offset = 10.0"]);
+    assert!(
+        findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::CoverageScaleNotDefault { .. })),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn a_datatype_the_requirement_does_not_allow_is_an_error() {
+    // Requirement 9 permits integer and float only. The CHECK constraint of
+    // the table definition enforces this rule, so a file with another value
+    // was written without the constraint. The DDL of the spec includes the
+    // constraint, but nothing makes a writer use it. The test rebuilds the
+    // table without the constraint to make such a file.
+    let findings = coverage_after(&[
+        "CREATE TABLE unchecked AS SELECT * FROM gpkg_2d_gridded_coverage_ancillary",
+        "DROP TABLE gpkg_2d_gridded_coverage_ancillary",
+        "ALTER TABLE unchecked RENAME TO gpkg_2d_gridded_coverage_ancillary",
+        "UPDATE gpkg_2d_gridded_coverage_ancillary SET datatype = 'elevation'",
+    ]);
+    let finding = findings
+        .iter()
+        .find(|finding| matches!(finding, Finding::CoverageDatatypeUnknown { .. }))
+        .unwrap_or_else(|| panic!("{findings:?}"));
+    assert_eq!(finding.severity(), Severity::Error);
+    // Without a datatype for comparison, the check still compares the payload
+    // with the encoding profile, and this payload conforms.
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::CoveragePayloadDatatypeMismatch { .. })),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn a_coverage_with_no_ancillary_row_cannot_be_interpreted() {
+    // Requirements 1 and 7.
+    let findings = coverage_after(&["DELETE FROM gpkg_2d_gridded_coverage_ancillary"]);
+    let finding = findings
+        .iter()
+        .find(|finding| matches!(finding, Finding::CoverageUninterpretable { .. }))
+        .unwrap_or_else(|| panic!("{findings:?}"));
+    assert_eq!(finding.severity(), Severity::Error);
+    assert_eq!(finding.repair(), None);
+}
+
+#[test]
+fn a_payload_that_breaks_the_profile_is_a_warning_and_names_its_requirement() {
+    // A JPEG: neither of the two encodings that the extension permits.
+    let findings = coverage_after(&[
+        "UPDATE coverage SET tile_data = x'FFD8FFE000104A46494600010100000100010000'",
+    ]);
+    let finding = findings
+        .iter()
+        .find(|finding| matches!(finding, Finding::CoveragePayloadNonConformant { .. }))
+        .unwrap_or_else(|| panic!("{findings:?}"));
+    assert_eq!(finding.severity(), Severity::Warning);
+    assert!(finding.to_string().contains("1 tile(s)"), "{finding}");
+}
+
+#[test]
+fn a_payload_contradicting_the_datatype_is_an_error() {
+    // The payload of the fixture is a float32 TIFF. If the coverage is
+    // integer, the two disagree (Requirement 13), and a reader that uses the
+    // ancillary row gets incorrect values.
+    let findings =
+        coverage_after(&["UPDATE gpkg_2d_gridded_coverage_ancillary SET datatype = 'integer'"]);
+    let finding = findings
+        .iter()
+        .find(|finding| matches!(finding, Finding::CoveragePayloadDatatypeMismatch { .. }))
+        .unwrap_or_else(|| panic!("{findings:?}"));
+    assert_eq!(finding.severity(), Severity::Error);
+    assert_eq!(finding.table_name(), Some("coverage"));
+    assert!(
+        finding.to_string().contains("datatype \"integer\""),
+        "{finding}"
+    );
 }

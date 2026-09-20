@@ -23,8 +23,15 @@ use std::fmt;
 
 use geopackage_core::extensions::ExtensionSupport;
 
+use geopackage_core::TileError;
+use geopackage_core::coverage::{CoverageDatatype, TILE_ANCILLARY_TABLE, coverage_payload};
+use geopackage_core::ident::quote;
+
 use crate::index::SpatialIndexAudit;
-use crate::{ExtensionScope, GeoPackage, GpkgVersion, Result, SpatialIndexStatus, table_exists};
+use crate::{
+    ContentsDataType, Coverage, ExtensionScope, GeoPackage, GpkgVersion, Result,
+    SpatialIndexStatus, table_exists,
+};
 
 /// How much a [`Finding`] matters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -119,6 +126,73 @@ pub enum Finding {
         /// What the rule check reported.
         detail: String,
     },
+    /// A `gpkg_contents` row for a tiled gridded coverage that cannot be
+    /// interpreted: no `gpkg_2d_gridded_coverage_ancillary` row, or no tile
+    /// matrix set.
+    CoverageUninterpretable {
+        /// The coverage's table.
+        table_name: String,
+        /// Why it could not be opened.
+        detail: String,
+    },
+    /// A coverage with a `datatype` that is neither `integer` nor `float`
+    /// (Requirement 9), so the meaning of its samples is not defined.
+    CoverageDatatypeUnknown {
+        /// The coverage's table.
+        table_name: String,
+        /// The value as the file spells it.
+        datatype: String,
+    },
+    /// A `float` coverage whose scale or offset is not the default
+    /// (Requirement 11).
+    CoverageScaleNotDefault {
+        /// The coverage's table.
+        table_name: String,
+        /// Which pair, and its values.
+        detail: String,
+    },
+    /// Coverage tiles with payloads that break the encoding profile of the
+    /// extension (Requirements 13 and 15 to 20).
+    CoveragePayloadNonConformant {
+        /// The coverage's table.
+        table_name: String,
+        /// The requirement that the first nonconformant payload breaks.
+        requirement: u8,
+        /// What that payload declares.
+        detail: String,
+        /// How many tiles are affected.
+        tiles: i64,
+    },
+    /// Coverage tiles with payloads that contradict the `datatype` of their
+    /// coverage (Requirements 13 and 14).
+    CoveragePayloadDatatypeMismatch {
+        /// The coverage's table.
+        table_name: String,
+        /// The `datatype` that the ancillary row declares.
+        datatype: String,
+        /// What the first mismatched payload declares instead.
+        detail: String,
+        /// How many tiles are affected.
+        tiles: i64,
+    },
+    /// Coverage tiles with no `gpkg_2d_gridded_tile_ancillary` row
+    /// (Requirement 10).
+    MissingTileAncillary {
+        /// The coverage's table.
+        table_name: String,
+        /// The coverage's `datatype`, which sets the severity of the finding.
+        datatype: String,
+        /// How many tiles have no row.
+        tiles: i64,
+    },
+    /// `gpkg_2d_gridded_tile_ancillary` rows whose `tpudt_id` matches no tile
+    /// (Requirement 12).
+    DanglingTileAncillary {
+        /// The coverage's table, as the rows name it.
+        table_name: String,
+        /// How many rows point to no tile.
+        rows: i64,
+    },
     /// A `gpkg_metadata_reference` row pointing at an absent record.
     DanglingMetadataReference {
         /// The `md_file_id` or `md_parent_id` that resolves to nothing.
@@ -145,7 +219,22 @@ impl Finding {
             Self::MissingContentsTable { .. }
             | Self::SpatialIndexOutOfStep { .. }
             | Self::DanglingMetadataReference { .. }
+            | Self::CoverageUninterpretable { .. }
+            | Self::CoverageDatatypeUnknown { .. }
+            | Self::CoveragePayloadDatatypeMismatch { .. }
             | Self::MissingMappingTable { .. } => Severity::Error,
+            // The severity depends on the coverage. Without the row, a reader
+            // uses a scale of 1 and an offset of 0. Requirement 11 sets these
+            // values for a float coverage. For an integer coverage, the scale
+            // and offset convert samples to values, so the defaults give
+            // incorrect values.
+            Self::MissingTileAncillary { datatype, .. } => {
+                if datatype == "float" {
+                    Severity::Warning
+                } else {
+                    Severity::Error
+                }
+            }
             // Readable, but not what the current spec says.
             Self::LegacyApplicationId { .. }
             | Self::TableNameCaseMismatch { .. }
@@ -153,6 +242,12 @@ impl Finding {
             | Self::UnrecognisedExtension { .. }
             | Self::LegacySpatialIndexTriggers { .. }
             | Self::TilePyramidInconsistent { .. }
+            | Self::CoverageScaleNotDefault { .. }
+            | Self::DanglingTileAncillary { .. }
+            // The header of the payload is correct, so a reader that uses the
+            // header reads the payload correctly. The file does not conform to
+            // the extension, but it is readable.
+            | Self::CoveragePayloadNonConformant { .. }
             | Self::NonConformantRelationName { .. } => Severity::Warning,
             // A choice, not a defect: an unindexed layer still reads.
             Self::NoSpatialIndex { .. } => Severity::Advisory,
@@ -166,7 +261,14 @@ impl Finding {
             | Self::SpatialIndexOutOfStep { table_name, .. }
             | Self::LegacySpatialIndexTriggers { table_name }
             | Self::NoSpatialIndex { table_name }
-            | Self::TilePyramidInconsistent { table_name, .. } => Some(table_name),
+            | Self::TilePyramidInconsistent { table_name, .. }
+            | Self::CoverageUninterpretable { table_name, .. }
+            | Self::CoverageDatatypeUnknown { table_name, .. }
+            | Self::CoverageScaleNotDefault { table_name, .. }
+            | Self::CoveragePayloadNonConformant { table_name, .. }
+            | Self::CoveragePayloadDatatypeMismatch { table_name, .. }
+            | Self::MissingTileAncillary { table_name, .. }
+            | Self::DanglingTileAncillary { table_name, .. } => Some(table_name),
             Self::TableNameCaseMismatch { declared, .. } => Some(declared),
             Self::RemovedExtension { table_name, .. }
             | Self::UnrecognisedExtension { table_name, .. } => table_name.as_deref(),
@@ -206,6 +308,15 @@ impl Finding {
             | Self::TilePyramidInconsistent { .. }
             | Self::DanglingMetadataReference { .. }
             | Self::MissingMappingTable { .. }
+            // A repair of a coverage finding needs the writer that produced the
+            // file: the values that a repair must supply are the data itself.
+            | Self::CoverageUninterpretable { .. }
+            | Self::CoverageDatatypeUnknown { .. }
+            | Self::CoverageScaleNotDefault { .. }
+            | Self::CoveragePayloadNonConformant { .. }
+            | Self::CoveragePayloadDatatypeMismatch { .. }
+            | Self::MissingTileAncillary { .. }
+            | Self::DanglingTileAncillary { .. }
             | Self::NonConformantRelationName { .. } => None,
         }
     }
@@ -289,6 +400,62 @@ impl fmt::Display for Finding {
                     "tile pyramid {table_name:?} breaks the tile matrix rules: {detail}"
                 )
             }
+            Self::CoverageUninterpretable { table_name, detail } => {
+                write!(f, "coverage {table_name:?} cannot be interpreted: {detail}")
+            }
+            Self::CoverageDatatypeUnknown {
+                table_name,
+                datatype,
+            } => {
+                write!(
+                    f,
+                    "coverage {table_name:?} declares datatype {datatype:?}, which is neither \"integer\" nor \"float\""
+                )
+            }
+            Self::CoverageScaleNotDefault { table_name, detail } => {
+                write!(
+                    f,
+                    "float coverage {table_name:?} does not keep the default scale and offset: {detail}"
+                )
+            }
+            Self::CoveragePayloadNonConformant {
+                table_name,
+                requirement,
+                detail,
+                tiles,
+            } => {
+                write!(
+                    f,
+                    "{tiles} tile(s) of coverage {table_name:?} break tiled gridded coverage Requirement {requirement}: {detail}"
+                )
+            }
+            Self::CoveragePayloadDatatypeMismatch {
+                table_name,
+                datatype,
+                detail,
+                tiles,
+            } => {
+                write!(
+                    f,
+                    "{tiles} tile(s) of coverage {table_name:?} do not match its datatype {datatype:?}: {detail}"
+                )
+            }
+            Self::MissingTileAncillary {
+                table_name,
+                datatype,
+                tiles,
+            } => {
+                write!(
+                    f,
+                    "{tiles} tile(s) of {datatype} coverage {table_name:?} have no gpkg_2d_gridded_tile_ancillary row"
+                )
+            }
+            Self::DanglingTileAncillary { table_name, rows } => {
+                write!(
+                    f,
+                    "{rows} gpkg_2d_gridded_tile_ancillary row(s) for {table_name:?} match no tile"
+                )
+            }
             Self::DanglingMetadataReference { md_id } => {
                 write!(
                     f,
@@ -329,9 +496,18 @@ impl GeoPackage {
     ///
     /// One pass over everything this crate knows how to check: the container's
     /// version stamp and catalogue, the extension registrations, every feature
-    /// table's spatial index, every tile pyramid's matrix rules, and the two
-    /// extension catalogues that point at other rows. Findings come back
-    /// most severe first.
+    /// table's spatial index, every tile pyramid's matrix rules, the ancillary
+    /// rows and payloads of every tiled gridded coverage, and the two extension
+    /// catalogues that point at other rows. Findings come back most severe
+    /// first.
+    ///
+    /// # Cost
+    ///
+    /// Each check except one reads catalogue rows, pragmas and index shadow
+    /// tables, so the work is proportional to the number of tables, not to the
+    /// size of the file. The exception is coverages: the encoding requirements
+    /// of the extension are statements about payloads, so the check reads each
+    /// coverage tile. For a file without a coverage, the cost does not change.
     ///
     /// An empty vector means every check passed, not that the file is
     /// conformant in every respect the spec defines: this reports what it can
@@ -350,6 +526,7 @@ impl GeoPackage {
         self.validate_extensions(&mut findings)?;
         self.validate_spatial_indexes(&mut findings)?;
         self.validate_tile_pyramids(&mut findings)?;
+        self.validate_coverages(&mut findings)?;
         self.validate_metadata(&mut findings)?;
         self.validate_relations(&mut findings)?;
         // Most severe first, and stable within a severity so a diff of the
@@ -453,6 +630,207 @@ impl GeoPackage {
                     detail: error.to_string(),
                 });
             }
+        }
+        Ok(())
+    }
+
+    /// Checks every tiled gridded coverage: its ancillary rows, and its
+    /// payloads.
+    ///
+    /// This is the one pass with work that scales with the size of the file.
+    /// It reads every coverage tile, because the encoding requirements apply to
+    /// payloads, and the profile needs the header, not a prefix of the blob (the
+    /// IFD of a TIFF can follow its image data). The pass does not check a
+    /// sample of the tiles, because the result would then report on tiles that
+    /// it did not check.
+    fn validate_coverages(&self, findings: &mut Vec<Finding>) -> Result<()> {
+        for entry in self.contents()? {
+            if entry.data_type != ContentsDataType::Coverage {
+                continue;
+            }
+            let coverage = match self.coverage(&entry.table_name) {
+                Ok(coverage) => coverage,
+                Err(error) => {
+                    findings.push(Finding::CoverageUninterpretable {
+                        table_name: entry.table_name,
+                        detail: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            let datatype = coverage.datatype();
+            if datatype.is_none() {
+                findings.push(Finding::CoverageDatatypeUnknown {
+                    table_name: coverage.table_name().to_owned(),
+                    datatype: coverage.ancillary().datatype.clone(),
+                });
+            }
+            self.validate_coverage_ancillary(&coverage, datatype, findings)?;
+            self.validate_coverage_payloads(&coverage, datatype, findings)?;
+        }
+        Ok(())
+    }
+
+    /// Checks the ancillary rows of one coverage: Requirements 10, 11 and 12.
+    #[expect(
+        clippy::float_cmp,
+        reason = "Requirement 11 says the scale and offset of a float coverage are \"set to the defaults\", which is exactly 1.0 and 0.0; a tolerance would accept values the requirement does not"
+    )]
+    fn validate_coverage_ancillary(
+        &self,
+        coverage: &Coverage<'_>,
+        datatype: Option<CoverageDatatype>,
+        findings: &mut Vec<Finding>,
+    ) -> Result<()> {
+        let table_name = coverage.table_name().to_owned();
+        let quoted = quote(&table_name)?;
+        let ancillary = coverage.ancillary();
+
+        if datatype == Some(CoverageDatatype::Float)
+            && (ancillary.scale != 1.0 || ancillary.offset != 0.0)
+        {
+            findings.push(Finding::CoverageScaleNotDefault {
+                table_name: table_name.clone(),
+                detail: format!(
+                    "the coverage row has scale {} and offset {}",
+                    ancillary.scale, ancillary.offset
+                ),
+            });
+        }
+
+        let tile_ancillary_exists = table_exists(self.connection(), TILE_ANCILLARY_TABLE)?;
+        if !tile_ancillary_exists {
+            // Requirement 2 specifies the table. Without the table, no tile
+            // has a row, which is the same finding.
+            let tiles = coverage.tile_count()?;
+            if tiles > 0 {
+                findings.push(Finding::MissingTileAncillary {
+                    table_name,
+                    datatype: ancillary.datatype.clone(),
+                    tiles,
+                });
+            }
+            return Ok(());
+        }
+
+        let missing: i64 = self.connection().query_row(
+            &format!(
+                "SELECT count(*) FROM {quoted} t \
+                 LEFT JOIN {TILE_ANCILLARY_TABLE} a \
+                 ON a.tpudt_id = t.id AND a.tpudt_name = ?1 COLLATE NOCASE \
+                 WHERE a.id IS NULL"
+            ),
+            [&table_name],
+            |row| row.get(0),
+        )?;
+        if missing > 0 {
+            findings.push(Finding::MissingTileAncillary {
+                table_name: table_name.clone(),
+                datatype: ancillary.datatype.clone(),
+                tiles: missing,
+            });
+        }
+
+        let dangling: i64 = self.connection().query_row(
+            &format!(
+                "SELECT count(*) FROM {TILE_ANCILLARY_TABLE} a \
+                 LEFT JOIN {quoted} t ON t.id = a.tpudt_id \
+                 WHERE a.tpudt_name = ?1 COLLATE NOCASE AND t.id IS NULL"
+            ),
+            [&table_name],
+            |row| row.get(0),
+        )?;
+        if dangling > 0 {
+            findings.push(Finding::DanglingTileAncillary {
+                table_name: table_name.clone(),
+                rows: dangling,
+            });
+        }
+
+        if datatype == Some(CoverageDatatype::Float) {
+            let scaled: i64 = self.connection().query_row(
+                &format!(
+                    "SELECT count(*) FROM {TILE_ANCILLARY_TABLE} \
+                     WHERE tpudt_name = ?1 COLLATE NOCASE AND (scale != 1.0 OR offset != 0.0)"
+                ),
+                [&table_name],
+                |row| row.get(0),
+            )?;
+            if scaled > 0 {
+                findings.push(Finding::CoverageScaleNotDefault {
+                    table_name,
+                    detail: format!(
+                        "{scaled} tile row(s) have a scale or offset other than the defaults"
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Checks every payload of one coverage against the encoding profile and
+    /// against the `datatype` of the coverage.
+    ///
+    /// Counts the payloads for each coverage, and does not report each tile. One
+    /// defective encoder that writes ten thousand tiles is one fault, and ten
+    /// thousand identical findings would hide all other findings. The finding
+    /// keeps the detail of the first payload, which identifies the fault.
+    fn validate_coverage_payloads(
+        &self,
+        coverage: &Coverage<'_>,
+        datatype: Option<CoverageDatatype>,
+        findings: &mut Vec<Finding>,
+    ) -> Result<()> {
+        let mut profile: Option<(u8, String)> = None;
+        let mut profile_tiles = 0;
+        let mut mismatch: Option<String> = None;
+        let mut mismatch_tiles = 0;
+
+        let mut cursor = coverage.cursor()?;
+        let mut stream = cursor.tiles()?;
+        while let Some(tile) = stream.next()? {
+            let payload = match coverage_payload(tile.data()) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    profile_tiles += 1;
+                    if profile.is_none() {
+                        let requirement = match &error {
+                            TileError::CoverageProfileViolation { requirement, .. } => *requirement,
+                            // Not a TIFF and not a PNG. Requirements 13 and 14
+                            // together permit these two encodings only, and 13
+                            // names both.
+                            _ => 13,
+                        };
+                        profile = Some((requirement, error.to_string()));
+                    }
+                    continue;
+                }
+            };
+            if let Some(datatype) = datatype
+                && let Err(error) = datatype.check_payload(&payload)
+            {
+                mismatch_tiles += 1;
+                if mismatch.is_none() {
+                    mismatch = Some(error.to_string());
+                }
+            }
+        }
+
+        if let Some((requirement, detail)) = profile {
+            findings.push(Finding::CoveragePayloadNonConformant {
+                table_name: coverage.table_name().to_owned(),
+                requirement,
+                detail,
+                tiles: profile_tiles,
+            });
+        }
+        if let Some(detail) = mismatch {
+            findings.push(Finding::CoveragePayloadDatatypeMismatch {
+                table_name: coverage.table_name().to_owned(),
+                datatype: coverage.ancillary().datatype.clone(),
+                detail,
+                tiles: mismatch_tiles,
+            });
         }
         Ok(())
     }
