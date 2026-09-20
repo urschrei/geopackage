@@ -10,6 +10,9 @@
 //! - `scan`:                every tile in matrix order through the lending
 //!   cursor, which is what a copy or an export does.
 //! - `write_all`:           the batch write, tiles per second.
+//! - `coverage/*`:          the same per-tile write through the writer of a
+//!   pyramid and through the writer of a coverage, which gives the cost of the
+//!   per-tile ancillary row of Requirement 10.
 //!
 //! Throughput is in tiles per second, so the figures compare directly against
 //! `scripts/compare_gdal_tiles.sh`. Payloads are a fixed 4 KiB, which is a
@@ -30,8 +33,9 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use geopackage::core::coverage::CoverageDatatype;
 use geopackage::core::tiles::{TileCoord, TileMatrixSet, ZoomLadder};
-use geopackage::{GeoPackage, TilePyramid, TilePyramidBuilder};
+use geopackage::{CoverageBuilder, GeoPackage, TilePyramid, TilePyramidBuilder};
 
 /// Payload bytes per tile: a PNG header followed by filler, which the write
 /// path probes and the read path returns untouched.
@@ -202,5 +206,120 @@ fn bench_writes(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_reads, bench_writes);
+/// A 256-pixel float32 LZW coverage TIFF header, padded to [`TILE_BYTES`].
+///
+/// The same form as [`tile_payload`], for the same reason: the write path
+/// reads the header and stores the rest, so the measurement is about the
+/// container and not about the payload.
+fn coverage_payload() -> Vec<u8> {
+    let entries: [(u16, u16); 7] = [
+        (256, 256), // ImageWidth
+        (257, 256), // ImageLength
+        (258, 32),  // BitsPerSample
+        (259, 5),   // Compression: LZW
+        (277, 1),   // SamplesPerPixel
+        (278, 256), // RowsPerStrip
+        (339, 3),   // SampleFormat: IEEE floating point
+    ];
+    let mut bytes = b"II\x2a\x00".to_vec();
+    bytes.extend_from_slice(&8_u32.to_le_bytes());
+    bytes.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    for (tag, value) in entries {
+        bytes.extend_from_slice(&tag.to_le_bytes());
+        bytes.extend_from_slice(&3_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0]);
+    }
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.resize(TILE_BYTES, 0);
+    bytes
+}
+
+/// The cost of Requirement 10 for each tile.
+///
+/// The writer of a coverage runs three statements where the writer of a
+/// pyramid runs one. The three statements write the tile, read the id of the
+/// tile, and write the `gpkg_2d_gridded_tile_ancillary` row that
+/// Requirement 10 specifies for each tile. The two benches run the same loop over the same addresses with the
+/// same payload size through the two writers, so the ratio is the cost of that
+/// requirement only.
+///
+/// The ladder is smaller than in the read benches (zoom 0 to 4, 341 tiles):
+/// this is a per-tile comparison, and the ratio is the result, not the absolute
+/// rate.
+fn bench_coverage_writes(c: &mut Criterion) {
+    const BENCH_ZOOM: i64 = 4;
+    let coords = addresses(BENCH_ZOOM);
+    let png = tile_payload();
+    let tiff = coverage_payload();
+
+    let mut group = c.benchmark_group("coverage");
+    group.measurement_time(Duration::from_secs(10));
+    group.throughput(Throughput::Elements(coords.len() as u64));
+
+    group.bench_function("pyramid/writer_put", |b| {
+        b.iter_batched(
+            || {
+                let dir = tempfile::tempdir().expect("tempdir");
+                let gpkg = GeoPackage::create(dir.path().join("w.gpkg")).expect("create");
+                gpkg.add_epsg_srs(3857).expect("register 3857");
+                let matrix_set = TileMatrixSet::web_mercator_quad();
+                let matrices = matrix_set
+                    .ladder(ZoomLadder::new(0, BENCH_ZOOM))
+                    .expect("ladder");
+                gpkg.create_tile_pyramid(
+                    &TilePyramidBuilder::new("basemap", matrix_set).matrices(matrices),
+                )
+                .expect("create pyramid");
+                (dir, gpkg)
+            },
+            |(dir, gpkg)| {
+                let pyramid = gpkg.tiles("basemap").expect("open");
+                let mut writer = pyramid.writer().expect("writer");
+                for coord in &coords {
+                    writer.put(*coord, &png).expect("put");
+                }
+                writer.commit().expect("commit");
+                drop(gpkg);
+                drop(dir);
+            },
+            criterion::BatchSize::PerIteration,
+        );
+    });
+
+    group.bench_function("coverage/writer_put", |b| {
+        b.iter_batched(
+            || {
+                let dir = tempfile::tempdir().expect("tempdir");
+                let gpkg = GeoPackage::create(dir.path().join("w.gpkg")).expect("create");
+                gpkg.add_epsg_srs(3857).expect("register 3857");
+                let matrix_set = TileMatrixSet::web_mercator_quad();
+                let matrices = matrix_set
+                    .ladder(ZoomLadder::new(0, BENCH_ZOOM))
+                    .expect("ladder");
+                gpkg.create_coverage(
+                    &CoverageBuilder::new("elevation", matrix_set, CoverageDatatype::Float)
+                        .matrices(matrices),
+                )
+                .expect("create coverage");
+                (dir, gpkg)
+            },
+            |(dir, gpkg)| {
+                let coverage = gpkg.coverage("elevation").expect("open");
+                let mut writer = coverage.writer().expect("writer");
+                for coord in &coords {
+                    writer.put(*coord, &tiff).expect("put");
+                }
+                writer.commit().expect("commit");
+                drop(gpkg);
+                drop(dir);
+            },
+            criterion::BatchSize::PerIteration,
+        );
+    });
+    group.finish();
+}
+
+criterion_group!(benches, bench_reads, bench_writes, bench_coverage_writes);
 criterion_main!(benches);
