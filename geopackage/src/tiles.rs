@@ -401,6 +401,23 @@ impl GeoPackage {
     /// - [`Error::NoTileMatrixSet`] if its `gpkg_tile_matrix_set` row is
     ///   missing, which leaves its tiles unlocatable.
     pub fn tiles(&self, name: &str) -> Result<TilePyramid<'_>> {
+        self.open_pyramid(name, "tiles")
+    }
+
+    /// Opens the tile machinery over a `gpkg_contents` row of the given data
+    /// type.
+    ///
+    /// The tile table, its matrix set and its zoom levels are shaped the same
+    /// whether the payloads are pictures or measurements, so a coverage
+    /// (`2d-gridded-coverage`, Requirement 5) borrows all of it. What it does
+    /// not borrow is the public handle: [`crate::Coverage`] keeps this one
+    /// private, so a coverage never reaches a writer that knows nothing about
+    /// its ancillary rows.
+    pub(crate) fn open_pyramid(
+        &self,
+        name: &str,
+        expected_data_type: &'static str,
+    ) -> Result<TilePyramid<'_>> {
         let conn = self.connection();
         let row = conn
             .query_row(
@@ -413,10 +430,10 @@ impl GeoPackage {
         let (declared_name, data_type) = row.ok_or_else(|| Error::NoSuchLayer {
             table_name: name.to_owned(),
         })?;
-        if data_type != "tiles" {
+        if data_type != expected_data_type {
             return Err(Error::WrongDataType {
                 table_name: declared_name,
-                expected: "tiles",
+                expected: expected_data_type,
                 found: data_type,
             });
         }

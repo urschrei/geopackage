@@ -182,6 +182,23 @@ pub enum Error {
     /// another implementation wrote opens whatever its matrices say.
     #[error(transparent)]
     Tile(#[from] geopackage_core::TileError),
+    /// A tiled gridded coverage whose `gpkg_2d_gridded_coverage_ancillary`
+    /// row is missing, so what its samples mean is unknown.
+    ///
+    /// Requirements 1 and 7: a file containing tiled gridded data has the
+    /// table, and every `2d-gridded-coverage` row in `gpkg_contents` has a row
+    /// in it. Without one there is no `datatype`, no scale or offset and no
+    /// `data_null`, and a sample is a number with no meaning attached, so
+    /// [`crate::GeoPackage::coverage`] refuses rather than guessing at
+    /// defaults.
+    #[error(
+        "coverage {table_name:?} has no {table} row, so what its samples mean is unknown",
+        table = geopackage_core::coverage::COVERAGE_ANCILLARY_TABLE
+    )]
+    NoCoverageAncillary {
+        /// The coverage that is missing its row.
+        table_name: String,
+    },
     /// A tile pyramid whose `gpkg_tile_matrix_set` row is missing, so the
     /// extent its tiles are addressed against is unknown.
     #[error(

@@ -22,6 +22,12 @@
 //! read of the kind [`crate::tiles::probe`] already does, and no sample is
 //! ever decoded.
 //!
+//! An integer coverage may store PNG instead (Requirement 13), and
+//! [`coverage_png`] reads that header to the same depth: 16-bit unsigned,
+//! single channel, and nothing beyond what `IHDR` declares. [`coverage_payload`]
+//! takes either and [`CoverageDatatype::check_payload`] is the rule that ties
+//! a payload to the `datatype` its coverage declares.
+//!
 //! **Requirement 21 is not checked here, and cannot be.** "All pixels in a
 //! tile of coverage data _SHALL_ be set with a valid component value … Special
 //! floating point values such as NaN and Inf SHALL NOT be used" is a statement
@@ -42,6 +48,28 @@
 //! here, because every tag this profile constrains holds a single number.
 
 use crate::tiles::TileError;
+
+/// Registered extension name for tiled gridded coverages (OGC 17-066r2).
+pub const COVERAGE_EXTENSION_NAME: &str = "gpkg_2d_gridded_coverage";
+/// `gpkg_extensions.definition` value for [`COVERAGE_EXTENSION_NAME`].
+///
+/// The r1 URL, which is what the Extension Table Record in the current
+/// (r2) spec source still gives and what GDAL writes. Copied rather than
+/// corrected, as normative text is throughout this workspace.
+pub const COVERAGE_EXTENSION_DEFINITION: &str =
+    "http://docs.opengeospatial.org/is/17-066r1/17-066r1.html";
+/// `gpkg_extensions.scope` value for the three rows a coverage registers.
+pub const COVERAGE_EXTENSION_SCOPE: &str = "read-write";
+/// The `gpkg_contents.data_type` a tiled gridded coverage declares
+/// (Requirement 5).
+///
+/// Not `tiles`: a coverage is its own kind of content, and this crate opens
+/// one through its own handle rather than as a tile pyramid.
+pub const COVERAGE_DATA_TYPE: &str = "2d-gridded-coverage";
+/// The per-coverage ancillary table (Requirement 1).
+pub const COVERAGE_ANCILLARY_TABLE: &str = "gpkg_2d_gridded_coverage_ancillary";
+/// The per-tile ancillary table (Requirement 2).
+pub const TILE_ANCILLARY_TABLE: &str = "gpkg_2d_gridded_tile_ancillary";
 
 /// The TIFF tags this profile constrains, by number.
 mod tag {
@@ -311,6 +339,249 @@ pub fn coverage_tiff(bytes: &[u8]) -> Result<CoverageTiff, TileError> {
         compression,
         width,
         height,
+    })
+}
+
+/// What a conforming PNG coverage payload declares in its header.
+///
+/// There is no sample-type field here, because Requirement 13 leaves one
+/// possibility: "If type `png` is being used, the data _SHALL_ be 16-bit
+/// unsigned integer (single channel - "greyscale")". A `CoveragePng` that
+/// exists is 16-bit greyscale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CoveragePng {
+    /// Width in pixels, from `IHDR`.
+    pub width: i64,
+    /// Height in pixels, from `IHDR`.
+    pub height: i64,
+}
+
+/// A coverage tile payload in either of the encodings the extension allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CoveragePayload {
+    /// `image/tiff`, the encoding a `float` coverage uses (Requirement 14) and
+    /// one of the two an `integer` coverage may (Requirement 13).
+    Tiff(CoverageTiff),
+    /// `image/png`, 16-bit greyscale, which only an `integer` coverage may use.
+    Png(CoveragePng),
+}
+
+impl CoveragePayload {
+    /// The sample encoding the payload declares.
+    ///
+    /// A PNG coverage payload is [`SampleType::Unsigned`] of 16 bits by
+    /// Requirement 13, which is what makes the two encodings comparable at all.
+    pub fn sample_type(self) -> SampleType {
+        match self {
+            Self::Tiff(tiff) => tiff.sample_type,
+            Self::Png(_) => SampleType::Unsigned(16),
+        }
+    }
+
+    /// Width in pixels.
+    pub fn width(self) -> i64 {
+        match self {
+            Self::Tiff(tiff) => tiff.width,
+            Self::Png(png) => png.width,
+        }
+    }
+
+    /// Height in pixels.
+    pub fn height(self) -> i64 {
+        match self {
+            Self::Tiff(tiff) => tiff.height,
+            Self::Png(png) => png.height,
+        }
+    }
+
+    /// The MIME type Requirements 13 and 14 name for this encoding.
+    pub fn mime_type(self) -> &'static str {
+        match self {
+            Self::Tiff(_) => "image/tiff",
+            Self::Png(_) => "image/png",
+        }
+    }
+}
+
+/// The `gpkg_2d_gridded_coverage_ancillary.datatype` of a coverage
+/// (Requirement 9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CoverageDatatype {
+    /// `integer`: samples are whole numbers, and the scale and offset columns
+    /// carry them back to real values.
+    Integer,
+    /// `float`: samples are values already, and Requirement 11 holds the scale
+    /// and offset at their defaults.
+    Float,
+}
+
+impl CoverageDatatype {
+    /// Reads the column value, which Requirement 9 restricts to `integer` or
+    /// `float`.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "integer" => Some(Self::Integer),
+            "float" => Some(Self::Float),
+            _ => None,
+        }
+    }
+
+    /// The column value, as the spec spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Integer => "integer",
+            Self::Float => "float",
+        }
+    }
+
+    /// Checks a payload against the `datatype` its coverage declares
+    /// (Requirements 13 and 14).
+    ///
+    /// The two directions do not rest on equally explicit text, and the
+    /// difference is worth stating:
+    ///
+    /// - **float** is explicit. Requirement 14: the payload "_SHALL_ be of
+    ///   _MIME type_ `image/tiff` and the default data encoding _SHALL_ be
+    ///   32-bit floating point as described in the TIFF Encoding". A PNG, or a
+    ///   TIFF of integer samples, breaks it.
+    /// - **integer** is read rather than quoted. Requirement 13 allows
+    ///   `image/png` or `image/tiff` and pins only the PNG form to 16-bit
+    ///   unsigned; it does not say in as many words that the TIFF form must
+    ///   hold integer samples. Taking floating-point samples under a `datatype`
+    ///   of `integer` as conforming would leave the column meaning nothing, so
+    ///   they are refused here, against Requirement 13.
+    ///
+    /// Reported rather than enforced on read, as everything in this crate is:
+    /// this is the predicate, and the caller decides what a failure costs.
+    ///
+    /// # Errors
+    ///
+    /// [`TileError::CoverageProfileViolation`], naming Requirement 13 or 14.
+    pub fn check_payload(self, payload: &CoveragePayload) -> Result<(), TileError> {
+        match (self, payload.sample_type()) {
+            (Self::Float, SampleType::Float32) if matches!(payload, CoveragePayload::Tiff(_)) => {
+                Ok(())
+            }
+            (Self::Float, _) => Err(violation(
+                14,
+                format!(
+                    "the coverage declares datatype float, and the payload is {} carrying {:?} samples",
+                    payload.mime_type(),
+                    payload.sample_type()
+                ),
+            )),
+            (Self::Integer, SampleType::Unsigned(_) | SampleType::Signed(_)) => Ok(()),
+            (Self::Integer, sample_type) => Err(violation(
+                13,
+                format!(
+                    "the coverage declares datatype integer, and the payload carries {sample_type:?} samples"
+                ),
+            )),
+        }
+    }
+}
+
+/// Checks a coverage tile payload in whichever encoding it is written in.
+///
+/// Dispatches on the magic bytes: a PNG signature goes to [`coverage_png`] and
+/// everything else to [`coverage_tiff`], which is where a payload that is
+/// neither is refused.
+///
+/// This says nothing about whether the encoding suits the coverage that holds
+/// it; that is [`CoverageDatatype::check_payload`].
+///
+/// # Errors
+///
+/// [`TileError::CoverageProfileViolation`] for a payload the profile refuses,
+/// and [`TileError::UnreadablePayload`] for bytes that are neither encoding.
+pub fn coverage_payload(bytes: &[u8]) -> Result<CoveragePayload, TileError> {
+    if bytes.starts_with(&PNG_SIGNATURE) {
+        return Ok(CoveragePayload::Png(coverage_png(bytes)?));
+    }
+    Ok(CoveragePayload::Tiff(coverage_tiff(bytes)?))
+}
+
+/// The eight bytes every PNG begins with.
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+/// Checks a PNG tile payload against Requirement 13: 16-bit unsigned, single
+/// channel.
+///
+/// Reads the signature and the `IHDR` chunk, and nothing else: no `IDAT` is
+/// touched, so the same "header only, never a decode" line holds here as for
+/// TIFF, and Requirement 21 is as far out of reach.
+///
+/// # Errors
+///
+/// [`TileError::CoverageProfileViolation`] naming Requirement 13 when the bit
+/// depth or colour type is not 16-bit greyscale.
+///
+/// [`TileError::UnreadablePayload`] when the bytes are not a PNG, or are
+/// truncated before `IHDR` ends.
+///
+/// # Examples
+///
+/// ```
+/// use geopackage_core::TileError;
+/// use geopackage_core::coverage::coverage_png;
+///
+/// // A PNG signature and nothing after it: unreadable, not non-conformant.
+/// let truncated = b"\x89PNG\r\n\x1a\n";
+/// assert!(matches!(
+///     coverage_png(truncated),
+///     Err(TileError::UnreadablePayload { .. })
+/// ));
+/// ```
+pub fn coverage_png(bytes: &[u8]) -> Result<CoveragePng, TileError> {
+    if !bytes.starts_with(&PNG_SIGNATURE) {
+        return Err(unreadable("no PNG signature"));
+    }
+    // IHDR is always the first chunk (PNG clause 5.6) and sits at a fixed
+    // offset: the 8-byte signature, then the chunk's 4-byte length. Its type
+    // and the five fields this profile cares about follow in one run.
+    let Some(ihdr) = bytes.get(12..).and_then(|rest| rest.first_chunk::<14>()) else {
+        return Err(unreadable("truncated before the IHDR header ends"));
+    };
+    let [
+        type0,
+        type1,
+        type2,
+        type3,
+        width0,
+        width1,
+        width2,
+        width3,
+        height0,
+        height1,
+        height2,
+        height3,
+        bit_depth,
+        colour_type,
+    ] = *ihdr;
+    if [type0, type1, type2, type3] != *b"IHDR" {
+        return Err(unreadable("the first PNG chunk is not IHDR"));
+    }
+    if bit_depth != 16 {
+        return Err(violation(
+            13,
+            format!("PNG bit depth is {bit_depth}, and a coverage tile is 16-bit"),
+        ));
+    }
+    // Colour type 0 is greyscale; 2, 3, 4 and 6 add channels or a palette.
+    if colour_type != 0 {
+        return Err(violation(
+            13,
+            format!(
+                "PNG colour type is {colour_type}, and a coverage tile is single channel (greyscale, colour type 0)"
+            ),
+        ));
+    }
+    Ok(CoveragePng {
+        width: i64::from(u32::from_be_bytes([width0, width1, width2, width3])),
+        height: i64::from(u32::from_be_bytes([height0, height1, height2, height3])),
     })
 }
 
@@ -933,6 +1204,145 @@ pub(crate) mod tests {
             dimensions(prefix).unwrap_err();
         }
         coverage_tiff(&bytes).unwrap();
+    }
+
+    /// A PNG header: signature, then an IHDR chunk with the given fields.
+    /// Nothing after it, since nothing after it is read.
+    fn png(width: u32, height: u32, bit_depth: u8, colour_type: u8) -> Vec<u8> {
+        let mut bytes = PNG_SIGNATURE.to_vec();
+        bytes.extend_from_slice(&13u32.to_be_bytes());
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&[bit_depth, colour_type, 0, 0, 0]);
+        // The chunk's CRC, which this reader does not check and so does not
+        // compute; four bytes of the right shape are enough.
+        bytes.extend_from_slice(&[0, 0, 0, 0]);
+        bytes
+    }
+
+    #[test]
+    fn a_16_bit_greyscale_png_conforms() {
+        let payload = coverage_png(&png(256, 128, 16, 0)).unwrap();
+        assert_eq!((payload.width, payload.height), (256, 128));
+    }
+
+    #[test]
+    fn a_png_that_is_not_16_bit_greyscale_is_refused() {
+        // Requirement 13 leaves one PNG form: 16-bit, single channel.
+        for (bit_depth, colour_type) in [(8, 0), (16, 2), (8, 6), (16, 3)] {
+            match coverage_png(&png(64, 64, bit_depth, colour_type)) {
+                Err(TileError::CoverageProfileViolation { requirement, .. }) => {
+                    assert_eq!(requirement, 13);
+                }
+                other => panic!("expected a Requirement 13 violation, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_truncated_png_is_unreadable() {
+        let bytes = png(64, 64, 16, 0);
+        // 8 signature + 4 length + 4 type + 10 of IHDR: everything this
+        // profile constrains sits in the first 26 bytes, and a payload
+        // shorter than that cannot be judged.
+        const HEADER_LEN: usize = 26;
+        for length in 0..HEADER_LEN {
+            assert!(
+                coverage_png(&bytes[..length]).is_err(),
+                "a PNG truncated to {length} bytes was accepted"
+            );
+        }
+        for length in HEADER_LEN..=bytes.len() {
+            coverage_png(&bytes[..length]).unwrap();
+        }
+        // A first chunk that is not IHDR is a PNG this reader will not guess
+        // at rather than one it refuses.
+        let mut wrong_chunk = bytes.clone();
+        wrong_chunk.splice(12..16, *b"sRGB");
+        assert!(matches!(
+            coverage_png(&wrong_chunk),
+            Err(TileError::UnreadablePayload { .. })
+        ));
+    }
+
+    #[test]
+    fn a_payload_is_read_in_either_encoding() {
+        let tiff = coverage_payload(&conformant().build()).unwrap();
+        assert_eq!(tiff.sample_type(), SampleType::Float32);
+        assert_eq!(tiff.mime_type(), "image/tiff");
+        assert_eq!((tiff.width(), tiff.height()), (256, 256));
+
+        let png = coverage_payload(&png(256, 256, 16, 0)).unwrap();
+        // Requirement 13 leaves one possibility, so the PNG form compares with
+        // the TIFF one without anything more being read.
+        assert_eq!(png.sample_type(), SampleType::Unsigned(16));
+        assert_eq!(png.mime_type(), "image/png");
+        assert_eq!((png.width(), png.height()), (256, 256));
+
+        assert!(matches!(
+            coverage_payload(b"\xff\xd8\xff\xe0 a JPEG"),
+            Err(TileError::UnreadablePayload { .. })
+        ));
+    }
+
+    #[test]
+    fn a_float_coverage_takes_float32_tiff_and_nothing_else() {
+        let float32 = coverage_payload(&conformant().build()).unwrap();
+        CoverageDatatype::Float.check_payload(&float32).unwrap();
+
+        // Requirement 14 is explicit: image/tiff, 32-bit floating point.
+        let int16 = coverage_payload(
+            &conformant()
+                .set(tag::SAMPLE_FORMAT, 2)
+                .set(tag::BITS_PER_SAMPLE, 16)
+                .build(),
+        )
+        .unwrap();
+        let png16 = coverage_payload(&png(64, 64, 16, 0)).unwrap();
+        for payload in [int16, png16] {
+            match CoverageDatatype::Float.check_payload(&payload) {
+                Err(TileError::CoverageProfileViolation { requirement, .. }) => {
+                    assert_eq!(requirement, 14);
+                }
+                other => panic!("expected a Requirement 14 violation, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn an_integer_coverage_takes_either_encoding_but_not_float_samples() {
+        for payload in [
+            coverage_payload(&png(64, 64, 16, 0)).unwrap(),
+            coverage_payload(
+                &conformant()
+                    .set(tag::SAMPLE_FORMAT, 1)
+                    .set(tag::BITS_PER_SAMPLE, 8)
+                    .build(),
+            )
+            .unwrap(),
+        ] {
+            CoverageDatatype::Integer.check_payload(&payload).unwrap();
+        }
+
+        // Read rather than quoted, as the method documents: floating-point
+        // samples under `datatype = integer` would leave the column meaning
+        // nothing.
+        let float32 = coverage_payload(&conformant().build()).unwrap();
+        match CoverageDatatype::Integer.check_payload(&float32) {
+            Err(TileError::CoverageProfileViolation { requirement, .. }) => {
+                assert_eq!(requirement, 13);
+            }
+            other => panic!("expected a Requirement 13 violation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_datatype_column_round_trips() {
+        for datatype in [CoverageDatatype::Integer, CoverageDatatype::Float] {
+            assert_eq!(CoverageDatatype::parse(datatype.as_str()), Some(datatype));
+        }
+        assert_eq!(CoverageDatatype::parse("elevation"), None);
     }
 
     #[test]
