@@ -252,6 +252,8 @@ impl core::marker::UnsafeUnpin for geopackage_core::datetime::DateTime
 impl core::panic::unwind_safe::RefUnwindSafe for geopackage_core::datetime::DateTime
 impl core::panic::unwind_safe::UnwindSafe for geopackage_core::datetime::DateTime
 pub mod geopackage_core::ddl
+pub const geopackage_core::ddl::CREATE_GPKG_2D_GRIDDED_COVERAGE_ANCILLARY: &str
+pub const geopackage_core::ddl::CREATE_GPKG_2D_GRIDDED_TILE_ANCILLARY: &str
 pub const geopackage_core::ddl::CREATE_GPKG_CONTENTS: &str
 pub const geopackage_core::ddl::CREATE_GPKG_DATA_COLUMNS: &str
 pub const geopackage_core::ddl::CREATE_GPKG_DATA_COLUMN_CONSTRAINTS: &str

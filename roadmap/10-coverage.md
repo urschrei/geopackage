@@ -208,9 +208,8 @@ churny rename.
       so `tile_at` now answers `None` and `tile_range` inherits it.
       Pre-existing: this path has been fuzzed since M4, and the corpus it was
       run against had never produced the values.
-- [ ] **`Extension::GriddedCoverage` cites 17-066r1** in its doc comment and
-      should cite r2. Left for phase 2d, where the citation starts being
-      load-bearing.
+- [x] **`Extension::GriddedCoverage` cites 17-066r1** in its doc comment and
+      should cite r2. Done in 2b, with the support-level change.
 
 ### What phase 1 learned for phase 2
 
@@ -291,34 +290,38 @@ only if another implementation wrote it.
 
 ### Phase 2b: the write path
 
-- [ ] DDL for both ancillary tables, verbatim from
+- [x] DDL for both ancillary tables, verbatim from
       [annex-c](https://github.com/opengeospatial/geopackage/blob/master/spec/2d-gridded-coverage/annex-c.adoc),
       including its single-quoted table name. GDAL's differs (it folds the
       `CHECK` into the foreign-key constraint clause); ours follows the spec,
       and reading tolerates both because reading never looks at the DDL.
-- [ ] The three `gpkg_extensions` rows, with `definition` the r1 URL the r2
+- [x] The three `gpkg_extensions` rows, with `definition` the r1 URL the r2
       spec source still prints and GDAL still writes
       (`COVERAGE_EXTENSION_DEFINITION`). Copied, not corrected.
-- [ ] `CoverageBuilder` and `create_coverage`, with Requirement 11 enforced:
-      a `float` coverage keeps both scale/offset pairs at their defaults.
-- [ ] **Requirement 10 per tile.** Every tile insert needs its row id back
-      (`RETURNING id`) and a second insert into
-      `gpkg_2d_gridded_tile_ancillary`; every tile delete needs both rows
-      gone, since the normative DDL has no `ON DELETE CASCADE`. Doubling the
-      statements per tile will show in the tile-write benchmark, which is
-      worth measuring rather than assuming. A Hegel property test over
-      insert/delete sequences pins the pairing, as the RTree one pins the
-      index.
-- [ ] Lift the TIFF write refusal for a coverage table only, gated on
-      `Coverage::check_payload`. The ordinary tile path keeps refusing TIFF.
-- [ ] Say plainly in the docs what a writer with no codec cannot do: the four
-      per-tile statistics are left `NULL` unless the caller supplies them, and
-      Requirement 21 is unenforceable.
-- [ ] `ExtensionSupport` for `Extension::GriddedCoverage` moves from `Known`
-      to `Implemented`. It stayed `Known` through 2a and 2c deliberately: the
-      level is documented as "read **and** written", and adding a third level
-      for the months between would be API churn during a freeze. The pinned
-      inventory in `geopackage/tests/extensions.rs` changes with it.
+- [x] `CoverageBuilder` and `create_coverage`, with Requirement 11 enforced:
+      a `float` coverage keeps both scale/offset pairs at their defaults, on
+      the coverage row and on every tile's.
+- [x] **Requirement 10 per tile.** Every tile insert reads its row id back and
+      writes the matching ancillary row; every delete removes both, since the
+      normative DDL has no `ON DELETE CASCADE`. A Hegel property test pins the
+      pairing over arbitrary write/delete sequences, checking after every step
+      rather than at the end, as the RTree property test does.
+      *(The id comes from a `SELECT` rather than from `RETURNING`: `RETURNING`
+      needs SQLite 3.35, this crate links the system SQLite by default (D1),
+      and nothing else in the workspace imposes a runtime SQLite version. If
+      one is ever declared, this is the place that halves its statements.)*
+- [x] Lift the TIFF write refusal for a coverage table only, gated on the
+      payload check. The ordinary tile path still refuses TIFF, and C2's
+      Deflate asymmetry is enforced here: read, but not written.
+- [x] Say plainly in the docs what a writer with no codec cannot do: the four
+      per-tile statistics are left `NULL` unless the caller supplies them
+      through `put_with_ancillary`, and Requirement 21 is unenforceable.
+- [x] `ExtensionSupport` for `Extension::GriddedCoverage` moves from `Known`
+      to `Implemented`, and the pinned inventory in
+      `geopackage/tests/extensions.rs` with it.
+- [ ] Benchmark the per-tile cost. Requirement 10 doubles the statements per
+      tile (insert, id read, ancillary insert), and the tile-write benchmark
+      is where that shows. Not yet measured.
 
 ### Phase 2c: validate and the CLI
 
@@ -369,14 +372,19 @@ ended up, written against `Coverage` rather than against raw SQL.
 
 ### Phase 2d: interop and conformance
 
-- [ ] GDAL round trip in `gdal_interop.rs`: a coverage this crate wrote, read
-      back by `gdalinfo` with its elevations intact.
+- [x] GDAL round trip in `gdal_interop.rs`: a coverage this crate wrote, read
+      back by `gdalinfo` with its elevations intact. *(A payload GDAL encoded,
+      in a container this crate wrote, read back by GDAL: Float32, the
+      `data_null` from our ancillary row, and `gdallocationinfo` returning
+      pixel for pixel what the source file holds. The one check this workspace
+      cannot make itself, since it decodes nothing.)*
 - [ ] The twelve abstract tests of
       [annex-a](https://github.com/opengeospatial/geopackage/blob/master/spec/2d-gridded-coverage/annex-a.adoc)
       implemented by hand. There is no ETS for this extension — `ets-gpkg12`
       validates 1.2 core and tiles and skips the rest — so the abstract test
       suite is the nearest thing to one.
-- [ ] `Extension::GriddedCoverage` cites r2 rather than r1.
+- [x] `Extension::GriddedCoverage` cites r2 rather than r1. *(Landed with 2b,
+      beside the support-level change it sits next to.)*
 
 ## Acceptance criteria
 

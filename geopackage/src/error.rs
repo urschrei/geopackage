@@ -182,6 +182,38 @@ pub enum Error {
     /// another implementation wrote opens whatever its matrices say.
     #[error(transparent)]
     Tile(#[from] geopackage_core::TileError),
+    /// A `float` coverage asked to carry a scale or offset of its own.
+    ///
+    /// Requirement 11: "When the datatype of the corresponding
+    /// `gpkg_2d_gridded_coverage_ancillary` row is _float_, the `scale` and
+    /// `offset` values _SHALL_ be set to the defaults." Float samples are
+    /// values already, so there is nothing for a scale to carry them back
+    /// from. Raised on write, of either the coverage row or a tile's.
+    #[error(
+        "float coverage {table_name:?} cannot carry scale {scale} and offset {offset}: Requirement 11 keeps both at their defaults"
+    )]
+    FloatCoverageScaled {
+        /// The coverage that was being written.
+        table_name: String,
+        /// The offending scale.
+        scale: f64,
+        /// The offending offset.
+        offset: f64,
+    },
+    /// A coverage payload this crate reads but will not write.
+    ///
+    /// The asymmetry is deliberate and is settled in the milestone's decision
+    /// record: a reader that turns a file away helps nobody, and a writer is
+    /// where strictness is cheap. Deflate compression is the case that exists
+    /// today, accepted on read because Requirement 18 does not say "only LZW"
+    /// and refused on write because Requirement 15 asks for baseline TIFF.
+    #[error("payload for coverage {table_name:?} cannot be written: {reason}")]
+    UnwritableCoveragePayload {
+        /// The coverage that was being written.
+        table_name: String,
+        /// What about the payload makes it unwritable.
+        reason: String,
+    },
     /// A tiled gridded coverage whose `gpkg_2d_gridded_coverage_ancillary`
     /// row is missing, so what its samples mean is unknown.
     ///
