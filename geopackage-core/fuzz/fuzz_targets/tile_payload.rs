@@ -1,18 +1,42 @@
-//! Fuzz the tile payload probe and the tile matrix rules: neither may panic on
-//! arbitrary input, and a probe that succeeds must agree with the size check
-//! built from its own answer.
+//! Fuzz the tile payload probe, the coverage TIFF profile check and the tile
+//! matrix rules. They must not panic on arbitrary input. A probe that succeeds
+//! must agree with the size check made from its own result, and the two
+//! readers of a TIFF header must agree with each other.
 //!
 //! A tile payload is the one part of a GeoPackage this crate reads without
 //! having written it and without a schema to constrain it: whatever bytes a
-//! `tile_data` column contains are handed to `probe` as they are.
+//! `tile_data` column contains are handed to `probe` as they are, and a
+//! coverage payload goes to `coverage_tiff` in the same way.
 
 #![no_main]
 
-use geopackage_core::tiles::{self, TileMatrix, TileMatrixSet};
+use geopackage_core::coverage;
+use geopackage_core::tiles::{self, TileFormat, TileMatrix, TileMatrixSet};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    if let Ok(payload) = tiles::probe(data) {
+    // The profile check reads the same header as the probe. It must accept or
+    // reject any bytes without a panic.
+    let coverage = coverage::coverage_tiff(data);
+    let probed = tiles::probe(data);
+
+    // If the coverage profile accepts a payload, the probe must read it as a
+    // TIFF, with the size that the profile read from the same IFD. If the two
+    // readers disagree, a conforming coverage tile fails the tile size check.
+    // The probe uses the walker of the profile for TIFF, so the two agree by
+    // design.
+    if let Ok(coverage) = &coverage {
+        let payload = probed
+            .as_ref()
+            .expect("a payload the coverage profile accepts is a readable TIFF");
+        assert_eq!(payload.format, TileFormat::Tiff);
+        assert_eq!(
+            (payload.width, payload.height),
+            (coverage.width, coverage.height)
+        );
+    }
+
+    if let Ok(payload) = probed {
         assert!(payload.width >= 0 && payload.height >= 0);
         // A matrix declaring exactly what the payload reports must accept it,
         // and one declaring a different width must not.

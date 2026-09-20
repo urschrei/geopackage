@@ -6,6 +6,7 @@
     reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"
 )]
 
+use geopackage::core::coverage::{SampleType, TiffCompression, coverage_tiff};
 use geopackage::core::tiles::{TileCoord, TileMatrix, TileMatrixSet, ZoomLadder};
 use geopackage::core::types::GeometryType;
 use geopackage::core::{TileError, TileFormat};
@@ -598,6 +599,46 @@ fn a_pyramid_with_no_matrix_set_row_is_an_error() {
         gpkg.tiles("basemap"),
         Err(Error::NoTileMatrixSet { .. })
     ));
+}
+
+#[test]
+fn a_gdal_written_coverage_tile_meets_the_tiff_profile() {
+    // The committed fixture from scripts/generate_fixtures.py: one 64-pixel
+    // float32 TIFF tile, written by gdal_translate with TILE_FORMAT=TIFF.
+    // GDAL is the implementation the coverage profile's consumers meet, so
+    // what it writes is the interop anchor for the checker.
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gdal_coverage.gpkg");
+    let gpkg = GeoPackage::open_read_only(path).unwrap();
+
+    // A coverage declares its `gpkg_contents.data_type` as
+    // `2d-gridded-coverage`, and this crate implements the extension's payload
+    // profile and nothing else, so the table is not openable as a pyramid.
+    // Reading it that way is what M6 phase 2 adds.
+    assert!(matches!(
+        gpkg.tiles("coverage"),
+        Err(Error::WrongDataType { .. })
+    ));
+    assert!(gpkg.tile_pyramids().unwrap().is_empty());
+
+    // The payload itself, through the SQL escape hatch.
+    let payload: Vec<u8> = gpkg
+        .connection()
+        .query_row("SELECT tile_data FROM coverage", [], |row| row.get(0))
+        .unwrap();
+    let coverage = coverage_tiff(&payload).unwrap();
+    assert_eq!(coverage.sample_type, SampleType::Float32);
+    assert_eq!(coverage.sample_type.bits(), 32);
+    assert_eq!(coverage.compression, TiffCompression::Lzw);
+    assert!(coverage.compression.is_baseline());
+    assert_eq!((coverage.width, coverage.height), (64, 64));
+
+    // And the payload probe, which reads the same IFD, agrees about the size.
+    let probed = geopackage::core::tiles::probe(&payload).unwrap();
+    assert_eq!(probed.format, TileFormat::Tiff);
+    assert_eq!((probed.width, probed.height), (64, 64));
+    let matrix = TileMatrix::new(0, 1, 1, 64, 64, 1.0, 1.0);
+    matrix.check_payload(&probed).unwrap();
 }
 
 #[test]

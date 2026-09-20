@@ -443,6 +443,16 @@ fn every_extension_in_the_committed_fixtures_is_classified() {
     assert_eq!(
         seen,
         vec![
+            // The coverage fixture: this crate names the extension and checks
+            // its TIFF payload profile, and implements nothing else of it, so
+            // it is Known rather than Implemented.
+            (
+                "gpkg_2d_gridded_coverage".to_owned(),
+                ExtensionSupport::Known
+            ),
+            // Also the coverage fixture: GDAL writes a WKT2 definition in
+            // addition to the EPSG:3857 row that it adds.
+            ("gpkg_crs_wkt".to_owned(), ExtensionSupport::Implemented),
             (
                 "gpkg_geom_CIRCULARSTRING".to_owned(),
                 ExtensionSupport::Implemented

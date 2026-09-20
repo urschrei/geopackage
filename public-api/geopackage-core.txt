@@ -1,4 +1,23 @@
 pub mod geopackage_core
+pub mod geopackage_core::coverage
+#[non_exhaustive] pub enum geopackage_core::coverage::SampleType
+pub geopackage_core::coverage::SampleType::Float32
+pub geopackage_core::coverage::SampleType::Signed(u8)
+pub geopackage_core::coverage::SampleType::Unsigned(u8)
+impl geopackage_core::coverage::SampleType
+pub fn geopackage_core::coverage::SampleType::bits(self) -> u8
+#[non_exhaustive] pub enum geopackage_core::coverage::TiffCompression
+pub geopackage_core::coverage::TiffCompression::Deflate
+pub geopackage_core::coverage::TiffCompression::Lzw
+pub geopackage_core::coverage::TiffCompression::None
+impl geopackage_core::coverage::TiffCompression
+pub fn geopackage_core::coverage::TiffCompression::is_baseline(self) -> bool
+#[non_exhaustive] pub struct geopackage_core::coverage::CoverageTiff
+pub geopackage_core::coverage::CoverageTiff::compression: geopackage_core::coverage::TiffCompression
+pub geopackage_core::coverage::CoverageTiff::height: i64
+pub geopackage_core::coverage::CoverageTiff::sample_type: geopackage_core::coverage::SampleType
+pub geopackage_core::coverage::CoverageTiff::width: i64
+pub fn geopackage_core::coverage::coverage_tiff(&[u8]) -> core::result::Result<geopackage_core::coverage::CoverageTiff, geopackage_core::tiles::TileError>
 pub mod geopackage_core::curve
 pub struct geopackage_core::curve::BodyScan
 pub geopackage_core::curve::BodyScan::dimensions: geo_traits::dimension::Dimensions
@@ -316,6 +335,9 @@ pub geopackage_core::tiles::TileError::CoordOutsideMatrix::matrix_height: i64
 pub geopackage_core::tiles::TileError::CoordOutsideMatrix::matrix_width: i64
 pub geopackage_core::tiles::TileError::CoordOutsideMatrix::row: i64
 pub geopackage_core::tiles::TileError::CoordOutsideMatrix::zoom_level: i64
+pub geopackage_core::tiles::TileError::CoverageProfileViolation
+pub geopackage_core::tiles::TileError::CoverageProfileViolation::detail: alloc::string::String
+pub geopackage_core::tiles::TileError::CoverageProfileViolation::requirement: u8
 pub geopackage_core::tiles::TileError::DuplicateZoomLevel
 pub geopackage_core::tiles::TileError::DuplicateZoomLevel::zoom_level: i64
 pub geopackage_core::tiles::TileError::ExtentMismatch
@@ -619,6 +641,9 @@ pub geopackage_core::TileError::CoordOutsideMatrix::matrix_height: i64
 pub geopackage_core::TileError::CoordOutsideMatrix::matrix_width: i64
 pub geopackage_core::TileError::CoordOutsideMatrix::row: i64
 pub geopackage_core::TileError::CoordOutsideMatrix::zoom_level: i64
+pub geopackage_core::TileError::CoverageProfileViolation
+pub geopackage_core::TileError::CoverageProfileViolation::detail: alloc::string::String
+pub geopackage_core::TileError::CoverageProfileViolation::requirement: u8
 pub geopackage_core::TileError::DuplicateZoomLevel
 pub geopackage_core::TileError::DuplicateZoomLevel::zoom_level: i64
 pub geopackage_core::TileError::ExtentMismatch
