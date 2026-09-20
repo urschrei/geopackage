@@ -24,6 +24,7 @@ pub fn run(path: &Path) -> Result<ExitCode> {
 
     print_layers(&gpkg)?;
     print_tile_pyramids(&gpkg)?;
+    print_coverages(&gpkg)?;
     print_extensions(&gpkg)?;
 
     Ok(ExitCode::SUCCESS)
@@ -120,6 +121,56 @@ fn print_tile_pyramids(gpkg: &GeoPackage) -> Result<()> {
                     matrix.tile_width,
                     matrix.tile_height
                 );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Prints the coverages, separately from the pyramids, because a coverage is a
+/// different kind of content. `gpkg coverage info` gives the details.
+fn print_coverages(gpkg: &GeoPackage) -> Result<()> {
+    let declared: Vec<String> = gpkg
+        .contents()?
+        .into_iter()
+        .filter(|entry| entry.data_type == ContentsDataType::Coverage)
+        .map(|entry| entry.table_name)
+        .collect();
+    if declared.is_empty() {
+        return Ok(());
+    }
+
+    for name in declared {
+        // Uses the catalogue names, not `coverages()`, so that the list
+        // includes a coverage that this crate cannot open. `validate` gives
+        // the reason.
+        match gpkg.coverage(&name) {
+            Ok(coverage) => {
+                let ancillary = coverage.ancillary();
+                println!("\ncoverage {name:?}");
+                println!(
+                    "  samples:  {}{}",
+                    ancillary.datatype,
+                    match ancillary.uom.as_deref() {
+                        Some(uom) => format!(" in {uom}"),
+                        None => String::new(),
+                    }
+                );
+                let zooms = coverage.zoom_levels();
+                match (zooms.first(), zooms.last()) {
+                    (Some(first), Some(last)) => println!("  zooms:    {first} to {last}"),
+                    _ => println!("  zooms:    none"),
+                }
+                if let Some(srs) = gpkg.srs(coverage.matrix_set().srs_id)? {
+                    println!(
+                        "  srs:      {} ({}:{})",
+                        srs.name, srs.organization, srs.organization_coordsys_id
+                    );
+                }
+            }
+            Err(error) => {
+                println!("\ncoverage {name:?}");
+                println!("  unreadable: {error}");
             }
         }
     }
