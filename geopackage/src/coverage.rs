@@ -680,6 +680,10 @@ impl GeoPackage {
     /// (Requirement 7) and the three `gpkg_extensions` rows (Requirement 6), in
     /// one transaction.
     ///
+    /// Adds the EPSG:4979 row that Requirement 3 specifies, if the file does not
+    /// have it. A geographic 3D CRS has no WKT1 form, so this also adds the
+    /// `gpkg_crs_wkt` extension column.
+    ///
     /// # Per-tile statistics
     ///
     /// The file contains per-tile statistics only if the caller supplies them.
@@ -713,6 +717,13 @@ impl GeoPackage {
         let conn = self.connection();
         let tx = WriteTransaction::begin(conn)?;
         self.write_pyramid(&spec, zoom_other)?;
+        // Requirement 3: a file that complies with this extension contains the
+        // EPSG:4979 row, whether or not a coverage uses it. The requirement is
+        // about the file, so the creation of a coverage adds the row. 4979 is
+        // geographic 3D and has no WKT1 form, so the registration also adds
+        // the `gpkg_crs_wkt` extension column. GDAL writes the same row and
+        // column.
+        self.add_epsg_srs(COVERAGE_VERTICAL_SRS_ID)?;
         for (exists, sql) in [
             (
                 table_exists(conn, COVERAGE_ANCILLARY_TABLE)?,
@@ -767,6 +778,10 @@ impl GeoPackage {
         self.coverage(&builder.table_name)
     }
 }
+
+/// The EPSG code that Requirement 3 specifies for every coverage file: WGS 84
+/// 3D, the geographic 3D CRS that vertical values refer to.
+const COVERAGE_VERTICAL_SRS_ID: i32 = 4979;
 
 /// Requirement 11: "When the datatype of the corresponding
 /// `gpkg_2d_gridded_coverage_ancillary` row is _float_, the `scale` and
