@@ -315,9 +315,15 @@ only if another implementation wrote it.
 - [x] `ExtensionSupport` for `Extension::GriddedCoverage` moves from `Known`
       to `Implemented`, and the pinned inventory in
       `geopackage/tests/extensions.rs` with it.
-- [ ] Benchmark the per-tile cost. Requirement 10 doubles the statements per
-      tile (insert, id read, ancillary insert), and the tile-write benchmark
-      is where that shows. Not yet measured.
+- [x] Benchmark the per-tile cost. Requirement 10 makes three statements per
+      tile where a pyramid makes one, and
+      [benchmarks/2026-09-20-coverage-writes.md](benchmarks/2026-09-20-coverage-writes.md)
+      is what that costs: **about 26%** of per-tile write throughput, 3.6 µs a
+      tile, measured against a pyramid control on the same machine in the same
+      run. Three statements for the price of 1.26, because most of a tile
+      write is the page and the transaction rather than the statement. The
+      `RETURNING` alternative would save perhaps half the difference and cost
+      a runtime SQLite minimum; the arithmetic is recorded there.
 
 ### Phase 2c: validate and the CLI
 
