@@ -597,7 +597,15 @@ impl TileMatrixSet {
     /// Inclusive at every edge: a position on `max_x` belongs to the last
     /// column rather than to one past it, and a position on `min_y` to the last
     /// row.
+    ///
+    /// Also returns `None` for a grid with no columns or no rows, which
+    /// contains no tile for any position. Requirements 47 and 48 do not permit
+    /// that grid, and [`TileMatrixSet::validate`] rejects it. A [`TileMatrix`]
+    /// read from the file of another writer has not been through either check.
     pub fn tile_at(&self, matrix: &TileMatrix, x: f64, y: f64) -> Option<(i64, i64)> {
+        if matrix.matrix_width <= 0 || matrix.matrix_height <= 0 {
+            return None;
+        }
         if x < self.min_x || x > self.max_x || y < self.min_y || y > self.max_y {
             return None;
         }
@@ -1266,6 +1274,24 @@ mod tests {
         );
         assert_eq!(set.tile_at(&zoom1, 200.0, 200.0), Some((1, 0)));
         assert_eq!(set.tile_at(&zoom1, -0.5, 100.0), None);
+    }
+
+    #[test]
+    fn a_grid_with_no_tiles_contains_no_position() {
+        // Requirements 47 and 48 forbid this grid and `validate` rejects it,
+        // but a tile matrix from the file of another writer has not been
+        // through either check, and a public method must not panic on it. The
+        // `tile_payload` fuzz target found this case.
+        let (set, _) = square_pyramid();
+        for (width, height) in [(0, 1), (1, 0), (-1, 1), (1, i64::MIN)] {
+            let degenerate = TileMatrix::new(0, width, height, 256, 256, 1.0, 1.0);
+            assert_eq!(set.tile_at(&degenerate, 1.0, 1.0), None);
+            assert_eq!(
+                set.tile_range(&degenerate, 0.0, 0.0, 256.0, 256.0),
+                None,
+                "a range is a pair of tile_at calls, and gives the same answer"
+            );
+        }
     }
 
     #[test]
