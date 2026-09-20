@@ -227,13 +227,13 @@ Settled in C6 and built in phase 2a: a type of its own.
 **Folded into phase 2c**, and the reason is the order 2a settled: a validate
 pass written before `Coverage` existed would have read payloads through the
 SQL escape hatch and been rewritten the moment it did. The findings, their
-severities and the cost question are planned in 2c below. What remains here
-is the one piece that never needed a coverage handle:
+severities and the cost question are recorded in 2c below, where they landed.
+What belonged here was the one piece that never needed a coverage handle:
 
-- [ ] `gpkg tiles get --out` describes a TIFF payload it writes as
-      `TIFF, float32, LZW, 256x256` rather than `TIFF`. It already prints what
-      `probe` says, and a payload the profile can describe deserves the
-      fuller line whichever table it came from.
+- [x] `gpkg tiles get --out` describes a TIFF payload it writes as
+      `Tiff 256x256, Float32, Lzw` rather than `Tiff 256x256`. It already
+      printed what `probe` says, and a payload the profile can describe
+      deserves the fuller line whichever table it came from.
 
 *(Moved to 2c: the `validate()` findings, their severity split, and
 `gpkg coverage info`, which needs the handle 2a built. `gpkg tiles info`
@@ -314,25 +314,58 @@ only if another implementation wrote it.
 - [ ] Say plainly in the docs what a writer with no codec cannot do: the four
       per-tile statistics are left `NULL` unless the caller supplies them, and
       Requirement 21 is unenforceable.
+- [ ] `ExtensionSupport` for `Extension::GriddedCoverage` moves from `Known`
+      to `Implemented`. It stayed `Known` through 2a and 2c deliberately: the
+      level is documented as "read **and** written", and adding a third level
+      for the months between would be API churn during a freeze. The pinned
+      inventory in `geopackage/tests/extensions.rs` changes with it.
 
 ### Phase 2c: validate and the CLI
 
-- [ ] `validate()`: Requirements 7, 8, 10 and 11 as SQL joins (an ancillary
-      row pointing at no coverage, a coverage with no row, a tile with no
-      ancillary row, a float coverage whose scale or offset is not the
-      default), plus the payload check over every tile. This is the pass
-      phase 1b was going to write against raw SQL and can now write against
-      `Coverage`.
-- [ ] Severity split: a profile violation is a warning, since the payload
-      describes itself honestly; a payload contradicting the coverage's
-      `datatype` is an error, because a reader honouring the ancillary row
-      gets wrong numbers.
-- [ ] The cost question `validate()` has never had to answer before: this is
-      the first check whose work scales with file size. Read whole payloads
-      first, document it, and revisit with a benchmark rather than sampling
-      tiles quietly.
-- [ ] `gpkg coverage info`, and a coverage line in `gpkg info`'s contents
-      listing.
+Landed ahead of 2b, because all of it is about reading files someone else
+wrote and none of it waits on a write path. This is where phase 1b's work
+ended up, written against `Coverage` rather than against raw SQL.
+
+- [x] `validate()` gains a coverage pass: Requirements 1 and 7 (a coverage
+      that cannot be interpreted), 9 (a `datatype` outside `integer`/`float`),
+      10 (tiles with no ancillary row), 11 (a float coverage that scales its
+      samples, in either pair) and 12 (ancillary rows matching no tile), plus
+      every payload against the encoding profile and against the coverage's
+      own `datatype`.
+- [x] Severity split, as planned: a profile violation is a **warning**, since
+      the payload describes itself honestly and a reader honouring its header
+      reads it correctly, and a payload contradicting the coverage's
+      `datatype` is an **error**, because a reader honouring the ancillary row
+      gets wrong numbers. One severity turned out to depend on the file rather
+      than on the check: a missing per-tile row is a warning on a float
+      coverage, whose scale and offset Requirement 11 pins to the defaults a
+      reader would fall back to anyway, and an error on an integer one, where
+      the fallback invents values.
+- [x] Payload findings are counted per coverage rather than raised per tile,
+      keeping the first offender's detail. Ten thousand tiles from one broken
+      encoder are one fault, and ten thousand identical findings would bury
+      every other one.
+- [x] The cost question, answered as planned: `validate()` reads every
+      coverage payload, which makes it the first check whose work scales with
+      the size of the file, and that is documented on the method. A TIFF's IFD
+      may sit after its image data, so a prefix of the blob is not enough;
+      sampling some tiles was the alternative, and a validator that quietly
+      checks a few is worse than one that takes its time. Revisit with a
+      benchmark, not by sampling.
+- [x] `gpkg coverage info` and `gpkg coverage get`, a separate command from
+      `gpkg tiles` for the reason C6 gives. `info` prints what the samples
+      mean (datatype, scale, offset, null, cell encoding, uom) and describes
+      the first payload's header; `get` writes the stored bytes and prints the
+      recorded range beside them, which is the only thing this crate can say
+      about a tile's contents without decoding it.
+- [x] A coverage line in `gpkg info`'s summary, listed from the catalogue so a
+      coverage this crate cannot open is named rather than omitted.
+- [x] `gpkg validate` prints the new findings for free, being a printer for
+      `validate()`.
+- [ ] **Re-pin the external corpus expectations.** `corpus_external.rs` pins
+      the findings each fetched file reports, and any coverage in that corpus
+      may now report new ones. Unrun here (the corpus is not part of a default
+      test run), so the next soak is where that gets checked.
 
 ### Phase 2d: interop and conformance
 
@@ -361,9 +394,11 @@ because reading a coverage is only worth having once something reports on it
    soak of the length M4's tile fuzzing used. *(Seven minutes and about six
    million executions, seeded with the GDAL fixture's own tile. The first soak
    found the `tile_at` panic above; the soak after the fix is clean.)*
-3. [ ] `gpkg validate` reports a violation this workspace synthesised (a
+3. [x] `gpkg validate` reports a violation this workspace synthesised (a
    deliberately non-conformant payload written through raw SQLite) and stays
-   silent on the GDAL fixture. *(Phase 1b.)*
+   silent on the GDAL fixture. *(Phase 2c: seven cases, one per requirement
+   the pass checks, each asserting the severity as well as the finding, and
+   the fixture pinned at no findings in the committed-fixture inventory.)*
 4. [x] No new dependency in `Cargo.toml`, and `geopackage-core` still decodes
    no pixels.
 

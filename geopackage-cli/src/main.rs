@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 mod copy;
+mod coverage;
 mod error;
 mod index;
 mod info;
@@ -80,6 +81,46 @@ enum Command {
         #[command(subcommand)]
         command: TileCommand,
     },
+    /// Tiled gridded coverages: elevation and other measured grids.
+    ///
+    /// A separate command from `tiles` because a coverage is a separate kind
+    /// of content: its payloads carry measurements rather than pictures, and
+    /// what its samples mean is in ancillary tables a pyramid does not have.
+    Coverage {
+        #[command(subcommand)]
+        command: CoverageCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum CoverageCommand {
+    /// Describe every coverage in a file, or a single named coverage.
+    Info {
+        /// The `.gpkg` file to read.
+        file: PathBuf,
+        /// Describe only this coverage.
+        coverage: Option<String>,
+    },
+    /// Write one tile's stored bytes out, addressed by zoom, column and row.
+    ///
+    /// No samples are decoded: the bytes come out as the file stores them, and
+    /// what is printed beside them is what the payload's header and the tile's
+    /// ancillary row declare.
+    Get {
+        /// The `.gpkg` file to read.
+        file: PathBuf,
+        /// The coverage's table name.
+        coverage: String,
+        /// Zoom level.
+        zoom: i64,
+        /// Tile column, counting east from the extent's west edge.
+        column: i64,
+        /// Tile row, counting south from the extent's north edge.
+        row: i64,
+        /// Write to this path instead of standard output.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -133,6 +174,22 @@ fn main() -> ExitCode {
             } => tiles::get(
                 &file,
                 &pyramid,
+                geopackage::core::tiles::TileCoord::new(zoom, column, row),
+                out.as_deref(),
+            ),
+        },
+        Command::Coverage { command } => match command {
+            CoverageCommand::Info { file, coverage } => coverage::info(&file, coverage.as_deref()),
+            CoverageCommand::Get {
+                file,
+                coverage,
+                zoom,
+                column,
+                row,
+                out,
+            } => coverage::get(
+                &file,
+                &coverage,
                 geopackage::core::tiles::TileCoord::new(zoom, column, row),
                 out.as_deref(),
             ),

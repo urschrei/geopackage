@@ -9,6 +9,7 @@
 use std::path::Path;
 use std::process::ExitCode;
 
+use geopackage::core::coverage::coverage_tiff;
 use geopackage::core::tiles::{TileCoord, probe};
 use geopackage::{GeoPackage, TilePyramid};
 
@@ -97,7 +98,22 @@ pub fn get(
             // the extension on `--out` is the caller's guess and the payload
             // is whatever the file stored.
             let described = match probe(&bytes) {
-                Ok(payload) => format!("{:?} {}x{}", payload.format, payload.width, payload.height),
+                Ok(payload) => {
+                    // A TIFF in a tile table belongs to the coverage
+                    // extension, and its header says more than its size: the
+                    // sample type and compression are what a reader needs to
+                    // know before it can do anything with the bytes.
+                    let profile = match coverage_tiff(&bytes) {
+                        Ok(coverage) => {
+                            format!(", {:?}, {:?}", coverage.sample_type, coverage.compression)
+                        }
+                        Err(_) => String::new(),
+                    };
+                    format!(
+                        "{:?} {}x{}{profile}",
+                        payload.format, payload.width, payload.height
+                    )
+                }
                 Err(_) => "unrecognised payload".to_owned(),
             };
             println!(

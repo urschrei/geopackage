@@ -296,8 +296,30 @@ impl core::marker::UnsafeUnpin for geopackage::Error
 impl !core::panic::unwind_safe::RefUnwindSafe for geopackage::Error
 impl !core::panic::unwind_safe::UnwindSafe for geopackage::Error
 #[non_exhaustive] pub enum geopackage::Finding
+pub geopackage::Finding::CoverageDatatypeUnknown
+pub geopackage::Finding::CoverageDatatypeUnknown::datatype: alloc::string::String
+pub geopackage::Finding::CoverageDatatypeUnknown::table_name: alloc::string::String
+pub geopackage::Finding::CoveragePayloadDatatypeMismatch
+pub geopackage::Finding::CoveragePayloadDatatypeMismatch::datatype: alloc::string::String
+pub geopackage::Finding::CoveragePayloadDatatypeMismatch::detail: alloc::string::String
+pub geopackage::Finding::CoveragePayloadDatatypeMismatch::table_name: alloc::string::String
+pub geopackage::Finding::CoveragePayloadDatatypeMismatch::tiles: i64
+pub geopackage::Finding::CoveragePayloadNonConformant
+pub geopackage::Finding::CoveragePayloadNonConformant::detail: alloc::string::String
+pub geopackage::Finding::CoveragePayloadNonConformant::requirement: u8
+pub geopackage::Finding::CoveragePayloadNonConformant::table_name: alloc::string::String
+pub geopackage::Finding::CoveragePayloadNonConformant::tiles: i64
+pub geopackage::Finding::CoverageScaleNotDefault
+pub geopackage::Finding::CoverageScaleNotDefault::detail: alloc::string::String
+pub geopackage::Finding::CoverageScaleNotDefault::table_name: alloc::string::String
+pub geopackage::Finding::CoverageUninterpretable
+pub geopackage::Finding::CoverageUninterpretable::detail: alloc::string::String
+pub geopackage::Finding::CoverageUninterpretable::table_name: alloc::string::String
 pub geopackage::Finding::DanglingMetadataReference
 pub geopackage::Finding::DanglingMetadataReference::md_id: i64
+pub geopackage::Finding::DanglingTileAncillary
+pub geopackage::Finding::DanglingTileAncillary::rows: i64
+pub geopackage::Finding::DanglingTileAncillary::table_name: alloc::string::String
 pub geopackage::Finding::LegacyApplicationId
 pub geopackage::Finding::LegacyApplicationId::application_id: u32
 pub geopackage::Finding::LegacyApplicationId::version: geopackage_core::version::GpkgVersion
@@ -307,6 +329,10 @@ pub geopackage::Finding::MissingContentsTable
 pub geopackage::Finding::MissingContentsTable::table_name: alloc::string::String
 pub geopackage::Finding::MissingMappingTable
 pub geopackage::Finding::MissingMappingTable::mapping_table_name: alloc::string::String
+pub geopackage::Finding::MissingTileAncillary
+pub geopackage::Finding::MissingTileAncillary::datatype: alloc::string::String
+pub geopackage::Finding::MissingTileAncillary::table_name: alloc::string::String
+pub geopackage::Finding::MissingTileAncillary::tiles: i64
 pub geopackage::Finding::NoSpatialIndex
 pub geopackage::Finding::NoSpatialIndex::table_name: alloc::string::String
 pub geopackage::Finding::NonConformantRelationName
