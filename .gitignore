@@ -5,6 +5,9 @@ geopackage-core/fuzz/target
 geopackage-core/fuzz/corpus
 geopackage-core/fuzz/artifacts
 geopackage-core/fuzz/coverage
+# Python bytecode that an import of generate_fixtures.py creates in scripts/.
+__pycache__/
+
 # Externally fetched corpus (scripts/fetch_corpus.sh); never committed.
 /corpus
 

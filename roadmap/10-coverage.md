@@ -177,6 +177,18 @@ churny rename.
       are not committed, a big-endian float32 and a big-endian uncompressed
       int16, so the byte-order and integer paths are read against a third
       party's encoder rather than only against this crate's test builder.)*
+- [x] A second committed fixture, `gdal_coverage_png.gpkg`, added 2026-09-21:
+      the *other* encoding of Requirement 13, an `integer` coverage of 16-bit
+      PNGs from another encoder. Before it, this workspace had built every PNG
+      that the profile had checked, and the corpus was the only planned source
+      of a PNG from elsewhere. It also has a pair other than the defaults: GDAL
+      quantises a float source to 16-bit unsigned values and records the
+      transform *per tile*, so `Coverage::value` is checked against the
+      arithmetic of another implementation. It is the third subject of the
+      abstract test suite. *(For the record: GDAL's repository contains no
+      coverage `.gpkg`. Its gridded coverage tests start from
+      `data/float32.tif` and create the GeoPackage in the test body, as the
+      fixture generator here does.)*
 - [x] Corpus: `corpus_external.rs` already walks tiles one at a time, so the
       checker runs over every TIFF payload in the NGA and GDAL sample sets, and
       a violation there is reported rather than assumed absent. *(Not through
@@ -417,10 +429,12 @@ because reading a coverage is only worth having once something reports on it
 
 1. [ ] Every TIFF payload in the fetched corpus and in the committed GDAL
    fixture is judged, and each judgement is either conformant or a reported
-   violation naming its requirement, with no payload unchecked. *(Half
-   met: the fixture is judged on every test run (through `Coverage` since
-   2a, which checks the `datatype` as well as the profile), and the corpus
-   sweep is written but has not been run against a fetched corpus.)*
+   violation naming its requirement, with no payload unchecked. *(Met for
+   the committed fixtures, which are now two and cover both encodings, judged
+   on every test run through `Coverage` and against the `datatype` as well as
+   the profile. Open for the corpus, which is parked: what it would add is
+   files from writers other than GDAL (NGA's Java stack, FME), and files
+   using the pre-1.2 spellings, which nothing here has ever opened.)*
 2. [x] The fuzz target runs the checker without a panic or a timeout over a
    soak of the length M4's tile fuzzing used. *(Seven minutes and about six
    million executions, seeded with the GDAL fixture's own tile. The first soak
