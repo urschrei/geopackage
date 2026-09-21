@@ -8,11 +8,14 @@
 //! API. Going through the API would check that the API agrees with itself; the
 //! point here is to check the *file*.
 //!
-//! Every test runs twice, over
+//! Every test runs three times, over
 //!
-//! - `gdal_coverage.gpkg`, the committed fixture GDAL wrote, which is the
-//!   control: a file another implementation produced and believes in, and
-//!   [`geopackage_writes_a_conformant_coverage`]'s counterpart.
+//! - `gdal_coverage.gpkg`, a `float` coverage of TIFF payloads that GDAL
+//!   wrote: a file another implementation produced and believes in.
+//! - `gdal_coverage_png.gpkg`, GDAL's other encoding: an `integer` coverage of
+//!   16-bit PNGs whose samples are quantised, so the per-tile scale and offset
+//!   carry them back. Requirement 13's PNG form and Requirement 11's one
+//!   permitted exception, neither of which the TIFF control reaches.
 //! - a coverage this crate writes, which is what the suite is really for.
 //!
 //! Two of the twelve are `Test Type: Capability` with a manual step
@@ -40,19 +43,36 @@ use geopackage::{CoverageBuilder, GeoPackage, TileAncillary};
 use rusqlite::Connection;
 use tempfile::TempDir;
 
-/// The two subjects: GDAL's file, and ours.
+/// The three subjects: GDAL's two encodings, and ours.
 ///
 /// Held open as connections rather than as [`GeoPackage`] handles, because the
 /// abstract tests are statements about the file and are written as SQL.
+///
+/// Both GDAL files are controls, and they are not the same control: one is a
+/// `float` coverage of TIFF payloads, the other an `integer` coverage of
+/// 16-bit PNGs carrying a per-tile scale and offset, which is Requirement 13's
+/// other encoding and the only shape Requirement 11 lets a pair vary in.
 fn subjects() -> Vec<(&'static str, Connection, Option<TempDir>)> {
-    vec![("gdal", Connection::open(gdal_fixture()).unwrap(), None), {
-        let (dir, path) = write_ours();
-        ("ours", Connection::open(path).unwrap(), Some(dir))
-    }]
+    vec![
+        ("gdal-tiff", Connection::open(gdal_fixture()).unwrap(), None),
+        (
+            "gdal-png",
+            Connection::open(gdal_png_fixture()).unwrap(),
+            None,
+        ),
+        {
+            let (dir, path) = write_ours();
+            ("ours", Connection::open(path).unwrap(), Some(dir))
+        },
+    ]
 }
 
 fn gdal_fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gdal_coverage.gpkg")
+}
+
+fn gdal_png_fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gdal_coverage_png.gpkg")
 }
 
 /// A coverage this crate writes, carrying the fixture's own payload: a float32
@@ -219,7 +239,7 @@ fn test004_every_coverage_has_one_tile_matrix_set() {
 fn test005_coverages_are_listed_in_contents() {
     for (who, conn, _dir) in subjects() {
         let tables = coverage_tables(&conn);
-        let expected = if who == "gdal" {
+        let expected = if who == "gdal-tiff" {
             "coverage"
         } else {
             "elevation"

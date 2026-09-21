@@ -753,6 +753,68 @@ def build_gdal_coverage(tmp: Path) -> Path:
     return out
 
 
+def build_gdal_coverage_png(tmp: Path) -> Path:
+    """A GDAL-written coverage whose payloads are PNG rather than TIFF.
+
+    Requirement 13's other encoding: an *integer* coverage may store
+    ``image/png``, 16-bit unsigned single channel. GDAL reaches it by
+    quantising a float source into that space, which is why the file that
+    comes out declares ``datatype = 'integer'`` and carries a **per-tile**
+    scale and offset -- the one place Requirement 11 allows a pair to be
+    anything but the defaults, and the only shape in this fixture corpus that
+    exercises it.
+
+    The companion to ``gdal_coverage.gpkg``: same source grid, same size, the
+    other encoding. Asserted in ``geopackage/tests/coverage.rs`` and used as a
+    third subject by the extension's abstract test suite.
+    """
+    out = FIXTURES / "gdal_coverage_png.gpkg"
+    out.unlink(missing_ok=True)
+
+    side = 64
+    source = tmp / "dem_png.asc"
+    header = [
+        f"ncols {side}",
+        f"nrows {side}",
+        "xllcorner 0.0",
+        "yllcorner 0.0",
+        "cellsize 100.0",
+        "NODATA_value -9999",
+    ]
+    rows = [
+        " ".join(f"{(x * 3 + y * 5) % 97 + 0.5:.1f}" for x in range(side))
+        for y in range(side)
+    ]
+    write(source, "\n".join(header + rows) + "\n")
+
+    run(
+        [
+            "gdal_translate",
+            "-q",
+            "-ot",
+            "Float32",
+            "-of",
+            "GPKG",
+            "-a_srs",
+            "EPSG:3857",
+            "-co",
+            "TILE_FORMAT=PNG",
+            "-co",
+            "RASTER_TABLE=elevation",
+            "-co",
+            f"BLOCKSIZE={side}",
+            "-co",
+            "METADATA_TABLES=NO",
+            "-co",
+            "ADD_GPKG_OGR_CONTENTS=NO",
+            str(source),
+            str(out),
+        ]
+    )
+    finalise(out)
+    return out
+
+
 # One layer per non-linear type (Annex F.1), each as (layer, -nlt type, WKT).
 #
 # The arcs are chosen so a control-point bounding box is visibly wrong. The
@@ -1154,6 +1216,7 @@ def main() -> None:
         unsnapshotted = [
             build_gdal_tiles(tmp),
             build_gdal_coverage(tmp),
+            build_gdal_coverage_png(tmp),
             build_gdal_curves(tmp),
         ]
         if osgeo_available():

@@ -584,3 +584,130 @@ fn the_two_tables_stay_in_step_through_write_ops(tc: hegel::TestCase) {
         assert_eq!(rows, tiles, "the ancillary rows diverged from the tiles");
     }
 }
+
+// --- the PNG encoding ---------------------------------------------------------
+
+fn png_fixture() -> GeoPackage {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/gdal_coverage_png.gpkg");
+    GeoPackage::open_read_only(path).unwrap()
+}
+
+#[test]
+fn an_integer_coverage_may_store_png() {
+    // Requirement 13's other encoding, from a third-party encoder: GDAL
+    // reaches it by quantising a float source into 16-bit unsigned space.
+    let gpkg = png_fixture();
+    let coverage = gpkg.coverage("elevation").unwrap();
+
+    assert_eq!(coverage.datatype(), Some(CoverageDatatype::Integer));
+    let payload = coverage
+        .check_payload(&coverage.get_tile(TileCoord::new(0, 0, 0)).unwrap().unwrap())
+        .unwrap();
+    assert_eq!(payload.mime_type(), "image/png");
+    // Requirement 13 leaves one PNG form, so the sample type follows from the
+    // encoding rather than from anything the file says.
+    assert_eq!(payload.sample_type(), SampleType::Unsigned(16));
+    assert_eq!((payload.width(), payload.height()), (64, 64));
+    assert_eq!(gpkg.validate().unwrap(), Vec::new());
+}
+
+#[test]
+fn a_per_tile_scale_and_offset_is_what_carries_quantised_samples_back() {
+    // The only shape Requirement 11 allows a non-default pair in, and the one
+    // this corpus had no example of until now: the coverage pair is the
+    // default and the tile pair does the work.
+    let gpkg = png_fixture();
+    let coverage = gpkg.coverage("elevation").unwrap();
+    assert_eq!(
+        (coverage.ancillary().scale, coverage.ancillary().offset),
+        (1.0, 0.0)
+    );
+
+    let tile = coverage
+        .tile_ancillary(TileCoord::new(0, 0, 0))
+        .unwrap()
+        .unwrap();
+    assert!(tile.scale < 1.0 && tile.offset == 0.5, "{tile:?}");
+    // GDAL recorded the range it quantised, so the arithmetic can be checked
+    // against its own numbers: the smallest stored sample is the minimum, and
+    // the largest is the maximum.
+    let (min, max) = (tile.min.unwrap(), tile.max.unwrap());
+    assert_eq!(coverage.value(&tile, 0.0), min);
+    let largest = ((max - tile.offset) / tile.scale).round();
+    assert!(
+        (coverage.value(&tile, largest) - max).abs() < 1e-3,
+        "{} is not {max}",
+        coverage.value(&tile, largest)
+    );
+}
+
+#[test]
+fn the_two_encodings_are_told_apart_by_what_the_payload_is() {
+    // A float coverage may not hold the PNG, and an integer one may not hold
+    // the float32 TIFF: Requirements 13 and 14, checked against two files
+    // another implementation wrote rather than against payloads we built.
+    let png_gpkg = png_fixture();
+    let png_coverage = png_gpkg.coverage("elevation").unwrap();
+    let png_tile = png_coverage
+        .get_tile(TileCoord::new(0, 0, 0))
+        .unwrap()
+        .unwrap();
+
+    let tiff_gpkg = fixture();
+    let tiff_coverage = tiff_gpkg.coverage("coverage").unwrap();
+    let tiff_tile = the_tile(&tiff_coverage);
+
+    match tiff_coverage.check_payload(&png_tile) {
+        Err(Error::Tile(TileError::CoverageProfileViolation { requirement, .. })) => {
+            assert_eq!(requirement, 14, "a float coverage holding a PNG");
+        }
+        other => panic!("expected a Requirement 14 violation, got {other:?}"),
+    }
+    match png_coverage.check_payload(&tiff_tile) {
+        Err(Error::Tile(TileError::CoverageProfileViolation { requirement, .. })) => {
+            assert_eq!(requirement, 13, "an integer coverage holding float samples");
+        }
+        other => panic!("expected a Requirement 13 violation, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_png_coverage_round_trips_through_this_crate() {
+    // The write path takes the other encoding too, per-tile pair and all.
+    let source = png_fixture();
+    let source_coverage = source.coverage("elevation").unwrap();
+    let payload = source_coverage
+        .get_tile(TileCoord::new(0, 0, 0))
+        .unwrap()
+        .unwrap();
+    let ancillary = source_coverage
+        .tile_ancillary(TileCoord::new(0, 0, 0))
+        .unwrap()
+        .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("ours.gpkg")).unwrap();
+    gpkg.add_epsg_srs(3857).unwrap();
+    let set = TileMatrixSet::new(3857, 0.0, 0.0, 6400.0, 6400.0);
+    let coverage = gpkg
+        .create_coverage(
+            &CoverageBuilder::new("elevation", set, CoverageDatatype::Integer)
+                .matrix(TileMatrix::new(0, 1, 1, 64, 64, 100.0, 100.0))
+                .data_null(65535.0),
+        )
+        .unwrap();
+    let mut writer = coverage.writer().unwrap();
+    writer
+        .put_with_ancillary(TileCoord::new(0, 0, 0), &payload, &ancillary)
+        .unwrap();
+    writer.commit().unwrap();
+
+    let written = gpkg.coverage("elevation").unwrap();
+    assert_eq!(
+        written.tile_ancillary(TileCoord::new(0, 0, 0)).unwrap(),
+        Some(ancillary),
+        "the per-tile pair and statistics survive the round trip"
+    );
+    assert_eq!(gpkg.validate().unwrap(), Vec::new());
+}
