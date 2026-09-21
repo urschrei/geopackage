@@ -20,6 +20,7 @@
 - [Transactions, and who commits](explanation/transactions.md)
 - [The spatial index: structure, contents, and the bulk build](explanation/spatial-index.md)
 - [Geometry storage: GPB, WKB, and curve types](explanation/geometry.md)
+- [Tiled gridded coverages, and why they are not tile pyramids](explanation/coverages.md)
 
 # Reference
 

@@ -8,6 +8,55 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- **Tiled gridded coverages** (OGC 17-066r2, `gpkg_2d_gridded_coverage`):
+  elevation and other measured grids, read, written and validated. A coverage
+  is its own handle rather than a kind of tile pyramid, because the spec gives
+  it its own `gpkg_contents.data_type` and every one of its tiles needs an
+  ancillary row: `GeoPackage::coverage`, `GeoPackage::coverages` and
+  `GeoPackage::create_coverage` return `Coverage`, and `GeoPackage::tiles`
+  rejects one. `CoverageBuilder` declares what the samples mean;
+  `CoverageWriter` keeps the tile and its `gpkg_2d_gridded_tile_ancillary` row
+  consistent, in both directions, because the normative table definition has no
+  `ON DELETE CASCADE`. `Coverage::value` and `Coverage::is_null` apply the
+  extension's scale, offset and null to a sample decoded elsewhere.
+- `geopackage_core::coverage`: the extension's payload profile, checked from
+  the header and without an image codec. `coverage_tiff` answers the TIFF
+  encoding requirements (15 to 20) by walking the first IFD, `coverage_png`
+  answers Requirement 13's PNG form from `IHDR`, and
+  `CoverageDatatype::check_payload` is the rule that ties a payload to the
+  `datatype` its coverage declares (Requirements 13 and 14). No sample is
+  decoded, so the crate does not check Requirement 21 (every pixel valid, no
+  NaN, no Inf), and the documentation says so.
+- `GeoPackage::validate` checks coverages: the ancillary rows (Requirements 1,
+  7, 9, 10, 11 and 12) and every payload, against both the encoding profile and
+  the coverage's own `datatype`. Six `Finding` variants contain the results; a
+  profile violation is a warning, a payload contradicting the `datatype` is an
+  error. This is the first check whose work scales with the size of the file,
+  which is documented on the method.
+- `gpkg coverage info` and `gpkg coverage get`, a separate command from
+  `gpkg tiles` for the same reason the handle is separate. `gpkg info` lists
+  coverages, and `gpkg tiles get` now names a TIFF payload's sample type and
+  compression.
+- `ContentsDataType::Coverage`, replacing the `Other("2d-gridded-coverage")`
+  the catalogue used to report for these tables.
+
+### Changed
+
+- `TileMatrixSet::tile_at` returns `None` for a tile matrix declaring no
+  columns or no rows, where it panicked. Requirements 47 and 48 forbid that
+  grid and `validate` rejects it, but `TileMatrix` is constructible directly
+  and one read from a file written elsewhere has not been validated, so
+  the panic was reachable through a public method on ordinary input. Found by
+  the `tile_payload` fuzz target. `TileMatrixSet::tile_range` inherits the
+  change.
+- `geopackage_core::tiles::probe` reads a TIFF's dimensions through the new
+  coverage walker rather than through `imagesize`, so the one header has one
+  reader. Error text for a malformed TIFF changes; no contract does.
+- `Extension::GriddedCoverage` reports `ExtensionSupport::Implemented` rather
+  than `Known`, and cites 17-066r2.
+
 ## [0.9.1] - 2026-08-15
 
 ### Changed
