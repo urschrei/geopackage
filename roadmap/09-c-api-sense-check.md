@@ -65,6 +65,10 @@ That model decodes, and decoding is what this crate refuses to do (M4: no
 image codec, payloads stay opaque). The comparison is therefore about which
 needs survive the model difference, not about matching calls.
 
+The table below was written before M6 added tiled gridded coverages, which
+GDAL's raster model also covers; its last row records what the C surface does
+and does not have of them.
+
 | GDAL | What a consumer uses it for | This ABI | Classification |
 |---|---|---|---|
 | `SUBDATASETS` metadata | list the pyramids in a file | `gpkg_tiles_names_count`, `gpkg_tiles_name_at` | equivalent, as of 2026-08-02 |
@@ -73,6 +77,7 @@ needs survive the model difference, not about matching calls.
 | `GDALRasterIO` | pixels | `gpkg_tiles_get` / `_get_into`: stored bytes, never pixels | omission: by design; a renderer decodes on its side of the boundary, and every consumer with an opinion about image formats already owns a decoder |
 | `GDALCreateCopy` to write a pyramid | write tiles | `gpkg_tiles_put` / `_delete`, checked against the grid and the declared format | equivalent for filling; **corrected 2026-08-02**: creating the pyramid itself has no C entry point, found while building F9's cursor, and is now its own item in 07 |
 | walking what a sparse pyramid actually stores | copy or audit a pyramid | none: C probes the declared grid with `gpkg_tiles_has`, which is O(grid) where Rust's `TileCursor` is O(stored) | gap, F9 |
+| the GPKG driver's `Float32` raster: a tiled gridded coverage | read or write elevation | none, as of M6 | omission, recorded 2026-09-21: the Rust crate reads, writes and validates coverages (M6), and none of it is exposed in C. Deliberate rather than overlooked, and a smaller loss than it sounds: a C consumer that wanted values out of a coverage would need a TIFF decoder on its side of this boundary anyway, exactly as under `GDALRasterIO` above, and one that has a decoder can read `tile_data` through `sqlite3` as under `ExecuteSQL`. Revisit if a C consumer asks; the surface would be a `gpkg_coverage_*` family mirroring `gpkg_tiles_*` plus the two ancillary rows, which is a phase rather than a patch |
 
 ## What QGIS would need
 

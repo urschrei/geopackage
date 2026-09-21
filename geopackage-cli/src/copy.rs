@@ -183,13 +183,23 @@ fn copy_layer(src: &GeoPackage, dst: &GeoPackage, layer: &Layer<'_>) -> Result<(
 fn report_what_was_left(src: &GeoPackage, dst: &GeoPackage, copied: &[Layer<'_>]) -> Result<()> {
     let mut left = Vec::new();
 
-    let tile_tables = src
-        .contents()?
-        .into_iter()
+    let contents = src.contents()?;
+    let tile_tables = contents
+        .iter()
         .filter(|entry| entry.data_type == ContentsDataType::Tiles)
         .count();
     if tile_tables > 0 {
         left.push(format!("{tile_tables} tile pyramid(s)"));
+    }
+    // Counted separately, and not folded into the pyramid line: a coverage is
+    // its own data type, and it would otherwise be reported only as a missing
+    // extension below, which reads as metadata lost rather than as data.
+    let coverages = contents
+        .iter()
+        .filter(|entry| entry.data_type == ContentsDataType::Coverage)
+        .count();
+    if coverages > 0 {
+        left.push(format!("{coverages} tiled gridded coverage(s)"));
     }
 
     // Only extensions the destination did not end up with. Writing the layers
