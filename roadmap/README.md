@@ -21,7 +21,7 @@ Data Interface as the bulk data plane.
 | [09-c-api-sense-check.md](09-c-api-sense-check.md) | The C surface compared against GDAL's C API and QGIS's provider needs, with findings and the decision |
 | [10-coverage.md](10-coverage.md) | M6: tiled gridded coverage, starting with the payload profile a header read can check |
 
-## Status snapshot (2026-08-02)
+## Status snapshot (2026-09-21)
 
 | Milestone | State |
 |---|---|
@@ -31,6 +31,7 @@ Data Interface as the bulk data plane.
 | M3 Arrow, C ABI, CLI | Complete. Arrow landed in v0.2.0; the C ABI and CLI were built as M5 phases 8 and 9 and released in v0.6.0, which is what closes acceptance criteria 6 and 7. |
 | M4 tiles | Complete, released as v0.6.0. |
 | M5 extensions, then CLI and C ABI, then the freeze | **In progress.** Phases 0 to 9 done; phase 10, the API freeze, is what remains. |
+| M6 tiled gridded coverage | **Complete but for the corpus.** Phases 1, 1b, 2a, 2b, 2c and 2d are done: the payload profile, the `Coverage` handle, the write path, the validate pass and CLI, the GDAL round trip and the extension's twelve abstract tests. What is open is acceptance criterion 1's other half, which needs a coverage in the fetched corpus, and the `corpus_external.rs` re-pin that goes with it. Unreleased. |
 
 Released: v0.1.0, v0.1.1, v0.1.2 (2026-07-24), v0.2.0 (2026-07-25), v0.3.0,
 v0.4.0, v0.5.0 (2026-07-26), v0.6.0 (2026-07-29), v0.7.0 and v0.7.1
@@ -39,12 +40,21 @@ Workspace version is 0.9.1.
 No release is planned for the rest of M5: its phases are an order of work, not a
 publication schedule.
 
-**601 tests pass** locally across the workspace with all features, 573 on the
-system-linked default (`geopackage-cli` excluded), plus 45 doctests, with
-clippy clean under the strict lint set. CI runs the same across 3 OSes at MSRV
-1.95.
+**726 tests pass** locally across the workspace with all features, 692 on the
+system-linked default (`geopackage-cli` excluded); 49 of the 726 are doctests.
+Clippy is clean under the strict lint set. CI runs the same across 3 OSes at
+MSRV 1.95.
 
-### Current focus: M5
+### Current focus: M5, with M6 landed beside it
+
+M6 (tiled gridded coverage) was taken out of order: it began as a question
+about the Rust GeoTIFF ecosystem, and the answer -- that the extension's
+payload is not a GeoTIFF and its rules are header facts rather than pixel
+facts -- made it small enough to build without the image codec this workspace
+does not want. It does not block the M5 freeze and is not released. Its plan
+and decisions are in [10-coverage.md](10-coverage.md).
+
+### M5
 
 - **Done.** Phase 0 (the Windows flake), phase 1 (the extension catalogue as
   public API, a prerequisite for the rest), phase 2 (`gpkg_crs_wkt_1_1` read

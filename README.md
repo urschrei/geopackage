@@ -98,8 +98,13 @@ Tiles, Arrow, extensions, validation and configuration are covered in the
 - CRS definitions are stored, not applied: there is no PROJ dependency and no
   coordinate transformation.
 - Tiles are stored and validated as bytes. The crate does not decode images,
-  reproject a pyramid, or build one from a raster. Tiled gridded coverage is
-  not currently implemented.
+  reproject a pyramid, or build one from a raster.
+- Tiled gridded coverages (elevation and other measured grids, OGC 17-066r2)
+  are read, written and validated, payloads included: the extension's TIFF and
+  PNG encoding rules are checked from the header, and a coverage's scale,
+  offset and null are applied to a sample you decoded elsewhere. Samples
+  themselves stay opaque, so the per-tile statistics are whatever the caller
+  supplies and Requirement 21 (no NaN, no Inf) cannot be enforced here.
 - Non-linear curve types (`CIRCULARSTRING` and the rest) can be written,
   indexed and queried by extent, but do not read back as geometry objects;
   `Feature::geometry_bytes` returns their WKB.
