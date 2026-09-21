@@ -751,6 +751,66 @@ def build_gdal_coverage(tmp: Path) -> Path:
     return out
 
 
+def build_gdal_coverage_png(tmp: Path) -> Path:
+    """A GDAL-written coverage with PNG payloads, not TIFF.
+
+    The other encoding of Requirement 13: an *integer* coverage can store
+    ``image/png``, 16-bit unsigned single channel. GDAL writes it when it
+    quantises a float source to that range. The file therefore declares
+    ``datatype = 'integer'`` and has a **per-tile** scale and offset. It is
+    the only fixture in this corpus with a pair other than the defaults.
+
+    The companion to ``gdal_coverage.gpkg``: the same source grid and size,
+    in the other encoding. Asserted in ``geopackage/tests/coverage.rs``, and
+    the third subject of the abstract test suite of the extension.
+    """
+    out = FIXTURES / "gdal_coverage_png.gpkg"
+    out.unlink(missing_ok=True)
+
+    side = 64
+    source = tmp / "dem_png.asc"
+    header = [
+        f"ncols {side}",
+        f"nrows {side}",
+        "xllcorner 0.0",
+        "yllcorner 0.0",
+        "cellsize 100.0",
+        "NODATA_value -9999",
+    ]
+    rows = [
+        " ".join(f"{(x * 3 + y * 5) % 97 + 0.5:.1f}" for x in range(side))
+        for y in range(side)
+    ]
+    write(source, "\n".join(header + rows) + "\n")
+
+    run(
+        [
+            "gdal_translate",
+            "-q",
+            "-ot",
+            "Float32",
+            "-of",
+            "GPKG",
+            "-a_srs",
+            "EPSG:3857",
+            "-co",
+            "TILE_FORMAT=PNG",
+            "-co",
+            "RASTER_TABLE=elevation",
+            "-co",
+            f"BLOCKSIZE={side}",
+            "-co",
+            "METADATA_TABLES=NO",
+            "-co",
+            "ADD_GPKG_OGR_CONTENTS=NO",
+            str(source),
+            str(out),
+        ]
+    )
+    finalise(out)
+    return out
+
+
 # One layer per non-linear type (Annex F.1), each as (layer, -nlt type, WKT).
 #
 # The arcs are chosen so a control-point bounding box is visibly wrong. The
@@ -1152,6 +1212,7 @@ def main() -> None:
         unsnapshotted = [
             build_gdal_tiles(tmp),
             build_gdal_coverage(tmp),
+            build_gdal_coverage_png(tmp),
             build_gdal_curves(tmp),
         ]
         if osgeo_available():

@@ -275,9 +275,11 @@ fn every_committed_fixture_reports_what_it_is_expected_to() {
         ("case_mismatch.gpkg", &["TableNameCaseMismatch"]),
         // Written without indexes: the fixture is about relations.
         ("gdal_related.gpkg", &["NoSpatialIndex"]),
-        // A GDAL-written tiled gridded coverage: conformant, and the anchor
-        // for the coverage checks.
+        // The two coverages from GDAL: a float coverage of TIFF payloads, and
+        // an integer coverage of 16-bit PNGs. Both conform, and the coverage
+        // checks use them as references.
         ("gdal_coverage.gpkg", &[]),
+        ("gdal_coverage_png.gpkg", &[]),
         ("gdal_curves.gpkg", &[]),
         (
             "gdal_multilayer_1_4.gpkg",
