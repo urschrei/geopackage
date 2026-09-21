@@ -24,7 +24,7 @@ Pre-1.0: the API changes between minor versions.
 
 ```toml
 [dependencies]
-geopackage = "0.9"
+geopackage = "0.10"
 ```
 
 The default build links the system SQLite, which must include the RTree

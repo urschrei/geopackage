@@ -8,6 +8,8 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-21
+
 ### Added
 
 - **Tiled gridded coverages** (OGC 17-066r2, `gpkg_2d_gridded_coverage`):
@@ -1204,7 +1206,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/urschrei/geopackage/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/urschrei/geopackage/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/urschrei/geopackage/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/urschrei/geopackage/compare/v0.7.1...v0.8.0
