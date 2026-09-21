@@ -12,10 +12,11 @@
 # is visibility rather than enforcement: a diff is a prompt to check the change
 # was meant, not a refusal.
 #
-# Needs `cargo install cargo-public-api`. It drives rustdoc's JSON output, which
-# is why it is a separate script and a separate CI job rather than a test: it
-# rebuilds documentation for every crate and is far too slow to sit in the
-# ordinary test run.
+# Needs `cargo install cargo-public-api` and a nightly toolchain. The tool runs
+# `cargo +nightly rustdoc` whatever toolchain is active, because rustdoc's JSON
+# output is unstable. This is a separate script and a separate CI job rather
+# than a test because it rebuilds documentation for every crate, which is too
+# slow for the ordinary test run.
 
 set -euo pipefail
 
@@ -33,9 +34,12 @@ for crate in "${crates[@]}"; do
     generated=$(mktemp)
     trap 'rm -f "$generated"' EXIT
 
-    # `--simplified` drops blanket and auto-trait implementations, which are
-    # noise here: they change with the compiler rather than with this code.
-    cargo public-api --simplified --all-features -p "$crate" > "$generated" 2>/dev/null
+    # Omit blanket, auto-trait and auto-derived impls. The compiler generates
+    # them, and rustdoc changes how it renders them between nightly releases,
+    # which changes this file when no crate has changed. As a result, this file
+    # does not record a removed derive or a lost auto trait.
+    cargo public-api --omit blanket-impls,auto-trait-impls,auto-derived-impls \
+        --all-features -p "$crate" > "$generated" 2>/dev/null
 
     if [ "$check" = true ]; then
         if ! diff -u "$recorded" "$generated" > /dev/null 2>&1; then
