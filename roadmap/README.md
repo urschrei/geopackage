@@ -31,17 +31,17 @@ Data Interface as the bulk data plane.
 | M3 Arrow, C ABI, CLI | Complete. Arrow landed in v0.2.0; the C ABI and CLI were built as M5 phases 8 and 9 and released in v0.6.0, which is what closes acceptance criteria 6 and 7. |
 | M4 tiles | Complete, released as v0.6.0. |
 | M5 extensions, then CLI and C ABI, then the freeze | **In progress.** Phases 0 to 9 done; phase 10, the API freeze, is what remains. |
-| M6 tiled gridded coverage | **Complete but for the corpus.** Phases 1, 1b, 2a, 2b, 2c and 2d are done: the payload profile, the `Coverage` handle, the write path, the validate pass and CLI, the GDAL round trip and the extension's twelve abstract tests. What is open is acceptance criterion 1's other half, which needs a coverage in the fetched corpus, and the `corpus_external.rs` re-pin that goes with it. Unreleased. |
+| M6 tiled gridded coverage | **Complete but for the corpus.** Phases 1, 1b, 2a, 2b, 2c and 2d are done: the payload profile, the `Coverage` handle, the write path, the validate pass and CLI, the GDAL round trip and the extension's twelve abstract tests. What is open is acceptance criterion 1's other half, which needs a coverage in the fetched corpus, and the `corpus_external.rs` re-pin that goes with it. Released as v0.10.0. |
 
 Released: v0.1.0, v0.1.1, v0.1.2 (2026-07-24), v0.2.0 (2026-07-25), v0.3.0,
 v0.4.0, v0.5.0 (2026-07-26), v0.6.0 (2026-07-29), v0.7.0 and v0.7.1
-(2026-08-02), v0.8.0 (2026-08-06), v0.9.0 (2026-08-10), v0.9.1 (2026-08-15).
-Workspace version is 0.9.1.
+(2026-08-02), v0.8.0 (2026-08-06), v0.9.0 (2026-08-10), v0.9.1 (2026-08-15),
+v0.10.0 (2026-09-21). Workspace version is 0.10.0.
 No release is planned for the rest of M5: its phases are an order of work, not a
 publication schedule.
 
-**726 tests pass** locally across the workspace with all features, 692 on the
-system-linked default (`geopackage-cli` excluded); 49 of the 726 are doctests.
+**731 tests pass** locally across the workspace with all features, 696 on the
+system-linked default (`geopackage-cli` excluded); 49 of the 731 are doctests.
 Clippy is clean under the strict lint set. CI runs the same across 3 OSes at
 MSRV 1.95.
 
@@ -51,8 +51,8 @@ M6 (tiled gridded coverage) was taken out of order: it began as a question
 about the Rust GeoTIFF ecosystem. The answer was that the payload of the
 extension is not a GeoTIFF, and that its rules are header facts, not pixel
 facts. That made the milestone small enough to build without an image codec,
-which this workspace avoids. It does not block the M5 freeze and is not
-released. Its plan and decisions are in [10-coverage.md](10-coverage.md).
+which this workspace avoids. It does not block the M5 freeze, and v0.10.0
+released it. Its plan and decisions are in [10-coverage.md](10-coverage.md).
 
 ### M5
 
