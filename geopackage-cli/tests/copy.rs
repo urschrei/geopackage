@@ -190,6 +190,16 @@ fn what_was_not_carried_is_named() {
 }
 
 #[test]
+fn a_coverage_is_named_as_data_left_behind() {
+    // Otherwise the report shows a coverage only as a missing extension, which
+    // looks like lost metadata, not like a table of elevations that was not
+    // copied.
+    let (_dir, _dst, output) = copy_of("gdal_coverage.gpkg");
+    let out = stdout(&output);
+    assert!(out.contains("1 tiled gridded coverage(s)"), "{out}");
+}
+
+#[test]
 fn extensions_the_copy_registers_itself_are_not_reported_as_lost() {
     // Writing a curve layer registers its own gpkg_geom_<TYPE>, so those are
     // present in the copy and must not be listed as left behind.
