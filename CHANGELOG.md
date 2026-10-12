@@ -8,6 +8,17 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-12
+
+### Changed
+
+- Rewrote the README and the crate-level documentation of all four crates
+  to be shorter and plainer. Configuration defaults and the C API's handle
+  rules are now tables.
+- The `geopackage` crate documentation now covers tiled gridded coverages,
+  validation, metadata and related tables, and the README lists the
+  `gpkg coverage` subcommand.
+
 ## [0.10.0] - 2026-09-21
 
 ### Added
@@ -1206,7 +1217,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/urschrei/geopackage/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/urschrei/geopackage/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/urschrei/geopackage/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/urschrei/geopackage/compare/v0.8.0...v0.9.0
