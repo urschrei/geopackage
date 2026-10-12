@@ -5,14 +5,14 @@
 [![docs.rs](https://docs.rs/geopackage/badge.svg)](https://docs.rs/geopackage)
 
 Read and write [OGC GeoPackage 1.4](https://www.geopackage.org/spec140/)
-files from Rust: feature and attribute tables, RTree spatial indexes, tile
-pyramids, and columnar I/O through Apache Arrow. A command-line tool and a
-C ABI are built over the same library.
+files in Rust: feature and attribute tables, RTree spatial indexes, tile
+pyramids, tiled gridded coverages, and Apache Arrow I/O. The workspace also
+includes a command-line tool and a C API built on the same library.
 
-Pre-1.0: the API changes between minor versions.
+Until 1.0, the API may change between minor versions.
 
 - API reference: [docs.rs](https://docs.rs/geopackage)
-- Book, with tutorial, how-to guides and explanation: [urschrei.github.io/geopackage](https://urschrei.github.io/geopackage/)
+- User guide, with a tutorial and how-to guides: [urschrei.github.io/geopackage](https://urschrei.github.io/geopackage/)
 - [Changelog](CHANGELOG.md)
 
 > [!NOTE]
@@ -27,14 +27,14 @@ Pre-1.0: the API changes between minor versions.
 geopackage = "0.10"
 ```
 
-The default build links the system SQLite, which must include the RTree
-module (`libsqlite3-dev` on Debian/Ubuntu, `sqlite-devel` on Fedora; macOS
-needs nothing beyond the SDK). The `bundled` feature compiles and links a
-vendored SQLite instead, needs a C compiler, and is the only option on
-Windows. The `arrow` feature adds the columnar read and write paths. The
-minimum supported Rust version is 1.95.
+By default the crate links the system SQLite, which must include the RTree
+module. Install `libsqlite3-dev` on Debian or Ubuntu, or `sqlite-devel` on
+Fedora; macOS needs nothing extra. To use a vendored SQLite instead, enable the
+`bundled` feature, which needs a C compiler. Windows requires `bundled`.
 
-The command-line tool vendors SQLite by default:
+The `arrow` feature adds Arrow I/O. The minimum supported Rust version is 1.95.
+
+The command-line tool uses a vendored SQLite by default:
 
 ```sh
 cargo install geopackage-cli
@@ -42,9 +42,9 @@ cargo install geopackage-cli
 
 ## Example
 
-Create a file, declare a point layer, write two features, and query by
-bounding box. Writing accepts any `geo_traits::GeometryTrait` implementor,
-which includes every `geo-types` geometry.
+Create a file, define a point layer, write two features, and query by
+bounding box. Writes accept any `geo_traits::GeometryTrait` implementor,
+including all `geo-types` geometries.
 
 ```rust
 use geo_types::Point;
@@ -70,7 +70,7 @@ layer.write_all(
     0,
 )?;
 
-// Served by the RTree index that `create_layer` builds.
+// Uses the RTree index that `create_layer` builds by default.
 for feature in layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))? {
     let feature = feature?;
     let geom = feature.geometry()?.and_then(|g| g.to_geo());
@@ -78,51 +78,52 @@ for feature in layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))? {
 }
 ```
 
-Tiles, Arrow, extensions, validation and configuration are covered in the
-[crate documentation](https://docs.rs/geopackage). Runnable programs are in
-[`geopackage/examples`](geopackage/examples).
+The [crate documentation](https://docs.rs/geopackage) covers tiles,
+coverages, Arrow, extensions, validation and configuration.
+[`geopackage/examples`](geopackage/examples) has runnable programs.
 
 ## Workspace
 
 | Crate | Contents | Reference |
 |---|---|---|
-| [`geopackage`](geopackage) | The container: files, layers, spatial indexes, tile pyramids, Arrow I/O. | [docs.rs](https://docs.rs/geopackage) |
-| [`geopackage-core`](geopackage-core) | Format primitives with no SQLite dependency: the GPB codec, table DDL, RTree trigger SQL. | [docs.rs](https://docs.rs/geopackage-core) |
-| [`geopackage-cli`](geopackage-cli) | `gpkg`: `info`, `validate`, `index`, `repair`, `copy` and `tiles`. | `gpkg --help` |
-| [`geopackage-ffi`](geopackage-ffi) | The C ABI: opaque handles, the Arrow C Data Interface as data plane, packaged with [cargo-c](https://github.com/lu-zero/cargo-c). Five C programs in [`examples`](geopackage-ffi/examples) are compiled against the committed header by CI. | [docs.rs](https://docs.rs/geopackage-ffi), [`include/geopackage.h`](geopackage-ffi/include/geopackage.h) |
+| [`geopackage`](geopackage) | The main library: files, layers, spatial indexes, tiles, coverages, Arrow I/O. | [docs.rs](https://docs.rs/geopackage) |
+| [`geopackage-core`](geopackage-core) | Format code with no SQLite dependency: the geometry codec, table definitions, RTree triggers. | [docs.rs](https://docs.rs/geopackage-core) |
+| [`geopackage-cli`](geopackage-cli) | The `gpkg` tool: `info`, `validate`, `index`, `repair`, `copy`, `tiles` and `coverage`. | `gpkg --help` |
+| [`geopackage-ffi`](geopackage-ffi) | The C API: opaque handles, with data passed through the Arrow C Data Interface. Packaged with [cargo-c](https://github.com/lu-zero/cargo-c). CI builds and runs the C programs in [`examples`](geopackage-ffi/examples) against the committed header. | [docs.rs](https://docs.rs/geopackage-ffi), [`include/geopackage.h`](geopackage-ffi/include/geopackage.h) |
 
-`geopackage-ffi` is the only crate that contains `unsafe`.
+Only `geopackage-ffi` uses `unsafe`.
 
-## Scope
+## Limitations
 
-- CRS definitions are stored, not applied: there is no PROJ dependency and no
-  coordinate transformation.
-- Tiles are stored and validated as bytes. The crate does not decode images,
-  reproject a pyramid, or build one from a raster.
-- Tiled gridded coverages (elevation and other measured grids, OGC 17-066r2)
-  are read, written and validated, payloads included: the extension's TIFF and
-  PNG encoding rules are checked from the header, and a coverage's scale,
-  offset and null are applied to a sample you decoded elsewhere. Samples
-  themselves stay opaque, so the per-tile statistics are whatever the caller
-  supplies and Requirement 21 (no NaN, no Inf) cannot be enforced here.
-- Non-linear curve types (`CIRCULARSTRING` and the rest) can be written,
-  indexed and queried by extent, but do not read back as geometry objects;
+- Coordinate reference systems are stored but not applied: there is no PROJ
+  dependency and no reprojection.
+- Tiles are stored and validated as bytes. Images aren't decoded, so the
+  crate can't render tiles, reproject a pyramid, or build one from a raster.
+- Tiled gridded coverages (OGC 17-066r2) are fully supported, but their
+  samples aren't decoded either. Payloads are checked against the extension's
+  TIFF and PNG rules using their headers, and a coverage's scale, offset and
+  null value can be applied to samples you decode yourself. Per-tile
+  statistics are therefore whatever you supply, and Requirement 21 (no NaN or
+  infinite values) can't be enforced.
+- Curved geometry types (`CIRCULARSTRING` and others) can be written, indexed
+  and queried by extent, but can't be read back as geometry objects.
   `Feature::geometry_bytes` returns their WKB.
 
 ## Conformance and performance
 
 Files written by this crate pass the OGC
-[ets-gpkg12](https://github.com/opengeospatial/ets-gpkg12) suite except one
-test whose regex hard-codes the 1.2 trigger set, and the Tiles conformance
-class in full. Round trips through GDAL byte-compare geometry and attributes.
-Details are in the [changelog](CHANGELOG.md) and
-[`roadmap/08-testing-conformance.md`](roadmap/08-testing-conformance.md).
+[ets-gpkg12](https://github.com/opengeospatial/ets-gpkg12) test suite,
+including the whole Tiles conformance class, with one exception: a test whose
+regex hard-codes the GeoPackage 1.2 triggers. Geometry and attributes survive
+a round trip through GDAL byte for byte. See the [changelog](CHANGELOG.md) and
+[`roadmap/08-testing-conformance.md`](roadmap/08-testing-conformance.md) for
+details.
 
-Benchmarks on three multi-gigabyte datasets, with method and caveats, are in
-[the current baseline write-up](roadmap/benchmarks/2026-08-15-fly-baseline.md).
-[`scripts/bench_datasets.sh`](scripts/bench_datasets.sh) runs the measurements
-and [`scripts/bench_fly.sh`](scripts/bench_fly.sh) provides the machine to run
-them on. Earlier write-ups in that directory predate the current method.
+[The current benchmark write-up](roadmap/benchmarks/2026-08-15-fly-baseline.md)
+covers three multi-gigabyte datasets, with method and caveats.
+[`scripts/bench_datasets.sh`](scripts/bench_datasets.sh) runs the benchmarks,
+and [`scripts/bench_fly.sh`](scripts/bench_fly.sh) runs them on a dedicated
+Fly.io machine. Earlier write-ups in that directory used an older method.
 
 ## License
 

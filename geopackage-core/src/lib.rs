@@ -1,37 +1,42 @@
-//! No-IO core of the [OGC GeoPackage](https://www.geopackage.org/spec140/) format.
+//! The parts of the [OGC GeoPackage](https://www.geopackage.org/spec140/)
+//! format that don't need a database.
 //!
-//! This crate contains the parts of the GeoPackage 1.4 specification that can
-//! be expressed without a database connection. The `geopackage` crate adds the
-//! SQLite container on top of this one and is the usual entry point. Use this
-//! crate directly when you need the format code without SQLite: a fuzz target,
-//! or another GeoPackage implementation sharing the codec and DDL.
+//! This crate contains the geometry codec, table definitions and validation
+//! rules of GeoPackage 1.4, with no SQLite dependency. Most users want the
+//! `geopackage` crate, which builds the SQLite container on top of this one.
+//! Use this crate directly for format code without SQLite: in a fuzz target,
+//! for example, or another GeoPackage implementation.
 //!
 //! # Modules
 //!
-//! - [`gpb`]: the GeoPackage Binary (GPB) geometry blob header codec
-//! - [`geometry`]: the parsed geometry view ([`GpbGeometry`]), and the GPB
-//!   encoders, from a geometry object or from bytes that are already ISO WKB
-//! - [`types`]: column and geometry type vocabulary (spec Table 1, Annex G)
-//! - [`datetime`]: `DATE`/`DATETIME` text form parsing (strict and lenient),
-//!   calendar validation, and epoch conversion
-//! - [`ddl`]: normative `CREATE TABLE` SQL and required `gpkg_spatial_ref_sys` seed rows
-//! - [`srs`]: vendored EPSG WKT1 subset for `gpkg_spatial_ref_sys` seeding
-//! - [`tiles`]: tile pyramid user table SQL and the tile matrix model
-//! - [`coverage`]: the payload profile of the tiled gridded coverage
-//!   extension, checked from the header without a decode of the samples
-//! - [`triggers`]: RTree spatial index virtual table and trigger SQL (version-aware)
-//! - [`version`]: `application_id` / `user_version` handling
-//! - [`ident`]: SQL identifier quoting
-//! - [`schema`]: the `gpkg_schema` extension's column descriptions and
-//!   value constraints (Annex F.9)
-//! - [`metadata`]: the `gpkg_metadata` extension's records and the references
-//!   attaching them to a file's contents (Annex F.8)
-//! - [`related`]: the Related Tables Extension's relationships (OGC 18-000)
-//! - [`curve`]: envelopes read straight from ISO WKB, non-linear types
-//!   included, with exact circular-arc extents
+//! - **[`gpb`]**: The GeoPackage Binary (GPB) geometry header codec
+//! - **[`geometry`]**: A parsed geometry view ([`GpbGeometry`]), and GPB
+//!   encoders for geometry objects and existing ISO WKB
+//! - **[`curve`]**: Envelopes read directly from ISO WKB, including exact
+//!   extents for circular arcs
+//! - **[`types`]**: Column and geometry types (spec Table 1, Annex G)
+//! - **[`datetime`]**: `DATE` and `DATETIME` parsing, strict or lenient, with
+//!   calendar validation and epoch conversion
+//! - **[`ddl`]**: `CREATE TABLE` statements and the required
+//!   `gpkg_spatial_ref_sys` rows
+//! - **[`srs`]**: A subset of EPSG WKT1 definitions for
+//!   `gpkg_spatial_ref_sys`
+//! - **[`triggers`]**: RTree spatial index tables and triggers, by spec
+//!   version
+//! - **[`tiles`]**: Tile pyramid table definitions and the tile matrix model
+//! - **[`coverage`]**: Payload rules for tiled gridded coverages, checked from
+//!   the TIFF or PNG header
+//! - **[`schema`]**: Column descriptions and value constraints from the
+//!   `gpkg_schema` extension (Annex F.9)
+//! - **[`metadata`]**: Metadata records and references from the
+//!   `gpkg_metadata` extension (Annex F.8)
+//! - **[`related`]**: Relationships from the Related Tables Extension
+//!   (OGC 18-000)
+//! - **[`version`]**: `application_id` and `user_version` handling
+//! - **[`ident`]**: SQL identifier quoting
 //!
-//! SQL text is reproduced verbatim from the spec's normative annexes
-//! (Annex C "Table Definition SQL", Annex F.3 "R-tree Spatial Indexes").
+//! SQL is copied verbatim from the spec's Annex C ("Table Definition SQL") and
+//! Annex F.3 ("R-tree Spatial Indexes").
 //!
 //! # Example
 //!
@@ -57,19 +62,18 @@
 //!
 //! # Cargo features
 //!
-//! - **`geo-types`** (on by default): adds [`GpbGeometry::to_geo`], converting
-//!   a parsed geometry to an owned `geo-types` value. Disable it with
-//!   `default-features = false`; the [`geo_traits`] implementation, which reads
-//!   coordinates directly from the blob, does not depend on it.
+//! - **`geo-types`** (default): Enables [`GpbGeometry::to_geo`], which converts
+//!   a parsed geometry to a `geo-types` geometry. The [`geo_traits`]
+//!   implementation doesn't need it
 //!
-//! # Reading untrusted geometries
+//! # Untrusted input
 //!
-//! [`GpbGeometry`] parses WKB bodies with the `wkb` crate, whose 0.9.2 reader
-//! pre-allocates from element counts read out of the blob without bounding them
-//! against the buffer: a malformed geometry declaring a `0xFFFFFFFF`-member
-//! collection drives a multi-gigabyte allocation. The fix belongs upstream in
-//! [georust/wkb](https://github.com/georust/wkb); until it lands and this crate
-//! bumps its dependency, do not parse geometries from untrusted sources.
+//! [`GpbGeometry`] parses WKB with the `wkb` crate. Its 0.9.2 reader allocates
+//! based on element counts read from the blob without checking them against
+//! the blob's length, so a malformed geometry can trigger a multi-gigabyte
+//! allocation. Until this is fixed upstream in
+//! [georust/wkb](https://github.com/georust/wkb), don't parse geometries from
+//! untrusted sources.
 
 // `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
 // workspace lints table (root Cargo.toml). This crate never uses `unsafe`; the
