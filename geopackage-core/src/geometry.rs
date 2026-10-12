@@ -824,10 +824,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::float_cmp,
-        reason = "asserting the exact bit-level round-trip of the coordinate through WKB; the values are written and read as literals, so exact equality is the property under test"
-    )]
     fn delegates_geometry_trait_to_wkb() {
         let blob = gpb(&wkb_point(3.0, 4.0));
         let g = GpbGeometry::parse(&blob).unwrap();
@@ -835,8 +831,9 @@ mod tests {
             GtType::Point(p) => {
                 use geo_traits::{CoordTrait, PointTrait};
                 let c = p.coord().unwrap();
-                assert_eq!(c.x(), 3.0);
-                assert_eq!(c.y(), 4.0);
+                // Compare bits: the round trip through WKB must be exact.
+                assert_eq!(c.x().to_bits(), 3.0_f64.to_bits());
+                assert_eq!(c.y().to_bits(), 4.0_f64.to_bits());
             }
             _ => panic!("expected a point"),
         }
