@@ -1,23 +1,31 @@
 //! Read and write [OGC GeoPackage](https://www.geopackage.org/spec140/) files.
 //!
-//! A GeoPackage is an SQLite database with a standardised schema for vector
-//! features and raster tiles. [`GeoPackage::create`], [`GeoPackage::open`] and
-//! [`GeoPackage::open_read_only`] open the container with pragma and schema
-//! validation;
-//! [`GeoPackage::layer`] returns a [`Layer`] handle for reading and writing
-//! features, and [`GeoPackage::layers`] enumerates them.
-//! [`GeoPackage::tiles`] returns a [`TilePyramid`] handle for the tile side,
-//! described under [Tiles](#tiles) below.
+//! A GeoPackage is an SQLite database with a standard schema for vector
+//! features, attribute tables and raster tiles. This crate reads and writes all
+//! three, maintains their RTree spatial indexes, and can move features in and
+//! out as Apache Arrow record batches.
 //!
-//! A command-line companion, `gpkg`, is built by the `geopackage-cli` crate:
-//! `gpkg info`, `gpkg validate`, `gpkg index`, `gpkg repair`, `gpkg copy` and
-//! `gpkg tiles` inspect, check and convert files without writing any code.
-//! Install it with `cargo install geopackage-cli`; unlike this library it
-//! vendors SQLite by default (see [Cargo features](#cargo-features)).
+//! # Overview
+//!
+//! - **[`GeoPackage`]**: An open file. Create one with [`GeoPackage::create`],
+//!   or open one with [`GeoPackage::open`] or [`GeoPackage::open_read_only`]
+//! - **[`Layer`]**: A feature or attribute table, from [`GeoPackage::layer`] or
+//!   [`GeoPackage::attributes`]
+//! - **[`TilePyramid`]**: A table of raster tiles, from [`GeoPackage::tiles`]
+//! - **[`Coverage`]**: A tiled gridded coverage, such as an elevation model,
+//!   from [`GeoPackage::coverage`]
+//! - **[`OpenOptions`]**: Settings for opening a file: journal mode, lock
+//!   timeout, and checks applied to writes
+//!
+//! The `gpkg` command-line tool, from the `geopackage-cli` crate, handles
+//! common tasks without any code: `info`, `validate`, `index`, `repair`,
+//! `copy`, `tiles` and `coverage`. Install it with
+//! `cargo install geopackage-cli`.
 //!
 //! # Quick start
 //!
-//! Create a file, define a point layer, write features, query by bounding box:
+//! Create a file, define a point layer, write features, and query by bounding
+//! box:
 //!
 //! ```
 //! use geo_types::Point;
@@ -47,8 +55,7 @@
 //!     0,
 //! )?;
 //!
-//! // Served by the layer's RTree index, which `create_layer` builds unless
-//! // `TableSchemaBuilder::spatial_index(false)` turns it off.
+//! // Uses the RTree index that `create_layer` builds by default.
 //! for feature in layer.features_in(BoundingBox::new(-7.0, 53.0, -6.0, 54.0))? {
 //!     let feature = feature?;
 //!     assert_eq!(feature.value("name"), Some(ValueRef::Text("Dublin")));
@@ -56,43 +63,37 @@
 //! # Ok(()) }
 //! ```
 //!
-//! # Features
+//! # Feature and attribute tables
 //!
-//! - [`Layer::features`]: every row as an owned [`Feature`]
-//! - [`Layer::select`]: rows matching a caller-supplied raw SQL `WHERE` clause
-//! - [`Layer::features_in`]: rows in a bounding box, served by the RTree index
-//!   when one is present and a full scan otherwise, with identical results
-//! - [`Layer::cursor`], [`Layer::cursor_select`], [`Layer::cursor_in`]:
-//!   streaming counterparts that read one row at a time and hold no result set
-//! - [`Layer::write_all`]: batch load
-//! - [`Layer::writer`]: a transaction with per-row `insert`/`update`/`delete`
-//!   ([`FeatureWriter`])
-//! - [`GeoPackage::create_attributes_table`], [`GeoPackage::attributes`]: the
-//!   same for non-spatial attribute tables
-//! - [`GeoPackage::add_epsg_srs`]: registers an EPSG code in
-//!   `gpkg_spatial_ref_sys`
-//! - [`GeoPackage::open_lenient`]: accepts legacy and lightly malformed files,
-//!   collecting [`OpenWarning`]s instead of failing
+//! - **[`GeoPackage::create_layer`]**, **[`GeoPackage::create_attributes_table`]**:
+//!   Create a table from a [`TableSchemaBuilder`]
+//! - **[`Layer::features`]**: Read every row
+//! - **[`Layer::features_in`]**: Read the rows that intersect a bounding box,
+//!   using the spatial index if there is one
+//! - **[`Layer::select`]**: Read the rows that match an SQL `WHERE` clause
+//! - **[`Layer::cursor`]**, **[`Layer::cursor_in`]**, **[`Layer::cursor_select`]**:
+//!   Stream rows one at a time instead of collecting them
+//! - **[`Layer::write_all`]**: Insert many features in batched transactions
+//! - **[`Layer::writer`]**: Insert, update and delete individual rows in one
+//!   transaction
+//! - **[`GeoPackage::add_epsg_srs`]**: Register an EPSG spatial reference
+//!   system
 //!
-//! # Geometry round trips
+//! # Geometry
 //!
-//! [`Feature::geometry`] parses the stored blob into a
-//! [`GpbGeometry`](core::GpbGeometry), a view over the row's bytes that
-//! implements [`geo_traits::GeometryTrait`], and every write method accepts
-//! any `impl GeometryTrait<T = f64>`. A geometry can therefore be streamed
-//! out of one file, measured, and written into another without being
-//! converted to a `geo-types` value in either direction: the analysis reads
-//! coordinates from the stored encoding, and the writer encodes WKB from the
-//! same view. What _does_ allocate is each row's blob, copied out of SQLite,
-//! and the new blob the writer serialises; an algorithm that produces new
-//! geometry also allocates its output.
+//! [`Feature::geometry`] returns a [`GpbGeometry`](core::GpbGeometry), a view
+//! over the stored bytes that implements [`geo_traits::GeometryTrait`]. Every
+//! write method accepts any `impl GeometryTrait<T = f64>`, including all
+//! `geo-types` geometries. A geometry can therefore be read from one file,
+//! measured, and written to another without being converted: the only
+//! allocations are the row's blob and the newly encoded output.
 //!
 //! ```
 //! use geo_traits::{CoordTrait, GeometryTrait, GeometryType as Kind, LineStringTrait};
 //! use geopackage::core::types::{ColumnType, GeometryType};
 //! use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, TableSchemaBuilder, Value, ValueRef};
 //!
-//! /// Planar length, read from the trait: no geometry object is built.
+//! /// Planar length, computed from the stored coordinates.
 //! fn length(geometry: &impl GeometryTrait<T = f64>) -> f64 {
 //!     let Kind::LineString(line) = geometry.as_type() else {
 //!         return 0.0;
@@ -148,8 +149,7 @@
 //! for feature in cursor.features()? {
 //!     let feature = feature?;
 //!     if let Some(geometry) = feature.geometry()? {
-//!         // `geometry` borrows the row's blob; `length` reads coordinates
-//!         // from it, and `insert` encodes WKB from the same view.
+//!         // Both calls read the same borrowed view.
 //!         let l = length(&geometry);
 //!         writer.insert(None, &geometry, &[ValueRef::Float(l)])?;
 //!     }
@@ -168,28 +168,20 @@
 //!
 //! # Tiles
 //!
-//! A tile pyramid is the container's other data type: pre-rendered raster
-//! tiles, addressed by zoom level, column and row, with a
-//! `gpkg_tile_matrix_set` row fixing the ground extent they are indexed
-//! against and a `gpkg_tile_matrix` row per zoom level.
-//! [`GeoPackage::create_tile_pyramid`] writes one (from a
-//! [`TilePyramidBuilder`]), [`GeoPackage::tiles`] opens one, and
-//! [`GeoPackage::tile_pyramids`] enumerates them.
+//! A tile pyramid stores pre-rendered raster tiles by zoom level, column and
+//! row. Create one with [`GeoPackage::create_tile_pyramid`], open one with
+//! [`GeoPackage::tiles`], and list them with [`GeoPackage::tile_pyramids`].
 //!
-//! **Payloads are opaque.** This crate stores, indexes and validates tiles; it
-//! decodes none of them, and depends on no image codec. It reads each
-//! payload's *header*, which is how a tile written at the wrong pixel size, or
-//! in a format the table may not contain, is rejected rather than stored. Turning
-//! a tile into pixels, or a source raster into a pyramid, needs an image
-//! library or GDAL on top of this one.
+//! Tiles are stored as bytes and never decoded. Only the image header is read,
+//! so that a tile with the wrong pixel size or a disallowed format is rejected.
+//! Rendering tiles, or building a pyramid from a raster, requires an image
+//! library or GDAL.
 //!
-//! Rows count from the **top** of the extent downwards, as WMTS and XYZ do and
-//! TMS does not, and the indices are relative to the pyramid's own extent
-//! rather than to a global grid. [`TileMatrix::flip_row`](core::tiles::TileMatrix::flip_row)
-//! converts to and from the TMS sense, and
-//! [`TileMatrixSet::xyz_to_tile`](core::tiles::TileMatrixSet::xyz_to_tile)
-//! errors rather than mis-addressing when a pyramid is not the standard web
-//! mercator quad.
+//! Rows are numbered from the top of the pyramid's own extent, as in WMTS and
+//! XYZ, not from the bottom as in TMS.
+//! [`TileMatrix::flip_row`](core::tiles::TileMatrix::flip_row) converts between
+//! the two, and [`TileMatrixSet::xyz_to_tile`](core::tiles::TileMatrixSet::xyz_to_tile)
+//! returns an error if the pyramid isn't the standard Web Mercator grid.
 //!
 //! ```
 //! use geopackage::core::tiles::{TileCoord, TileMatrixSet, ZoomLadder};
@@ -210,8 +202,7 @@
 //! let gpkg = GeoPackage::create(path)?;
 //! gpkg.add_epsg_srs(3857)?;
 //!
-//! // The spec's default arrangement: each zoom level doubles the grid, with
-//! // pixel sizes derived from the extent so they span it exactly.
+//! // Zoom levels 0 to 4, each doubling the grid of the one above.
 //! let matrix_set = TileMatrixSet::web_mercator_quad();
 //! let matrices = matrix_set.ladder(ZoomLadder::new(0, 4))?;
 //! let tiles = gpkg.create_tile_pyramid(
@@ -221,8 +212,7 @@
 //! tiles.put_tile(TileCoord::new(1, 0, 0), &png(256, 256))?;
 //! assert!(tiles.get_tile(TileCoord::new(1, 0, 0))?.is_some());
 //!
-//! // Streaming a pyramid borrows each payload from the row it was read
-//! // from, so nothing is copied to walk one.
+//! // The cursor lends out each payload without copying it.
 //! let mut cursor = tiles.cursor()?;
 //! let mut stream = cursor.tiles()?;
 //! while let Some(tile) = stream.next()? {
@@ -231,16 +221,24 @@
 //! # Ok(()) }
 //! ```
 //!
-//! # Columnar I/O
+//! # Coverages
 //!
-//! Enabled by the `arrow` feature, [`Layer::read_arrow`] reads a layer as Arrow
-//! record batches, multithreaded by default, and [`Layer::write_arrow`]
-//! writes batches back through the same path as [`Layer::write_all`].
-//! Geometry is a GeoArrow WKB column whose metadata includes the CRS as
-//! PROJJSON. [`TableSchemaBuilder::from_arrow_schema`] is the layer
-//! definition an Arrow schema implies, so a layer can be copied without its
-//! schema being restated; the type mapping both directions share is
-//! documented on the [`arrow`] module.
+//! A tiled gridded coverage is a tile pyramid whose tiles hold measurements,
+//! such as elevations, instead of images. Create one with
+//! [`GeoPackage::create_coverage`] and open one with [`GeoPackage::coverage`].
+//! As with tiles, samples are never decoded: [`Coverage::value`] applies the
+//! coverage's scale, offset and null value to a sample you have decoded
+//! yourself.
+//!
+//! # Arrow
+//!
+//! With the `arrow` feature, [`Layer::read_arrow`] reads a layer as Arrow
+//! record batches, using multiple threads by default, and [`Layer::write_arrow`]
+//! writes them using the same code as [`Layer::write_all`]. Geometry is a
+//! GeoArrow WKB column, with the CRS stored in its metadata as PROJJSON.
+//! [`TableSchemaBuilder::from_arrow_schema`] defines a layer from an Arrow
+//! schema, so a layer can be copied without restating its columns. The
+//! [`arrow`] module documents the type mapping.
 //!
 //! ```
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -285,31 +283,28 @@
 //!
 //! # Extensions
 //!
-//! `gpkg_extensions` is where a file declares what it uses beyond the core
-//! spec. [`GeoPackage::extensions`] reads that catalogue, and
-//! [`Layer::extensions`] and [`TilePyramid::extensions`] narrow it to one
-//! table. Every row identifies as an [`Extension`] and has an
-//! [`ExtensionSupport`]: read and written here, identified and left alone,
-//! removed from the standard in 2016 and accepted on read, or not recognised
-//! at all.
+//! [`GeoPackage::extensions`] lists the extensions a file declares in
+//! `gpkg_extensions`, and [`Layer::extensions`] and [`TilePyramid::extensions`]
+//! list those that apply to one table. Each is identified as an [`Extension`],
+//! with an [`ExtensionSupport`] level saying how this crate handles it.
 //!
-//! That last one is not only informational. Writing to a table covered by an
-//! extension this crate cannot identify fails with
-//! [`Error::UnsupportedExtension`], because such an extension may constrain
-//! the rows, triggers or encodings of the table it covers, and writing beside
-//! it could produce a file its own producer can no longer read. Reading never
-//! fails for this reason. [`GeoPackage::blocking_extension`] asks the
-//! question directly, and
-//! [`OpenOptions::allow_unsupported_extension_writes`] disables the check.
+//! Writing to a table covered by an extension this crate doesn't recognise
+//! fails with [`Error::UnsupportedExtension`], because the extension may
+//! constrain that table in ways this crate can't respect. Reading is
+//! unaffected. [`GeoPackage::blocking_extension`] checks a table in advance,
+//! and [`OpenOptions::allow_unsupported_extension_writes`] turns the check off.
 //!
-//! Two extensions are surfaced as part of the model rather than as catalogue
-//! rows. `gpkg_crs_wkt` puts a WKT2 CRS definition and a coordinate epoch on
-//! [`Srs`], which is how a CRS with no WKT1 form is represented at all.
-//! `gpkg_schema` describes columns and constrains their values:
-//! [`GeoPackage::data_columns`] and [`Column::data_column`] give the
-//! descriptions, [`GeoPackage::column_constraint`] resolves what a column's
-//! values are limited to, and [`GeoPackage::set_data_column`] and
-//! [`GeoPackage::add_column_constraint`] write them.
+//! These extensions have their own API:
+//!
+//! - **`gpkg_crs_wkt`**: WKT2 CRS definitions and coordinate epochs, on [`Srs`]
+//! - **`gpkg_schema`**: Column descriptions and value constraints. See
+//!   [`GeoPackage::data_columns`], [`GeoPackage::column_constraint`] and the
+//!   example below
+//! - **`gpkg_metadata`**: Metadata records attached to the file, a table, a
+//!   column or a row. See [`GeoPackage::metadata`] and
+//!   [`GeoPackage::add_metadata`]
+//! - **Related Tables** (OGC 18-000): Relationships between tables. See
+//!   [`GeoPackage::relations`] and [`GeoPackage::add_relation`]
 //!
 //! ```
 //! use geopackage::{ColumnConstraint, ConstraintKind, DataColumn, GeoPackage, OpenOptions};
@@ -350,8 +345,8 @@
 //! )?;
 //! # }
 //!
-//! // The constraints are advisory in the format, so checking written values
-//! // against them is opt-in rather than assumed.
+//! // The format doesn't enforce constraints, so checking writes against them
+//! // is opt-in.
 //! let gpkg = OpenOptions::new()
 //!     .enforce_column_constraints(true)
 //!     .open(&path)?;
@@ -362,163 +357,129 @@
 //! # Ok(()) }
 //! ```
 //!
-//! # Cargo features
+//! # Validation
 //!
-//! - **`geo-types`** (on by default): forwards `geopackage-core`'s feature of
-//!   the same name, which adds
-//!   [`GpbGeometry::to_geo`](geopackage_core::geometry::GpbGeometry::to_geo).
-//!   Disable it with `default-features = false`.
-//! - **`arrow`** (off by default): the columnar paths above. It pulls in
-//!   `arrow-array` and `arrow-schema`, which a caller using only the scalar API
-//!   does not need.
-//! - **`bundled`** (off by default): compile a vendored SQLite amalgamation
-//!   and link it statically, instead of linking the system SQLite. The
-//!   default, system-linked build requires the development files
-//!   (`libsqlite3-dev` on Debian/Ubuntu; the macOS SDK suffices) and an
-//!   `SQLITE_ENABLE_RTREE` build, which every open checks
-//!   ([`Error::RtreeUnavailable`]). `bundled` needs a C compiler, always has
-//!   the RTree module, and is the only option on Windows, which has no system
-//!   SQLite.
+//! [`GeoPackage::validate`] checks a file and returns a [`Finding`] for each
+//! problem, with a [`Severity`] and, where possible, advice on how to fix it.
+//! It doesn't modify the file. [`GeoPackage::open_lenient`] opens legacy and
+//! slightly malformed files that [`GeoPackage::open`] rejects, and records
+//! what it tolerated as [`OpenWarning`]s.
 //!
 //! # Configuration
 //!
-//! The defaults are intended to support the common case: a single-file GeoPackage, an indexed
-//! feature layer, and values read in keeping with other popular implementations.
-//! Each of these types documents possible trade-off behind its defaults:
+//! The defaults suit the common case: a single-file GeoPackage with indexed
+//! layers, read the same way other popular implementations read it. Each
+//! setting's documentation describes the trade-offs.
 //!
-//! - [`OpenOptions`]: the journal mode ([`JournalMode`], where
-//!   [`JournalMode::Wal`] is opt-in), the `synchronous` durability level
-//!   ([`Synchronous`]), and how long a statement waits for another
-//!   connection's lock ([`OpenOptions::busy_timeout`], default
-//!   [`DEFAULT_BUSY_TIMEOUT`], five seconds, against SQLite's own default of
-//!   not waiting at all). Left unset, the file keeps SQLite's own defaults for
-//!   the first two. A
-//!   handle that opted into WAL resets the file to a single `DELETE`-journal
-//!   file on close, so the `.gpkg` handed on has no sidecar files; see
-//!   [`GeoPackage`].
-//! - [`TableSchemaBuilder`]: a new layer's columns ([`ColumnSpec`]), primary
-//!   key (default [`DEFAULT_PRIMARY_KEY`], `fid`), geometry column
-//!   ([`GeometrySpec`], named [`DEFAULT_GEOMETRY_COLUMN`], `geom`, unless told
-//!   otherwise), and whether it is indexed
-//!   ([`TableSchemaBuilder::spatial_index`], default `true`).
-//!   [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`],
-//!   [`Layer::repair_spatial_index`], [`Layer::audit_spatial_index`] and
-//!   [`Layer::rebuild_spatial_index`] manage the index after creation.
-//! - [`BulkIndexOptions`]: how an RTree index is built, for
-//!   [`Layer::create_spatial_index_with`] and [`Layer::write_all_with`]: the
-//!   row count at which the bulk build takes over from the per-row triggers
-//!   ([`BulkIndexOptions::bulk_threshold`], default [`DEFAULT_BULK_THRESHOLD`],
-//!   10,000 rows), how much of the result it checks before trusting it
-//!   ([`BulkVerification`], default [`BulkVerification::None`]), and how full
-//!   each node of the tree is
-//!   packed ([`BulkIndexOptions::fill_factor`], default
-//!   [`DEFAULT_FILL_FACTOR`], `1.0`).
-//! - [`TilePyramidBuilder`]: a new pyramid's extent and spatial reference
-//!   system ([`TileMatrixSet`](core::tiles::TileMatrixSet)), its zoom levels
-//!   ([`TileMatrix`](core::tiles::TileMatrix), usually from
-//!   [`TileMatrixSet::ladder`](core::tiles::TileMatrixSet::ladder)), and
-//!   whether zoom levels that do not step by factors of two are allowed
-//!   ([`TilePyramidBuilder::allow_zoom_other`], off by default, since that
-//!   needs the `gpkg_zoom_other` extension registered).
-//! - **Column projection**, through [`Layer::with_columns`] and
-//!   [`Layer::without_geometry`]: which columns a read of that handle
-//!   fetches. Everything, by default. Worth setting on a layer with large
-//!   geometries when only the attributes are needed, since the geometry is
-//!   otherwise fetched and copied into every row whether or not anything
-//!   reads it.
-//! - [`ConversionOptions`]: how stored values are read back, through
-//!   [`Layer::with_conversion_options`]: which `DATETIME` text forms are
-//!   accepted ([`DateTimeParsing`], default [`DateTimeParsing::Strict`]) and
-//!   whether a value its declared type does not strictly permit is read or
-//!   rejected ([`StorageStrictness`], default [`StorageStrictness::Lenient`]).
+//! | Setting | Default |
+//! |---|---|
+//! | [`OpenOptions::journal_mode`] | Unchanged; [`JournalMode::Wal`] is opt-in |
+//! | [`OpenOptions::synchronous`] | Unchanged |
+//! | [`OpenOptions::busy_timeout`] | [`DEFAULT_BUSY_TIMEOUT`] (5 seconds; SQLite's own default is not to wait) |
+//! | [`TableSchemaBuilder::primary_key`] | [`DEFAULT_PRIMARY_KEY`] (`fid`) |
+//! | [`GeometrySpec::column_name`] | [`DEFAULT_GEOMETRY_COLUMN`] (`geom`) |
+//! | [`TableSchemaBuilder::spatial_index`] | `true` |
+//! | [`BulkIndexOptions::bulk_threshold`] | [`DEFAULT_BULK_THRESHOLD`] (10,000 rows) |
+//! | [`BulkIndexOptions::verification`] | [`BulkVerification::None`] |
+//! | [`BulkIndexOptions::fill_factor`] | [`DEFAULT_FILL_FACTOR`] (`1.0`) |
+//! | [`TilePyramidBuilder::allow_zoom_other`] | `false` |
+//! | [`ConversionOptions::with_datetime`] | [`DateTimeParsing::Strict`] |
+//! | [`ConversionOptions::with_storage`] | [`StorageStrictness::Lenient`] |
+//! | [`Layer::with_geometry_type_validation`] | Off |
+//! | [`Layer::with_columns`], [`Layer::without_geometry`] | All columns |
+//! | [`ArrowReadOptions::batch_size`](arrow::ArrowReadOptions::batch_size) | [`DEFAULT_BATCH_SIZE`](arrow::DEFAULT_BATCH_SIZE) (65,536 rows) |
+//! | [`ArrowReadOptions::threads`](arrow::ArrowReadOptions::threads) | `0`: `min(4, available parallelism)` |
+//! | [`ArrowReadOptions::max_batch_bytes`](arrow::ArrowReadOptions::max_batch_bytes) | [`default_max_batch_bytes`](arrow::default_max_batch_bytes): `min(i32::MAX, RAM / 4)` |
 //!
-//! Two settings are available outside the options types. [`Layer::write_all`] and
-//! [`Layer::write_arrow`] take a `batch_size`, the number of rows sharing a
-//! transaction, where `0` writes all of them in one.
-//! [`Layer::with_geometry_type_validation`] checks each geometry against its
-//! column's declared type while reading, and is **off** by default.
+//! A few notes:
 //!
-//! Under the `arrow` feature, [`ArrowReadOptions`](arrow::ArrowReadOptions)
-//! configures the columnar read: rows per batch
-//! ([`batch_size`](arrow::ArrowReadOptions::batch_size), default
-//! [`DEFAULT_BATCH_SIZE`](arrow::DEFAULT_BATCH_SIZE), 65,536), how many
-//! threads may read at once ([`threads`](arrow::ArrowReadOptions::threads),
-//! default `0`, meaning `min(4, available parallelism)`), and a ceiling on
-//! the geometry bytes one batch may hold
-//! ([`max_batch_bytes`](arrow::ArrowReadOptions::max_batch_bytes), default
-//! [`default_max_batch_bytes`](arrow::default_max_batch_bytes),
-//! `min(INT32_MAX, RAM / 4)`): the geometry column's Arrow offsets are
-//! 32-bit, so no batch can address more than 2 GB of WKB, and a batch that
-//! would cross the ceiling is emitted short so a layer of very large
-//! geometries still reads. The columnar write has no options type of its own:
-//! [`Layer::write_arrow_with`] takes the same [`BulkIndexOptions`] as
-//! [`Layer::write_all_with`].
+//! - A handle opened in WAL mode switches the file back to a single
+//!   `DELETE`-journal file when it closes, so the `.gpkg` has no sidecar files.
+//!   See [`GeoPackage`].
+//! - [`BulkIndexOptions`] controls how an RTree index is built, through
+//!   [`Layer::create_spatial_index_with`], [`Layer::write_all_with`] and
+//!   [`Layer::write_arrow_with`]. Above the bulk threshold the index is built
+//!   in one pass instead of row by row through triggers.
+//! - Leaving out the geometry with [`Layer::without_geometry`] saves copying
+//!   it into every row when you only need attributes.
+//! - [`Layer::write_all`] and [`Layer::write_arrow`] take a `batch_size`: the
+//!   number of rows per transaction, or `0` for a single transaction.
+//! - Arrow's 32-bit offsets limit a batch to 2 GB of WKB, so a batch that would
+//!   exceed `max_batch_bytes` is emitted early instead.
 //!
-//! Anything not covered here is reachable as SQL: [`GeoPackage::connection`]
-//! returns the underlying rusqlite connection.
+//! For anything else, [`GeoPackage::connection`] returns the underlying
+//! `rusqlite` connection.
 //!
-//! # What writes, and when
+//! # Which calls write
 //!
-//! Most of this crate divides cleanly into reads and writes, but three calls do
-//! not, so the whole surface is tabulated here rather than left to be inferred
-//! from the names. [`Layer::extent`] records what it had to measure;
-//! [`Layer::repair_spatial_index`] writes only when there is something to
-//! repair; and [`Layer::writer`] opens without writing, because SQLite's
-//! `BEGIN DEFERRED` takes no lock, so the first failure lands on the first row.
+//! Most calls either read or write, but three depend on the state of the
+//! file. [`Layer::extent`] stores the extent it measures if the recorded one
+//! is unusable. [`Layer::repair_spatial_index`] writes only if there is
+//! something to repair. [`Layer::writer`] begins a deferred transaction,
+//! which takes no lock until a row is written, so on a read-only connection
+//! the first row fails rather than the call.
 //!
 //! | Call | Writes to the file | On a read-only connection |
 //! |---|---|---|
-//! | [`Layer::features`], [`Layer::cursor`], [`Layer::features_in`], [`Layer::select`] | never | works |
-//! | [`Layer::spatial_index_status`], [`Layer::has_spatial_index`] | never | works |
-//! | [`Layer::audit_spatial_index`] | never | works |
-//! | [`GeoPackage::contents`] | never | works |
-//! | [`Layer::extent`] | only where the recorded bounds are unusable | works: measures, returns, records nothing |
-//! | [`Layer::repair_spatial_index`] | only where the trigger set is not current | works where there is nothing to repair |
-//! | [`Layer::recompute_extent`] | always | fails |
-//! | [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`], [`Layer::rebuild_spatial_index`] | always | fails |
-//! | [`Layer::writer`] | on its row methods and its commit, not on the call | opens; the first row written fails |
-//! | [`Layer::write_all`], [`Layer::write_arrow`] | always | fails |
-//! | [`GeoPackage::tiles`], [`TilePyramid::get_tile`], [`TilePyramid::cursor`] | never | works |
-//! | [`TilePyramid::validate`] | never | works |
-//! | [`TilePyramid::put_tile`], [`TilePyramid::delete_tile`], [`TilePyramid::write_all`] | always | fails |
-//! | [`TilePyramid::writer`] | on its tile methods and its commit, not on the call | opens; the first tile written fails |
+//! | [`Layer::features`], [`Layer::cursor`], [`Layer::features_in`], [`Layer::select`] | Never | Works |
+//! | [`Layer::spatial_index_status`], [`Layer::has_spatial_index`] | Never | Works |
+//! | [`Layer::audit_spatial_index`] | Never | Works |
+//! | [`GeoPackage::contents`] | Never | Works |
+//! | [`Layer::extent`] | Only if the recorded extent is unusable | Works; the extent is returned but not stored |
+//! | [`Layer::repair_spatial_index`] | Only if the triggers are out of date | Works if there is nothing to repair |
+//! | [`Layer::recompute_extent`] | Always | Fails |
+//! | [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`], [`Layer::rebuild_spatial_index`] | Always | Fails |
+//! | [`Layer::writer`] | On row operations and commit | Opens; the first row fails |
+//! | [`Layer::write_all`], [`Layer::write_arrow`] | Always | Fails |
+//! | [`GeoPackage::tiles`], [`TilePyramid::get_tile`], [`TilePyramid::cursor`] | Never | Works |
+//! | [`TilePyramid::validate`] | Never | Works |
+//! | [`TilePyramid::put_tile`], [`TilePyramid::delete_tile`], [`TilePyramid::write_all`] | Always | Fails |
+//! | [`TilePyramid::writer`] | On tile operations and commit | Opens; the first tile fails |
 //!
-//! Reading an extent therefore modifies the file when the recorded bounds are
-//! unusable, which is deliberate: the file stops being wrong for every later
-//! reader rather than only for this one. [`Layer::extent`] documents why, and
-//! the two ways to avoid it.
+//! Storing the extent fixes the file for later readers as well. See
+//! [`Layer::extent`] for how to avoid the write.
 //!
-//! ## What can fail, and why
+//! ## Errors
 //!
-//! - **A read-only connection**, per the table: [`Error::Sqlite`] with
-//!   SQLite's `SQLITE_READONLY`. [`Layer::extent`] is the exception, since it
-//!   has an answer either way.
-//! - **Another connection holding the write lock**: the statement waits up to
-//!   [`OpenOptions::busy_timeout`] and then fails with `SQLITE_BUSY`. Again
-//!   [`Layer::extent`] is the exception: contention means the measurement
-//!   describes a layer being changed underneath it, so the file keeps what it
-//!   had and the measurement is returned rather than an error. Note that SQLite
-//!   skips the wait entirely for a read-to-write upgrade that would deadlock
-//!   under a rollback journal, and for a stale snapshot under WAL.
+//! - **Read-only connection**: [`Error::Sqlite`] with `SQLITE_READONLY`.
+//!   [`Layer::extent`] returns its measurement instead.
+//! - **Write lock held by another connection**: The call waits for up to
+//!   [`OpenOptions::busy_timeout`], then fails with `SQLITE_BUSY`.
+//!   [`Layer::extent`] returns its measurement and leaves the file unchanged.
+//!   SQLite doesn't wait when waiting can't help: a read-to-write upgrade
+//!   under a rollback journal, or a stale snapshot under WAL.
 //! - **No spatial index**: [`Error::NoSpatialIndex`] from
-//!   [`Layer::audit_spatial_index`] and [`Layer::rebuild_spatial_index`], and
-//!   from [`Layer::repair_spatial_index`] when there is nothing there at all.
+//!   [`Layer::audit_spatial_index`], [`Layer::rebuild_spatial_index`] and
+//!   [`Layer::repair_spatial_index`].
 //! - **No geometry column**: [`Error::NoGeometryColumn`] from
 //!   [`Layer::extent`], [`Layer::recompute_extent`], [`Layer::features_in`] and
 //!   [`Layer::cursor_in`].
-//! - **A store that cannot be written for any other reason**, an unwritable
-//!   directory, a full disk, an I/O error: [`Error::ExtentPersist`] from
-//!   [`Layer::extent`], which includes the measurement so the answer is not
-//!   lost with the failure, and [`Error::Sqlite`] from everything else.
+//! - **Any other write failure**, such as a full disk: [`Error::ExtentPersist`]
+//!   from [`Layer::extent`], which includes the measurement, and
+//!   [`Error::Sqlite`] from everything else.
 //!
-//! # Reading untrusted files
+//! # Cargo features
 //!
-//! The `wkb` 0.9.2 reader this crate parses geometry with pre-allocates from
-//! element counts read out of the blob without bounding them against the
-//! buffer, so a malformed geometry declaring a `0xFFFFFFFF`-member collection
-//! drives a multi-gigabyte allocation. The fix belongs upstream in
-//! [georust/wkb](https://github.com/georust/wkb); until it lands and this crate
-//! bumps its dependency, you should take care when parsing GeoPackage files from untrusted sources.
+//! - **`geo-types`** (default): Enables
+//!   [`GpbGeometry::to_geo`](geopackage_core::geometry::GpbGeometry::to_geo),
+//!   which converts a stored geometry to a `geo-types` geometry
+//! - **`arrow`**: Arrow record batch I/O. Adds dependencies on `arrow-array`
+//!   and `arrow-schema`
+//! - **`bundled`**: Compile and statically link a vendored SQLite instead of
+//!   linking the system library. Requires a C compiler. Required on Windows
+//!
+//! Without `bundled`, you need SQLite's development files (`libsqlite3-dev` on
+//! Debian and Ubuntu; macOS includes them), and SQLite must be built with the
+//! RTree module. Opening a file checks this, and returns
+//! [`Error::RtreeUnavailable`] if the module is missing.
+//!
+//! # Untrusted input
+//!
+//! Geometry is parsed by the `wkb` crate. Its 0.9.2 reader allocates based on
+//! element counts read from the blob without checking them against the blob's
+//! length, so a malformed geometry can trigger a multi-gigabyte allocation.
+//! Until this is fixed upstream in [georust/wkb](https://github.com/georust/wkb),
+//! don't read geometries from untrusted files.
 
 // `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
 // workspace lints table (root Cargo.toml). This crate never uses `unsafe`; the
