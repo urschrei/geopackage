@@ -44,10 +44,10 @@ pub enum OpenWarning {
     },
     /// The file registers an extension this crate cannot identify.
     ///
-    /// Reading continues: a `write-only` extension is one a reader may ignore
-    /// by Requirement 64, and even a `read-write` one is more useful reported
-    /// than rejected, since what it affects may be a table the caller never
-    /// touches. Writing to the affected table fails instead, with
+    /// Reading continues. Under Requirement 64, a reader may ignore a
+    /// `write-only` extension. Even a `read-write` one is more useful reported
+    /// than rejected, since the table it affects may be one you never touch.
+    /// Writing to the affected table fails instead, with
     /// [`Error::UnsupportedExtension`](crate::Error::UnsupportedExtension).
     UnsupportedExtension {
         /// The `extension_name` value, as the file spells it.
@@ -59,8 +59,8 @@ pub enum OpenWarning {
     },
 }
 
-/// One line saying what was accepted, so a caller reporting warnings does not
-/// have to match on them itself.
+/// Formats the warning as one line saying what was accepted, so you can report
+/// warnings without matching on them.
 impl std::fmt::Display for OpenWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -110,8 +110,8 @@ impl GeoPackage {
     ///
     /// Retrieve the warnings with [`GeoPackage::open_warnings`]. A file that
     /// cannot be identified as a GeoPackage at all, or is missing a required
-    /// core table (`gpkg_spatial_ref_sys`, `gpkg_contents`), is still an error:
-    /// leniency covers presentation, not identity.
+    /// core table (`gpkg_spatial_ref_sys`, `gpkg_contents`), is still an error.
+    /// Leniency covers presentation, not identity.
     pub fn open_lenient<P: AsRef<Path>>(path: P) -> Result<Self> {
         crate::OpenOptions::new().lenient(true).open(path)
     }
@@ -119,14 +119,14 @@ impl GeoPackage {
     /// Opens an existing GeoPackage read-only, with the same leniency as
     /// [`GeoPackage::open_lenient`].
     ///
-    /// The combination an inspection tool needs: the files most worth
-    /// inspecting are the ones something is wrong with, and inspecting them
-    /// should not require write access to the file, its directory, or the
-    /// medium it sits on. [`GeoPackage::open_read_only`] is read-only but
-    /// strict, and [`GeoPackage::open_lenient`] is lenient but requires write
-    /// access; this is the combination `gpkg info` and `gpkg validate` use.
+    /// Use this for inspection. The files most worth inspecting are the ones
+    /// with something wrong, and inspecting them should not need write access
+    /// to the file, its directory, or the medium it is on.
+    /// [`GeoPackage::open_read_only`] is read-only but strict, and
+    /// [`GeoPackage::open_lenient`] is lenient but needs write access.
+    /// `gpkg info` and `gpkg validate` use this combination.
     ///
-    /// Warnings are retrieved with [`GeoPackage::open_warnings`], as for
+    /// Retrieve the warnings with [`GeoPackage::open_warnings`], as for
     /// `open_lenient`.
     ///
     /// # Errors
@@ -137,9 +137,10 @@ impl GeoPackage {
         crate::OpenOptions::new().lenient(true).open_read_only(path)
     }
 
-    /// Returns the warnings collected by [`GeoPackage::open_lenient`] (always
-    /// empty for a handle opened with strict [`GeoPackage::open`] or created
-    /// fresh).
+    /// Returns the warnings collected by [`GeoPackage::open_lenient`].
+    ///
+    /// The list is always empty for a handle opened with strict
+    /// [`GeoPackage::open`] or newly created.
     pub fn open_warnings(&self) -> &[OpenWarning] {
         &self.warnings
     }
@@ -147,9 +148,9 @@ impl GeoPackage {
 
 /// Collects everything a lenient open accepts, as warnings.
 ///
-/// Called from the one open path in `lib.rs` when `OpenOptions::lenient` is
-/// set, so leniency composes with every other setting rather than living in a
-/// parallel constructor that ignored them.
+/// The single open path in `lib.rs` calls this when `OpenOptions::lenient` is
+/// set. Leniency therefore combines with every other setting, instead of
+/// living in a separate constructor that ignores them.
 pub(crate) fn collect_warnings(
     conn: &Connection,
     application_id: u32,
@@ -173,9 +174,9 @@ pub(crate) fn collect_warnings(
 /// Pushes an [`OpenWarning::UnsupportedExtension`] for every `gpkg_extensions`
 /// row naming an extension this crate cannot identify.
 ///
-/// The rows this crate can name are not reported, whether or not it implements
-/// them: knowing what an extension is and which tables it owns is enough to
-/// leave it alone.
+/// Extensions this crate can name are not reported, whether or not it
+/// implements them. Knowing what an extension is and which tables it owns is
+/// enough to leave it alone.
 fn collect_unsupported_extensions(
     conn: &Connection,
     warnings: &mut Vec<OpenWarning>,

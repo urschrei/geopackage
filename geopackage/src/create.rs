@@ -32,9 +32,9 @@ pub const DEFAULT_GEOMETRY_COLUMN: &str = "geom";
 
 /// One non-geometry, non-primary-key column of a [`TableSchemaBuilder`].
 ///
-/// The declared type is a spec [`ColumnType`]; `NOT NULL`, `UNIQUE`, and a
+/// The declared type is a spec [`ColumnType`]. `NOT NULL`, `UNIQUE`, and a
 /// `DEFAULT` expression are optional constraints. The default expression is
-/// emitted verbatim into the DDL (raw SQL, trusted from the caller).
+/// raw SQL from the caller, emitted verbatim into the DDL and trusted as is.
 #[derive(Debug, Clone)]
 pub struct ColumnSpec {
     name: String,
@@ -72,8 +72,10 @@ impl ColumnSpec {
     }
 
     /// Sets a `DEFAULT` expression, as raw SQL text (e.g. `"0"`, `"'n/a'"`,
-    /// `"CURRENT_TIMESTAMP"`). Emitted verbatim, so it is the caller's
-    /// responsibility to supply a valid, safe expression.
+    /// `"CURRENT_TIMESTAMP"`).
+    ///
+    /// The text is emitted verbatim, so you must supply a valid, safe
+    /// expression.
     #[must_use]
     pub fn default_value(mut self, sql: impl Into<String>) -> Self {
         self.default = Some(sql.into());
@@ -162,10 +164,10 @@ impl GeometrySpec {
 /// builder to [`GeoPackage::create_layer`] (feature table) or
 /// [`GeoPackage::create_attributes_table`] (non-spatial table).
 ///
-/// The emitted table has an `INTEGER PRIMARY KEY AUTOINCREMENT` column
-/// (conventionally `fid`, overridable via [`Self::primary_key`]) first, then
-/// the [`ColumnSpec`] columns in the order added, then the geometry column
-/// last for a feature table.
+/// The emitted table starts with an `INTEGER PRIMARY KEY AUTOINCREMENT`
+/// column, conventionally `fid`, which you can rename with
+/// [`Self::primary_key`]. The [`ColumnSpec`] columns follow in the order
+/// added, and a feature table ends with the geometry column.
 #[derive(Debug, Clone)]
 pub struct TableSchemaBuilder {
     table_name: String,
@@ -210,17 +212,17 @@ impl TableSchemaBuilder {
     /// Sets whether [`GeoPackage::create_layer`] builds a spatial index for
     /// this layer. Defaults to `true`.
     ///
-    /// An indexed feature layer is what every other implementation produces:
-    /// GDAL's driver creates one unless told otherwise, so a file from
-    /// `ogr2ogr` has one. Without an index [`crate::Layer::features_in`] still
-    /// answers correctly, by falling back to a full scan, so the absence is
-    /// invisible until someone profiles it. A spatial format whose spatial
-    /// queries are quietly linear is a poor default.
+    /// Every other implementation produces indexed feature layers. GDAL's
+    /// driver creates an index unless told otherwise, so a file from `ogr2ogr`
+    /// has one. Without an index, [`crate::Layer::features_in`] still returns
+    /// correct results by falling back to a full scan, so the missing index
+    /// goes unnoticed until someone profiles it. Silently linear spatial
+    /// queries are a poor default for a spatial format.
     ///
-    /// Creating it here also costs less than adding it later: the index is
-    /// empty, which is the state that lets a subsequent large
-    /// [`crate::Layer::write_all`] or [`crate::Layer::write_arrow`] build the
-    /// whole tree in one bulk pass rather than through the per-row triggers.
+    /// Creating the index here is also cheaper than adding it later. It starts
+    /// empty, which lets a later large [`crate::Layer::write_all`] or
+    /// [`crate::Layer::write_arrow`] build the whole tree in one bulk pass
+    /// instead of through the per-row triggers.
     ///
     /// Ignored for a builder with no geometry column, which has nothing to
     /// index.
@@ -253,8 +255,10 @@ impl TableSchemaBuilder {
         self
     }
 
-    /// Sets the geometry column (required for [`GeoPackage::create_layer`],
-    /// rejected by [`GeoPackage::create_attributes_table`]).
+    /// Sets the geometry column.
+    ///
+    /// [`GeoPackage::create_layer`] requires one, and
+    /// [`GeoPackage::create_attributes_table`] rejects one.
     #[must_use]
     pub fn geometry(mut self, geometry: GeometrySpec) -> Self {
         self.geometry = Some(geometry);
@@ -295,8 +299,8 @@ impl GeoPackage {
     /// Creates a feature layer from a [`TableSchemaBuilder`].
     ///
     /// Emits the user-table DDL, a `gpkg_contents` row (`data_type = 'features'`),
-    /// and a `gpkg_geometry_columns` row (creating that table lazily on first
-    /// use), then returns a read/write [`Layer`] handle for the new table.
+    /// and a `gpkg_geometry_columns` row, creating that table on first use. It
+    /// then returns a read/write [`Layer`] handle for the new table.
     ///
     /// # Errors
     ///
@@ -371,8 +375,9 @@ impl GeoPackage {
         Ok(())
     }
 
-    /// [`Self::create_table`] without the transaction management: every
-    /// statement runs on `tx`, which the caller owns and commits.
+    /// Does the work of [`Self::create_table`] without managing the
+    /// transaction. Every statement runs on `tx`, which the caller owns and
+    /// commits.
     fn create_table_in(
         &self,
         tx: &Connection,

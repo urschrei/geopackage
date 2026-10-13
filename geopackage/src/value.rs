@@ -32,7 +32,7 @@ use rusqlite::types::ValueRef as SqlValueRef;
 
 /// A typed, non-geometry column value.
 ///
-/// Storage width is not preserved: every declared integer width
+/// Storage width is not preserved. Every declared integer width
 /// (`TINYINT` … `INTEGER`) maps to [`Value::Integer`], and both `FLOAT` and
 /// `DOUBLE`/`REAL` map to [`Value::Float`].
 #[derive(Debug, Clone, PartialEq)]
@@ -59,14 +59,14 @@ pub enum Value {
 /// A borrowed [`Value`]: the same cases, with text and binary borrowed from
 /// whatever stores the row's bytes.
 ///
-/// This is what the read path returns. A [`crate::Feature`] keeps its text and
-/// blob cells in one buffer rather than as a `String` or `Vec<u8>` each, so
-/// there is no stored `Value` to borrow; a `ValueRef` is built pointing into
-/// that buffer instead. Call [`ValueRef::to_value`] for a `Value` that
-/// outlives the feature.
+/// The read path returns these. A [`crate::Feature`] keeps its text and blob
+/// cells in one buffer, not as a separate `String` or `Vec<u8>` each, so there
+/// is no stored `Value` to borrow. Instead, a `ValueRef` points into that
+/// buffer. Call [`ValueRef::to_value`] for a `Value` that outlives the
+/// feature.
 ///
-/// The variants without a borrow are passed by value: [`Date`] and
-/// [`DateTime`] are `Copy` and smaller than a pointer pair.
+/// The variants without a borrow hold their value directly, because [`Date`]
+/// and [`DateTime`] are `Copy` and smaller than a pointer pair.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum ValueRef<'a> {
@@ -91,10 +91,10 @@ pub enum ValueRef<'a> {
 impl<'a> ValueRef<'a> {
     /// Copies this into an owned [`Value`].
     ///
-    /// Not named `to_owned`: `ValueRef` is `Copy`, so it already has a
-    /// `ToOwned::to_owned` returning another `ValueRef`. An inherent method of
-    /// that name would shadow it and return a different type depending on
-    /// whether it was called as a method or through the trait.
+    /// This isn't named `to_owned`, because `ValueRef` is `Copy` and so already
+    /// has a `ToOwned::to_owned` that returns another `ValueRef`. An inherent
+    /// method of that name would shadow it, and return a different type
+    /// depending on whether you called it as a method or through the trait.
     #[must_use]
     pub fn to_value(&self) -> Value {
         Value::from(*self)
@@ -102,8 +102,8 @@ impl<'a> ValueRef<'a> {
 
     /// Returns the text, if this is a [`ValueRef::Text`].
     ///
-    /// The borrow is of whatever stores the row's bytes, not of this value, so
-    /// the result outlives the `ValueRef` it came from.
+    /// The result borrows from whatever stores the row's bytes, not from this
+    /// value, so it outlives the `ValueRef` it came from.
     #[must_use]
     pub fn as_str(&self) -> Option<&'a str> {
         match *self {
@@ -112,8 +112,9 @@ impl<'a> ValueRef<'a> {
         }
     }
 
-    /// Returns the bytes, if this is a [`ValueRef::Blob`]. Borrowed as
-    /// [`Self::as_str`].
+    /// Returns the bytes, if this is a [`ValueRef::Blob`].
+    ///
+    /// The result borrows as in [`Self::as_str`].
     #[must_use]
     pub fn as_blob(&self) -> Option<&'a [u8]> {
         match *self {
@@ -130,9 +131,9 @@ impl<'a> ValueRef<'a> {
 
     /// Returns the boolean, if this is a [`ValueRef::Boolean`].
     ///
-    /// Only that case: an integer column containing `0` or `1` reads as
-    /// [`ValueRef::Integer`], because what a value converts to is driven by the
-    /// column's declared type rather than by its contents.
+    /// An integer column containing `0` or `1` still reads as
+    /// [`ValueRef::Integer`], because the column's declared type decides the
+    /// conversion, not the value's contents.
     #[must_use]
     pub fn as_bool(&self) -> Option<bool> {
         match *self {
@@ -152,8 +153,8 @@ impl<'a> ValueRef<'a> {
 
     /// Returns the float, if this is a [`ValueRef::Float`].
     ///
-    /// An `INTEGER`-declared column reads as [`ValueRef::Integer`] even where
-    /// the value would widen losslessly, so this does not convert one.
+    /// An `INTEGER`-declared column reads as [`ValueRef::Integer`] even when
+    /// the value would widen losslessly, and this method does not convert it.
     #[must_use]
     pub fn as_f64(&self) -> Option<f64> {
         match *self {
@@ -215,8 +216,8 @@ impl<'a> From<&'a Value> for ValueRef<'a> {
 ///
 /// This works on bare values only. `Option` has no cross-type `PartialEq` in
 /// the standard library, so `feature.value("x")`, an `Option<ValueRef>`, does
-/// not compare against an `Option<Value>`: write the expected side as a
-/// `ValueRef` there.
+/// not compare against an `Option<Value>`. Write the expected side as a
+/// `ValueRef` in that case.
 impl PartialEq<Value> for ValueRef<'_> {
     fn eq(&self, other: &Value) -> bool {
         *self == ValueRef::from(other)
@@ -231,7 +232,7 @@ impl PartialEq<ValueRef<'_>> for Value {
 
 /// How [`Value`] conversion interprets `DATETIME` text.
 ///
-/// `DATE` text is always parsed with [`Date::parse`]; only `DATETIME` has a
+/// `DATE` text is always parsed with [`Date::parse`]. Only `DATETIME` has a
 /// strict and a lenient form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
@@ -256,17 +257,17 @@ pub enum DateTimeParsing {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum StorageStrictness {
-    /// Read the value as its declared type where that is possible: any non-zero
+    /// Read the value as its declared type where possible. Any non-zero
     /// INTEGER in a `BOOLEAN` column is `true`, and an INTEGER in a
     /// `FLOAT`/`DOUBLE` column widens losslessly to [`Value::Float`].
     ///
-    /// The default. Non-conformant values of this kind occur in files that
-    /// other implementations read without complaint, so rejecting them by
-    /// default would make this crate the odd one out on files it can perfectly
-    /// well read.
+    /// This is the default. Other implementations read files containing these
+    /// non-conformant values without complaint, so rejecting them by default
+    /// would make this crate the odd one out on files it can read perfectly
+    /// well.
     #[default]
     Lenient,
-    /// Reject both: a `BOOLEAN` column may contain only `0` or `1`
+    /// Reject both. A `BOOLEAN` column may contain only `0` or `1`
     /// ([`Error::NonBooleanInteger`]), and a `FLOAT`/`DOUBLE` column may
     /// contain only REAL ([`Error::ValueTypeMismatch`]).
     Strict,
@@ -283,13 +284,15 @@ pub struct ConversionOptions {
 }
 
 impl ConversionOptions {
-    /// Strict throughout: `DATETIME` must be the exact 1.4 form, and a value its
-    /// declared type does not permit is an error rather than an interpretation.
+    /// Creates options that are strict throughout.
+    ///
+    /// `DATETIME` must be the exact 1.4 form, and a value its declared type
+    /// does not permit is an error rather than an interpretation.
     ///
     /// This is stricter than [`Self::default`], which pairs strict `DATETIME`
-    /// parsing with [`StorageStrictness::Lenient`] because that combination is
-    /// what reads the files real writers produce. Mix them with
-    /// [`Self::with_datetime`] and [`Self::with_storage`].
+    /// parsing with [`StorageStrictness::Lenient`] because that combination
+    /// reads the files real writers produce. Use [`Self::with_datetime`] and
+    /// [`Self::with_storage`] to mix the two.
     pub fn strict() -> Self {
         Self {
             datetime: DateTimeParsing::Strict,
@@ -297,8 +300,10 @@ impl ConversionOptions {
         }
     }
 
-    /// Lenient throughout: accept the common `DATETIME` variants found in real
-    /// files, and read values their declared type does not strictly permit.
+    /// Creates options that are lenient throughout.
+    ///
+    /// They accept the common `DATETIME` variants found in real files, and
+    /// read values their declared type does not strictly permit.
     pub fn lenient() -> Self {
         Self {
             datetime: DateTimeParsing::Lenient,
@@ -381,10 +386,10 @@ impl GeoPackage {
 /// Converts a typed [`Value`] into an owned rusqlite value for parameter
 /// binding (the [`crate::Layer::select`] passthrough).
 ///
-/// Query parameters are kept by the prepared statement for as long as the
-/// cursor lives, which outlasts the borrow the caller passed in, so this is one
-/// of the few places the read path has to copy. It happens once per query, not
-/// once per row.
+/// The prepared statement keeps query parameters for as long as the cursor
+/// lives, which is longer than the borrow the caller passed in. This is
+/// therefore one of the few places the read path has to copy. The copy happens
+/// once per query, not once per row.
 pub(crate) fn value_ref_to_sql(value: &ValueRef<'_>) -> rusqlite::types::Value {
     value_into_sql(value.to_value())
 }
@@ -393,9 +398,9 @@ pub(crate) fn value_ref_to_sql(value: &ValueRef<'_>) -> rusqlite::types::Value {
 ///
 /// The scalar write path keeps the caller's values for the whole insert, so
 /// text and blob cells can be bound straight out of them. Going through
-/// [`value_to_sql`] instead deep-copies every string and blob in the row, once
-/// per row written. Only `DATE` and `DATETIME` are owned here, because they are
-/// formatted rather than copied.
+/// [`value_to_sql`] instead would deep-copy every string and blob in the row,
+/// once per row written. Only `DATE` and `DATETIME` are owned here, because
+/// they are formatted rather than copied.
 pub(crate) fn value_ref_to_bind(value: ValueRef<'_>) -> rusqlite::types::ToSqlOutput<'_> {
     use rusqlite::types::{ToSqlOutput, Value as Sql};
     match value {
@@ -410,7 +415,7 @@ pub(crate) fn value_ref_to_bind(value: ValueRef<'_>) -> rusqlite::types::ToSqlOu
     }
 }
 
-/// [`value_ref_to_bind`] for a caller holding an owned [`Value`].
+/// Like [`value_ref_to_bind`], for a caller holding an owned [`Value`].
 pub(crate) fn value_to_bind(value: &Value) -> rusqlite::types::ToSqlOutput<'_> {
     use rusqlite::types::{ToSqlOutput, Value as Sql};
     match value {
@@ -425,8 +430,8 @@ pub(crate) fn value_to_bind(value: &Value) -> rusqlite::types::ToSqlOutput<'_> {
     }
 }
 
-/// [`value_ref_to_sql`] for a caller that owns its value, so a string or blob
-/// moves into the binding instead of being copied.
+/// Like [`value_ref_to_sql`], for a caller that owns its value. A string or
+/// blob moves into the binding instead of being copied.
 ///
 /// The columnar write path builds a value per cell and then binds it once, so
 /// cloning there would copy every string twice before it reached SQLite.
@@ -448,7 +453,7 @@ pub(crate) fn value_into_sql(value: Value) -> rusqlite::types::Value {
 /// declared type.
 ///
 /// `column_type` is `None` for a column whose declared type is outside the
-/// spec vocabulary; such a value is surfaced by its raw storage class.
+/// spec vocabulary. Such a value is returned by its raw storage class.
 pub(crate) fn value_ref_from_sql<'a>(
     value: SqlValueRef<'a>,
     column_type: Option<&ColumnType>,
@@ -552,7 +557,7 @@ pub(crate) fn value_ref_from_sql<'a>(
     }
 }
 
-/// Surfaces a value by its raw storage class, used when the declared type is
+/// Converts a value by its raw storage class alone, for a declared type
 /// outside the spec vocabulary.
 fn untyped<'a>(value: SqlValueRef<'a>) -> Result<ValueRef<'a>> {
     Ok(match value {
@@ -564,10 +569,10 @@ fn untyped<'a>(value: SqlValueRef<'a>) -> Result<ValueRef<'a>> {
     })
 }
 
-/// [`value_ref_from_sql`] producing an owned [`Value`].
+/// Like [`value_ref_from_sql`], but produces an owned [`Value`].
 ///
-/// The conversion itself borrows; this copies the result for the callers that
-/// need a value outliving the row, such as the query-parameter path.
+/// The conversion itself borrows. This copies the result for callers that need
+/// a value to outlive the row, such as the query-parameter path.
 pub(crate) fn value_from_ref(
     value: SqlValueRef<'_>,
     column_type: Option<&ColumnType>,
@@ -579,7 +584,7 @@ pub(crate) fn value_from_ref(
 
 /// Borrows SQLite TEXT bytes as UTF-8.
 ///
-/// The parsed types read through this: they consume the text and keep none of
+/// The parsed types read through this. They consume the text and keep none of
 /// it, so copying it first would allocate and drop a `String` per cell, per
 /// row.
 fn text_ref(bytes: &[u8]) -> Result<&str> {

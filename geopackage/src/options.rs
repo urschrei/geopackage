@@ -20,21 +20,22 @@ use crate::{GeoPackage, Result};
 
 /// SQLite journal mode for a GeoPackage connection.
 ///
-/// The default is interchange-first: an unspecified journal mode leaves the
-/// file as it is, and a file created fresh is [`JournalMode::Delete`] (SQLite's
-/// own default), so a handed-over `.gpkg` is a single file. [`JournalMode::Wal`]
-/// is opt-in for concurrent read/write throughput; a handle that opted into WAL
-/// checkpoints and resets the file to `Delete` on [`GeoPackage::close`] and on
-/// drop, so no `-wal`/`-shm` sidecars are left behind.
+/// The default favours interchange. If you don't set a journal mode, the file
+/// keeps the one it has, and a newly created file uses [`JournalMode::Delete`]
+/// (SQLite's own default), so a `.gpkg` you hand over is a single file.
+/// [`JournalMode::Wal`] is opt-in, for concurrent read/write throughput. A
+/// handle that opted into WAL checkpoints and resets the file to `Delete` on
+/// [`GeoPackage::close`] and on drop, so no `-wal`/`-shm` sidecars are left
+/// behind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum JournalMode {
-    /// The rollback journal (`PRAGMA journal_mode = DELETE`). Single-file, the
-    /// interchange default.
+    /// The rollback journal (`PRAGMA journal_mode = DELETE`). It keeps the
+    /// database in a single file, and is the interchange default.
     Delete,
     /// Write-ahead logging (`PRAGMA journal_mode = WAL`). Faster concurrent
     /// read/write, at the cost of `-wal`/`-shm` sidecar files while the
-    /// connection is open; a WAL handle is reset to `Delete` on close/drop.
+    /// connection is open. A WAL handle is reset to `Delete` on close or drop.
     Wal,
 }
 
@@ -52,12 +53,12 @@ impl JournalMode {
 ///
 /// Trades write throughput against how much recent work a power loss or OS
 /// crash can undo. [`Synchronous::Full`] is SQLite's default in rollback-journal
-/// mode; [`Synchronous::Normal`] is the usual choice under
-/// [`JournalMode::Wal`]. Leaving it unspecified keeps SQLite's own default.
+/// mode, and [`Synchronous::Normal`] is the usual choice under
+/// [`JournalMode::Wal`]. If you leave it unset, SQLite's own default applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Synchronous {
-    /// `PRAGMA synchronous = OFF` (0): no syncing; fastest, least durable.
+    /// `PRAGMA synchronous = OFF` (0). No syncing: fastest and least durable.
     Off,
     /// `PRAGMA synchronous = NORMAL` (1).
     Normal,
@@ -82,20 +83,20 @@ impl Synchronous {
 /// How long a statement waits for another connection's lock before failing,
 /// unless [`OpenOptions::busy_timeout`] says otherwise.
 ///
-/// SQLite's own default is to fail immediately, which makes any concurrent
-/// writer turn an ordinary write into an error. Five seconds is long enough to
-/// ride out the writes a cooperating process actually makes and short enough
-/// not to look like a hang.
+/// SQLite's own default is to fail immediately, so any concurrent writer turns
+/// an ordinary write into an error. Five seconds is long enough to wait out the
+/// writes a cooperating process makes, and short enough not to look like a
+/// hang.
 pub const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A builder for opening or creating a [`GeoPackage`] with an explicit journal
 /// mode and/or `synchronous` level.
 ///
-/// Both settings are optional. An unspecified journal mode leaves the file's
-/// existing mode untouched (a freshly created file is
-/// [`JournalMode::Delete`]); an unspecified synchronous level keeps SQLite's
-/// default. Journal mode is ignored by [`Self::open_read_only`], which cannot
-/// write the change.
+/// Both settings are optional. If you don't set a journal mode, the file keeps
+/// its existing one (a newly created file is [`JournalMode::Delete`]). If you
+/// don't set a synchronous level, SQLite's default applies.
+/// [`Self::open_read_only`] ignores the journal mode, because it cannot write
+/// the change.
 ///
 /// # Examples
 ///
@@ -120,8 +121,10 @@ pub struct OpenOptions {
 }
 
 impl OpenOptions {
-    /// Creates a builder with no settings applied (the same defaults the
-    /// plain [`GeoPackage::create`] / [`GeoPackage::open`] constructors use).
+    /// Creates a builder with no settings applied.
+    ///
+    /// These are the defaults the plain [`GeoPackage::create`] and
+    /// [`GeoPackage::open`] constructors use.
     pub fn new() -> Self {
         Self::default()
     }
@@ -136,13 +139,12 @@ impl OpenOptions {
     /// Accepts legacy and lightly non-conforming files, recording what was
     /// accepted as [`crate::OpenWarning`]s rather than failing to open.
     ///
-    /// Composes with every other setting here: leniency was previously
-    /// reachable only through [`GeoPackage::open_lenient`] and
-    /// [`GeoPackage::open_read_only_lenient`], which take no options at all,
-    /// so WAL and leniency, or constraint enforcement and leniency, could not
-    /// be combined.
+    /// This combines with every other setting here.
+    /// [`GeoPackage::open_lenient`] and [`GeoPackage::open_read_only_lenient`]
+    /// take no options at all, so use this to combine leniency with WAL or with
+    /// constraint enforcement.
     ///
-    /// Leniency covers presentation, not identity: a file that cannot be
+    /// Leniency covers presentation, not identity. A file that cannot be
     /// identified as a GeoPackage, or that is missing a required core table, is
     /// still an error. Retrieve what was accepted with
     /// [`GeoPackage::open_warnings`].
@@ -160,20 +162,19 @@ impl OpenOptions {
     }
 
     /// Sets how long a statement waits for a lock another connection holds
-    /// before giving up with `SQLITE_BUSY`. [`DEFAULT_BUSY_TIMEOUT`] when
-    /// unset.
+    /// before giving up with `SQLITE_BUSY`. Defaults to
+    /// [`DEFAULT_BUSY_TIMEOUT`].
     ///
     /// `Duration::ZERO` restores SQLite's own default, which is to fail
-    /// immediately. That is rarely the right choice: a GeoPackage is a
+    /// immediately. That is rarely what you want. A GeoPackage is a
     /// single-writer database that readers and writers are expected to share,
     /// so a write that meets a concurrent writer should wait rather than fail
     /// on the first attempt.
     ///
-    /// This is the whole of the crate's retry policy. Waiting is what SQLite
-    /// does on a caller's behalf here, and it is worth knowing that the wait is
-    /// skipped in the two cases where it could not help: a read-to-write
-    /// upgrade that would deadlock under a rollback journal, and a stale
-    /// snapshot under WAL, both of which return `SQLITE_BUSY` at once however
+    /// This is the crate's entire retry policy, and SQLite does the waiting.
+    /// SQLite skips the wait in the two cases where it could not help: a
+    /// read-to-write upgrade that would deadlock under a rollback journal, and
+    /// a stale snapshot under WAL. Both return `SQLITE_BUSY` at once, however
     /// long the timeout is.
     #[must_use]
     pub fn busy_timeout(mut self, timeout: Duration) -> Self {
@@ -184,13 +185,12 @@ impl OpenOptions {
     /// Allows writes to tables covered by an extension this crate cannot
     /// identify, instead of failing with [`Error::UnsupportedExtension`].
     ///
-    /// By default such a write fails, because an unidentifiable extension may
+    /// By default such a write fails. An unidentifiable extension may
     /// constrain the rows, triggers or encodings of the table it covers, and
-    /// Requirement 64 makes every extension one a writer has to understand.
-    /// Set this when you know what the extension is and know that writing
-    /// beside it is safe: the check is the crate's, not the format's, and a
-    /// caller who knows more than the catalogue does should be able to say
-    /// so.
+    /// under Requirement 64 a writer has to understand every extension. Set
+    /// this when you know what the extension is and that writing beside it is
+    /// safe. The check is the crate's, not the format's, and if you know more
+    /// than the catalogue does, you should be able to say so.
     ///
     /// Reads are unaffected either way, and extensions this crate can name
     /// never trigger the error. GDAL, for comparison, warns in this
@@ -213,24 +213,23 @@ impl OpenOptions {
     /// contain values its own constraints forbid, and rejecting writes beside
     /// them by default would impose a rule the format does not.
     ///
-    /// What is checked, for a constrained column: a `range` against
-    /// integers and floats, an `enum` against text and against the decimal
-    /// form of a number, since the spec's own sample enumerates numbers as
-    /// text, and a `glob` by asking SQLite. NULL satisfies every constraint, a
-    /// constraint saying what a value may be rather than that there has to be
-    /// one; use `NOT NULL` for that. Blob, date and datetime values are not
-    /// checked.
+    /// For a constrained column, a `range` is checked against integers and
+    /// floats, and a `glob` by asking SQLite. An `enum` is checked against text
+    /// and against the decimal form of a number, since the spec's own sample
+    /// enumerates numbers as text. NULL satisfies every constraint, because a
+    /// constraint says what a value may be, not that there has to be one. Use
+    /// `NOT NULL` for that. Blob, date and datetime values are not checked.
     ///
-    /// The glob form goes to SQLite (`SELECT ?1 GLOB ?2`, prepared once per
-    /// writer) rather than being matched here. Its pattern language has no
-    /// definition beyond what SQLite does with it, and this crate bundles
-    /// SQLite, so the engine that stores the file is the authority on what its
-    /// own constraints mean. That also gives a number SQLite's own text coercion,
-    /// which is what a trigger enforcing the same constraint would apply.
+    /// SQLite matches globs (`SELECT ?1 GLOB ?2`, prepared once per writer),
+    /// not this crate. The pattern language has no definition beyond what
+    /// SQLite does with it, and this crate bundles SQLite, so the engine that
+    /// stores the file decides what its own constraints mean. SQLite also
+    /// applies its own text coercion to a number, which is what a trigger
+    /// enforcing the same constraint would do.
     ///
-    /// Applies to every write path, the columnar one included. Measured at
-    /// about 31% on a 200,000-row write with two constrained columns, and
-    /// nothing at all for a layer with no constraints.
+    /// This applies to every write path, including the columnar one. The
+    /// measured cost is about 31% on a 200,000-row write with two constrained
+    /// columns, and nothing for a layer with no constraints.
     ///
     /// [`Error::ColumnConstraintViolation`]: crate::Error::ColumnConstraintViolation
     #[must_use]
@@ -241,10 +240,9 @@ impl OpenOptions {
 
     /// Fills in [`DEFAULT_BUSY_TIMEOUT`] where the caller set none.
     ///
-    /// Applied by the entry points that open the connection themselves. A
-    /// caller-supplied connection keeps whatever timeout it already has unless
-    /// the caller asks for one, on the same principle that leaves its journal
-    /// mode alone.
+    /// The entry points that open the connection themselves apply this. A
+    /// caller-supplied connection keeps its existing timeout unless the caller
+    /// sets one, on the same principle that leaves its journal mode alone.
     pub(crate) fn with_default_busy_timeout(mut self) -> Self {
         if self.busy_timeout.is_none() {
             self.busy_timeout = Some(DEFAULT_BUSY_TIMEOUT);
@@ -254,7 +252,7 @@ impl OpenOptions {
 
     /// Creates a new GeoPackage 1.4 file at `path` with these options.
     ///
-    /// As [`GeoPackage::create`], but applying the configured journal mode and
+    /// Like [`GeoPackage::create`], but applies the configured journal mode and
     /// `synchronous` level to the new connection.
     pub fn create<P: AsRef<Path>>(self, path: P) -> Result<GeoPackage> {
         GeoPackage::create_configured(path.as_ref(), self)
@@ -267,17 +265,17 @@ impl OpenOptions {
 
     /// Opens an existing GeoPackage read-only with these options.
     ///
-    /// The journal mode is ignored (a read-only connection cannot change it);
-    /// the `synchronous` level is still applied.
+    /// The journal mode is ignored, because a read-only connection cannot
+    /// change it. The `synchronous` level is still applied.
     pub fn open_read_only<P: AsRef<Path>>(self, path: P) -> Result<GeoPackage> {
         GeoPackage::open_configured(path.as_ref(), OpenFlags::SQLITE_OPEN_READ_ONLY, self)
     }
 
     /// Wraps an already-open connection with these options.
     ///
-    /// As [`GeoPackage::from_connection`], but applying the configured journal
-    /// mode and `synchronous` level. The caller is responsible for the
-    /// connection being writable if a journal mode is set.
+    /// Like [`GeoPackage::from_connection`], but applies the configured journal
+    /// mode and `synchronous` level. If a journal mode is set, you are
+    /// responsible for making sure the connection is writable.
     pub fn from_connection(self, conn: rusqlite::Connection) -> Result<GeoPackage> {
         GeoPackage::from_connection_configured(conn, self, true)
     }
