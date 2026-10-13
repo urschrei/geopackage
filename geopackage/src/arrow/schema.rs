@@ -21,17 +21,17 @@ pub(crate) const GEOARROW_WKB: &str = "geoarrow.wkb";
 pub(crate) const DATETIME_UNIT: TimeUnit = TimeUnit::Microsecond;
 
 impl Layer<'_> {
-    /// The Arrow schema this layer's rows are read into.
+    /// Returns the Arrow schema that this layer's rows are read into.
     ///
-    /// Fields appear in the table's column order, so the geometry column sits
-    /// where it sits in the table rather than being moved to one end. See the
+    /// Fields appear in the table's column order, so the geometry column keeps
+    /// its position in the table instead of being moved to one end. See the
     /// [module documentation](super) for the type mapping.
     ///
     /// A projection ([`Layer::with_columns`], [`Layer::without_geometry`])
-    /// narrows this schema exactly as it narrows a row read: the primary key
-    /// is always a field, a value column is a field when the projection names
-    /// it, and the geometry is a field only when projected in. The reads on
-    /// this handle return batches of this schema.
+    /// narrows this schema exactly as it narrows a row read. The primary key
+    /// is always a field. A value column is a field if the projection names
+    /// it, and the geometry is a field only if the projection includes it.
+    /// Reads on this handle return batches with this schema.
     ///
     /// # Errors
     ///
@@ -48,9 +48,9 @@ impl Layer<'_> {
         Ok(Arc::new(Schema::new(fields)))
     }
 
-    /// Whether a read of this handle includes `column`: the primary key
-    /// always, the geometry per the projection, a value column when the
-    /// projection keeps it.
+    /// Returns whether a read of this handle includes `column`. The primary
+    /// key is always included, the geometry according to the projection, and a
+    /// value column if the projection keeps it.
     fn arrow_reads_column(&self, column: &Column, geometry: Option<&GeometryColumn>) -> bool {
         if self.primary_key_column() == Some(column.name.as_str()) {
             return true;
@@ -64,7 +64,7 @@ impl Layer<'_> {
     }
 }
 
-/// The Arrow field for one table column.
+/// Returns the Arrow field for one table column.
 fn field_for(column: &Column, geometry: Option<&GeometryColumn>) -> Field {
     let is_geometry = geometry.is_some_and(|g| g.column_name == column.name);
     if is_geometry {
@@ -78,7 +78,7 @@ fn field_for(column: &Column, geometry: Option<&GeometryColumn>) -> Field {
     Field::new(&column.name, data_type_for(column), nullable)
 }
 
-/// The Arrow data type for a non-geometry column.
+/// Returns the Arrow data type for a non-geometry column.
 fn data_type_for(column: &Column) -> DataType {
     let Some(declared) = &column.column_type else {
         return affinity_type(&column.declared_type);
@@ -103,18 +103,20 @@ fn data_type_for(column: &Column) -> DataType {
     }
 }
 
-/// The Arrow type for a declared type outside the spec vocabulary, following
-/// SQLite's column-affinity rules.
+/// Returns the Arrow type for a declared type outside the spec vocabulary,
+/// following SQLite's column-affinity rules.
 ///
-/// The order of the tests is part of the rule and is not alphabetical: `INT`
-/// wins over everything, and the `CHAR`/`CLOB`/`TEXT` family wins over `BLOB`.
+/// The order of the tests is part of the rule, and is not alphabetical. `INT`
+/// takes precedence over everything, and the `CHAR`/`CLOB`/`TEXT` family takes
+/// precedence over `BLOB`.
 ///
 /// SQLite's last two rules, REAL affinity (`REAL`, `FLOA`, `DOUB`) and the
-/// NUMERIC fall-through, are one branch here because both land on `Float64`.
-/// For REAL that is exact. NUMERIC is the one lossy case in this function:
+/// NUMERIC fall-through, are one branch here because both map to `Float64`.
+/// For REAL that is exact. NUMERIC is the only lossy case in this function.
 /// SQLite may store an integer in such a column, and an integer beyond 2^53
-/// does not survive the conversion. The alternative is surfacing the column as
-/// text, which is lossless and unusable, so the loss is taken and recorded.
+/// doesn't survive the conversion. The alternative is to return the column as
+/// text, which is lossless but unusable, so the loss is accepted and
+/// documented here.
 fn affinity_type(declared: &str) -> DataType {
     let declared = declared.to_ascii_uppercase();
     let has = |needle: &str| declared.contains(needle);
@@ -129,11 +131,11 @@ fn affinity_type(declared: &str) -> DataType {
     }
 }
 
-/// The geometry field: WKB bytes with the GeoArrow extension name, and the
-/// CRS as extension metadata.
+/// Returns the geometry field: WKB bytes with the GeoArrow extension name, and
+/// the CRS as extension metadata.
 ///
-/// The bytes are the GPB blob's WKB body, which is why this encoding is the one
-/// to start from: it needs no geometry parsing at all.
+/// The bytes are the GPB blob's WKB body, so this encoding needs no geometry
+/// parsing at all. That is why it is the one to start from.
 fn geometry_field(name: &str, not_null: bool, srs_id: i32) -> Field {
     let mut metadata = HashMap::new();
     metadata.insert(EXTENSION_NAME_KEY.to_owned(), GEOARROW_WKB.to_owned());
@@ -141,15 +143,15 @@ fn geometry_field(name: &str, not_null: bool, srs_id: i32) -> Field {
     Field::new(name, DataType::Binary, !not_null).with_metadata(metadata)
 }
 
-/// The GeoArrow extension metadata for a geometry column: a JSON object whose
-/// `crs` names the SRS.
+/// Returns the GeoArrow extension metadata for a geometry column: a JSON
+/// object whose `crs` names the SRS.
 ///
-/// PROJJSON is what GeoArrow prefers, because an authority code leaves the
-/// reader to resolve it against a registry it may not have, so that is what
-/// this emits wherever the EPSG registry has a definition. A `srs_id` the
-/// registry does not know falls back to an `EPSG:<code>` authority string,
-/// which GeoArrow permits. `srs_id` 0 and -1 are the spec's undefined values
-/// and name no CRS at all.
+/// GeoArrow prefers PROJJSON, because an authority code leaves the reader to
+/// resolve it against a registry it may not have. This function emits PROJJSON
+/// wherever the EPSG registry has a definition. A `srs_id` the registry doesn't
+/// know falls back to an `EPSG:<code>` authority string, which GeoArrow
+/// permits. `srs_id` 0 and -1 are the spec's undefined values, and name no CRS
+/// at all.
 fn crs_metadata(srs_id: i32) -> String {
     if srs_id <= 0 {
         return "{}".to_owned();
@@ -165,18 +167,17 @@ fn crs_metadata(srs_id: i32) -> String {
     )
 }
 
-/// The numeric part of an `EPSG:<code>` authority code in GeoArrow CRS
-/// metadata, if that is the form it takes.
+/// Returns the numeric part of an `EPSG:<code>` authority code in GeoArrow CRS
+/// metadata, if the metadata takes that form.
 ///
 /// Handles both forms [`crs_metadata`] emits, and the same two forms from any
 /// other producer: a PROJJSON object, or an `EPSG:<code>` authority string.
 ///
-/// PROJJSON needs a real parse rather than a scan for the first `"code"`. A
-/// CRS object nests identifiers for its coordinate system, datum and
-/// ellipsoid, all of which have EPSG codes of their own: in EPSG:4326 the
-/// first one to appear is 6422, the ellipsoidal coordinate system. Only the
-/// top-level `id` identifies the CRS itself. Anything else yields `None` and
-/// the caller sets the SRS themselves.
+/// PROJJSON needs a real parse, not a scan for the first `"code"`. A CRS object
+/// nests identifiers for its coordinate system, datum and ellipsoid, each with
+/// its own EPSG code. In EPSG:4326 the first one to appear is 6422, the
+/// ellipsoidal coordinate system. Only the top-level `id` identifies the CRS
+/// itself. Anything else returns `None`, and the caller sets the SRS.
 pub(crate) fn epsg_code(metadata: &str) -> Option<i32> {
     let value: serde_json::Value = serde_json::from_str(metadata).ok()?;
     let crs = value.get("crs")?;

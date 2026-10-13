@@ -14,12 +14,12 @@ pub enum Error {
     #[cfg(feature = "arrow")]
     #[error(transparent)]
     Arrow(#[from] arrow_schema::ArrowError),
-    /// A stored value's storage class cannot go into the Arrow array its column
+    /// A stored value's storage class doesn't fit the Arrow array its column
     /// maps to (feature `arrow`).
     ///
-    /// The columnar counterpart of [`Self::ValueTypeMismatch`], reported
-    /// separately because it names an Arrow type rather than a declared
-    /// GeoPackage one.
+    /// This is the Arrow equivalent of [`Self::ValueTypeMismatch`]. It is a
+    /// separate variant because it names an Arrow type instead of a declared
+    /// GeoPackage type.
     #[cfg(feature = "arrow")]
     #[error("column {column:?} maps to Arrow {expected} but contains a {found} value")]
     ArrowValueMismatch {
@@ -34,8 +34,9 @@ pub enum Error {
     /// A schema field whose Arrow type the columnar reader has no builder for
     /// (feature `arrow`).
     ///
-    /// Unreachable from a schema this crate derived; it exists so that adding a
-    /// mapping without adding its builder is an error rather than a panic.
+    /// A schema that this crate derived never causes this. It exists so that
+    /// adding a mapping without its builder returns an error instead of
+    /// panicking.
     #[cfg(feature = "arrow")]
     #[error("no columnar builder for Arrow type {data_type}")]
     UnsupportedArrowType {
@@ -60,10 +61,11 @@ pub enum Error {
     /// The linked SQLite was compiled without the RTree module
     /// (`SQLITE_ENABLE_RTREE`), which the GeoPackage spatial index requires.
     ///
-    /// Reachable only when linking a system SQLite: the `bundled` feature
-    /// compiles an amalgamation that always includes the module. Checked once
-    /// per connection at open, where the remedy can be named, rather than
-    /// surfacing later as SQLite's own "no such module: rtree".
+    /// This happens only when linking a system SQLite, because the `bundled`
+    /// feature compiles an amalgamation that always includes the module. It is
+    /// checked once per connection when the file is opened, so that the error
+    /// can name the remedy instead of appearing later as SQLite's own "no such
+    /// module: rtree".
     #[error(
         "the linked SQLite was built without SQLITE_ENABLE_RTREE, which the \
          spatial index requires; link an RTree-enabled SQLite or build with \
@@ -114,7 +116,7 @@ pub enum Error {
         column_name: String,
     },
     /// A stored value's SQLite storage class is incompatible with the column's
-    /// declared GeoPackage type; the value is surfaced rather than coerced.
+    /// declared GeoPackage type. The value is reported instead of coerced.
     #[error("column {column:?} declared {declared:?} contains an incompatible {found} value")]
     ValueTypeMismatch {
         /// The column that was read.
@@ -129,8 +131,8 @@ pub enum Error {
     /// under
     /// [`StorageStrictness::Strict`](crate::StorageStrictness::Strict).
     ///
-    /// The storage class is the right one, so this is not a
-    /// [`Self::ValueTypeMismatch`]: the value itself is outside what the
+    /// The storage class is correct, so this isn't a
+    /// [`Self::ValueTypeMismatch`]. The value itself is outside what the
     /// declared type permits. Lenient conversion, the default, reads any
     /// non-zero integer as `true` instead.
     #[error("column {column:?} declared BOOLEAN contains {value}, which is neither 0 nor 1")]
@@ -152,7 +154,7 @@ pub enum Error {
         source: geopackage_core::datetime::DateTimeError,
     },
     /// A geometry column was read through the value API, which handles only
-    /// non-geometry columns; geometry is read through the feature API.
+    /// non-geometry columns. Read geometry through the feature API.
     #[error("column {column:?} is a geometry column and cannot be read as a Value")]
     GeometryValueUnsupported {
         /// The geometry column that was read.
@@ -177,9 +179,9 @@ pub enum Error {
     /// A tile pyramid that does not satisfy the spec's consistency rules
     /// (Requirements 45 to 53), or a tile payload that could not be read.
     ///
-    /// Raised by [`crate::GeoPackage::create_tile_pyramid`] and by the tile
-    /// write path. Reading an existing pyramid never validates it, so a file
-    /// another implementation wrote opens whatever its matrices say.
+    /// Returned by [`crate::GeoPackage::create_tile_pyramid`] and by tile
+    /// writes. Reading an existing pyramid never validates it, so a file
+    /// written by another implementation opens whatever its matrices say.
     #[error(transparent)]
     Tile(#[from] geopackage_core::TileError),
     /// A `float` coverage with a scale or offset other than the defaults.
@@ -187,8 +189,8 @@ pub enum Error {
     /// Requirement 11: "When the datatype of the corresponding
     /// `gpkg_2d_gridded_coverage_ancillary` row is _float_, the `scale` and
     /// `offset` values _SHALL_ be set to the defaults." Float samples are
-    /// values, so a scale has nothing to convert. A write of the coverage row
-    /// or of a tile row returns this error.
+    /// values, so a scale has nothing to convert. Writing the coverage row or
+    /// a tile row returns this error.
     #[error(
         "float coverage {table_name:?} cannot have scale {scale} and offset {offset}: Requirement 11 keeps both at their defaults"
     )]
@@ -215,8 +217,9 @@ pub enum Error {
     /// A tiled gridded coverage without a `gpkg_2d_gridded_coverage_ancillary`
     /// row, so the meaning of its samples is unknown.
     ///
-    /// Requirements 1 and 7: a file with tiled gridded data has the table, and
-    /// each `2d-gridded-coverage` row in `gpkg_contents` has a row in it.
+    /// Requirements 1 and 7 say that a file with tiled gridded data has the
+    /// table, and that each `2d-gridded-coverage` row in `gpkg_contents` has a
+    /// row in it.
     /// Without the row there is no `datatype`, no scale or offset and no
     /// `data_null`, so a sample has no meaning. [`crate::GeoPackage::coverage`]
     /// returns this error and does not use default values.
@@ -250,8 +253,7 @@ pub enum Error {
     ///
     /// The base spec allows PNG and JPEG (Requirements 36 and 37), and the
     /// `gpkg_webp` extension allows WebP, which the write path registers as it
-    /// goes. A TIFF belongs to the tiled gridded coverage extension, which this
-    /// crate does not implement.
+    /// goes. A TIFF belongs to the tiled gridded coverage extension.
     #[error(
         "tile payload for {table_name:?} is {format:?}, which a tile pyramid may not hold: \
          PNG and JPEG need no extension, WebP registers gpkg_webp"
@@ -265,11 +267,11 @@ pub enum Error {
     /// A written value that a `gpkg_schema` constraint on its column does not
     /// allow.
     ///
-    /// Raised only when the file was opened with
-    /// [`OpenOptions::enforce_column_constraints`](crate::OpenOptions::enforce_column_constraints):
-    /// the spec makes these constraints advisory, enforced "by SQL triggers or
-    /// by code in applications that update GeoPackage data values", so
-    /// enforcing them is the caller's decision.
+    /// Returned only when the file was opened with
+    /// [`OpenOptions::enforce_column_constraints`](crate::OpenOptions::enforce_column_constraints).
+    /// The spec makes these constraints advisory, enforced "by SQL triggers or
+    /// by code in applications that update GeoPackage data values", so you
+    /// decide whether to enforce them.
     #[error(
         "{table_name}.{column_name} = {value} violates constraint {constraint_name:?} ({constraint})"
     )]
@@ -285,13 +287,13 @@ pub enum Error {
         /// The value, rendered for the message.
         value: String,
     },
-    /// A `gpkg_data_column_constraints` constraint the spec's own rules rule
-    /// out, found while reading it or rejected while writing it.
+    /// A `gpkg_data_column_constraints` constraint that breaks the spec's
+    /// rules, found while reading it or rejected while writing it.
     ///
-    /// Requirements 108 to 114 fix what each `constraint_type` may contain:
-    /// a `range` needs both bounds and needs `min` below `max`, an `enum` or
-    /// `glob` needs a `value`, and the type has to be one of the three. A row
-    /// outside those rules names what it constrains without saying how.
+    /// Requirements 108 to 114 set what each `constraint_type` may contain.
+    /// A `range` needs both bounds, with `min` below `max`. An `enum` or
+    /// `glob` needs a `value`. The type must be one of those three. A row that
+    /// breaks these rules names what it constrains without saying how.
     #[error("column constraint {constraint_name:?} is not usable: {reason}")]
     InvalidColumnConstraint {
         /// The `constraint_name` the rows share.
@@ -302,17 +304,17 @@ pub enum Error {
     /// A write to a table covered by an extension this crate cannot
     /// identify.
     ///
-    /// Requirement 64 makes every extension one a writer has to understand:
-    /// `read-write` affects readers and writers, `write-only` affects writers.
-    /// Since an unrecognised extension may constrain the rows, the triggers or
-    /// the encodings of the table it covers, writing to it could produce a
-    /// file its own producer can no longer read. This is the "fail fast" that
-    /// clause 2.3.2 gives the catalogue as its purpose.
+    /// Requirement 64 says that a writer has to understand every extension.
+    /// `read-write` affects readers and writers, and `write-only` affects
+    /// writers. An unrecognised extension may constrain the rows, triggers or
+    /// encodings of the table it covers, so writing to the table could produce
+    /// a file its own producer can no longer read. Clause 2.3.2 gives this
+    /// "fail fast" as the purpose of the catalogue.
     ///
-    /// Reading never fails for this reason, and an extension this crate
-    /// can name does not raise it: see
+    /// Reading never fails for this reason, and an extension this crate can
+    /// name never causes it. See
     /// [`ExtensionSupport`](geopackage_core::extensions::ExtensionSupport).
-    /// A caller who knows the extension is harmless can proceed with
+    /// If you know the extension is harmless, you can write anyway with
     /// [`OpenOptions::allow_unsupported_extension_writes`](crate::OpenOptions::allow_unsupported_extension_writes).
     #[error(
         "table {table_name:?} declares the unrecognised {extension_name:?} extension \
@@ -343,10 +345,11 @@ pub enum Error {
         /// The requested layer name.
         table_name: String,
     },
-    /// A layer was requested with the wrong accessor: its `gpkg_contents`
-    /// `data_type` does not match the accessor used ([`crate::GeoPackage::layer`]
-    /// expects `features`, [`crate::GeoPackage::attributes`] expects
-    /// `attributes`).
+    /// A layer was requested with the wrong accessor.
+    ///
+    /// Its `gpkg_contents` `data_type` doesn't match the accessor used:
+    /// [`crate::GeoPackage::layer`] expects `features`, and
+    /// [`crate::GeoPackage::attributes`] expects `attributes`.
     #[error("layer {table_name:?} has data_type {found:?}, not {expected:?}")]
     WrongDataType {
         /// The layer as named in `gpkg_contents`.
@@ -356,9 +359,9 @@ pub enum Error {
         /// The `data_type` actually recorded in `gpkg_contents`.
         found: String,
     },
-    /// A spatial (bounding-box) query was requested on a layer that has no
-    /// geometry column (an attribute layer, or a feature table whose
-    /// `gpkg_geometry_columns` row is missing).
+    /// A spatial (bounding-box) query was made on a layer with no geometry
+    /// column, such as an attribute layer or a feature table whose
+    /// `gpkg_geometry_columns` row is missing.
     #[error("layer {table_name:?} has no geometry column; spatial queries are unavailable")]
     NoGeometryColumn {
         /// The layer that was queried.
@@ -412,46 +415,45 @@ pub enum Error {
         md_file_id: i64,
     },
     /// Walking `md_parent_id` revisited a record. Requirement 102 forbids only
-    /// the one-step cycle, so a longer one is a file this crate reports rather
-    /// than one it can rule out.
+    /// the one-step cycle, so this crate can't rule out a longer one, and
+    /// reports it instead.
     #[error("metadata parent chain cycles at record {id}")]
     MetadataCycle {
         /// The record the chain returned to.
         id: i64,
     },
     /// A `gpkg_metadata_reference` row has a `reference_scope` that is not
-    /// one of the five Requirement 96 allows.
+    /// one of the five that Requirement 96 allows.
     #[error("unknown metadata reference_scope {scope:?}")]
     UnknownReferenceScope {
         /// The value as the file spells it.
         scope: String,
     },
     /// [`crate::GeoPackage::create_layer`] was called with a builder that has no
-    /// geometry column (use [`crate::GeoPackage::create_attributes_table`] for a
-    /// non-spatial table).
+    /// geometry column. Use [`crate::GeoPackage::create_attributes_table`] for
+    /// a non-spatial table.
     #[error("cannot create feature layer {table_name:?}: the builder has no geometry column")]
     MissingGeometrySpec {
         /// The table the builder describes.
         table_name: String,
     },
     /// [`crate::GeoPackage::create_attributes_table`] was called with a builder
-    /// that has a geometry column (use [`crate::GeoPackage::create_layer`] for a
-    /// feature table).
+    /// that has a geometry column. Use [`crate::GeoPackage::create_layer`] for
+    /// a feature table.
     #[error("cannot create attributes table {table_name:?}: the builder has a geometry column")]
     UnexpectedGeometrySpec {
         /// The table the builder describes.
         table_name: String,
     },
     /// [`crate::Layer::extent`] measured a layer's extent but could not record
-    /// it, for a reason that is not another connection holding a lock.
+    /// it, for a reason other than another connection holding a lock.
     ///
-    /// The measurement succeeded and is included here, so nothing is lost by
-    /// the failure: the caller can use `extent` and decide how to treat the
-    /// unwritable store. Lock contention does not produce this, because a
-    /// concurrent writer means the measurement may already be stale; what does
-    /// produce it are conditions under which the store is broken or unwritable
-    /// in a way that will not clear, such as an unwritable directory, a full
-    /// disk, or an I/O error.
+    /// The measurement succeeded and is included here, so nothing is lost. You
+    /// can use `extent` and decide how to handle the unwritable store. Lock
+    /// contention doesn't produce this error, because a concurrent writer means
+    /// the measurement may already be stale. It comes from conditions that
+    /// leave the store broken or unwritable in a way that won't clear, such as
+    /// an unwritable directory, a full disk, or an I/O error.
     #[error("measured the extent of table {table_name:?} but could not record it: {source}")]
     ExtentPersist {
         /// The table whose extent was measured.
@@ -459,26 +461,27 @@ pub enum Error {
         /// The measured extent, which is what [`crate::Layer::extent`] would
         /// have returned. `None` when the layer had nothing to measure.
         extent: Option<crate::BoundingBox>,
-        /// Why the write failed. Boxed only to keep this variant from setting
-        /// the size of every `Result` in the crate.
+        /// Why the write failed. It is boxed only so that this variant doesn't
+        /// set the size of every `Result` in the crate.
         source: Box<rusqlite::Error>,
     },
     /// [`crate::Feature::geometry`] was called on a row whose read did not
     /// select the geometry column.
     ///
-    /// Distinct from `Ok(None)`, which means the row's geometry is NULL. This
-    /// says the geometry was never read, because
+    /// This differs from `Ok(None)`, which means the row's geometry is NULL.
+    /// This error means the geometry was never read, because
     /// [`crate::Layer::with_columns`] did not name it or
-    /// [`crate::Layer::without_geometry`] excluded it, and it is an error
-    /// rather than an empty answer so the two cannot be confused.
-    /// [`crate::Feature::has_geometry_column`] tests for it without erroring.
+    /// [`crate::Layer::without_geometry`] excluded it. It is an error, not an
+    /// empty result, so that the two cases can't be confused.
+    /// [`crate::Feature::has_geometry_column`] checks for this case without
+    /// returning an error.
     #[error("this feature's read did not select the geometry column")]
     GeometryNotProjected,
     /// A partial update named the same column more than once.
     ///
-    /// SQLite accepts a repeated assignment and applies the last one, so this
-    /// is rejected rather than resolved: naming a column twice with different
-    /// values is more likely to be a caller's mistake than an intention.
+    /// SQLite accepts a repeated assignment and applies the last one. This
+    /// crate rejects it instead, because naming a column twice with different
+    /// values is more likely a mistake than intentional.
     #[error("update of table {table_name:?} names column {column_name:?} more than once")]
     DuplicateUpdateColumn {
         /// The table being written.

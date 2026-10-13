@@ -20,24 +20,24 @@ struct RowLayout {
     values: Vec<Option<usize>>,
 }
 
-/// One row of a [`RecordBatch`], as a view rather than a copy.
+/// One row of a [`RecordBatch`], as a view instead of a copy.
 ///
-/// Holding the batch and an index, rather than owned values, is what lets the
-/// write path bind strings and blobs straight out of the Arrow arrays. Both
-/// handles are `Arc`, so a row costs two reference-count bumps where owning its
-/// values cost an allocation per text cell plus a copy of the geometry.
+/// Holding the batch and an index, instead of owned values, lets the write
+/// path bind strings and blobs directly from the Arrow arrays. Both handles are
+/// `Arc`, so a row costs two reference-count increments. Owned values would
+/// cost an allocation per text cell plus a copy of the geometry.
 struct ArrowRow {
     batch: Arc<RecordBatch>,
     layout: Arc<RowLayout>,
     row: usize,
 }
 
-/// A row, or the failure that stopped one being made.
+/// A row, or the error that prevented it being built.
 ///
-/// Batches are taken apart lazily, so an error has to travel with the rows
-/// rather than out of the side of the iterator. Writing one of these fails the
-/// write, which rolls the transaction back exactly as any other write error
-/// does.
+/// Batches are split into rows lazily, so an error has to travel with the rows
+/// instead of leaving the iterator by a separate route. Writing an error value
+/// fails the write, which rolls back the transaction like any other write
+/// error.
 enum ArrowRowResult {
     Row(ArrowRow),
     Failed(Error),
@@ -90,20 +90,20 @@ impl crate::writer::WritableRow for ArrowRow {
 impl Layer<'_> {
     /// Writes Arrow [`RecordBatch`]es into this layer.
     ///
-    /// The columnar counterpart of [`crate::Layer::write_all`], and it shares
-    /// that path: batching, the bulk spatial-index decision and the single
-    /// transaction all behave identically. What differs is that a geometry
-    /// arrives as WKB and stays as WKB, gaining a GPB header rather than being
+    /// This is the columnar equivalent of [`crate::Layer::write_all`], and uses
+    /// the same code. Batching, the bulk spatial-index decision and the single
+    /// transaction all behave identically. The difference is that a geometry
+    /// arrives as WKB and stays WKB. It gains a GPB header instead of being
     /// parsed into a geometry object and serialised again.
     ///
-    /// The reader's schema must name columns this layer has. Extra columns in
-    /// the batch are an error rather than being ignored, since silently dropping
-    /// data a caller asked to write is worse than rejecting it. A column of the
-    /// layer that the batch does not name is left to its default.
+    /// The reader's schema must name columns that this layer has. Extra columns
+    /// in the batch are an error, not ignored, because silently dropping data
+    /// you asked to write is worse than rejecting it. A layer column that the
+    /// batch doesn't name is left to its default.
     ///
-    /// A [`RecordBatchReader`](arrow_array::RecordBatchReader) does not say how many rows it will produce, which
-    /// is the case the bulk index path buffers for rather than trusting a size
-    /// hint (issue #17).
+    /// A [`RecordBatchReader`](arrow_array::RecordBatchReader) doesn't say how
+    /// many rows it will produce. The bulk index path handles this by buffering
+    /// instead of trusting a size hint (issue #17).
     ///
     /// Returns the assigned feature ids, in the order the rows were written.
     ///
@@ -186,10 +186,10 @@ impl Layer<'_> {
     }
 }
 
-/// Work out where each of the layer's columns sits in this batch.
+/// Works out where each of the layer's columns sits in this batch.
 ///
 /// The layout is computed once per batch and shared, so a row stores two `Arc`
-/// handles rather than a copy of anything.
+/// handles instead of copying anything.
 #[hotpath::measure(label = "arrow::layout_of")]
 fn layout_of(
     batch: &RecordBatch,
@@ -233,7 +233,7 @@ fn binary_at(column: &ArrayRef, row: usize) -> Result<&[u8]> {
     })
 }
 
-/// Read one `Int64` cell, for the feature id.
+/// Reads one `Int64` cell, for the feature id.
 fn read_i64(column: &ArrayRef, row: usize) -> Result<Option<i64>> {
     if column.is_null(row) {
         return Ok(None);
@@ -248,17 +248,18 @@ fn read_i64(column: &ArrayRef, row: usize) -> Result<Option<i64>> {
     Ok(Some(values.value(row)))
 }
 
-/// Bind one attribute cell, borrowing from the array wherever that is possible.
+/// Binds one attribute cell, borrowing from the array wherever possible.
 ///
-/// The inverse of the read path's mapping, and deliberately narrower: it accepts
-/// what [`Layer::arrow_schema`] produces, so a round trip works, plus the
-/// narrower integer and float widths another producer is likely to emit.
+/// This is the inverse of the read path's mapping, and deliberately narrower.
+/// It accepts what [`Layer::arrow_schema`] produces, so a round trip works,
+/// plus the narrower integer and float widths that other producers are likely
+/// to emit.
 ///
 /// Strings and blobs are bound as slices into the Arrow buffers, which is the
-/// point of this function: they are already contiguous there, so copying them
-/// into a `Value` first would allocate once per cell for nothing. `DATE` and
-/// `DATETIME` are the exception, because a GeoPackage stores them as text and
-/// the text has to be produced.
+/// purpose of this function. They are already contiguous there, so copying
+/// them into a `Value` first would allocate once per cell for no benefit.
+/// `DATE` and `DATETIME` are the exception, because a GeoPackage stores them
+/// as text, which has to be produced.
 fn bind_value<'a>(
     column: &'a ArrayRef,
     row: usize,
@@ -405,29 +406,28 @@ fn bind_value<'a>(
 }
 
 impl crate::TableSchemaBuilder {
-    /// Derive a layer definition from an Arrow schema.
+    /// Derives a layer definition from an Arrow schema.
     ///
-    /// The inverse of [`Layer::arrow_schema`], for creating a layer to receive
-    /// [`Layer::write_arrow`]. Everything the builder normally takes can still
-    /// be overridden afterwards.
+    /// This is the inverse of [`Layer::arrow_schema`], for creating a layer to
+    /// receive [`Layer::write_arrow`]. You can still override anything the
+    /// builder normally takes afterwards.
     ///
-    /// The mapping is the read mapping run backwards, with three things worth
-    /// knowing:
+    /// The mapping is the read mapping in reverse, with three points to note:
     ///
-    /// - **Integer widths are honoured here but not on the way out.** `Int8`
-    ///   becomes `TINYINT`, `Int16` `SMALLINT`, `Int32` `MEDIUMINT`, `Int64`
-    ///   `INTEGER`. Reading collapses all four to `Int64`, because SQLite does
-    ///   not enforce a declared width, so a layer round-tripped through Arrow
-    ///   comes back with every integer column widened to `INTEGER`. The data is
-    ///   unchanged; the declared type is not.
+    /// - **Integer widths are kept here, but not when reading.** `Int8`
+    ///   becomes `TINYINT`, `Int16` `SMALLINT`, `Int32` `MEDIUMINT`, and
+    ///   `Int64` `INTEGER`. Reading collapses all four to `Int64`, because
+    ///   SQLite doesn't enforce a declared width. A layer round-tripped through
+    ///   Arrow therefore comes back with every integer column widened to
+    ///   `INTEGER`. The data is unchanged, but the declared type is not.
     /// - **The geometry column is found by its `geoarrow.wkb` extension name**,
     ///   not by position or by name. Its declared type is `GEOMETRY`, which
-    ///   accepts any geometry, because WKB does not say what it will contain.
-    ///   The SRS comes from the field's CRS metadata when that is an
+    ///   accepts any geometry, because WKB doesn't say what it will contain.
+    ///   The SRS comes from the field's CRS metadata if that is an
     ///   `EPSG:<code>` authority code, and is otherwise `0`, the spec's
     ///   undefined value.
     /// - **A field named as the primary key is skipped**, not made an attribute
-    ///   column, since the builder creates the key itself. Call
+    ///   column, because the builder creates the key itself. Call
     ///   [`crate::TableSchemaBuilder::primary_key`] before this if the key is
     ///   not named `fid`.
     ///
@@ -464,8 +464,8 @@ impl crate::TableSchemaBuilder {
     }
 }
 
-/// The GeoPackage column type for an Arrow type, the inverse of the mapping in
-/// the [module documentation](super).
+/// Returns the GeoPackage column type for an Arrow type, the inverse of the
+/// mapping in the [module documentation](super).
 fn column_type_for(data_type: &DataType) -> Result<ColumnType> {
     Ok(match data_type {
         DataType::Boolean => ColumnType::Boolean,

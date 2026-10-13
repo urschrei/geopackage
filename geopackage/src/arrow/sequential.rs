@@ -21,8 +21,8 @@ pub(crate) struct SequentialBatches<'a> {
     /// The aggregate-path query, wrapping the same columns in the registered
     /// function. Built on first use.
     pub(crate) aggregate_sql: String,
-    /// Index of the field that is also the pagination key, when it is one of
-    /// them. `None` means the key is selected as an extra leading column.
+    /// Index of the field that is also the pagination key, if the key is a
+    /// field. `None` means the key is selected as an extra leading column.
     pub(crate) key_field: Option<usize>,
     /// Index of the geometry field, whose values need the GPB header stripped.
     pub(crate) geometry_index: Option<usize>,
@@ -45,13 +45,14 @@ pub(crate) struct SequentialBatches<'a> {
     /// The caller's `WHERE` parameters, bound first (`?1` to `?N`) on every
     /// page. Empty for a reader with no `WHERE` clause.
     pub(crate) user_params: Vec<rusqlite::types::Value>,
-    /// Absolute row index of the geometry selected only for the bbox re-test,
-    /// set when a projection keeps the geometry out of the schema but a
-    /// filter still needs it. Never a field, so never appended to a builder.
+    /// Absolute row index of the geometry selected only for the bbox re-test.
+    /// It is set when a projection leaves the geometry out of the schema but a
+    /// filter still needs it. It is never a field, so it is never appended to
+    /// a builder.
     pub(crate) hidden_geometry: Option<usize>,
-    /// The spatial filter, set only by `read_arrow_in`. Boxed so an unfiltered
-    /// reader, which is every reader the threaded path builds, stores one
-    /// pointer rather than the whole of it.
+    /// The spatial filter, set only by `read_arrow_in`. Boxed so that an
+    /// unfiltered reader, which includes every reader the threaded path
+    /// builds, stores one pointer instead of the whole filter.
     pub(crate) filter: Option<Box<SpatialFilter>>,
     /// The aggregate function, when this reader uses it. `None` falls back to
     /// the direct loop.
@@ -76,10 +77,11 @@ impl SequentialBatches<'_> {
     /// Reads up to `limit` rows starting at `key`, ignoring where the reader
     /// had got to.
     ///
-    /// Used by the parallel path, whose workers each read whole batches at
-    /// offsets assigned to them rather than walking the layer in sequence.
-    /// `limit` is what remains of the worker's window: the byte ceiling can
-    /// cut a batch short, and the rest of that window still has to be read.
+    /// The parallel path uses this. Its workers each read whole batches at
+    /// offsets assigned to them, instead of walking the layer in sequence.
+    /// `limit` is what remains of the worker's window, because the byte
+    /// ceiling can cut a batch short and the rest of the window still has to
+    /// be read.
     #[hotpath::measure(label = "arrow::read_batch_at")]
     pub(crate) fn read_batch_at(&mut self, key: i64, limit: usize) -> Result<Option<RecordBatch>> {
         self.next_key = key;
@@ -152,7 +154,7 @@ impl SequentialBatches<'_> {
         )?))
     }
 
-    /// Record where the next batch starts, and whether there can be one.
+    /// Records where the next batch starts, and whether there can be one.
     fn advance(&mut self, last_key: Option<i64>, rows_read: usize, truncated: bool) {
         // A short batch normally means the current range ran out: the whole
         // layer for an unsegmented read, the current segment for a segmented
@@ -177,7 +179,7 @@ impl SequentialBatches<'_> {
         }
     }
 
-    /// Move to the next candidate segment, or the end of the read.
+    /// Moves to the next candidate segment, or to the end of the read.
     ///
     /// For an unsegmented read there is no next range, so this is where a
     /// finished scan becomes `exhausted`.
@@ -193,8 +195,9 @@ impl SequentialBatches<'_> {
         }
     }
 
-    /// The direct path: step the rows and fetch each value. Kept as the
-    /// fallback for a table too wide for the aggregate's argument list.
+    /// The direct path, which steps through the rows and fetches each value.
+    /// It is the fallback for a table too wide for the aggregate's argument
+    /// list.
     #[hotpath::measure(label = "arrow::next_batch_direct")]
     fn next_batch_direct(&mut self) -> Result<Option<RecordBatch>> {
         // Looped rather than recursive: under a selective filter many pages in
@@ -346,13 +349,13 @@ impl SequentialBatches<'_> {
     }
 }
 
-/// The exact re-filter a `read_arrow_in` applies.
+/// The exact re-filter that `read_arrow_in` applies.
 ///
 /// The index stores `f32` envelopes and is queried with outward-widened
-/// bounds, and a candidate segment additionally folds small key gaps, so the
-/// fetched rows are a superset twice over: every one has to be re-tested
+/// bounds, and a candidate segment also folds in small key gaps. The fetched
+/// rows are therefore a superset for two reasons. Each one has to be re-tested
 /// against its true `f64` envelope, or a filtered columnar read would return
-/// rows `features_in` does not.
+/// rows that `features_in` doesn't.
 pub(crate) struct SpatialFilter {
     pub(crate) bbox: BoundingBox,
 }
@@ -363,7 +366,7 @@ enum Page {
     Batch(RecordBatch),
     /// Nothing left to read.
     Exhausted,
-    /// Candidates were read and every one was filtered out; there may be more.
+    /// Candidates were read and all were filtered out. There may be more.
     AllFiltered,
 }
 

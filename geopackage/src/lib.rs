@@ -550,21 +550,23 @@ use std::path::Path;
 /// # Interchange-first close
 ///
 /// A handle opened or created in [`JournalMode::Wal`] creates `-wal`/`-shm`
-/// sidecar files while it is live. On [`GeoPackage::close`] and on drop such a
-/// handle checkpoints the WAL and resets the file to [`JournalMode::Delete`], so
-/// the resulting`.gpkg` is a single file. Prefer the explicit
-/// [`GeoPackage::close`], which surfaces any error; the drop path is
-/// best-effort and never panics. [`GeoPackage::into_connection`] opts out of
-/// this guarantee: the returned connection keeps whatever journal mode it was
-/// in.
+/// sidecar files while it is open. On [`GeoPackage::close`], and on drop, the
+/// handle checkpoints the WAL and resets the file to
+/// [`JournalMode::Delete`], so the resulting `.gpkg` is a single file. Prefer
+/// [`GeoPackage::close`], which returns any error. Dropping the handle does
+/// the same work on a best-effort basis and never panics.
+/// [`GeoPackage::into_connection`] opts out of this guarantee: the returned
+/// connection keeps whatever journal mode it was in.
 pub struct GeoPackage {
-    /// `Some` for the whole lifetime of the handle; taken only by
-    /// [`Self::into_connection`], which is why the handle can implement `Drop`.
+    /// `Some` for the whole lifetime of the handle. Only
+    /// [`Self::into_connection`] takes it, which is why the handle can
+    /// implement `Drop`.
     conn: Option<Connection>,
     version: GpkgVersion,
     warnings: Vec<OpenWarning>,
-    /// The journal mode this handle is responsible for finalising: `Wal` only
-    /// when it opted into WAL and must reset the file to `Delete` on close/drop.
+    /// The journal mode this handle must finalise. It is `Wal` only when the
+    /// handle opted into WAL and must reset the file to `Delete` on close or
+    /// drop.
     journal_mode: JournalMode,
     /// Whether writes proceed to tables covered by an extension this crate
     /// cannot identify. See
@@ -580,8 +582,8 @@ impl GeoPackage {
     /// Creates a new GeoPackage 1.4 file at `path` with default options
     /// ([`JournalMode::Delete`], SQLite's default `synchronous`).
     ///
-    /// Use [`OpenOptions`] to create in [`JournalMode::Wal`] or with an
-    /// explicit [`Synchronous`] level.
+    /// Use [`OpenOptions`] to create the file in [`JournalMode::Wal`] or with
+    /// an explicit [`Synchronous`] level.
     ///
     /// # Errors
     ///
@@ -605,15 +607,15 @@ impl GeoPackage {
         OpenOptions::new().open_read_only(path)
     }
 
-    /// Wraps an already-open connection with default options, validating that
-    /// it is a GeoPackage and registering the required SQL functions.
+    /// Wraps an open connection with default options. Checks that it is a
+    /// GeoPackage and registers the required SQL functions.
     pub fn from_connection(conn: Connection) -> Result<Self> {
         // A caller-supplied connection is left in whatever journal mode it
         // already has (no journal pragma applied).
         Self::from_connection_configured(conn, OpenOptions::new(), false)
     }
 
-    /// The `create` core, applying `options` before seeding the schema.
+    /// Implements `create`, applying `options` before seeding the schema.
     pub(crate) fn create_configured(path: &Path, options: OpenOptions) -> Result<Self> {
         if path.exists()
             && std::fs::metadata(path)
@@ -662,7 +664,8 @@ impl GeoPackage {
         })
     }
 
-    /// The `open`/`open_read_only` core, applying `options` after opening.
+    /// Implements `open` and `open_read_only`, applying `options` after
+    /// opening.
     pub(crate) fn open_configured(
         path: &Path,
         flags: OpenFlags,
@@ -749,20 +752,20 @@ impl GeoPackage {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Borrows the underlying connection (escape hatch: full SQL access).
+    /// Returns the underlying connection, for full SQL access.
     pub fn connection(&self) -> &Connection {
         self.conn
             .as_ref()
             .expect("connection is present for the whole handle lifetime")
     }
 
-    /// Consumes the handle, returning the underlying connection.
+    /// Consumes the handle and returns the underlying connection.
     ///
-    /// This **opts out** of the interchange-first close guarantee: the returned
-    /// connection keeps whatever journal mode it is in, so a handle that was in
+    /// This **opts out** of the interchange-first close guarantee. The returned
+    /// connection keeps whatever journal mode it is in, so a handle in
     /// [`JournalMode::Wal`] returns a WAL connection with its `-wal`/`-shm`
-    /// sidecars intact. Use [`Self::close`] instead when the resulting file is
-    /// to be handed over.
+    /// sidecars intact. Use [`Self::close`] instead if you are going to hand
+    /// the file over.
     pub fn into_connection(mut self) -> Connection {
         // Taking the connection leaves `self.conn == None`, so the `Drop` below
         // runs its finalise on nothing.
@@ -774,11 +777,11 @@ impl GeoPackage {
     /// Closes the GeoPackage, finalising a [`JournalMode::Wal`] file back to a
     /// single [`JournalMode::Delete`] file.
     ///
-    /// For a WAL handle this checkpoints the WAL (`TRUNCATE`) and resets the
-    /// journal mode to `DELETE`, removing the `-wal`/`-shm` sidecars, then
-    /// closes the connection. For a non-WAL handle it is just a close. Prefer
-    /// this to a plain drop when you want to observe any finalisation error; the
-    /// drop path does the same work best-effort and swallows errors.
+    /// For a WAL handle, this checkpoints the WAL (`TRUNCATE`), resets the
+    /// journal mode to `DELETE`, which removes the `-wal`/`-shm` sidecars, and
+    /// then closes the connection. Any other handle is simply closed. Use this
+    /// instead of dropping the handle if you want to see finalisation errors.
+    /// Dropping does the same work on a best-effort basis and discards errors.
     pub fn close(mut self) -> Result<()> {
         if self.journal_mode == JournalMode::Wal
             && let Some(conn) = self.conn.as_ref()
@@ -805,14 +808,15 @@ impl Drop for GeoPackage {
     }
 }
 
-/// Applies `options` to a freshly opened connection, returning the journal
-/// mode the resulting handle is responsible for finalising.
+/// Applies `options` to a newly opened connection and returns the journal mode
+/// that the resulting handle must finalise.
 ///
-/// The synchronous level, when set, is always applied. The journal mode is
-/// applied only when `apply_journal` is true (false for a read-only connection,
-/// which cannot change it) and a mode is set; an unset journal mode leaves the
-/// file as it is. The returned [`JournalMode`] is [`JournalMode::Wal`] only when
-/// WAL was actually applied, so only then do close/drop reset the file.
+/// The synchronous level, if set, is always applied. The journal mode is
+/// applied only if a mode is set and `apply_journal` is true. It is false for a
+/// read-only connection, which can't change its journal mode. If no journal
+/// mode is set, the file keeps its current one. The returned [`JournalMode`] is
+/// [`JournalMode::Wal`] only if WAL was actually applied, so only then do close
+/// and drop reset the file.
 fn apply_open_options(
     conn: &Connection,
     options: OpenOptions,
@@ -870,9 +874,9 @@ fn finalize_wal_to_delete(conn: &Connection) -> Result<()> {
 /// Reads a 32-bit SQLite database-header pragma (`application_id` or
 /// `user_version`) as a `u32`.
 ///
-/// SQLite reports these fields sign-extended into an `i64`; the values are
-/// 32-bit magics, so reinterpreting the low 32 bits as unsigned (which is what
-/// the sign-extension preserves) is the intended read.
+/// SQLite reports these fields sign-extended into an `i64`. The values are
+/// 32-bit magic numbers, so the intended read takes the low 32 bits, which the
+/// sign extension preserves, as unsigned.
 #[expect(
     clippy::cast_sign_loss,
     reason = "application_id/user_version are 32-bit header magics; reading their low bits as unsigned is intentional, and preserves the bit pattern for any header value"
@@ -881,15 +885,15 @@ pub(crate) fn read_header_u32(conn: &Connection, pragma: &str) -> rusqlite::Resu
     Ok(conn.pragma_query_value(None, pragma, |r| r.get::<_, i64>(0))? as u32)
 }
 
-/// Verifies the linked SQLite has the RTree module compiled in.
+/// Checks that the linked SQLite has the RTree module compiled in.
 ///
-/// The GeoPackage spatial index is an `rtree` virtual table; without
-/// `SQLITE_ENABLE_RTREE`, every indexed layer fails at first use with
-/// SQLite's own "no such module: rtree". The bundled build always includes
-/// the module; a system SQLite may not, so this runs once per connection, up
-/// front, where [`Error::RtreeUnavailable`] can name the remedy. A build
-/// under `SQLITE_OMIT_COMPILEOPTION_DIAGS` cannot answer the question and is
-/// taken as capable; the later operations then report the truth.
+/// The GeoPackage spatial index is an `rtree` virtual table. Without
+/// `SQLITE_ENABLE_RTREE`, every indexed layer fails on first use with SQLite's
+/// own "no such module: rtree". The bundled build always includes the module,
+/// but a system SQLite may not. This check runs once per connection, up front,
+/// so that [`Error::RtreeUnavailable`] can name the remedy. A build with
+/// `SQLITE_OMIT_COMPILEOPTION_DIAGS` can't report its options, so it is
+/// assumed to have the module. Later operations then show whether it does.
 fn ensure_rtree_available(conn: &Connection) -> Result<()> {
     let enabled = conn
         .query_row(
@@ -920,10 +924,10 @@ pub(crate) fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bo
 ///
 /// SQLite object names resolve case-insensitively, but joins between catalogue
 /// tables (`gpkg_contents`, `gpkg_geometry_columns`) compare the stored strings
-/// exactly. This returns the physical name as SQLite stores it, identical to
-/// `name` for a well-formed file, differing only in case for the wrong-case
-/// files [`GeoPackage::open_lenient`] accepts. `None` when no such table
-/// exists under any casing.
+/// exactly. This returns the name as SQLite stores it. For a well-formed file
+/// it is identical to `name`. For the wrong-case files that
+/// [`GeoPackage::open_lenient`] accepts, it differs only in case. Returns
+/// `None` if no such table exists under any casing.
 pub(crate) fn resolve_table_name(
     conn: &Connection,
     name: &str,
@@ -966,8 +970,8 @@ pub enum ContentsDataType {
     Features,
     /// Tile pyramid.
     Tiles,
-    /// Tiled gridded coverage: a tile pyramid with payloads that contain
-    /// measurements, not images (`2d-gridded-coverage`, OGC 17-066r2
+    /// Tiled gridded coverage, a tile pyramid whose tiles hold measurements
+    /// instead of images (`2d-gridded-coverage`, OGC 17-066r2
     /// Requirement 5).
     ///
     /// Open it with [`GeoPackage::coverage`], not with [`GeoPackage::tiles`].
