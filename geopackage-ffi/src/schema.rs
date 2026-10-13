@@ -1,10 +1,10 @@
 //! Schema introspection and the spatial index, for `gpkg_layer_t`.
 //!
-//! What a layer declares: its columns and their types, its geometry column and
-//! that column's spatial reference system, its extent, and the state of its
-//! spatial index. The column calls read a schema the handle already stores, so
-//! they cost nothing beyond copying a string; the extent and the index calls
-//! query the file.
+//! These calls report what a layer declares: its columns and their types, its
+//! geometry column and that column's spatial reference system, its extent, and
+//! the state of its spatial index. The column calls read a schema the handle
+//! already stores, so they cost nothing beyond copying a string. The extent and
+//! index calls query the file.
 //!
 //! # Describing a layer
 //!
@@ -55,13 +55,13 @@
 //! # The spatial index
 //!
 //! A feature layer may have an RTree index over its geometry column.
-//! [`gpkg_layer_has_spatial_index`] answers the question a caller usually has,
-//! which is whether a bounding-box read will be served by an index or by a full
-//! scan; [`gpkg_layer_spatial_index_status`] says more, distinguishing an index
-//! that is absent, current, maintained by the pre-1.4 trigger set, or out of
-//! step with its table. [`gpkg_layer_create_spatial_index`],
-//! [`gpkg_layer_drop_spatial_index`] and [`gpkg_layer_repair_spatial_index`]
-//! change it, and each writes, so each fails on a read-only handle.
+//! [`gpkg_layer_has_spatial_index`] tells you whether a bounding-box read will
+//! be served by an index or by a full scan. [`gpkg_layer_spatial_index_status`]
+//! gives more detail: whether the index is absent, current, maintained by the
+//! pre-1.4 trigger set, or out of step with its table.
+//! [`gpkg_layer_create_spatial_index`], [`gpkg_layer_drop_spatial_index`] and
+//! [`gpkg_layer_repair_spatial_index`] change the index. Each of them writes,
+//! so each fails on a read-only handle.
 //!
 //! ```c
 //! bool indexed = false;
@@ -73,9 +73,8 @@
 //! }
 //! ```
 //!
-//! Everything here reads or acts on a layer the caller already holds, so none
-//! of it takes a new token: the layer handle's own is what keeps the container
-//! alive.
+//! Everything here reads or acts on a layer you already hold, so none of it
+//! takes a new token. The layer handle's own token keeps the container alive.
 
 use std::ffi::c_char;
 

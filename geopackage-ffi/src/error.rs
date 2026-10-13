@@ -1,15 +1,15 @@
-//! `gpkg_status` and `gpkg_error_t`: how a failure crosses the boundary.
+//! Status codes (`gpkg_status`) and the error out-parameter (`gpkg_error_t`).
 //!
-//! Every fallible entry point takes an optional `gpkg_error_t *` out-parameter.
-//! On failure it is filled in with a code and an owned, NUL-terminated UTF-8
-//! message, which the caller releases with [`gpkg_error_clear`]. Passing NULL
-//! is allowed and means the caller wants only the return value.
+//! Every function that can fail takes an optional `gpkg_error_t *`
+//! out-parameter. On failure, the function fills it in with a code and an
+//! owned, NUL-terminated UTF-8 message, which you release with
+//! [`gpkg_error_clear`]. You can pass NULL if you want only the return value.
 //!
-//! # Using it
+//! # Usage
 //!
-//! Declare one error variable, pass its address, and report and clear on the
-//! way out. A call that succeeds does not touch it, so the same variable serves
-//! every call in a program.
+//! Declare one error variable and pass its address. When a call fails, report
+//! the error and clear it. A call that succeeds does not touch the variable, so
+//! you can use the same one for every call in a program.
 //!
 //! ```c
 //! // Report and clear, so each call site is two lines.
@@ -28,10 +28,10 @@
 //! }
 //! ```
 //!
-//! Clearing before reuse is what keeps the message owned by exactly one place:
-//! a second failure writes a new pointer into the same field, and the first
-//! message can then no longer be released. A caller that wants only the status
-//! passes NULL instead, and has nothing to release:
+//! Clear the error before you reuse it, so that each message has exactly one
+//! owner. A second failure writes a new pointer into the same field, and the
+//! first message can then no longer be released. If you want only the status,
+//! pass NULL instead, and there is nothing to release:
 //!
 //! ```c
 //! if (gpkg_layer_count(layer, &rows, NULL) != GPKG_STATUS_OK) {
@@ -39,26 +39,26 @@
 //! }
 //! ```
 //!
-//! Some codes are ordinary answers rather than faults.
-//! `gpkg_tiles_get` and `gpkg_tiles_get_into` return `GPKG_STATUS_NOT_FOUND`
-//! for an address a sparse pyramid has no tile at, and `gpkg_layer_extent`
-//! returns it for a layer with nothing to measure. Branch on the code before
-//! treating a call as failed.
+//! Some codes are ordinary results rather than faults. `gpkg_tiles_get` and
+//! `gpkg_tiles_get_into` return `GPKG_STATUS_NOT_FOUND` when a sparse pyramid
+//! has no tile at the requested address, and `gpkg_layer_extent` returns it for
+//! a layer with nothing to measure. Check the code before you treat a call as
+//! failed.
 //!
 //! # Why the codes are categories
 //!
-//! `geopackage::Error` has 46 variants and gains more as the library grows.
-//! Mapping each to its own C constant would put a header-breaking change behind
-//! every new variant, so the codes here are a small closed set of categories a
-//! caller can branch on, and the message supplies the detail. A new library
-//! variant classifies into an existing category or into [`Status::Other`];
-//! neither changes the header.
+//! `geopackage::Error` has 46 variants, and gains more as the library grows. If
+//! each variant had its own C constant, every new variant would be a breaking
+//! change to the header. Instead, the codes are a small, closed set of
+//! categories to branch on, and the message carries the detail. A new library
+//! variant maps to an existing category or to [`Status::Other`], and neither
+//! changes the header.
 //!
-//! Several of those variants wrap an error enum of their own, and the
-//! classification follows the wrapping down rather than stopping at the
-//! outermost variant. A tile written off its grid and a geometry whose bytes
-//! are malformed both arrive under one library variant, and neither is
-//! `Other`.
+//! Several of those variants wrap an error enum of their own. The
+//! classification looks inside the wrapped error rather than stopping at the
+//! outermost variant. For example, a tile written outside its grid and a
+//! geometry with malformed bytes both arrive under one library variant, and
+//! neither is classified as `Other`.
 
 use std::ffi::{CString, c_char};
 

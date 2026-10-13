@@ -1,12 +1,12 @@
-//! `gpkg_value_t`: one cell of a row, crossing the boundary by value.
+//! `gpkg_value_t`: one cell of a row, passed by value.
 //!
-//! The Arrow data plane moves whole layers. This is what moves one cell, for
-//! the row-at-a-time writes in [`crate::writer`], and it is a direct image of
-//! the Rust crate's `ValueRef`: the same eight cases, with text and binary
-//! borrowed from the caller rather than copied.
+//! Arrow streams move whole layers. This type carries one cell, for the
+//! row-at-a-time writes in [`crate::writer`]. It mirrors the Rust crate's
+//! `ValueRef`: it has the same eight cases, and text and binary are borrowed
+//! from the caller rather than copied.
 //!
-//! A value is a tag and a union, which C99 designated initialisers make
-//! readable at the call site:
+//! A value is a tag and a union. C99 designated initialisers keep it readable
+//! at the call site:
 //!
 //! ```c
 //! gpkg_value_t name = {GPKG_VALUE_KIND_TEXT, {.text = "Dublin"}};
@@ -15,18 +15,18 @@
 //! gpkg_value_t missing = {GPKG_VALUE_KIND_NULL, {0}};
 //! ```
 //!
-//! Text and binary point at the caller's memory and are read during the call
-//! that takes them, so a buffer may be reused as soon as that call returns.
-//! Nothing here allocates or takes ownership.
+//! Text and binary point at your memory and are read during the call that takes
+//! them, so you can reuse a buffer as soon as that call returns. Nothing here
+//! allocates or takes ownership.
 //!
 //! # Why dates are structured rather than text
 //!
 //! A GeoPackage stores dates as text, so passing them as text would work and
-//! would be one case fewer. It is not done, because the crate validates a date
-//! before writing it: a value arriving as text binds as text, and the column's
-//! declared type is then the only thing standing between the file and
-//! `"32nd Fibruary"`. Structured dates keep that check, and cost a caller
-//! three integers.
+//! would need one case fewer. The C API does not do that, because the crate
+//! validates a date before writing it. A value passed as text binds as text,
+//! and then only the column's declared type stands between the file and
+//! `"32nd Fibruary"`. Structured dates keep the validation, and cost you three
+//! integers.
 
 use std::ffi::c_char;
 

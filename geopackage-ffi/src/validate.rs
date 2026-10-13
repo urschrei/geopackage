@@ -1,9 +1,9 @@
-//! `gpkg_validate`: the library's file checks, from C.
+//! Run the library's file checks from C with `gpkg_validate`.
 //!
-//! [`gpkg_validate`] runs every check `GeoPackage::validate` runs and hands
-//! back a `gpkg_findings_t` the caller owns: a plain list of findings, most
-//! severe first. It borrows nothing from the container, so it outlives a
-//! close harmlessly and there is nothing to release but itself, with
+//! [`gpkg_validate`] runs every check that `GeoPackage::validate` runs, and
+//! returns a `gpkg_findings_t` that you own. It is a plain list of findings,
+//! most severe first. It borrows nothing from the container, so it remains
+//! valid after a close, and the only thing to release is the list itself, with
 //! [`gpkg_findings_free`].
 //!
 //! ```c

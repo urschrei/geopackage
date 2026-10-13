@@ -1,20 +1,20 @@
 //! `gpkg_tiles_t`: a handle onto one tile pyramid.
 //!
-//! A pyramid is pre-rendered raster tiles, addressed by zoom level, column and
-//! row. [`gpkg_tiles_open`] takes one by name, the same `gpkg_contents` table
-//! name a GeoPackage tool would show, and [`gpkg_tiles_free`] releases it.
+//! A tile pyramid holds pre-rendered raster tiles, addressed by zoom level,
+//! column and row. [`gpkg_tiles_open`] opens one by name, the same
+//! `gpkg_contents` table name a GeoPackage tool would show, and
+//! [`gpkg_tiles_free`] releases it. If you don't know the name,
 //! [`gpkg_tiles_names_count`] and [`gpkg_tiles_name_at`] enumerate the file's
-//! pyramids for a caller that does not already know the name.
+//! pyramids.
 //!
-//! Rows count from the **top** of the pyramid's extent downwards, as WMTS and
-//! XYZ do and TMS does not, and both indices are relative to that extent rather
-//! than to a global grid.
+//! Rows count down from the **top** of the pyramid's extent, as in WMTS and XYZ
+//! but not TMS. Both indices are relative to that extent, not to a global grid.
 //!
-//! **No image is decoded anywhere here.** A tile goes out as the bytes the file
-//! stores and comes in as the bytes the caller supplies. Writing checks the
-//! address against the zoom level's grid and the payload's header against the
-//! declared tile size, which is a header read rather than a decode; turning
-//! tiles into pixels needs an image library on top of this one.
+//! **This module never decodes an image.** Reads return the bytes the file
+//! stores, and writes store the bytes you supply. A write checks the address
+//! against the zoom level's grid, and the payload's header against the declared
+//! tile size. That reads only the header and does not decode the image. To turn
+//! tiles into pixels, use an image library on top of this one.
 //!
 //! # Walking a pyramid
 //!
@@ -49,15 +49,15 @@
 //!
 //! # Two readers
 //!
-//! [`gpkg_tiles_get`] allocates a buffer and hands it over;
-//! [`gpkg_tiles_get_into`] copies into a buffer the caller already has. They
-//! return the same bytes, and the difference is who owns the memory.
+//! [`gpkg_tiles_get`] allocates a buffer and gives it to you.
+//! [`gpkg_tiles_get_into`] copies into a buffer you already have. They return
+//! the same bytes, and differ in who owns the memory.
 //!
 //! An allocation that crosses the boundary has to come back with its length,
-//! since that is what [`gpkg_bytes_free`] reconstructs it from, and a wrong
-//! length there is undefined behaviour. Nothing crosses in the other reader,
-//! so there is no length to keep and nothing to get wrong; it also spares an
-//! allocation per tile, which tells for a caller reading many.
+//! because [`gpkg_bytes_free`] reconstructs the allocation from it. Passing
+//! it a wrong length is undefined behaviour. With the other reader nothing
+//! crosses, so there is no length to keep and nothing to get wrong. It also
+//! saves an allocation per tile, which matters if you read many tiles.
 //!
 //! ```c
 //! // One buffer, reused across every tile: the reader that owns nothing.
@@ -100,18 +100,18 @@
 //! }
 //! ```
 //!
-//! The payload is copied into the file during the call, so the caller's buffer
-//! is its own again on return. An address outside the zoom level's grid, or a
-//! payload whose header says it is a different pixel size from the one the
-//! level declares, is rejected rather than stored.
+//! The call copies the payload into the file, so the buffer is yours again when
+//! the call returns. An address outside the zoom level's grid is rejected
+//! rather than stored, as is a payload whose header gives a different pixel
+//! size from the one the level declares.
 //!
 //! # Why a pyramid handle is held rather than rebuilt
 //!
-//! [`gpkg_tiles_get`] measures about 5 microseconds. Rebuilding a borrowed
-//! pyramid handle inside every call costs about 40 on top of that, which would
-//! make a tile read from C roughly eight times slower than the same read from
-//! Rust. So the handle keeps the pyramid, and [`crate::handle`] is where the
-//! borrow that implies is accounted for.
+//! [`gpkg_tiles_get`] takes about 5 microseconds. Rebuilding a borrowed pyramid
+//! handle inside every call would add about 40 on top of that. A tile read
+//! from C would then be roughly eight times slower than the same read from
+//! Rust. So the handle keeps the pyramid, and [`crate::handle`] accounts for
+//! the borrow this implies.
 
 use std::ffi::c_char;
 

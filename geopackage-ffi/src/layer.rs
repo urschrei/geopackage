@@ -1,14 +1,13 @@
 //! `gpkg_layer_t`: a handle onto one layer of an open GeoPackage.
 //!
-//! A layer is opened by name, either as a feature layer with
-//! [`gpkg_layer_open`] or as a non-spatial attribute table with
-//! [`gpkg_attributes_open`], and released with [`gpkg_layer_free`]. The handle
-//! is what everything about a layer hangs off: the schema calls in
-//! [`crate::schema`], and the Arrow reads and writes in [`crate::stream`].
+//! Open a layer by name, either as a feature layer with [`gpkg_layer_open`] or
+//! as a non-spatial attribute table with [`gpkg_attributes_open`], and release
+//! it with [`gpkg_layer_free`]. The schema calls in [`crate::schema`] and the
+//! Arrow reads and writes in [`crate::stream`] all take this handle.
 //!
 //! [`gpkg_layer_names_count`] and [`gpkg_layer_name_at`] enumerate the file's
 //! feature layers, in table-name order. Attribute tables are not in that list,
-//! so a caller wanting one opens it by a name it already knows.
+//! so to open one you need to know its name already.
 //!
 //! ```c
 //! size_t layers = 0;
@@ -41,10 +40,10 @@
 //! }
 //! ```
 //!
-//! A layer handle borrows its container. That borrow is erased to `'static` in
-//! [`crate::handle`], and what makes the erasure sound is the rule enforced
-//! here and in `gpkg_close`: a container cannot close while any layer
-//! handle it produced is still alive. Free the layer first.
+//! A layer handle borrows its container. [`crate::handle`] erases that borrow
+//! to `'static`. The erasure is sound because of the rule enforced here and in
+//! `gpkg_close`: a container cannot close while any layer handle it produced is
+//! still alive. Free the layer first.
 
 use std::ffi::c_char;
 

@@ -1,14 +1,14 @@
-//! `gpkg_writer_t`: changing features a row at a time.
+//! `gpkg_writer_t`: insert, update and delete features one row at a time.
 //!
-//! [`crate::stream`] moves whole layers as Arrow and only ever appends. This is
-//! the other half: insert one row, change one, remove one. A consumer editing
-//! an existing file wants this; a consumer loading a million rows wants Arrow.
+//! [`crate::stream`] moves whole layers as Arrow and only appends. A writer
+//! inserts, updates and deletes single rows. Use a writer to edit an existing
+//! file, and Arrow to load a million rows.
 //!
-//! A writer owns a transaction for its lifetime. Rows staged through it are
-//! not durable until [`gpkg_writer_commit`], and [`gpkg_writer_free`] discards
-//! them. Inside a transaction the caller opened with `gpkg_begin` the writer
-//! joins that one instead, so its commit stages rather than commits and the
-//! caller's `gpkg_commit` is what makes the work durable.
+//! A writer owns a transaction for its lifetime. Rows staged through it are not
+//! durable until [`gpkg_writer_commit`], and [`gpkg_writer_free`] discards
+//! them. If you opened a transaction with `gpkg_begin`, the writer joins it
+//! instead. Its commit then only stages the work, and your `gpkg_commit` makes
+//! it durable.
 //!
 //! ```c
 //! gpkg_writer_t *writer = gpkg_layer_writer(layer, &error);
@@ -49,21 +49,22 @@
 //!
 //! # Feature ids and values
 //!
-//! A feature id is passed as a pointer so that "assign one" and "use this one"
-//! are distinguishable: NULL assigns, and the assigned id comes back through
-//! `out_fid`. No sentinel would do, since every `int64_t` is a legal id.
+//! A feature id is passed as a pointer so that you can either have one assigned
+//! or supply your own. Pass NULL to have one assigned, and the assigned id
+//! comes back through `out_fid`. A sentinel value would not work, because every
+//! `int64_t` is a valid id.
 //!
-//! `values` covers the layer's value columns in the order
-//! [`crate::gpkg_layer_column_name`] reports them, excluding the primary key
-//! and the geometry, which travel as their own arguments. A count that does not
-//! match the layer is rejected rather than padded.
+//! `values` holds the layer's value columns in the order that
+//! [`crate::gpkg_layer_column_name`] reports them. It excludes the primary key
+//! and the geometry, which are separate arguments. A count that does not match
+//! the layer is rejected rather than padded.
 //!
 //! # Geometry
 //!
-//! Geometry crosses as WKB and is stored as it arrives, wrapped in the GPB
-//! header the format requires. Nothing is decoded on the way, so a geometry
-//! this library could not otherwise represent, a curve above all, survives a
-//! write. `NULL` with a length of zero writes a row with no geometry.
+//! Geometry is passed as WKB and stored as it arrives, wrapped in the GPB
+//! header the format requires. Nothing is decoded on the way, so a write
+//! preserves geometry this library could not otherwise represent, especially
+//! curves. `NULL` with a length of zero writes a row with no geometry.
 
 use std::ffi::c_char;
 
