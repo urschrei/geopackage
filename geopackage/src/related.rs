@@ -1,16 +1,16 @@
-//! The Related Tables Extension (OGC 18-000): `gpkgext_relations` and the
-//! user-defined mapping tables it points at.
+//! The Related Tables Extension (OGC 18-000).
 //!
-//! Reading works for any relation type, including ones this crate has never
-//! heard of: a relationship is a base table, a related table and a mapping
-//! table, and walking it needs nothing more. Writing is offered for the
+//! This module covers `gpkgext_relations` and the user-defined mapping tables
+//! it points at. Reading works for any relation type, including ones this crate
+//! doesn't know. A relationship is a base table, a related table and a mapping
+//! table, and that is all you need to walk it. Writing is supported for the
 //! requirements classes the spec defines.
 //!
-//! Cardinality is not modelled. The spec chooses not to constrain it and warns
-//! against enforcing one-to-many with a `UNIQUE` constraint, because SQLite
-//! does not expose such constraints in an easily queryable way, so
-//! [`GeoPackage::related_ids`] returns whatever pairs the mapping table
-//! contains.
+//! Cardinality is not modelled. The spec deliberately leaves it unconstrained,
+//! and warns against enforcing one-to-many with a `UNIQUE` constraint because
+//! SQLite does not expose such constraints in an easily queryable way.
+//! [`GeoPackage::related_ids`] therefore returns whatever pairs the mapping
+//! table contains.
 
 use geopackage_core::ident::quote;
 use geopackage_core::related::{
