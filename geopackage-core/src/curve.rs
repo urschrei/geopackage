@@ -46,19 +46,19 @@ use crate::types::{GeometryType, GeometryTypeSet};
 
 use geo_traits::Dimensions;
 
-/// Cap on nested geometry containers, so a hostile body cannot drive the
-/// recursive walk into a stack overflow. Deeper than any nesting a writer
-/// produces in practice.
+/// Maximum nesting depth of geometry containers, so a hostile body cannot
+/// drive the recursive walk into a stack overflow. No writer nests this deeply
+/// in practice.
 const MAX_DEPTH: u32 = 32;
 
-/// Relative tolerance below which three points count as collinear, applied to
-/// the cross product that is twice the triangle's signed area, scaled by the
-/// square of the largest coordinate offset.
+/// Relative tolerance below which three points count as collinear.
 ///
-/// Below this the circumcentre is dominated by cancellation error. Treating
-/// the arc as its chord there is the correct limit: as the points straighten,
-/// the radius diverges and the bulge past the control points falls to zero, so
-/// the error the tolerance admits shrinks with it.
+/// It applies to the cross product, which is twice the triangle's signed area,
+/// scaled by the square of the largest coordinate offset. Below this
+/// tolerance, cancellation error dominates the circumcentre, and treating the
+/// arc as its chord is the correct limit. As the points straighten, the radius
+/// diverges and the bulge past the control points falls to zero, so the error
+/// the tolerance admits shrinks with it.
 const COLLINEAR_TOLERANCE: f64 = 1e-14;
 
 /// Returns the XY envelope of an ISO WKB body as
@@ -74,7 +74,7 @@ const COLLINEAR_TOLERANCE: f64 = 1e-14;
 /// yields `None` rather than a NaN-valued box, matching
 /// [`crate::geometry::GpbGeometry::xy_envelope`].
 ///
-/// The body is the WKB that follows a GPB header, not the whole blob; use
+/// The body is the WKB that follows a GPB header, not the whole blob. Use
 /// [`crate::gpb::body_offset`] to find it.
 ///
 /// # Errors
@@ -102,25 +102,25 @@ pub struct BodyScan {
     /// The dimensions the body's type code declares, for checking against the
     /// column's `z` and `m` constraints.
     pub dimensions: Dimensions,
-    /// How many bytes of the input the geometry occupies. A caller copying the
-    /// body into a blob should copy only this much, so trailing bytes beyond
-    /// the geometry are not included.
+    /// How many bytes of the input the geometry occupies. If you copy the body
+    /// into a blob, copy only this many bytes so that trailing bytes beyond the
+    /// geometry are left out.
     pub len: usize,
     /// The non-linear types the body contains, at every nesting depth and
     /// including the body's own.
     ///
     /// Each of these needs a `gpkg_geom_<TYPE>` row for the column the body is
-    /// written to (Annex F.1 Requirement 67), and a container's members are not
-    /// implied by its own type: a `MULTICURVE` containing `CIRCULARSTRING`s
-    /// needs a row for each. Registering them is the caller's responsibility,
-    /// since this function sees a body, not a table.
+    /// written to (Annex F.1 Requirement 67). A container's own type does not
+    /// imply its members' types, so a `MULTICURVE` containing
+    /// `CIRCULARSTRING`s needs a row for each. The caller must register them,
+    /// because this function sees a body, not a table.
     pub extension_types: GeometryTypeSet,
 }
 
 /// Walks an ISO WKB body once, returning everything the read and write paths
 /// need from it.
 ///
-/// [`xy_envelope`] is this with only the bounds kept.
+/// [`xy_envelope`] calls this and keeps only the bounds.
 ///
 /// # Errors
 ///
@@ -160,12 +160,12 @@ pub fn scan(wkb_body: &[u8]) -> Result<BodyScan, GeometryError> {
 /// `p1` to `p2`, or `None` when no control point is finite.
 ///
 /// The three points are `[x, y]` pairs in the layer's own coordinate space.
-/// The box covers the whole arc, not just the three points: see the module
-/// documentation for why that distinction matters.
+/// The box covers the whole arc, not just the three points. The module
+/// documentation explains why that distinction matters.
 ///
-/// Coincident endpoints (`p0 == p2`) mean the segment closes the circle, and
-/// the box is the circle's. Collinear or coincident points have no circle
-/// through them, and the box is the box of the points.
+/// If the endpoints coincide (`p0 == p2`), the segment closes the circle and
+/// the box is the circle's. If the points are collinear or coincident, no
+/// circle passes through them and the box is the box of the points.
 pub fn arc_envelope(p0: [f64; 2], p1: [f64; 2], p2: [f64; 2]) -> Option<[f64; 4]> {
     let mut bounds = XyBounds::new();
     for [x, y] in [p0, p1, p2] {
@@ -180,13 +180,14 @@ pub fn arc_envelope(p0: [f64; 2], p1: [f64; 2], p2: [f64; 2]) -> Option<[f64; 4]
 /// Returns the points of the arc's circle furthest along each axis that the
 /// arc itself reaches, in the order left, right, bottom, top.
 ///
-/// Each is `None` when the arc stops short of that axis extreme, and all four
-/// are `None` when the control points have no circle through them, in which
-/// case the arc is the chord and the control points bound it on their own.
+/// Each is `None` when the arc stops short of that axis extreme. All four are
+/// `None` when no circle passes through the control points. The arc is then
+/// the chord, and the control points bound it on their own.
 ///
-/// Kept separate from the control points so the walker can give a coordinate's
-/// Z to the bounds while leaving these extremes without one: an extreme is an
-/// XY property of the circle, and the Z there would have to be interpolated.
+/// These are kept separate from the control points so that the walker can add
+/// each coordinate's Z to the bounds but leave these extremes without one. An
+/// extreme is an XY property of the circle, and its Z would have to be
+/// interpolated.
 fn arc_extremes(p0: [f64; 2], p1: [f64; 2], p2: [f64; 2]) -> [Option<[f64; 2]>; 4] {
     let [x0, y0] = p0;
     let [x2, y2] = p2;
@@ -222,14 +223,14 @@ fn arc_extremes(p0: [f64; 2], p1: [f64; 2], p2: [f64; 2]) -> [Option<[f64; 2]>; 
 /// Returns the centre and radius of the circle through the three points, or
 /// `None` when they are collinear, coincident, or not all finite.
 ///
-/// Matched endpoints are the closed-circle convention rather than a degenerate
-/// case: `p0` and `p1` are then the ends of a diameter. That has to be settled
-/// before the collinearity test, because two coincident points are collinear
-/// with anything and the circumcentre formula has nothing to work with. The
-/// test is exact equality, not a tolerance: a writer closing an arc emits the
-/// identical point, and there is no epsilon that is meaningful in both degrees
-/// and metres. Endpoints that are merely close take the general path, which
-/// handles a near-complete circle correctly anyway.
+/// Matched endpoints follow the closed-circle convention and are not a
+/// degenerate case. `p0` and `p1` are then the ends of a diameter. This case
+/// is handled before the collinearity test, because two coincident points are
+/// collinear with anything and the circumcentre formula has nothing to work
+/// with. The test is exact equality, not a tolerance. A writer closing an arc
+/// emits the identical point, and no epsilon is meaningful in both degrees and
+/// metres. Endpoints that are merely close take the general path, which still
+/// handles a near-complete circle correctly.
 fn arc_centre(p0: [f64; 2], p1: [f64; 2], p2: [f64; 2]) -> Option<([f64; 2], f64)> {
     let [x0, y0] = p0;
     let [x1, y1] = p1;
@@ -356,11 +357,11 @@ fn read_geometry(
 
 /// Reads a counted coordinate sequence into `bounds`.
 ///
-/// The whole sequence is taken from the cursor in one step (one bounds check
-/// per sequence rather than several per coordinate) and folded by a loop
-/// monomorphised over the byte order, so the endianness decision sits outside
-/// the loop. This is the hottest loop in the scanner; the structure is what
-/// lets the compiler unroll it.
+/// The whole sequence is taken from the cursor in one step, with one bounds
+/// check per sequence rather than several per coordinate. A loop monomorphised
+/// over the byte order then folds it, which keeps the endianness decision
+/// outside the loop. This is the hottest loop in the scanner, and this
+/// structure lets the compiler unroll it.
 fn read_coords(
     cursor: &mut Cursor<'_>,
     little_endian: bool,
@@ -389,12 +390,12 @@ fn read_word<const LITTLE_ENDIAN: bool>(word: [u8; 8]) -> f64 {
 /// Word count at or above which [`add_coords`] folds with
 /// [`XyzBounds::add_branchless`] rather than [`XyzBounds::add`].
 ///
-/// The branch-free fold is what the compiler can vectorise, but the
-/// vectorised loop carries setup cost that a short run never amortises, and
-/// there the branchy fold wins. 32 words is 16 XY coordinates. Small-feature
-/// data (buildings, river segments) sits well under that and the shapes that
-/// gain from vectorisation (large polygons, long lines) sit far over it, so
-/// the exact value is not delicate.
+/// The compiler can vectorise the branch-free fold, but the vectorised loop
+/// has a setup cost that a short run never amortises, so the branchy fold is
+/// faster there. 32 words is 16 XY coordinates. Small-feature data (buildings,
+/// river segments) sits well under that, and the shapes that gain from
+/// vectorisation (large polygons, long lines) sit far over it, so the exact
+/// value is not critical.
 const BRANCHLESS_MIN_WORDS: usize = 32;
 
 /// Folds a coordinate region into `bounds`, choosing the fold form by the
@@ -411,10 +412,11 @@ fn add_coords<const LITTLE_ENDIAN: bool>(
     }
 }
 
-/// Folds a coordinate region into `bounds` through `add`, one loop per
-/// coordinate layout so each iterates over fixed-size arrays with no
-/// per-coordinate checks. An M ordinate is skipped; a Z is kept when the
-/// layout has one.
+/// Folds a coordinate region into `bounds` through `add`.
+///
+/// There is one loop per coordinate layout, so each iterates over fixed-size
+/// arrays with no per-coordinate checks. An M ordinate is skipped, and a Z is
+/// kept when the layout has one.
 fn fold_coords<const LITTLE_ENDIAN: bool>(
     words: &[[u8; 8]],
     coord: CoordLayout,
@@ -475,8 +477,8 @@ fn fold_coords<const LITTLE_ENDIAN: bool>(
 /// both the points and the extent each arc sweeps.
 ///
 /// A well-formed CircularString has an odd count of at least three. A malformed
-/// one still contributes its points: the trailing pair of an even count is
-/// added without an arc rather than rejected, which keeps the envelope
+/// one still contributes its points. With an even count, the trailing pair is
+/// added without an arc rather than rejected. This keeps the envelope
 /// conservative instead of failing the write.
 fn read_circular_string(
     cursor: &mut Cursor<'_>,
@@ -548,7 +550,7 @@ struct CoordLayout {
 /// Splits an ISO WKB type code into its base type and its coordinate layout.
 ///
 /// ISO WKB adds 1000 for Z, 2000 for M and 3000 for ZM. EWKB instead sets high
-/// bit flags and may prefix an SRID, which a GPB body must not do, so it is
+/// bit flags and may prefix an SRID. A GPB body must not be EWKB, so EWKB is
 /// rejected rather than guessed at.
 fn decode_type(code: u32) -> Result<(u32, CoordLayout), GeometryError> {
     if code & 0xE000_0000 != 0 {
@@ -636,10 +638,10 @@ impl<'a> Cursor<'a> {
     /// Takes the region holding `count` coordinates of the given layout,
     /// returning it as 8-byte words.
     ///
-    /// One truncation check covers the whole sequence, reported at the
-    /// region's start rather than at the first missing double. A hostile
-    /// count that cannot fit in memory fails the same check, since no
-    /// remaining slice can satisfy it.
+    /// One truncation check covers the whole sequence, and it reports the
+    /// region's start rather than the first missing double. A hostile count
+    /// that cannot fit in memory fails the same check, because no remaining
+    /// slice can satisfy it.
     fn take_coord_words(
         &mut self,
         count: u32,
@@ -701,7 +703,7 @@ mod tests {
 
     use std::f64::consts::PI;
 
-    /// Assert two envelopes agree to `tolerance` on every bound.
+    /// Asserts that two envelopes agree to within `tolerance` on every bound.
     #[track_caller]
     fn assert_envelope(actual: Option<[f64; 4]>, expected: [f64; 4], tolerance: f64) {
         let Some(actual) = actual else {

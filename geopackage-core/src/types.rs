@@ -47,8 +47,8 @@ pub enum GeometryType {
 impl GeometryType {
     /// Parses a geometry type name, case-insensitively.
     ///
-    /// The spec writes the names in upper case; other cases appear in the
-    /// wild and are accepted on read.
+    /// The spec writes the names in upper case. Other cases appear in the
+    /// wild, and this accepts them on read.
     ///
     /// # Examples
     ///
@@ -142,8 +142,8 @@ impl GeometryType {
     /// Returns the type an ISO WKB base code names, or `None` for a code that
     /// is not a GeoPackage geometry type.
     ///
-    /// The base code is the type code with its dimension offset removed: ISO
-    /// WKB adds 1000 for Z, 2000 for M and 3000 for ZM.
+    /// The base code is the type code without its dimension offset. ISO WKB
+    /// adds 1000 for Z, 2000 for M and 3000 for ZM.
     pub(crate) fn from_wkb_base(base: u32) -> Option<Self> {
         Self::ALL.get(base as usize).copied()
     }
@@ -179,10 +179,10 @@ impl fmt::Display for GeometryType {
 /// A set of geometry types, stored as a bitset so that walking a geometry can
 /// accumulate one without allocating.
 ///
-/// Reports what a geometry body actually contains, which is not the same as
-/// the type its column declares: a `MULTICURVE` may contain `CIRCULARSTRING`s
-/// and a `MULTISURFACE` may contain `CURVEPOLYGON`s, and under Annex F.1
-/// Requirement 67 each non-linear type present needs its own
+/// The set reports what a geometry body actually contains, which is not the
+/// same as the type its column declares. A `MULTICURVE` may contain
+/// `CIRCULARSTRING`s and a `MULTISURFACE` may contain `CURVEPOLYGON`s. Under
+/// Annex F.1 Requirement 67 each non-linear type present needs its own
 /// `gpkg_geom_<TYPE>` row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GeometryTypeSet(u16);
@@ -226,7 +226,7 @@ impl GeometryTypeSet {
 ///
 /// Integer widths (`TINYINT` … `INTEGER`) and the `BOOLEAN`, `DATE`, and
 /// `DATETIME` types are storage-class INTEGER/TEXT under SQLite's type
-/// affinity; the declared type constrains interpretation, not storage.
+/// affinity. The declared type constrains interpretation, not storage.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ColumnType {
@@ -263,7 +263,7 @@ impl ColumnType {
     /// `PRAGMA table_info`, case-insensitively, including `TEXT(N)`/`BLOB(N)`
     /// length suffixes.
     ///
-    /// Returns `None` for declared types outside the spec vocabulary; SQLite
+    /// Returns `None` for declared types outside the spec vocabulary. SQLite
     /// stores such types, and lenient readers keep the raw string.
     ///
     /// # Examples
@@ -355,7 +355,8 @@ impl ZmFlag {
     }
 }
 
-/// Parses the `(N)` suffix of `TEXT(N)`/`BLOB(N)`; empty means no length.
+/// Parses the `(N)` suffix of `TEXT(N)`/`BLOB(N)`. An empty suffix means no
+/// length.
 fn parse_len_suffix(rest: &str) -> Option<Option<u32>> {
     let rest = rest.trim();
     if rest.is_empty() {
