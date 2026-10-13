@@ -7,8 +7,8 @@ use super::feature_writer::FeatureWriter;
 /// A new row for [`crate::Layer::write_all`]: an optional explicit feature id, an
 /// optional geometry, and the value-column values in column order.
 ///
-/// Construct with [`NewFeature::new`] (a geometry) or
-/// [`NewFeature::attributes`] (none); set an explicit id with
+/// Construct one with [`NewFeature::new`] for a row with a geometry, or
+/// [`NewFeature::attributes`] for a row without one. Set an explicit id with
 /// [`NewFeature::with_fid`].
 #[derive(Debug, Clone)]
 pub struct NewFeature<G> {
@@ -54,11 +54,10 @@ impl<G> NewFeature<G> {
 /// Implemented by [`NewFeature`], whose geometry is an object to be encoded, and
 /// by the columnar write path, whose geometry is already ISO WKB and only needs
 /// a header. Both paths share the batching, the bulk-index decision and the
-/// transaction handling; they differ only in how one row reaches the database,
-/// which is what this trait names.
+/// transaction handling. This trait covers the one thing they do differently:
+/// how a single row reaches the database.
 pub(crate) trait WritableRow {
-    /// Writes this row through `writer`, returning its assigned feature id
-    /// and
+    /// Writes this row through `writer`, returning its assigned feature id and
     /// the XY envelope of its geometry, or `None` when it has no indexable
     /// geometry.
     fn write(self, writer: &mut FeatureWriter<'_>) -> Result<(i64, Option<[f64; 4]>)>;

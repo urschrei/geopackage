@@ -11,18 +11,18 @@ use super::feature_writer::ValueColumn;
 ///
 /// Empty, and so free per row, unless
 /// [`OpenOptions::enforce_column_constraints`](crate::OpenOptions::enforce_column_constraints)
-/// was set: the constraints are advisory in the format ("These restrictions
+/// was set. The format makes the constraints advisory ("These restrictions
 /// MAY be enforced by SQL triggers or by code in applications that update
-/// GeoPackage data values"), so enforcing them is the caller's decision rather
-/// than this crate's.
+/// GeoPackage data values"), so enforcing them is the caller's decision, not
+/// this crate's.
 pub(crate) struct ColumnConstraints<'conn> {
     pub(crate) per_column: Vec<Option<ColumnConstraint>>,
     /// `SELECT ?1 GLOB ?2`, prepared once, for the glob form.
     ///
-    /// The pattern language is SQLite's, defined by whatever the engine that
-    /// stores the file does, so the engine is asked rather than its rules
-    /// being copied here. That also gives numbers SQLite's own text coercion,
-    /// which is what a trigger enforcing the same constraint would apply.
+    /// The pattern language is SQLite's, defined by what the engine that
+    /// stores the file does, so this asks the engine instead of copying its
+    /// rules. SQLite also applies its own text coercion to numbers, which is
+    /// what a trigger enforcing the same constraint would do.
     /// `None` when no column has a glob, which is the usual case.
     pub(crate) glob: Option<CachedStatement<'conn>>,
 }
@@ -68,8 +68,8 @@ impl<'conn> ColumnConstraints<'conn> {
         }
     }
 
-    /// Returns `true` if anything at all is enforced, so the row paths can
-    /// skip the walk.
+    /// Returns `true` if nothing is enforced, so the row paths can skip the
+    /// walk.
     pub(crate) fn is_empty(&self) -> bool {
         self.per_column.iter().all(Option::is_none)
     }
@@ -81,7 +81,7 @@ impl<'conn> ColumnConstraints<'conn> {
     /// Returns `true` if `value` satisfies the constraint on the column at
     /// `index`.
     ///
-    /// The range and enum forms are decided here; the glob form is put to
+    /// The range and enum forms are checked here, and the glob form by
     /// SQLite.
     pub(crate) fn satisfied(&mut self, index: usize, value: Checkable<'_>) -> Result<bool> {
         let Self { per_column, glob } = self;
@@ -157,8 +157,8 @@ pub(crate) fn in_range(kind: &ConstraintKind, value: f64) -> bool {
 
 /// A value reduced to what a constraint can judge it by.
 ///
-/// The three write paths supply values in three forms; this is what they
-/// have in common as far as a `range`, `enum` or `glob` is concerned.
+/// The three write paths supply values in three forms. This is what they
+/// have in common, as far as a `range`, `enum` or `glob` is concerned.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Checkable<'a> {
     /// No value. A constraint says what a value may be, not that there has to
@@ -166,16 +166,16 @@ pub(crate) enum Checkable<'a> {
     /// something says so with `NOT NULL`.
     Null,
     /// An integer, compared numerically against a `range` and by its decimal
-    /// form against an `enum` or `glob`: the spec's own sample enumerates the
-    /// numbers 1, 3, 5, 7 and 9 as `enum` values.
+    /// form against an `enum` or `glob`, because the spec's own sample
+    /// enumerates the numbers 1, 3, 5, 7 and 9 as `enum` values.
     Integer(i64),
     /// A float, compared as [`Checkable::Integer`] is.
     Real(f64),
     /// Text, which no `range` admits and which an `enum` or `glob` compares
     /// directly.
     Text(&'a str),
-    /// A blob, date or datetime, none of which any constraint form describes.
-    /// Not checked.
+    /// A blob, date or datetime. No constraint form describes these, so they
+    /// are not checked.
     Unchecked,
 }
 

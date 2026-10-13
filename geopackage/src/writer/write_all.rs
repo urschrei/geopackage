@@ -84,13 +84,14 @@ impl<'a> Layer<'a> {
     /// Begins a write transaction over this layer, returning a
     /// [`FeatureWriter`].
     ///
-    /// The writer owns the transaction: stage rows with its `insert`/`update`/
+    /// The writer owns the transaction. Stage rows with its `insert`/`update`/
     /// `delete` methods, then call [`FeatureWriter::commit`]. Dropping the
     /// writer without committing rolls the transaction back.
     ///
-    /// Unless a transaction is already open on the connection, in which case
-    /// the writer joins that one and both of those sentences belong to whoever
-    /// began it. [`FeatureWriter::commit`] says what changes.
+    /// The exception is when a transaction is already open on the connection.
+    /// The writer then joins that transaction, and committing and rolling back
+    /// are up to whoever began it. [`FeatureWriter::commit`] describes what
+    /// changes.
     pub fn writer(&self) -> Result<FeatureWriter<'a>> {
         self.gpkg().check_writable(self.table_name())?;
         let conn: &Connection = self.gpkg().connection();
@@ -182,26 +183,27 @@ impl<'a> Layer<'a> {
     /// Writes every item of `features` in batches, each batch its own
     /// committed transaction.
     ///
-    /// `batch_size` bounds how many rows share a transaction (`0` writes them
-    /// all in a single transaction). Returns the assigned feature ids in order.
-    /// Batches commit independently: an error part-way leaves already-committed
-    /// batches in place, so pass `0` when you need all-or-nothing.
+    /// `batch_size` bounds how many rows share a transaction, and `0` writes
+    /// them all in a single transaction. Returns the assigned feature ids in
+    /// order. Batches commit independently. An error part-way leaves
+    /// already-committed batches in place, so pass `0` when you need
+    /// all-or-nothing.
     ///
-    /// `batch_size` bounds nothing when a transaction is already open on the
-    /// connection: the batch commits are staged rather than durable, so every
-    /// row belongs to the caller's transaction and an error part-way leaves all
-    /// of them staged rather than some of them committed. This follows from
+    /// If a transaction is already open on the connection, `batch_size` bounds
+    /// nothing. The batch commits are staged rather than durable, so every row
+    /// belongs to the caller's transaction. An error part-way leaves all of the
+    /// rows staged, rather than some of them committed. This follows from
     /// opening the transaction, and matches the all-or-nothing behaviour of
     /// `batch_size = 0`.
     ///
-    /// Rows with `geometry: Some(_)` go through [`FeatureWriter::insert`]; rows
-    /// with `None` through [`FeatureWriter::insert_row`].
+    /// Rows with `geometry: Some(_)` go through [`FeatureWriter::insert`], and
+    /// rows with `None` through [`FeatureWriter::insert_row`].
     ///
     /// When the layer has a spatial index and the write is at least
     /// [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD) rows, it takes
-    /// the bulk path instead, maintaining the index in one operation at the end
-    /// rather than row by row through the triggers;
-    /// [`Self::write_all_with`] tunes or forces that choice.
+    /// the bulk path instead. That path maintains the index in one operation at
+    /// the end, rather than row by row through the triggers. Use
+    /// [`Self::write_all_with`] to tune or force that choice.
     pub fn write_all<G, I>(&self, features: I, batch_size: usize) -> Result<Vec<i64>>
     where
         G: GeometryTrait<T = f64>,
@@ -210,18 +212,18 @@ impl<'a> Layer<'a> {
         self.write_all_with(features, batch_size, BulkIndexOptions::default())
     }
 
-    /// [`Self::write_all`] with an explicit [`BulkIndexOptions`] controlling the
-    /// bulk-vs-triggered index-build choice.
+    /// Like [`Self::write_all`], with an explicit [`BulkIndexOptions`] that
+    /// chooses between a bulk and a triggered index build.
     ///
-    /// The bulk path is taken when the layer has a spatial index, the write
-    /// reaches `options.bulk_threshold` rows, and it is large enough relative to
-    /// the rows already indexed to be worth rebuilding the index rather than
-    /// appending to it. The size condition is settled from the iterator's
-    /// `size_hint` where that is possible, and by buffering up to
-    /// `bulk_threshold` rows where it is not, so an iterator that does not know
-    /// its own length still reaches the path.
-    /// [`BulkIndexOptions::always_bulk`] drops the size condition;
-    /// [`BulkIndexOptions::never_bulk`] disables the path.
+    /// The write takes the bulk path when the layer has a spatial index, the
+    /// write reaches `options.bulk_threshold` rows, and it is large enough
+    /// relative to the rows already indexed to be worth rebuilding the index
+    /// rather than appending to it. The size check uses the iterator's
+    /// `size_hint` where possible, and otherwise buffers up to
+    /// `bulk_threshold` rows, so an iterator that does not know its own length
+    /// can still take the bulk path. [`BulkIndexOptions::always_bulk`] drops
+    /// the size condition, and [`BulkIndexOptions::never_bulk`] disables the
+    /// bulk path.
     pub fn write_all_with<G, I>(
         &self,
         features: I,
@@ -267,23 +269,23 @@ impl<'a> Layer<'a> {
     /// Returns whether this write is large enough to take the bulk path,
     /// along with any rows that had to be pulled from `features` to decide.
     ///
-    /// This is the one decision that has to be made before a row is written,
-    /// because the bulk path drops the RTree triggers first and dropping them
-    /// for a handful of rows would cost more in schema churn than it saves.
-    /// Whether the index is then rebuilt or appended to is settled after the
-    /// write, from the exact counts (see [`rebuild_beats_append`]).
+    /// This is the only decision that must be made before any row is written.
+    /// The bulk path drops the RTree triggers first, and for a handful of rows
+    /// the schema churn would cost more than the bulk path saves. Whether the
+    /// index is then rebuilt or appended to is decided after the write, from
+    /// the exact counts (see [`rebuild_beats_append`]).
     ///
-    /// The size condition is answered from [`Iterator::size_hint`] whenever the
-    /// hint settles it, which covers every `Vec`-like source at no cost. An
-    /// iterator that does not know its own length, which is most iterators that
-    /// are not backed by a collection, reports a lower bound of `0` and would
-    /// otherwise never reach the threshold however many rows it went on to
-    /// yield. For those the rows themselves are the only evidence available, so
-    /// they are buffered until either the threshold is reached, which is all the
-    /// proof the decision needs, or the iterator ends first, which gives an exact
-    /// count that is known to be below it.
+    /// [`Iterator::size_hint`] answers the size condition whenever the hint
+    /// settles it, which covers every `Vec`-like source at no cost. An iterator
+    /// that does not know its own length, as is true of most iterators not
+    /// backed by a collection, reports a lower bound of `0`. Going by the hint
+    /// alone, it would never reach the threshold, however many rows it went on
+    /// to yield. For such an iterator the rows themselves are the only
+    /// evidence, so they are buffered until the threshold is reached, which
+    /// settles the decision, or until the iterator ends first, which gives an
+    /// exact count below the threshold.
     ///
-    /// Buffering is therefore bounded by `options.bulk_threshold` rows and never
+    /// Buffering is therefore bounded by `options.bulk_threshold` rows, never
     /// by the length of the input. Raising the threshold raises that bound for
     /// unsized iterators.
     fn bulk_write_engages<R, I>(
@@ -329,8 +331,9 @@ impl<'a> Layer<'a> {
         Ok((true, buffered))
     }
 
-    /// The per-batch triggered write path: one committed transaction per
-    /// `batch_size` rows (`0` = a single transaction for the whole iterator).
+    /// The per-batch triggered write path, with one committed transaction per
+    /// `batch_size` rows. `0` means a single transaction for the whole
+    /// iterator.
     #[hotpath::measure(label = "write_all_batched")]
     fn write_all_batched<R, I>(&self, features: I, batch_size: usize) -> Result<Vec<i64>>
     where
@@ -363,10 +366,10 @@ impl<'a> Layer<'a> {
         Ok(fids)
     }
 
-    /// The bulk write path: drop the rtree triggers, insert every row in one
-    /// transaction (no per-row index maintenance, but `gpkg_contents` bbox and
-    /// `last_change` are still maintained by the writer commit), then bring the
-    /// index up to date and reinstall the triggers.
+    /// The bulk write path. It drops the RTree triggers, inserts every row in
+    /// one transaction, then brings the index up to date and reinstalls the
+    /// triggers. There is no per-row index maintenance, but the writer commit
+    /// still maintains the `gpkg_contents` bbox and `last_change`.
     ///
     /// On any failure after the triggers are dropped, the index is restored to a
     /// consistent, trigger-maintained state before the error is returned.
@@ -476,20 +479,19 @@ impl<'a> Layer<'a> {
 /// entries against an index already containing `indexed` of them should
 /// rebuild that index rather than append the new entries to it.
 ///
-/// This is decided after the rows are written rather than before, so both counts
-/// are exact. Deciding it up front meant guessing the size of the write from
-/// [`Iterator::size_hint`], which can only ever supply a lower bound, and an
-/// iterator that supplies none at all could not be placed on either side of the
-/// ratio.
+/// The decision is made after the rows are written, not before, so both counts
+/// are exact. Deciding up front would mean guessing the size of the write from
+/// [`Iterator::size_hint`], which only ever gives a lower bound, and an
+/// iterator that gives none could not be placed on either side of the ratio.
 ///
-/// An empty index is the clear case: there is nothing to preserve, so the
-/// rebuild is a straight win. A populated index is a trade, because a rebuild
+/// An empty index is the easy case. There is nothing to preserve, so the
+/// rebuild is a clear win. A populated index is a trade-off, because a rebuild
 /// pays for the rows already in it. Measured at 1M and 100k existing rows, a
-/// rebuild costs roughly 1.5 us per row of the *total* table while an append
+/// rebuild costs roughly 1.5 us per row of the *total* table, while an append
 /// costs roughly 18 to 40 us per *new* row, rising with table size as the index
 /// deepens. Rebuilding therefore wins once the new entries are somewhere between
 /// 5% and 10% of the existing ones. [`MERGE_REBUILD_RATIO`] takes the
-/// conservative end: at 100k existing rows a 10k-row append measured 187 ms
+/// conservative end. At 100k existing rows, a 10k-row append measured 187 ms
 /// against 149 ms rebuilt, and at 1M existing a 100k-row append measured 2938 ms
 /// against 1783 ms.
 pub(crate) fn rebuild_beats_append(new_entries: usize, indexed: usize) -> bool {
@@ -502,17 +504,17 @@ pub(crate) fn rebuild_beats_append(new_entries: usize, indexed: usize) -> bool {
 /// Adds one RTree entry per newly written row, leaving the existing index in
 /// place.
 ///
-/// This is the work the `_insert` trigger would have done had it still been
-/// installed: the same `INSERT OR REPLACE`, the same values, in the same row
-/// order, so the index this leaves behind is the one a triggered write would
-/// have produced. The envelopes were computed while encoding the geometries, and
-/// a row whose geometry is NULL or empty contributed none, which is exactly the
-/// trigger's `NEW.geom NOT NULL AND NOT ST_IsEmpty(NEW.geom)` condition.
+/// This does the work the `_insert` trigger would have done if it were still
+/// installed: the same `INSERT OR REPLACE`, with the same values, in the same
+/// row order. The resulting index is the one a triggered write would have
+/// produced. The envelopes were computed while encoding the geometries, and a
+/// row whose geometry is NULL or empty contributed none, which exactly matches
+/// the trigger's `NEW.geom NOT NULL AND NOT ST_IsEmpty(NEW.geom)` condition.
 ///
 /// Nothing gates the result. The bulk build is gated because it writes a tree by
-/// hand into an on-disk format SQLite does not document as an interface; these
-/// inserts go through the RTree module itself and need no more checking than the
-/// triggers do.
+/// hand into an on-disk format SQLite does not document as an interface. These
+/// inserts go through the RTree module itself, and need no more checking than
+/// the triggers do.
 pub(crate) fn append_entries(
     conn: &Connection,
     rtree: &str,
@@ -577,13 +579,13 @@ mod tests {
     }
 
     /// A bulk `write_all` that fails during the index build must leave nothing
-    /// behind: not the rows, not a half-built index, not a dropped trigger set.
+    /// behind: no rows, no half-built index, and no dropped trigger set.
     ///
-    /// This is the atomicity the bulk path used to lack. The rebuild ran in its
-    /// own transaction, because building the index in an `ATTACH`ed scratch
-    /// database required autocommit, so the rows were already committed by the
-    /// time it ran and a failure here left them against a stale index. The
-    /// assertions below all fail against that arrangement.
+    /// The bulk path used to lack this atomicity. The rebuild ran in its own
+    /// transaction, because building the index in an `ATTACH`ed scratch
+    /// database required autocommit. The rows were therefore already committed
+    /// by the time it ran, and a failure here left them against a stale index.
+    /// The assertions below all fail against that arrangement.
     #[test]
     fn failed_bulk_write_rolls_back_rows_and_index() {
         let (_dir, gpkg) = indexed_empty_layer();
@@ -626,9 +628,9 @@ mod tests {
         assert_eq!(indexed, 1, "triggers did not survive the rollback");
     }
 
-    /// The same atomicity on the other branch: a bulk `write_all` that adds its
-    /// entries to a populated index, and then fails, must also leave nothing
-    /// behind.
+    /// Tests the same atomicity on the other branch. A bulk `write_all` that
+    /// adds its entries to a populated index, and then fails, must also leave
+    /// nothing behind.
     ///
     /// `failed_bulk_write_rolls_back_rows_and_index` cannot cover this. It writes
     /// into an empty index, which always rebuilds, so the branch that appends
