@@ -8,7 +8,7 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
-## [0.10.1] - 2026-10-12
+## [0.10.1] - 2026-10-13
 
 ### Changed
 
