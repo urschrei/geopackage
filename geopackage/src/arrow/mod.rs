@@ -1,9 +1,9 @@
-//! Arrow schema derivation: GeoPackage column types to Arrow field types.
+//! How GeoPackage column types map to Arrow field types.
 //!
-//! This is the type mapping the columnar read and write paths share. SQLite's
-//! declared types and Arrow's do not line up, so several entries below are a
-//! judgement rather than a translation, and each is stated with its reason
-//! rather than left to be inferred from the code.
+//! The columnar read and write paths share this mapping. SQLite's declared
+//! types don't line up with Arrow's, so several entries below are judgement
+//! calls rather than translations. Each comes with its reason, rather than
+//! leaving you to infer it from the code.
 //!
 //! # Attribute types
 //!
@@ -19,27 +19,28 @@
 //! | a geometry type | `Binary` + `geoarrow.wkb` | the geometry column |
 //! | anything else | by SQLite affinity | see below |
 //!
-//! **Integer widths collapse to `Int64`.** SQLite does not enforce a declared
-//! integer width: a `TINYINT` column stores whatever integer it was given, and
-//! reading one that exceeds the width is an ordinary thing to have to do. Every
-//! width therefore maps to `Int64`, which cannot truncate. This matches
-//! [`crate::Value::Integer`], which collapses the same widths for the same
-//! reason.
+//! **Integer widths collapse to `Int64`.** SQLite doesn't enforce a declared
+//! integer width. A `TINYINT` column stores whatever integer it was given, and
+//! reading values that exceed the width is routine. Every width therefore maps
+//! to `Int64`, which can't truncate. [`crate::Value::Integer`] collapses the
+//! same widths for the same reason.
 //!
-//! **`DATETIME` becomes microsecond UTC.** The GeoPackage form is a UTC
-//! ISO 8601 string with millisecond precision, and
-//! [`geopackage_core::datetime::DateTime`] parses finer input than that, so
-//! microseconds represent what the strict form can express with room for the lenient
-//! form. Values are converted, not reinterpreted: the text is parsed and the
-//! instant is written, so a consumer sees a timestamp rather than a string.
+//! **`DATETIME` becomes microsecond UTC.** GeoPackage stores a datetime as a
+//! UTC ISO 8601 string with millisecond precision.
+//! [`geopackage_core::datetime::DateTime`] also parses finer input, so
+//! microseconds cover everything the strict form can express, with room for the
+//! lenient form. Values are converted, not reinterpreted: the text is parsed
+//! and the instant is written, so a consumer sees a timestamp rather than a
+//! string.
 //!
-//! **A type outside the vocabulary is mapped by SQLite's affinity rules.**
-//! `VARCHAR(20)` and friends are common in files written by other tools, and
+//! **Other declared types are mapped by SQLite's affinity rules.** Files
+//! written by other tools often declare types such as `VARCHAR(20)`, and
 //! [`geopackage_core::types::ColumnType::parse`] returns `None` for them.
-//! Rejecting such a column would make the Arrow path useless on real
-//! files, so the declared type is run through the affinity rules from
+//! Rejecting those columns would make the Arrow path useless on real files.
+//! Instead, the declared type goes through the affinity rules in
 //! [SQLite section 3.1](https://www.sqlite.org/datatype3.html#determination_of_column_affinity),
-//! which is exactly how SQLite itself decides what such a column contains.
+//! which are the rules SQLite itself uses to decide what such a column
+//! contains.
 //!
 //! # Nullability
 //!

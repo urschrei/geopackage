@@ -1,19 +1,19 @@
-//! Bulk RTree build: construct the index directly and write it.
+//! Bulk RTree builds: construct the index in memory and write it directly.
 //!
-//! SQLite's RTree module has no bulk-load entry point, so populating an index
-//! one row at a time, whether through the spec's `INSERT INTO rtree SELECT`
-//! statement or through the per-row triggers, pays the node-splitting cost for
-//! every row ([gdal#7614](https://github.com/OSGeo/gdal/issues/7614) is the
-//! same observation from GDAL's side). This module first answered that by
-//! building the RTree in an `ATTACH`ed scratch database and copying its shadow
-//! tables into the target, but measurement showed the scratch build was then the
-//! dominant cost, because it still inserted every entry through the module one
-//! row at a time.
+//! SQLite's RTree module has no bulk-load entry point. Populating an index
+//! through the spec's `INSERT INTO rtree SELECT` statement or through the
+//! per-row triggers inserts one row at a time and pays the node-splitting cost
+//! for every row. [gdal#7614](https://github.com/OSGeo/gdal/issues/7614) makes
+//! the same observation from GDAL's side. This module originally built the
+//! RTree in an `ATTACH`ed scratch database and copied its shadow tables into
+//! the target. Measurement showed that the scratch build was then the dominant
+//! cost, because it still inserted every entry through the module one row at a
+//! time.
 //!
-//! So the tree is now built outright: [`crate::packed`] lays out the
+//! The tree is now built directly. [`crate::packed`] lays out the
 //! `rtree_%_node` / `_rowid` / `_parent` contents in memory from the entry set,
-//! and this module writes them as ordinary rows. No RTree module logic, no
-//! `ST_*` calls, no triggers, and no scratch database.
+//! and this module writes them as ordinary rows. The build uses no RTree module
+//! logic, no `ST_*` calls, no triggers and no scratch database.
 //!
 //! Dropping the scratch database also removed the `ATTACH`, which required
 //! autocommit and so forced the build out of the caller's transaction. The
@@ -26,29 +26,30 @@
 //!
 //! # The gate
 //!
-//! Every bulk build is **gated** before it is trusted (see [`gate`]): the written
-//! index must contain exactly the accumulated `(fid, envelope)` set (row count
-//! plus a per-row containment check), and it must pass a structural check
-//! ([`StructuralCheck`]: `rtreecheck()` on the index by default, optionally a
-//! whole-database `PRAGMA integrity_check`). Any anomaly makes [`fill_index`]
-//! fall back to the triggered population statement, so a failed gate never
-//! yields a corrupt or stale index, only a slower build.
+//! Every bulk build must pass a **gate** before it is trusted (see [`gate`]).
+//! The written index must contain exactly the accumulated `(fid, envelope)`
+//! set, checked by row count and a per-row containment check. It must also pass
+//! a structural check ([`StructuralCheck`]): `rtreecheck()` on the index by
+//! default, or optionally a whole-database `PRAGMA integrity_check`. If either
+//! check fails, [`fill_index`] falls back to the triggered population
+//! statement, so a failed gate never yields a corrupt or stale index, only a
+//! slower build.
 //!
-//! **The gate is about 45% of the build.** Profiled over 1M points, it costs
-//! ~745 ms of a ~1593 ms build: roughly half in the bijection scan, which reads
-//! every entry back out of the index, and half in `rtreecheck`, which walks the
-//! whole tree. GDAL's builder runs no equivalent, and without the gate this
-//! crate would be comfortably faster than it rather than level with it (see
-//! `roadmap/benchmarks/2026-07-24-gdal-like-for-like.md`).
+//! **The gate is about 45% of the build.** Profiled over 1M points, it takes
+//! ~745 ms of a ~1593 ms build. Roughly half of that is the bijection scan,
+//! which reads every entry back out of the index, and half is `rtreecheck`,
+//! which walks the whole tree. GDAL's builder runs no equivalent. Without the
+//! gate this crate would be comfortably faster than GDAL, rather than level
+//! with it (see `roadmap/benchmarks/2026-07-24-gdal-like-for-like.md`).
 //!
-//! That cost is deliberate and stays for now. This module writes a tree by hand
-//! into an on-disk format that SQLite does not document as an interface, so the
-//! result is checked against SQLite's own checker and against the input before
-//! anything relies on it. Removing or defaulting-off the gate is a question for
-//! 1.0, once the packer has enough history behind it to justify the trust; it is
-//! not a change to make while the format handling is this new. Until then,
-//! roughly half of a bulk index build is insurance, and the reason to keep
-//! paying it is confidence rather than speed.
+//! The cost is deliberate and stays for now. This module writes the tree by
+//! hand into an on-disk format that SQLite doesn't document as an interface, so
+//! the result is checked against SQLite's own checker and against the input
+//! before anything relies on it. Whether to remove the gate or turn it off by
+//! default is a question for 1.0, once the packer has enough history to justify
+//! that trust. It shouldn't change while the format handling is this new. Until
+//! then, roughly half of a bulk index build is spent on checking, and it is
+//! kept for confidence, not speed.
 //!
 //! The entry set itself comes either from an `ST_*` scan of the table or, when
 //! the caller can prove it accounts for every indexable row, from envelopes

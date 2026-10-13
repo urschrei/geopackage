@@ -2,10 +2,10 @@
 //!
 //! Each item includes one chapter of `docs/book` as its documentation, so
 //! `cargo test --doc` compiles every Rust block in it with this crate's real
-//! dependencies. The blocks are marked `no_run` in the book (they reference
-//! files a reader has and CI does not), so they are compiled, never executed.
-//! This module exists only under `cfg(doctest)`: it is absent from ordinary
-//! builds and from the packaged crate.
+//! dependencies. The blocks are marked `no_run` in the book because they
+//! reference files that a reader has and CI doesn't, so they are compiled but
+//! never executed. This module exists only under `cfg(doctest)`, so it is
+//! absent from ordinary builds and from the packaged crate.
 
 #[doc = include_str!("../../docs/book/src/tutorial/first-geopackage.md")]
 pub struct TutorialFirstGeopackage;
