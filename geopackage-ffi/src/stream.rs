@@ -157,17 +157,17 @@ use crate::value::{borrow_values, gpkg_value_t};
 
 /// What a stream owns for as long as C holds it.
 ///
-/// `batches` has had its borrow of the container erased; `_token` is what makes
-/// that sound, by counting against the container's child count until the stream
-/// is released.
+/// `batches` has had its borrow of the container erased. `_token` makes that
+/// sound: it counts against the container's child count until the stream is
+/// released.
 struct StreamState {
     batches: ArrowBatches<'static>,
     last_error: Option<CString>,
     _token: ChildToken,
 }
 
-/// Release callback: drop the state, and blank the stream as the C Data
-/// Interface requires.
+/// Drops the stream's state and blanks the stream, as the C Data Interface
+/// requires of a release callback.
 ///
 /// # Safety
 ///
@@ -193,7 +193,7 @@ unsafe extern "C" fn release(stream: *mut FFI_ArrowArrayStream) {
     stream.release = None;
 }
 
-/// The stream's private state, or `None` when it has been released.
+/// Returns the stream's private state, or `None` when it has been released.
 ///
 /// # Safety
 ///
@@ -275,7 +275,8 @@ unsafe extern "C" fn get_next(
 
 /// Returns the message from the last failing callback, or NULL.
 ///
-/// The consumer borrows this; it stays valid until the next call on the stream.
+/// The consumer borrows the message. It stays valid until the next call on the
+/// stream.
 ///
 /// # Safety
 ///
@@ -291,14 +292,14 @@ unsafe extern "C" fn get_last_error(stream: *mut FFI_ArrowArrayStream) -> *const
     }
 }
 
-/// `EINVAL` and `EIO`, the errno values the C Data Interface suggests for a
-/// misused and a failing stream. Spelled out rather than pulled from libc,
-/// which this crate does not otherwise depend on.
+/// The errno values `EINVAL` and `EIO`, which the C Data Interface suggests
+/// for a misused and a failing stream. They are defined here rather than taken
+/// from libc, which this crate does not otherwise depend on.
 const EINVAL: c_int = 22;
 const EIO: c_int = 5;
 
-/// Builds a stream over `batches`, taking `token` as the thing that keeps the
-/// container alive.
+/// Builds a stream over `batches`, holding `token` to keep the container
+/// alive.
 fn export_batches(batches: ArrowBatches<'static>, token: ChildToken) -> FFI_ArrowArrayStream {
     let state = Box::new(StreamState {
         batches,
@@ -316,10 +317,10 @@ fn export_batches(batches: ArrowBatches<'static>, token: ChildToken) -> FFI_Arro
 
 /// Reads a layer as an Arrow C Data Interface stream.
 ///
-/// `out` is filled in with a stream the caller owns and must release through
-/// its own `release` callback, as the C Data Interface specifies. The stream
-/// borrows the layer's container: the container cannot be closed until the
-/// stream has been released, exactly as for a layer handle.
+/// Fills in `out` with a stream that you own and must release through its own
+/// `release` callback, as the C Data Interface specifies. The stream borrows
+/// the layer's container, so the container cannot be closed until the stream
+/// has been released, as with a layer handle.
 ///
 /// ```c
 /// struct ArrowArrayStream stream;
@@ -345,18 +346,18 @@ fn export_batches(batches: ArrowBatches<'static>, token: ChildToken) -> FFI_Arro
 /// ```
 ///
 /// Rows arrive in primary-key order, in batches of up to 65,536 rows. A batch
-/// whose geometry would cross a byte ceiling is emitted short of that, so a
-/// layer of very large geometries still reads. The ceiling is the smaller of
-/// 2 GB, which is as far as the geometry column's 32-bit Arrow offsets reach,
-/// and a quarter of the machine's memory.
+/// ends early if its geometry would otherwise exceed a byte ceiling, so a layer
+/// of very large geometries still reads. The ceiling is the smaller of 2 GB
+/// (the reach of the geometry column's 32-bit Arrow offsets) and a quarter of
+/// the machine's memory.
 ///
-/// A failure part-way through is reported the interface's way: `get_next`
-/// returns non-zero and `get_last_error` has the detail. The `error`
-/// out-parameter here covers only opening the stream.
+/// If reading fails part-way through, `get_next` returns non-zero and
+/// `get_last_error` has the detail, as the interface specifies. The `error`
+/// out-parameter covers only opening the stream.
 ///
 /// Batches come back on one thread. The threaded reader assigns key windows to
-/// workers, which needs a second connection per worker; a stream handed to C is
-/// pulled on the caller's thread instead.
+/// workers, which needs a second connection per worker. A stream handed to C
+/// is pulled on the caller's thread instead.
 ///
 /// # Safety
 ///
@@ -375,17 +376,17 @@ pub unsafe extern "C" fn gpkg_layer_read_arrow(
     unsafe { read_arrow_inner(layer, None, None, out, error) }
 }
 
-/// Reads the rows of a layer intersecting a bounding box, as an Arrow stream.
+/// Reads the rows of a layer that intersect a bounding box, as an Arrow stream.
 ///
-/// The box is in the layer's own spatial reference system, and a row is
-/// returned when its geometry's envelope intersects the box, edges included.
-/// An envelope is not the geometry, so the rows are a superset of those that
-/// actually intersect: testing the geometries themselves is the caller's, on
-/// the WKB the stream yields.
+/// The box is in the layer's own spatial reference system. A row is returned
+/// when its geometry's envelope intersects the box, edges included. An
+/// envelope is not the geometry, so the result is a superset of the rows whose
+/// geometries actually intersect. To test the geometries themselves, use the
+/// WKB the stream yields.
 ///
-/// Served by the layer's RTree index when it has a usable one, and by a full
-/// scan with the same filter otherwise, returning the same rows either way.
-/// `gpkg_layer_has_spatial_index` says which it will be.
+/// The read uses the layer's RTree index when it has a usable one, and
+/// otherwise a full scan with the same filter. Either way it returns the same
+/// rows. `gpkg_layer_has_spatial_index` tells you which it will use.
 ///
 /// ```c
 /// struct ArrowArrayStream stream;
@@ -421,20 +422,20 @@ pub unsafe extern "C" fn gpkg_layer_read_arrow_in(
 /// Reads the rows matching a SQL `WHERE` clause, a bounding box, or both, as an
 /// Arrow stream.
 ///
-/// The general form of the three readers: `bbox` is NULL or four doubles
-/// (`min_x`, `min_y`, `max_x`, `max_y`) on the terms of
-/// `gpkg_layer_read_arrow_in`, and `where_clause` is NULL or a SQL clause on
-/// the terms below. With both NULL this is `gpkg_layer_read_arrow`; with both
-/// set the stream yields the rows satisfying the two together.
+/// This is the general form of the three readers. `bbox` is NULL or four
+/// doubles (`min_x`, `min_y`, `max_x`, `max_y`), read as by
+/// `gpkg_layer_read_arrow_in`. `where_clause` is NULL or a SQL clause, as
+/// described below. With both NULL, this is `gpkg_layer_read_arrow`. With both
+/// set, the stream yields the rows that satisfy both.
 ///
-/// The clause is **raw SQL, trusted from the caller**: it is appended
-/// (parenthesised) to the query, not parsed or sanitised, exactly as the Rust
-/// crate's `Layer::select` treats it. Its placeholders are `?1` to `?N` and
-/// `params` bind them in array order; the machinery the read adds around the
-/// clause never collides with that numbering. `params` reuses the writer's
-/// `gpkg_value_t`, borrowed for the duration of this call only.
+/// The clause is **raw SQL, trusted from the caller**. It is appended to the
+/// query in parentheses, and is not parsed or sanitised, just as the Rust
+/// crate's `Layer::select` treats it. Its placeholders are `?1` to `?N`, and
+/// `params` bind them in array order. The SQL the read adds around the clause
+/// never collides with that numbering. `params` reuses the writer's
+/// `gpkg_value_t`, and is borrowed only for the duration of this call.
 ///
-/// Reading one row by feature id is the clause `fid = ?1` with the id as its
+/// To read one row by feature id, use the clause `fid = ?1` with the id as its
 /// parameter:
 ///
 /// ```c
@@ -448,12 +449,12 @@ pub unsafe extern "C" fn gpkg_layer_read_arrow_in(
 /// // Pulled and released exactly as gpkg_layer_read_arrow's stream is.
 /// ```
 ///
-/// A clause SQLite cannot prepare surfaces the interface's way, through the
-/// stream's first `get_next` and `get_last_error`, because each batch is its
-/// own query; the `error` out-parameter here covers only opening the stream.
-/// Passing `params` without a clause for them is
-/// `GPKG_STATUS_INVALID_ARGUMENT`, and a bounding box on a layer with no
-/// geometry column is `GPKG_STATUS_NOT_FOUND`, as for
+/// Each batch is its own query, so a clause SQLite cannot prepare is reported
+/// the interface's way, through the stream's first `get_next` and
+/// `get_last_error`. The `error` out-parameter covers only opening the stream.
+/// Passing `params` without a clause for them fails with
+/// `GPKG_STATUS_INVALID_ARGUMENT`. A bounding box on a layer with no geometry
+/// column fails with `GPKG_STATUS_NOT_FOUND`, as for
 /// `gpkg_layer_read_arrow_in`.
 ///
 /// # Safety
@@ -516,7 +517,7 @@ pub unsafe extern "C" fn gpkg_layer_read_arrow_filtered(
     unsafe { read_arrow_inner(layer, bbox, clause.map(|text| (text, values)), out, error) }
 }
 
-/// The body of the three readers.
+/// Implements the three readers.
 ///
 /// # Safety
 ///
@@ -573,28 +574,28 @@ unsafe fn read_arrow_inner(
 
 /// Writes an Arrow C Data Interface stream into a layer.
 ///
-/// Writing appends: every batch adds rows, and nothing here changes or removes
-/// one that is already there. That suits a bulk load, and it is why
-/// re-writing rows that supply their own feature ids fails on the primary key
-/// rather than replacing them. To change or remove an existing feature, take a
-/// `gpkg_writer_t` with `gpkg_layer_writer`.
+/// Writing only appends. Every batch adds rows, and no existing row is changed
+/// or removed. That suits a bulk load. It also means that re-writing rows that
+/// supply their own feature ids fails on the primary key rather than replacing
+/// them. To change or remove an existing feature, use a `gpkg_writer_t` from
+/// `gpkg_layer_writer`.
 ///
-/// The stream's schema must name columns the layer has. A column the layer
-/// does not have is rejected rather than dropped, because discarding data a
-/// caller asked to write would be worse than rejecting it; a column of the
-/// layer the stream does not name is left to its default. A type the layer
-/// cannot store is `GPKG_STATUS_INVALID_ARGUMENT`. Building the layer with
-/// `gpkg_create_layer_from_arrow_schema` from the same schema is what makes
-/// the two agree by construction.
+/// Every column in the stream's schema must exist in the layer. A column the
+/// layer does not have is rejected rather than dropped, because discarding
+/// data you asked to write would be worse than rejecting it. A layer column
+/// that the stream does not name is left to its default. A type the layer
+/// cannot store fails with `GPKG_STATUS_INVALID_ARGUMENT`. If you build the
+/// layer with `gpkg_create_layer_from_arrow_schema` from the same schema, the
+/// two agree by construction.
 ///
 /// A stream column matching the layer's primary key supplies each row's fid,
-/// and a NULL there has one assigned. A stream appending to a layer that
-/// already contains rows should therefore omit that column, or supply NULLs
-/// in it: a fid the table already contains fails the write.
+/// and a row with NULL there is assigned one. A fid the table already contains
+/// fails the write, so when you append to a layer that already has rows, omit
+/// that column or supply NULLs in it.
 ///
 /// Takes ownership of `stream`, as the C Data Interface specifies for a moved
-/// stream: it is released here whether the write succeeds or fails, and the
-/// caller must not release it again. `out_rows`, when non-NULL, receives the
+/// stream. The call releases it whether the write succeeds or fails, and you
+/// must not release it again. If `out_rows` is non-NULL, it receives the
 /// number of rows written.
 ///
 /// ```c
@@ -613,20 +614,18 @@ unsafe fn read_arrow_inner(
 /// printf("wrote %llu rows\n", (unsigned long long)written);
 /// ```
 ///
-/// `batch_size` is the rows per write transaction; `0` writes everything in
-/// one transaction. Inside a transaction the caller opened with `gpkg_begin`
-/// it bounds nothing, since every batch belongs to that one, and is then a
-/// statement about how many rows are held at once rather than about
-/// durability.
+/// `batch_size` is the number of rows per write transaction, and `0` writes
+/// everything in one transaction. Inside a transaction you opened with
+/// `gpkg_begin`, every batch belongs to that transaction. The batch size then
+/// sets only how many rows are held at once, not what becomes durable.
 ///
-/// A failure part-way through leaves whatever earlier batches have already
-/// committed, so `batch_size` also decides how much a failed write can leave
-/// behind: `0` leaves nothing, because there is one transaction. Inside a
-/// caller's transaction nothing is durable until their commit, and
+/// If the write fails part-way through, the batches that have already
+/// committed stay. So `batch_size` also decides how much a failed write can
+/// leave behind. With `0` it leaves nothing, because there is one transaction.
+/// Inside your own transaction, nothing is durable until you commit, and
 /// `gpkg_rollback` discards all of it.
 ///
-/// The layer's spatial index, where it has one, is brought up to date as part
-/// of the write.
+/// If the layer has a spatial index, the write brings it up to date.
 ///
 /// # Safety
 ///
@@ -683,10 +682,10 @@ pub unsafe extern "C" fn gpkg_layer_write_arrow(
 
 /// Creates a layer whose columns come from an Arrow schema.
 ///
-/// The schema is borrowed, not consumed: the caller still owns it and must
-/// release it. This is what lets a C consumer copy a layer without any
-/// schema-description API of its own, by taking the schema from the source
-/// stream's `get_schema` and handing it straight here.
+/// The call borrows the schema rather than consuming it, so you still own it
+/// and must release it. To copy a layer without describing any columns
+/// yourself, take the schema from the source stream's `get_schema` and pass it
+/// straight here.
 ///
 /// ```c
 /// struct ArrowArrayStream src_stream;
@@ -707,16 +706,15 @@ pub unsafe extern "C" fn gpkg_layer_write_arrow(
 /// schema.release(&schema);
 /// ```
 ///
-/// The geometry column and its spatial reference system are taken from the
+/// The geometry column and its spatial reference system come from the
 /// schema's GeoArrow metadata. The referenced SRS must already exist in the
-/// destination; `gpkg_add_epsg_srs` puts one there. The geometry column is
-/// declared `GEOMETRY` rather than the source's own type, because the GeoArrow
-/// WKB encoding does not record one.
+/// destination, and `gpkg_add_epsg_srs` can add it. The geometry column is
+/// declared `GEOMETRY` rather than with the source's own type, because the
+/// GeoArrow WKB encoding does not record that type.
 ///
-/// `spatial_index` asks for an RTree index over that column, which is the
-/// usual choice for a layer that will be queried by bounding box.
-/// `gpkg_layer_create_spatial_index` adds one later, and costs a pass over the
-/// rows to do it.
+/// `spatial_index` requests an RTree index over that column, the usual choice
+/// for a layer you will query by bounding box. `gpkg_layer_create_spatial_index`
+/// can add one later, at the cost of a pass over the rows.
 ///
 /// Fails with `GPKG_STATUS_ALREADY_EXISTS` when the file already has a table
 /// of that name, and with `GPKG_STATUS_NOT_FOUND` when the schema names a
@@ -780,8 +778,8 @@ pub unsafe extern "C" fn gpkg_create_layer_from_arrow_schema(
 
 /// Registers an EPSG spatial reference system in the file.
 ///
-/// A layer cannot name an SRS the file does not register, so this is what a C
-/// consumer calls before creating one.
+/// A layer cannot name an SRS the file does not register, so call this before
+/// creating a layer that uses one.
 ///
 /// # Safety
 ///
