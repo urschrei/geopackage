@@ -93,39 +93,39 @@ impl Layer<'_> {
     /// they are usable, and otherwise the true extent measured from the
     /// geometries.
     ///
-    /// `None` when the layer contains no geometry to measure. The recorded
-    /// bounds are usable when all four are present and neither axis is
-    /// inverted, which is as much as any reader can check, since no
-    /// requirement governs the values; a recorded box that passes it is
-    /// returned as it stands, so this inherits whatever inexactness the file
-    /// records. Use [`Self::recompute_extent`] for an answer that does not.
+    /// Returns `None` when the layer contains no geometry to measure. The
+    /// recorded bounds are usable when all four are present and neither axis
+    /// is inverted. No reader can check more than that, because no requirement
+    /// governs the values. A recorded box that passes the check is returned as
+    /// it stands, so the result is only as exact as the file's box. Use
+    /// [`Self::recompute_extent`] to always measure.
     ///
     /// # This can modify the file
     ///
     /// When the recorded bounds are unusable and the connection can write, the
     /// measurement is recorded before it is returned, so **this method changes
-    /// the file's contents and modification time**. The point is that the file
-    /// stops being wrong, for every later reader rather than only this one.
+    /// the file's contents and modification time**. The file then stops being
+    /// wrong for every later reader, not only this one.
     ///
-    /// The recorded extent deserves this caution because the format gives it
-    /// none: the spec calls the bounds informative, sets no requirement on
+    /// This crate is careful with the recorded extent because the format is
+    /// not. The spec calls the bounds informative and sets no requirement on
     /// their values, and a reader can only check that they are present and
-    /// well ordered. A well-ordered wrong box is therefore believed
-    /// indefinitely (GDAL returns one verbatim and never recomputes it, even
-    /// under `bForce`; QGIS behaves the same way), while NULL bounds make a
-    /// reader compute the real extent. That asymmetry is why this crate
+    /// well ordered. Readers therefore believe a well-ordered wrong box
+    /// indefinitely. GDAL returns one verbatim and never recomputes it, even
+    /// under `bForce`, and QGIS behaves the same way. NULL bounds, by contrast,
+    /// make a reader compute the real extent. For that reason this crate
     /// records NULL rather than anything invented, and never records a box it
     /// cannot guarantee covers the layer.
     ///
-    /// Nothing is written when the recorded bounds are already usable, which is
-    /// the ordinary case, nor on a read-only connection, nor when there is
-    /// nothing to measure and the bounds are already NULL. To read the recorded
-    /// values without measuring or writing anything, use
+    /// Nothing is written when the recorded bounds are already usable (the
+    /// usual case), on a read-only connection, or when there is nothing to
+    /// measure and the bounds are already NULL. To read the recorded values
+    /// without measuring or writing anything, use
     /// [`crate::GeoPackage::contents`].
     ///
-    /// A layer with no geometry to measure has its bounds set to NULL, which is
-    /// what makes a reader compute the extent itself rather than believe an
-    /// invented one. GDAL does the same through `UpdateContentsToNullExtent`.
+    /// A layer with no geometry to measure has its bounds set to NULL, so that
+    /// a reader computes the extent itself rather than believing an invented
+    /// one. GDAL does the same through `UpdateContentsToNullExtent`.
     ///
     /// # Errors
     ///
@@ -137,12 +137,12 @@ impl Layer<'_> {
     ///
     /// Lock contention is deliberately **not** an error. A concurrent writer
     /// means the measurement describes a layer that is being changed underneath
-    /// it, so it is not a value this crate can guarantee; the file is left as
-    /// it was and the measurement is returned. Waiting for the lock is already
-    /// covered by [`crate::OpenOptions::busy_timeout`], and in the two cases
-    /// that arise here most often, a read-to-write upgrade under a rollback
-    /// journal and a stale snapshot under WAL, SQLite reports the conflict
-    /// immediately whatever that timeout says.
+    /// it, so this crate cannot guarantee the value. The file is left as it
+    /// was and the measurement is returned. Waiting for the lock is already
+    /// covered by [`crate::OpenOptions::busy_timeout`]. In the two cases that
+    /// arise here most often, a read-to-write upgrade under a rollback journal
+    /// and a stale snapshot under WAL, SQLite reports the conflict immediately
+    /// whatever that timeout says.
     pub fn extent(&self) -> Result<Option<BoundingBox>> {
         // Checked before the recorded value is consulted, so that a layer with
         // no geometry column answers the same way whether or not its
@@ -185,10 +185,10 @@ impl Layer<'_> {
 
     /// Writes a measured extent into `gpkg_contents`.
     ///
-    /// Nothing to measure records NULL, but only where the bounds are not NULL
-    /// already: an empty layer is read far more often than it changes, and a
-    /// write that changes no value would still change the file's modification
-    /// time.
+    /// If there is nothing to measure, this records NULL, but only when the
+    /// bounds are not already NULL. An empty layer is read far more often than
+    /// it changes, and a write that changes no value would still change the
+    /// file's modification time.
     fn record_extent(
         &self,
         conn: &rusqlite::Connection,
@@ -219,12 +219,12 @@ impl Layer<'_> {
 
     /// Decides what a failed recording means.
     ///
-    /// Another connection's lock is not a failure to report: it says a writer
-    /// is active, which is exactly the condition under which the measurement
-    /// cannot be guaranteed, so the file keeps what it had and the
-    /// measurement is returned. Anything else means the store is unwritable or
-    /// broken, which the caller should hear about, and the measurement is
-    /// included with the error so that hearing about it costs nothing.
+    /// A lock held by another connection is not reported as a failure. It
+    /// means a writer is active, which is exactly when the measurement cannot
+    /// be guaranteed, so the file keeps what it had and the measurement is
+    /// returned. Any other error means the store is unwritable or broken, and
+    /// the caller gets that error. The measurement is included with it, so the
+    /// caller loses nothing by receiving the error.
     fn finish_recording(
         &self,
         measured: Option<BoundingBox>,
@@ -244,24 +244,23 @@ impl Layer<'_> {
     /// Measures the layer's true extent and records it in `gpkg_contents`,
     /// returning what was written.
     ///
-    /// The counterpart of GDAL's `RECOMPUTE EXTENT ON <layer>`. A layer with no
-    /// geometry to measure has its bounds set to NULL, which is what lets a
-    /// reader compute the extent itself rather than believe an invented one.
+    /// This is the counterpart of GDAL's `RECOMPUTE EXTENT ON <layer>`. A layer
+    /// with no geometry to measure has its bounds set to NULL, so that a reader
+    /// computes the extent itself rather than believing an invented one.
     ///
-    /// Where [`Self::extent`] records only what it had to measure, and so
-    /// leaves a well-ordered box alone however wrong it is, this measures
-    /// unconditionally. It is the way to correct an extent that is merely
-    /// suspect, which nothing else here will touch, because nothing
-    /// distinguishes a wrong well-ordered box from a right one without
-    /// measuring.
+    /// [`Self::extent`] records only what it had to measure, so it leaves a
+    /// well-ordered box alone however wrong it is. This method always
+    /// measures. Use it to correct an extent that is merely suspect. Nothing
+    /// else in this crate touches such an extent, because nothing can tell a
+    /// wrong well-ordered box from a right one without measuring.
     ///
-    /// The measurement and the write share one transaction. Two statements in
-    /// autocommit would leave a window for another connection to commit a row
-    /// between them, and the box recorded would then exclude it: a value the
-    /// crate cannot guarantee, which is the one thing this module forbids.
-    /// Holding the read open closes the window under a rollback journal, and
-    /// under WAL turns it into a `SQLITE_BUSY_SNAPSHOT` error rather than a
-    /// silent write of a stale measurement.
+    /// The measurement and the write share one transaction. With two
+    /// autocommit statements, another connection could commit a row between
+    /// them, and the recorded box would exclude it. That box is a value the
+    /// crate cannot guarantee, which this module forbids recording. Holding
+    /// the read open closes the window under a rollback journal. Under WAL it
+    /// turns the race into a `SQLITE_BUSY_SNAPSHOT` error rather than a silent
+    /// write of a stale measurement.
     ///
     /// # Errors
     ///
@@ -299,10 +298,10 @@ impl Layer<'_> {
     /// An inverted box is treated as absent rather than repaired. It says
     /// nothing about where the data is, and GDAL reads it the same way.
     ///
-    /// This reports only what the file says; it never writes. Its callers
-    /// decide what to do about an unusable answer: [`Layer::extent`] measures
-    /// and records, and [`crate::FeatureWriter`] does not record a fold it
-    /// cannot guarantee.
+    /// This reports only what the file says and never writes. Callers decide
+    /// what to do about an unusable answer: [`Layer::extent`] measures and
+    /// records, and [`crate::FeatureWriter`] does not record a fold it cannot
+    /// guarantee.
     pub(crate) fn stored_extent(&self) -> Result<Option<BoundingBox>> {
         let bounds: Option<[Option<f64>; 4]> = self
             .gpkg()
@@ -326,14 +325,14 @@ impl Layer<'_> {
     /// Measures the true extent from the geometries themselves, through the
     /// registered `ST_*` functions.
     ///
-    /// NULL and empty geometries contribute nothing: `ST_MinX` and its siblings
-    /// return NULL for them, and the aggregates skip NULLs, exactly as the RTree
+    /// NULL and empty geometries contribute nothing. `ST_MinX` and its siblings
+    /// return NULL for them, and the aggregates skip NULLs, just as the RTree
     /// triggers skip the same rows. A layer whose geometries are all NULL or
-    /// empty therefore measures as `None` rather than as a degenerate box.
+    /// empty therefore measures as `None`, not as a degenerate box.
     ///
-    /// Reads through the connection it is given rather than the layer's, so a
-    /// caller that is going to record the result can measure inside the same
-    /// transaction it writes in.
+    /// It reads through the given connection rather than the layer's, so a
+    /// caller that will record the result can measure inside the transaction
+    /// it writes in.
     fn measure_extent(&self, conn: &rusqlite::Connection) -> Result<Option<BoundingBox>> {
         let geometry = self
             .geometry_column()
@@ -357,10 +356,9 @@ impl Layer<'_> {
 
     /// Returns `true` if the table contains at least one row.
     ///
-    /// The writer needs this to tell "the extent is unknown because nothing has
-    /// been written yet", where a fold over what it writes is the whole truth,
-    /// from "the extent is unknown but rows already exist", where it is only a
-    /// lower bound.
+    /// The writer uses this to tell apart two reasons the extent can be
+    /// unknown. If nothing has been written yet, a fold over what it writes is
+    /// the whole truth. If rows already exist, that fold is only a lower bound.
     pub(crate) fn has_rows(&self) -> Result<bool> {
         let sql = format!(
             "SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)",
@@ -374,9 +372,9 @@ impl Layer<'_> {
 
 /// Returns `true` if an error is another connection holding a lock.
 ///
-/// `DatabaseBusy` is the plain code behind both `SQLITE_BUSY` and
-/// `SQLITE_BUSY_SNAPSHOT`, which is the whole of what contention looks like on
-/// a connection that does not use shared cache.
+/// `DatabaseBusy` is the primary code behind both `SQLITE_BUSY` and
+/// `SQLITE_BUSY_SNAPSHOT`. On a connection that does not use shared cache,
+/// those are the only forms contention takes.
 fn is_lock_contention(error: &rusqlite::Error) -> bool {
     matches!(
         error.sqlite_error_code(),

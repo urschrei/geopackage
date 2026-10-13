@@ -70,36 +70,36 @@ use crate::transaction::WriteTransaction;
 /// [`crate::Layer::create_spatial_index`] and [`crate::Layer::write_all`] choose
 /// the bulk shadow-table build over the per-row triggered build.
 ///
-/// Below this, the fixed cost of building and writing the tree plus the gate
-/// outweighs the saving; above it the bulk build wins. Override with
+/// Below this, the fixed cost of building and writing the tree, plus the gate,
+/// outweighs the saving. Above it, the bulk build wins. Override it with
 /// [`BulkIndexOptions`].
 pub const DEFAULT_BULK_THRESHOLD: usize = 10_000;
 
 /// Default fraction of each RTree node's capacity used by the bulk build.
 ///
-/// Packing full gives the smallest tree, the shallowest descent and the best
-/// queries, which suits a bulk load. The cost is that a full node has
-/// no room for a later insert, so the first append into it splits immediately.
-/// Appends after a bulk load go through the triggers, which is the per-row path
-/// this build exists to avoid, so the default favours the load and the queries.
-/// Lower it with [`BulkIndexOptions::with_fill_factor`] when a freshly built
-/// index will be appended to heavily.
+/// Packing nodes full gives the smallest tree, the shallowest descent and the
+/// best queries, which suits a bulk load. However, a full node has no room for
+/// a later insert, so the first append into it splits immediately. Appends
+/// after a bulk load go through the triggers, the per-row path this build
+/// exists to avoid, so the default favours the load and the queries. Lower it
+/// with [`BulkIndexOptions::with_fill_factor`] if you will append heavily to a
+/// freshly built index.
 pub const DEFAULT_FILL_FACTOR: f64 = 1.0;
 
 /// Tuning for the RTree bulk-build path.
 ///
-/// Passed to [`crate::Layer::create_spatial_index_with`] (and the bulk
-/// `write_all` path). The default threshold is [`DEFAULT_BULK_THRESHOLD`];
-/// [`Self::always_bulk`] and [`Self::never_bulk`] force a path (mainly for tests
-/// and benchmarking).
+/// Pass it to [`crate::Layer::create_spatial_index_with`]. It also applies to
+/// the bulk `write_all` path. The default threshold is
+/// [`DEFAULT_BULK_THRESHOLD`]. [`Self::always_bulk`] and [`Self::never_bulk`]
+/// force one path or the other, mainly for tests and benchmarking.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct BulkIndexOptions {
     /// Candidate-row count at or above which the bulk build is used. `0` always
-    /// uses the bulk path; [`usize::MAX`] always uses the triggered path.
+    /// uses the bulk path. [`usize::MAX`] always uses the triggered path.
     ///
-    /// For [`crate::Layer::write_all`] this also bounds a buffer: a source that
-    /// does not advertise its length has rows held back, up to this many, to
+    /// For [`crate::Layer::write_all`] this also bounds a buffer. If a source
+    /// does not advertise its length, up to this many rows are held back to
     /// find out whether it reaches the threshold. Raising the threshold raises
     /// that bound, so a very large value paired with a lazy iterator can hold a
     /// correspondingly large number of rows in memory. `usize::MAX` buffers
@@ -115,54 +115,54 @@ pub struct BulkIndexOptions {
 
 /// How much of a bulk-built RTree is checked before it is trusted.
 ///
-/// Every level above [`Self::None`] also arms the automatic fallback: a build
-/// that fails its check is discarded and rebuilt through the triggered path, so
-/// the result is correct either way and only the time is lost. **With
-/// [`Self::None`] there is nothing to fail and so nothing to fall back from.**
+/// Every level above [`Self::None`] also enables the automatic fallback. A
+/// build that fails its check is discarded and rebuilt through the triggered
+/// path, so the result is correct either way and only time is lost. **With
+/// [`Self::None`] nothing is checked, so nothing can fail and fall back.**
 ///
 /// # Why the default changed
 ///
-/// Through 0.5 this defaulted to reading the whole index back and running
-/// `rtreecheck` over it, which is about **45% of the build**: roughly 745 ms of
-/// a 1593 ms build at one million points, split about evenly between the two.
-/// That was the right price while `crate::packed` was new, since it writes an
-/// RTree by hand into a format SQLite does not document as an interface.
+/// Through 0.5 the default read the whole index back and ran `rtreecheck`
+/// over it. That costs about **45% of the build**: roughly 745 ms of a 1593 ms
+/// build at one million points, split about evenly between the two checks.
+/// The cost was worth paying while `crate::packed` was new, because it writes
+/// an RTree by hand into a format SQLite does not document as an interface.
 ///
-/// The packer now has enough history for the cost to be opt-in rather than
-/// paid by everyone. A caller writing files of consequence, or bisecting a
-/// suspected index problem, turns it back on.
+/// The packer now has enough history for the check to be opt-in rather than
+/// paid by everyone. Turn it back on if you are writing files that matter or
+/// bisecting a suspected index problem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum BulkVerification {
     /// Trust the packer. The default, and the fastest.
     ///
     /// Nothing is read back, so a build cannot fail its check and cannot fall
-    /// back to the triggered path. `crate::Layer::audit_spatial_index` remains
-    /// available afterwards for a caller who needs the answer later rather
-    /// than on every write.
+    /// back to the triggered path. You can still call
+    /// `crate::Layer::audit_spatial_index` afterwards if you need the answer
+    /// later rather than on every write.
     #[default]
     None,
     /// Read every entry back and check it against the envelopes accumulated
     /// while writing: one index row per indexable row, a bijection on `id`, and
     /// each stored bound containing the true envelope.
     ///
-    /// The cheaper half of the pre-0.6 default, and the half that catches a
-    /// wrong or missing entry, which is what a query would notice.
+    /// This is the cheaper half of the pre-0.6 default. It catches a wrong or
+    /// missing entry, which is what a query would notice.
     Contents,
     /// [`Self::Contents`], plus `rtreecheck` over the tree, which cross-checks
     /// every entry against its parent's bounds and the `%_rowid`/`%_parent`
     /// mappings against `%_node`.
     ///
-    /// The pre-0.6 default. Catches a structurally malformed tree that the
-    /// content check would pass, which is the failure mode particular to
-    /// writing the shadow tables by hand.
+    /// This was the pre-0.6 default. It catches a structurally malformed tree
+    /// that the content check would pass, a failure particular to writing the
+    /// shadow tables by hand.
     Structure,
     /// [`Self::Structure`], plus a whole-database `PRAGMA integrity_check`.
     ///
-    /// O(database) rather than O(index), so on a large file it dominates
-    /// everything else, and a benign pre-existing problem anywhere in the file
-    /// forces the (still correct) triggered fallback. For validating a file of
-    /// unknown provenance.
+    /// This costs O(database) rather than O(index), so on a large file it
+    /// dominates everything else. A benign pre-existing problem anywhere in the
+    /// file also forces the triggered fallback, which is still correct. Use it
+    /// to validate a file of unknown provenance.
     Database,
 }
 
@@ -187,10 +187,10 @@ impl BulkIndexOptions {
 
     /// Always takes the bulk path (threshold `0`).
     ///
-    /// For [`crate::Layer::write_all`] this forces the path, not a rebuild: a
-    /// write small relative to an already populated index still has its entries
-    /// added to that index rather than the index rebuilt around them. Use
-    /// [`crate::Layer::create_spatial_index_with`] to rebuild outright.
+    /// For [`crate::Layer::write_all`] this forces the path, not a rebuild. A
+    /// write that is small relative to an already populated index still adds
+    /// its entries to that index, rather than rebuilding the index around them.
+    /// Use [`crate::Layer::create_spatial_index_with`] to rebuild outright.
     pub fn always_bulk() -> Self {
         Self::with_threshold(0)
     }
@@ -235,15 +235,15 @@ pub(crate) enum BuildPath {
 
 /// A way for a test to make something go wrong during a bulk index build.
 ///
-/// It is called on the index rows just after they are written and just before
-/// [`gate`] checks them, which is the only moment at which either kind of
-/// failure this exists to test can be introduced.
+/// It runs on the index rows just after they are written and just before
+/// [`gate`] checks them. That is the only point at which either kind of failure
+/// it tests can be introduced.
 ///
-/// Outside tests this is always [`no_fault`], which does nothing at all. A test
-/// passes either a function that corrupts the index that was just written, to
-/// show that the gate rejects it and the triggered rebuild still produces a
-/// correct one, or a function that returns an error, to show that the whole
-/// build is rolled back.
+/// Outside tests this is always [`no_fault`], which does nothing. A test passes
+/// one of two kinds of function. One corrupts the index that was just written,
+/// to show that the gate rejects it and the triggered rebuild still produces a
+/// correct one. The other returns an error, to show that the whole build is
+/// rolled back.
 pub(crate) type TestFault = fn(&Connection, &str) -> Result<()>;
 
 /// The [`TestFault`] used outside tests: it does nothing.
@@ -254,16 +254,16 @@ pub(crate) fn no_fault(_: &Connection, _: &str) -> Result<()> {
 /// Writes a packed tree into the three shadow tables through cached prepared
 /// statements.
 ///
-/// Node and parent rows go straight out: the packer emits them in ascending
-/// node order, which is also their primary-key order, so they append to the
-/// B-tree. `%_rowid` rows are the exception. Its key is the feature id, but the
-/// packer emits them in the tree's leaf order, which is Hilbert order and
-/// therefore close to random with respect to feature id. Inserting a million of
-/// those in that order is dominated by page splits: measured at 1M points it
+/// Node and parent rows are written immediately. The packer emits them in
+/// ascending node order, which is also their primary-key order, so they append
+/// to the B-tree. `%_rowid` rows are the exception. Their key is the feature
+/// id, but the packer emits them in the tree's leaf order. That is Hilbert
+/// order, and so close to random with respect to feature id. Page splits
+/// dominate inserting a million rows in that order. Measured at 1M points, it
 /// cost 556 ms on uniformly spread data and 1.76 s on clustered data, against
-/// 36 ms for the node rows. Buffering them and inserting in feature-id order
-/// costs 16 bytes per entry and a sort, and brings both to ~265 ms, removing
-/// the distribution sensitivity along with the cost.
+/// 36 ms for the node rows. Buffering the rows and inserting them in feature-id
+/// order costs 16 bytes per entry and a sort. It brings both cases to ~265 ms,
+/// and removes the sensitivity to data distribution along with the cost.
 struct ShadowTables<'c> {
     conn: &'c Connection,
     node_sql: String,
@@ -308,9 +308,9 @@ impl NodeSink for ShadowTables<'_> {
 
 /// The byte length the RTree module expects every node blob of `rtree` to have.
 ///
-/// Read from the freshly created index's root node rather than re-derived from
-/// `PRAGMA page_size`, because that is exactly what the module itself does when
-/// it reopens an existing index: it takes the node size from `length(data)` of
+/// This is read from the freshly created index's root node rather than
+/// re-derived from `PRAGMA page_size`. The module itself does the same when it
+/// reopens an existing index: it takes the node size from `length(data)` of
 /// node 1 and rejects any node that differs. Reading it keeps the two
 /// definitions from drifting apart.
 fn node_size(conn: &Connection, rtree: &str) -> Result<usize> {
@@ -328,16 +328,16 @@ fn node_size(conn: &Connection, rtree: &str) -> Result<usize> {
 /// Lifts SQLite's defensive flag for the duration of the direct shadow-table
 /// writes, restoring the value found on drop.
 ///
-/// Stock SQLite ships with the flag off, and the packed build was written
-/// against that: [`write_packed`] inserts into `rtree_*_node` / `_rowid` /
-/// `_parent` directly, which defensive mode rejects with "table ... may not
-/// be modified". Apple's system SQLite turns the flag on by default, so a
+/// Stock SQLite ships with the flag off, and the packed build assumes that.
+/// [`write_packed`] inserts into `rtree_*_node` / `_rowid` / `_parent`
+/// directly, which defensive mode rejects with "table ... may not be
+/// modified". Apple's system SQLite turns the flag on by default, so a
 /// system-linked build on macOS cannot bulk-build an index without lifting
-/// it. Scoped to the packed write rather than cleared at open, so a hardened
-/// connection keeps its hardening everywhere else.
+/// it. The flag is lifted only for the packed write, not cleared at open, so
+/// a hardened connection keeps its hardening everywhere else.
 struct DefensiveOff<'conn> {
     conn: &'conn Connection,
-    /// The flag as found; only a lifted flag is restored.
+    /// The flag as found. Only a lifted flag is restored.
     was_on: bool,
 }
 
@@ -393,8 +393,8 @@ fn write_packed(
     sink.flush()
 }
 
-/// Returns the number of rows in `table` (the cheap decision proxy: no
-/// `ST_*` calls).
+/// Returns the number of rows in `table`, a cheap proxy for the path decision
+/// that makes no `ST_*` calls.
 pub(crate) fn table_row_count(conn: &Connection, table: &str) -> Result<usize> {
     let count: i64 = conn.query_row(
         &format!("SELECT count(*) FROM {}", quote(table)?),
@@ -408,13 +408,13 @@ pub(crate) fn table_row_count(conn: &Connection, table: &str) -> Result<usize> {
 /// row is not indexable (empty under the same rule the `ST_*` functions
 /// apply).
 ///
-/// This reproduces in a single parse what the previous SQL scan computed with
-/// five `ST_*` calls per row. The blob is known non-NULL (the query's
-/// `WHERE {c} NOT NULL` handles that). Emptiness is decided exactly as
-/// `ST_IsEmpty` decides it (the header empty flag, else a body traversal) and
-/// the bounds are taken from the header envelope when present and from the body
-/// otherwise, exactly as `ST_MinX`/`ST_MaxX`/`ST_MinY`/`ST_MaxY` do. So the
-/// returned set is identical to the one the old scan produced.
+/// It computes in a single parse what the previous SQL scan computed with five
+/// `ST_*` calls per row. The blob is known to be non-NULL, because the query's
+/// `WHERE {c} NOT NULL` excludes NULLs. Emptiness is decided exactly as
+/// `ST_IsEmpty` decides it: by the header empty flag, or else a body traversal.
+/// The bounds come from the header envelope when present and from the body
+/// otherwise, exactly as `ST_MinX`/`ST_MaxX`/`ST_MinY`/`ST_MaxY` do. The
+/// returned set is therefore identical to the one the old scan produced.
 fn envelope_of(blob: &[u8]) -> std::result::Result<Option<[f64; 4]>, geopackage_core::Error> {
     // `ST_IsEmpty` traverses the body whenever the header flag is unset, so a
     // faithful set requires the same traversal here rather than trusting a
@@ -424,18 +424,18 @@ fn envelope_of(blob: &[u8]) -> std::result::Result<Option<[f64; 4]>, geopackage_
     Ok(bounds)
 }
 
-/// Accumulate `(fid, [min_x, max_x, min_y, max_y])` for every row whose geometry
-/// is indexable, so the accumulated set is identical to what the triggered path
+/// Accumulates `(fid, [min_x, max_x, min_y, max_y])` for every row whose
+/// geometry is indexable, so the set is identical to what the triggered path
 /// would index.
 ///
-/// The envelope is derived by parsing each blob once in Rust (see
-/// [`envelope_of`]). The previous form asked SQLite for
-/// `ST_IsEmpty` plus the four `ST_Min/Max` functions per row: six user-function
-/// dispatches, each re-fetching the blob and re-parsing the GPB header, and each
-/// `ST_*` re-traversing the body for an envelope-less blob. Reading the blob
-/// once collapses that to a single parse per row for the identical set. This
-/// scan runs only on the standalone `create_spatial_index` path; the bulk
-/// `write_all` path passes `precomputed` envelopes and never reaches here.
+/// Each envelope comes from parsing the blob once in Rust (see
+/// [`envelope_of`]). The previous version asked SQLite for `ST_IsEmpty` plus
+/// the four `ST_Min/Max` functions per row. That was six user-function
+/// dispatches, each re-fetching the blob and re-parsing the GPB header, and
+/// each `ST_*` call re-traversed the body of a blob without an envelope.
+/// Reading the blob once reduces that to a single parse per row, for the same
+/// set. This scan runs only on the standalone `create_spatial_index` path. The
+/// bulk `write_all` path passes `precomputed` envelopes and never reaches it.
 fn accumulate_envelopes(
     conn: &Connection,
     table: &str,
@@ -479,10 +479,10 @@ fn accumulate_envelopes(
 /// set.
 ///
 /// Passes only when the index contains exactly one row per accumulated entry
-/// (row count and a bijection on `id`), each stored bound conservatively
-/// contains the true envelope (the RTree stores `f32` bounds, minima rounded
-/// down and maxima rounded up, so containment, not equality, is the correct
-/// relation), and `PRAGMA integrity_check` reports `ok`.
+/// (checked by row count and a bijection on `id`), each stored bound
+/// conservatively contains the true envelope, and `PRAGMA integrity_check`
+/// reports `ok`. The RTree stores `f32` bounds, with minima rounded down and
+/// maxima rounded up, so containment, not equality, is the correct relation.
 fn gate(
     conn: &Connection,
     rtree: &str,
@@ -575,19 +575,20 @@ fn gate(
 /// shadow-table copy, gated with automatic fallback to the triggered
 /// population.
 ///
-/// On entry the virtual table may or may not exist and the RTree triggers must
-/// **not** be installed (the caller drops them first for a rebuild); this
+/// On entry the virtual table may or may not exist, and the RTree triggers
+/// must **not** be installed. For a rebuild, the caller drops them first. This
 /// function (re)creates the virtual table empty, fills it, and runs `after`
 /// inside the same transaction. The caller uses `after` to install the trigger
 /// set and any `gpkg_extensions` row, so the whole operation commits atomically.
 ///
 /// `precomputed` supplies the `(fid, envelope)` entry set directly instead of
 /// deriving it from an `ST_*` scan of the table. Pass `Some` only when the
-/// caller can prove it has an entry for every indexable row: the bulk
+/// caller can prove it has an entry for every indexable row. The bulk
 /// `write_all` path passes the envelopes it computed while encoding, and only
 /// when the table was empty before the write. An incomplete set would build an
-/// index missing rows, which the gate cannot detect because it checks the index
-/// against this very set. `None` scans, which is always sound.
+/// index that is missing rows. The gate cannot detect this, because it checks
+/// the index against the same set. `None` scans the table, which is always
+/// sound.
 ///
 /// `fault` is [`no_fault`] outside tests.
 ///
@@ -633,13 +634,13 @@ where
     Ok(path)
 }
 
-/// [`fill_index`] without the transaction management: every statement runs on
+/// [`fill_index`] without the transaction management. Every statement runs on
 /// `conn`, which the caller must already have inside a transaction, and nothing
 /// is committed here.
 ///
-/// The bulk `write_all` path uses this so the row inserts and the index build
-/// commit together: a crash cannot then leave rows committed against an index
-/// that was never rebuilt.
+/// The bulk `write_all` path uses this so that the row inserts and the index
+/// build commit together. A crash then cannot leave rows committed against an
+/// index that was never rebuilt.
 #[expect(
     clippy::too_many_arguments,
     reason = "internal build entry point threading the whole build context; a parameter struct would be used by these two call sites alone"

@@ -193,9 +193,9 @@ fn encode_node_into(blob: &mut Vec<u8>, depth: u16, cells: &[Cell], node_size: u
 /// Returns the number of nodes at each level, leaves first, for `entries`
 /// entries at `per_node` entries per node.
 ///
-/// The last entry is always 1: the root. Returned so node numbers can be
-/// assigned before anything is built, which is what lets the tree stream out
-/// instead of being assembled in memory and renumbered at the end.
+/// The last entry is always 1: the root. With these sizes, node numbers can be
+/// assigned before anything is built, so the tree can stream out instead of
+/// being assembled in memory and renumbered at the end.
 ///
 /// `per_node` is forced to at least 2. A fanout of 1 never reduces the level
 /// size (`n.div_ceil(1) == n`), so the loop below would not terminate and would
@@ -216,7 +216,7 @@ fn level_sizes(entries: usize, per_node: usize) -> Vec<usize> {
 /// `f64`) and streams it into `sink`.
 ///
 /// `node_size` is the byte length the RTree module expects every node blob to
-/// have; read it from the freshly created index rather than re-deriving it, so
+/// have. Read it from the freshly created index rather than re-deriving it, so
 /// the two cannot disagree.
 ///
 /// `fill_factor` is the fraction of each node's capacity to use, in `(0, 1]`.
