@@ -1,15 +1,15 @@
 # How to read a layer as Arrow record batches
 
-The columnar path builds Arrow arrays straight from the statement's column
-values, without going through a per-row feature object. This guide reads a
-layer as `RecordBatch`es, filters that read, and hands the result to the rest
-of the Arrow ecosystem.
+The columnar path builds Arrow arrays directly from the statement's column
+values, without creating a feature object for each row. This guide shows you
+how to read a layer as `RecordBatch`es, filter the read, and pass the result to
+the rest of the Arrow ecosystem.
 
 ## Enable the feature
 
 The columnar paths are off by default, because they add the `arrow-array` and
-`arrow-schema` dependencies that a caller using only the scalar API does not
-need:
+`arrow-schema` dependencies, which you don't need if you only use the scalar
+API:
 
 ```console
 $ cargo add geopackage --features arrow
@@ -33,14 +33,14 @@ for batch in layer.read_arrow(ArrowReadOptions::default())? {
 ```
 
 Attribute columns follow the type mapping documented on the
-[`arrow` module](https://docs.rs/geopackage/latest/geopackage/arrow/index.html);
-the geometry column is WKB with the `geoarrow.wkb` extension name, and its
-metadata includes the CRS as PROJJSON. Batches arrive in primary-key order
-whether the read is threaded or not.
+[`arrow` module](https://docs.rs/geopackage/latest/geopackage/arrow/index.html).
+The geometry column is WKB with the `geoarrow.wkb` extension name, and its
+metadata includes the CRS as PROJJSON. Batches arrive in primary-key order,
+whether or not the read is threaded.
 
 ## Filter the read
 
-Three variants take filters, and all three are single-threaded:
+Three variants take filters. All three are single-threaded:
 
 - To read the rows intersecting a box, use `read_arrow_in`:
 
@@ -55,14 +55,14 @@ Three variants take filters, and all three are single-threaded:
   # Ok(()) }
   ```
 
-  It uses the RTree index where the layer has one and a full scan where it
-  does not, re-testing every candidate against its true `f64` envelope either
-  way. The candidate set is fixed when the read is opened, so a row inserted
-  while batches are still being pulled is not returned.
+  It uses the RTree index if the layer has one, and a full scan if not. Either
+  way, it re-tests every candidate against its true `f64` envelope. The
+  candidate set is fixed when the read is opened, so a row inserted while you
+  are still pulling batches is not returned.
 
 - To filter on attributes, use `read_arrow_where`, which appends a raw SQL
-  `WHERE` clause. The clause is trusted from you and is not parsed or
-  sanitised here; its placeholders are `?1` to `?N`, bound in slice order:
+  `WHERE` clause. The library trusts the clause and does not parse or sanitise
+  it. Its placeholders are `?1` to `?N`, bound in slice order:
 
   ```rust,no_run
   # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -78,8 +78,8 @@ Three variants take filters, and all three are single-threaded:
   # Ok(()) }
   ```
 
-  This is also the columnar read for a single row: pass `fid = ?1` with the
-  key as its parameter.
+  You can also use it to read a single row in columnar form: pass `fid = ?1`
+  with the key as its parameter.
 
 - To apply both at once, use `read_arrow_in_where`, which intersects the two.
 
@@ -97,26 +97,25 @@ let options = ArrowReadOptions::with_batch_size(16_384)
 # Ok(()) }
 ```
 
-`with_batch_size` starts a fresh set of options from the default; the other
-two chain onto whatever they are given.
+`with_batch_size` creates a new set of options from the defaults. The other
+two chain onto any options value.
 
 - `batch_size` is rows per batch, 65,536 by default.
-- `threads` defaults to `min(4, available parallelism)`. Set it to `1` for a
-  read that touches no thread but yours. Threads are used only when the
-  database is a file, the primary key is dense, and there is more than one
-  batch of rows; the read is single-threaded rather than failing otherwise.
-- `max_batch_bytes` bounds the geometry bytes one batch may contain, and
-  defaults to `min(INT32_MAX, RAM / 4)`. The geometry column's Arrow offsets
-  are 32-bit, so 2 GB is a hard ceiling; a batch that would cross the limit is
-  emitted short. Lower it on a layer of very large geometries, where the
-  default multiplied by the thread count is more memory than you want in
-  flight.
+- `threads` defaults to `min(4, available parallelism)`. Set it to `1` to keep
+  the read on your own thread. The read uses threads only when the database is
+  a file, the primary key is dense, and there is more than one batch of rows.
+  Otherwise it runs single-threaded rather than failing.
+- `max_batch_bytes` limits the geometry bytes in one batch, and defaults to
+  `min(INT32_MAX, RAM / 4)`. The geometry column's Arrow offsets are 32-bit, so
+  2 GB is a hard ceiling. A batch that would cross the limit is emitted with
+  fewer rows. Lower it for a layer of very large geometries, where the default
+  multiplied by the thread count is more memory than you want in use at once.
 
 ## Hand the batches to something else
 
-`ArrowBatches` implements `RecordBatchReader`, so it goes straight into
-anything in the Arrow ecosystem that consumes one, including a Parquet writer
-or the Arrow C Data Interface:
+`ArrowBatches` implements `RecordBatchReader`, so you can pass it to anything
+in the Arrow ecosystem that consumes one, such as a Parquet writer or the Arrow
+C Data Interface:
 
 ```rust,no_run
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -133,9 +132,9 @@ let schema = batches.schema();
 
 ## Copy a layer through Arrow
 
-`Layer::arrow_schema` and `TableSchemaBuilder::from_arrow_schema` are the two
-directions of the same type mapping, so a layer can be copied without its
-schema being restated:
+`Layer::arrow_schema` and `TableSchemaBuilder::from_arrow_schema` apply the
+same type mapping in opposite directions, so you can copy a layer without
+restating its schema:
 
 ```rust,no_run
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -154,16 +153,16 @@ dst.layer("roads")?.write_arrow(batches, 0)?;
 # Ok(()) }
 ```
 
-Note that the geometry column comes back declared as its source type here,
-but a layer built from an Arrow schema alone gets `GEOMETRY`, because the
-GeoArrow WKB encoding does not record a specific type.
+Here the geometry column is declared with its source type. A layer built from
+an Arrow schema alone gets `GEOMETRY`, because the GeoArrow WKB encoding does
+not record a specific type.
 
 ## Then
 
 - Each batch is a separate query, paginated on the primary key, so a
-  concurrent writer can change the table between batches. Open your own
-  transaction on `GeoPackage::connection` if you need one snapshot across the
-  whole layer; see
+  concurrent writer can change the table between batches. If you need one
+  snapshot of the whole layer, open your own transaction on
+  `GeoPackage::connection`. See
   [Transactions, and who commits](../explanation/transactions.md).
 - API reference:
   [`Layer::read_arrow`](https://docs.rs/geopackage/latest/geopackage/struct.Layer.html#method.read_arrow),

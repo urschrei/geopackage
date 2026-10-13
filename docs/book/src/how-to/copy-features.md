@@ -1,10 +1,10 @@
 # How to copy features between files without decoding geometry
 
-Reading a geometry into a `geo-types` value and writing it back parses every
-coordinate for no purpose, and loses the non-linear curve types entirely,
-because `geo-traits` has no representation for an arc. This guide moves rows
-between files by their WKB bytes instead, so a `CIRCULARSTRING` survives the
-copy unchanged and nothing is re-encoded.
+If you read a geometry into a `geo-types` value and write it back, every
+coordinate is parsed for nothing, and the non-linear curve types are lost
+entirely, because `geo-traits` has no representation for an arc. This guide
+copies rows between files as WKB bytes instead. Nothing is re-encoded, and a
+`CIRCULARSTRING` arrives unchanged.
 
 ## From the shell
 
@@ -14,17 +14,17 @@ For a whole file, `gpkg copy` already works this way:
 $ gpkg copy places.gpkg places-copy.gpkg
 ```
 
-It copies feature and attribute layers: their schemas, their spatial reference
-systems, their rows, and a spatial index wherever the source had one. Tiles
-and the extension tables are not copied, and whatever was left behind is named
-at the end.
+It copies feature and attribute layers, with their schemas, spatial reference
+systems and rows, and a spatial index wherever the source had one. It does not
+copy tile pyramids, tiled gridded coverages or the extension tables, and it
+names whatever it left behind at the end.
 
 ## Mirror the source layer
 
-In Rust, start from an open source and a destination you have created. The
-destination column definition has to match the source in three respects that
-are easy to leave at their defaults and then fail on the first row: the
-geometry type, the `z` and `m` flags, and the SRS.
+In Rust, start with the source file open and the destination file created.
+The destination's geometry column must match the source in three respects:
+the geometry type, the `z` and `m` flags, and the SRS. These are easy to leave
+at their defaults, and the copy then fails on the first row.
 
 ```rust,no_run
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,8 +37,8 @@ let dst = GeoPackage::create("subset.gpkg")?;
 let source = src.layer("points")?;
 let geom = source.geometry_column().expect("a feature layer");
 
-// The definition has to exist in the destination before a layer names it.
-// `add_srs` does nothing for one already present.
+// The SRS must exist in the destination before a layer can refer to it.
+// `add_srs` does nothing if it is already there.
 if let Some(srs) = src.srs(geom.srs_id)? {
     dst.add_srs(&srs)?;
 }
@@ -49,7 +49,7 @@ let mut builder = TableSchemaBuilder::new("points").geometry(
         .z(geom.z)
         .m(geom.m),
 );
-// Every column except the geometry and the primary key: those two are
+// Copy every column except the geometry and the primary key. Those two are
 // declared elsewhere, and `Feature::values` skips them.
 for column in &source.schema().columns {
     if column.is_primary_key() || column.name == geom.column_name {
@@ -67,17 +67,16 @@ dst.create_layer(&builder)?;
 # Ok(()) }
 ```
 
-Leaving `z` and `m` at their defaults declares the dimension prohibited, and
-the first geometry with a Z fails against it. If the source names its primary
-key something other than `fid`, pass that name to
-`TableSchemaBuilder::primary_key` as well.
+If you leave `z` and `m` at their defaults, the dimension is declared
+prohibited, and the first geometry with a Z fails. If the source's primary key
+is not named `fid`, also pass its name to `TableSchemaBuilder::primary_key`.
 
 ## Copy the rows by their bytes
 
-`Feature::geometry_bytes` returns the stored GPB blob, header included.
-`gpb::body_offset` reads that header to find where the ISO WKB body starts,
-and `FeatureWriter::insert_wkb` copies the body into the new blob rather than
-re-serialising it. Nothing parses the geometry at any point.
+`Feature::geometry_bytes` returns the stored GPB blob, including its header.
+`gpb::body_offset` reads the header to find where the ISO WKB body starts.
+`FeatureWriter::insert_wkb` copies the body into the new blob without
+re-serialising it. The geometry is never parsed.
 
 ```rust,no_run
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -113,14 +112,14 @@ writer.commit()?;
 `Feature::values` yields borrowed `ValueRef`s, so text and blob cells bind
 into the destination statement without being copied.
 
-If you are updating rows in place rather than inserting them, `update_wkb` is
-the counterpart and keeps the same guarantee.
+To update rows in place instead of inserting them, use `update_wkb`. It gives
+the same guarantee.
 
 ## For a long copy
 
-A single writer means a single transaction, which grows the journal for the
-length of the copy. Commit periodically and open a fresh writer, as `gpkg
-copy` does every 10,000 rows. Add a counter to the loop above and end each
+A single writer is a single transaction, so the journal grows for the whole
+length of the copy. Commit periodically and open a new writer, as `gpkg
+copy` does every 10,000 rows. Add a counter to the loop above, and end each
 batch with:
 
 ```rust,no_run
@@ -140,18 +139,17 @@ if in_batch >= BATCH {
 # Ok(()) }
 ```
 
-A failure part-way then rolls back only the batch it was in, rather than the
-whole layer.
+If the copy then fails part-way, only the current batch is rolled back, not
+the whole layer.
 
-Note that if you have opened your own transaction on
-`GeoPackage::connection`, these commits stage rather than commit, and the
-durable commit is yours to issue. See
+If you have opened your own transaction on `GeoPackage::connection`, these
+commits only stage the rows, and you must issue the durable commit yourself. See
 [Transactions, and who commits](../explanation/transactions.md).
 
 ## Then
 
 - [Geometry storage: GPB, WKB, and curve types](../explanation/geometry.md)
-  covers what the GPB header contains, why the WKB body passes through
+  explains what the GPB header contains, why the WKB body passes through
   untouched, and what `geo-traits` cannot represent.
 - API reference:
   [`Feature::geometry_bytes`](https://docs.rs/geopackage/latest/geopackage/struct.Feature.html#method.geometry_bytes),

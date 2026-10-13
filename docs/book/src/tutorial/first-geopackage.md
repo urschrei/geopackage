@@ -1,13 +1,13 @@
 # Your first GeoPackage
 
-In this tutorial we will start from an empty directory and finish with a
-GeoPackage file containing four cities, which we will query by bounding box
-from Rust and then inspect from the shell with the `gpkg` command-line tool.
+In this tutorial we start from an empty directory and build a GeoPackage file
+containing four cities. We query it by bounding box from Rust, then inspect it
+from the shell with the `gpkg` command-line tool.
 
-Everything we need is a Rust toolchain of 1.95 or newer and an SQLite to link
-against: the system library on Linux (install `libsqlite3-dev` or your
-distribution's equivalent) or macOS, or the vendored copy via the `bundled`
-feature on Windows (see the [introduction](../introduction.md#installation)).
+You need a Rust toolchain, version 1.95 or newer, and an SQLite to link
+against. On Linux (install `libsqlite3-dev` or your distribution's equivalent)
+and macOS that is the system library. On Windows, use the vendored copy via the
+`bundled` feature (see the [introduction](../introduction.md#installation)).
 
 ## Create the project
 
@@ -18,8 +18,8 @@ $ cargo new cities
 $ cd cities
 ```
 
-Now we add the two dependencies. `geopackage` is the library; `geo-types` is
-where our point geometries will come from:
+Now we add two dependencies. `geopackage` is the library, and `geo-types`
+provides our point geometries:
 
 ```console
 $ cargo add geopackage geo-types
@@ -28,16 +28,16 @@ $ cargo add geopackage geo-types
 The output ends with a summary of what was added:
 
 ```console
-      Adding geopackage v0.8.0 to dependencies
+      Adding geopackage v0.10.1 to dependencies
       Adding geo-types v0.7.20 to dependencies
 ```
 
-Notice that `geopackage` builds SQLite from source, so the first compile takes
-a minute or so. Every later one is quick.
+The first build compiles every dependency, so it takes a minute or so. Later
+builds are quick.
 
 ## Create the file
 
-Let's open `src/main.rs` and replace it entirely with this:
+Open `src/main.rs` and replace its contents with this:
 
 ```rust,no_run
 use geopackage::GeoPackage;
@@ -51,9 +51,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`GeoPackage::create` fails rather than overwriting when the file already
-exists, so each run of this program starts from nothing. We delete the
-previous file as we run:
+`GeoPackage::create` fails rather than overwrite an existing file, so we delete
+the previous file before each run. That way every run starts from nothing:
 
 ```console
 $ rm -f cities.gpkg && cargo run
@@ -72,15 +71,14 @@ $ ls
 Cargo.lock  Cargo.toml  cities.gpkg  src  target
 ```
 
-Notice that `cities.gpkg` is a single file, with no `-wal` or `-shm`
-companions beside it. That is the default this library keeps to, so a file can
-be handed to someone else as it stands.
+`cities.gpkg` is a single file, with no `-wal` or `-shm` files beside it. This
+is the library's default, so you can hand the file to someone else as it is.
 
 ## Define a layer
 
-A file with no layers contains nothing. We will declare one: a table called
-`cities` with a text column, an integer column and a point geometry column in
-EPSG:4326.
+The file has no layers yet, so it contains nothing. Next we declare a table
+called `cities` with a text column, an integer column and a point geometry
+column in EPSG:4326.
 
 Add the two new `use` lines and the `create_layer` call, so that `main.rs`
 reads:
@@ -114,15 +112,15 @@ created cities.gpkg
 created layer "cities"
 ```
 
-`create_layer` also built an empty RTree spatial index over the geometry
-column, which we will use in a moment. Why it is built now, empty, rather than
-after the rows arrive, is covered in
-[The spatial index](../explanation/spatial-index.md).
+`create_layer` also built an empty RTree spatial index on the geometry column,
+which we will use shortly. [The spatial index](../explanation/spatial-index.md)
+explains why the index is built now, while empty, rather than after the rows
+arrive.
 
 ## Write four cities
 
-Now we put some data in. `write_all` takes an iterator of features and a batch
-size, where `0` means one transaction for all of them.
+Now we add some data. `write_all` takes an iterator of features and a batch
+size. A batch size of `0` writes all of them in one transaction.
 
 Add the `geo_types::Point` import, extend the `geopackage` import, and append
 the write:
@@ -182,17 +180,17 @@ created layer "cities"
 wrote 4 features
 ```
 
-The values in each `NewFeature` are given in the order the columns were
-declared, and the geometry and the feature id are not among them: they have
-their own places.
+The values in each `NewFeature` follow the order in which the columns were
+declared. The geometry and the feature id are not in that list. Each is handled
+separately.
 
 ## Query by bounding box
 
-Four cities is a small enough number to read back one at a time, so let's ask
-a question instead. `features_in` returns the rows whose geometry intersects a
-box, in the layer's own coordinates.
+Rather than read every city back, let's ask a spatial question. `features_in`
+returns the rows whose geometry intersects a box given in the layer's own
+coordinates.
 
-Add `BoundingBox` to the import list and the loop after the write:
+Add `BoundingBox` to the import list, and add the loop after the write:
 
 ```rust,no_run
 use geo_types::Point;
@@ -253,7 +251,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Run it one more time:
+Run it again:
 
 ```console
 $ rm -f cities.gpkg && cargo run
@@ -264,23 +262,22 @@ features in the box:
   Dublin: 592713
 ```
 
-Notice that only Dublin came back, although we wrote four cities. The box we
-passed spans one degree of longitude west of Greenwich and one degree of
-latitude north of 53, and Dublin is the only city we wrote that falls inside
-it. The query was served by the spatial index that `create_layer` built for
-us; a layer without one returns exactly the same rows from a full scan.
+Only Dublin came back, although we wrote four cities. The box spans one degree
+of longitude west of Greenwich and one degree of latitude north of 53, and
+Dublin is the only one of our cities inside it. The spatial index that
+`create_layer` built answered the query. A layer without an index returns
+exactly the same rows from a full scan.
 
 ## Read the geometries back
 
-So far we have read the name and population back, but not the point itself.
-The geometry comes back too. A feature hands it over lazily:
-`feature.geometry()` parses the stored blob into a wrapper over its bytes, and
-`to_geo` on that wrapper converts to an owned
+So far we have read back the name and population, but not the point itself. A
+feature returns its geometry lazily. `feature.geometry()` parses the stored
+blob into a wrapper over its bytes, and `to_geo` on that wrapper converts it to
+an owned
 [`geo_types::Geometry`](https://docs.rs/geo-types/latest/geo_types/geometry/enum.Geometry.html).
-The conversion is the mirror of the write side, which accepted our
-`geo_types::Point` values directly. `to_geo` returns an `Option` because a
-GeoPackage can hold curve types that `geo-types` cannot represent; our points
-are not among them.
+This mirrors the write side, which accepted our `geo_types::Point` values
+directly. `to_geo` returns an `Option` because a GeoPackage can hold curve
+types that `geo-types` cannot represent. Our points are not among them.
 
 Extend the loop body to fetch the location:
 
@@ -358,16 +355,15 @@ features in the box:
   Dublin: 592713 at -6.26, 53.35
 ```
 
-The point comes back exactly as we wrote it. Converting is a choice, not a
-toll: an algorithm written against the `geo-traits` interfaces can read
-coordinates straight out of the wrapper without an owned geometry ever
-existing, which the [geometry chapter](../explanation/geometry.md) covers.
+The point comes back exactly as we wrote it. You don't have to convert,
+though. An algorithm written against the `geo-traits` interfaces can read
+coordinates directly from the wrapper, without ever creating an owned geometry.
+The [geometry chapter](../explanation/geometry.md) covers this.
 
 ## Look at the file from outside
 
-Everything so far has been our own program describing its own work. Let's
-check the file with a tool that knows nothing about it. Install the
-command-line companion:
+So far only our own program has reported on the file. Let's check it with a
+separate tool. Install the command-line tool:
 
 ```console
 $ cargo install geopackage-cli
@@ -395,13 +391,12 @@ extensions:
   gpkg_rtree_index                   cities.geom            implemented [write-only]
 ```
 
-Notice that `rows: 4` matches what our program reported, and that `index:
+`rows: 4` matches what our program reported, and `index:
 current` is the spatial index we never named: `create_layer` built it, and it
-uses the GeoPackage 1.4 trigger set. Notice too the `fid` and
-`geom` columns, which we never declared. `fid` is the default primary key and
-`geom` the default geometry column name, both of which
-[`TableSchemaBuilder`](https://docs.rs/geopackage/latest/geopackage/struct.TableSchemaBuilder.html)
-can change.
+uses the GeoPackage 1.4 trigger set. We never declared the `fid` and `geom`
+columns either. `fid` is the default primary key and `geom` the default
+geometry column name. You can change both with
+[`TableSchemaBuilder`](https://docs.rs/geopackage/latest/geopackage/struct.TableSchemaBuilder.html).
 
 Let's also check that the file is well formed:
 
@@ -415,8 +410,9 @@ cities.gpkg
 
 We wrote a program that creates a GeoPackage, declares an indexed point layer,
 writes features into it, answers a spatial query and reads the geometries back
-as `geo-types` values, and we confirmed the result with a separate tool. `cities.gpkg` is an ordinary GeoPackage: QGIS,
-GDAL and anything else that reads the format will open it.
+as `geo-types` values. We then confirmed the result with a separate tool.
+`cities.gpkg` is an ordinary GeoPackage, so QGIS, GDAL and anything else that
+reads the format will open it.
 
 From here:
 
@@ -424,6 +420,6 @@ From here:
   indexing an existing layer, repairing a file, copying features between
   files, reading a layer as Arrow batches, and validating a file.
 - The [explanation chapters](../explanation/extent.md) cover why the extent, the
-  transactions, the spatial index and the geometry encoding work the way they
-  do.
+  transactions, the spatial index, the geometry encoding and tiled gridded
+  coverages work the way they do.
 - The [reference page](../reference.md) points at the full API documentation.
