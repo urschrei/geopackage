@@ -56,8 +56,8 @@ use crate::{Error, GeometryColumn, Layer, Result, table_exists};
 /// The health of a layer's RTree spatial index, from
 /// [`Layer::spatial_index_status`].
 ///
-/// Derived from two signals: whether the `rtree_<table>_<column>` virtual table
-/// exists, and which generation of trigger set (if any) maintains it
+/// The status depends on whether the `rtree_<table>_<column>` virtual table
+/// exists, and on which generation of trigger set, if any, maintains it
 /// ([`TriggerGeneration`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -68,19 +68,19 @@ pub enum SpatialIndexStatus {
     /// A complete, current index: the virtual table exists and has the
     /// GeoPackage 1.4 trigger set. [`Layer::features_in`] uses it.
     Current,
-    /// A present index maintained by a legacy (pre-1.4) or mixed trigger set.
-    /// Usable, but the pre-1.4 `update1` trigger corrupts the index under
-    /// `UPSERT`; [`Layer::repair_spatial_index`] upgrades it to the 1.4 set.
+    /// An index maintained by a legacy (pre-1.4) or mixed trigger set. It is
+    /// usable, but the pre-1.4 `update1` trigger corrupts the index under
+    /// `UPSERT`. [`Layer::repair_spatial_index`] upgrades it to the 1.4 set.
     Legacy,
     /// A desynchronised index: the virtual table exists but its triggers are
     /// missing (or triggers exist with no table). This crate's own writes
     /// cannot produce it. A bulk [`Layer::write_all`] drops the triggers,
     /// inserts the rows, rebuilds the index and reinstalls the triggers in one
     /// transaction, so an interrupted call rolls back to the state before it.
-    /// The state is reachable from a file another tool wrote, or from SQL run
+    /// The state can come from a file another tool wrote, or from SQL run
     /// directly against the connection.
     ///
-    /// The index is **not** silently trusted: [`Layer::has_spatial_index`]
+    /// The index is **not** silently trusted. [`Layer::has_spatial_index`]
     /// reports `false` for it, so [`Layer::features_in`] falls back to a correct
     /// full scan. [`Layer::repair_spatial_index`] rebuilds it and reinstalls the
     /// 1.4 triggers.
@@ -108,12 +108,12 @@ impl std::fmt::Display for SpatialIndexStatus {
 /// The result of [`Layer::audit_spatial_index`]: how the index's contents
 /// compare with the geometries they are supposed to describe.
 ///
-/// [`SpatialIndexStatus`] answers a structural question, whether the virtual
-/// table and the right triggers are present, and it is cheap. This answers the
-/// question that structure cannot: whether the entries actually agree with the
-/// data. An index can be [`SpatialIndexStatus::Current`] and still be wrong, in
-/// a file where rows were written while the triggers were absent, or that
-/// another tool populated incompletely.
+/// [`SpatialIndexStatus`] is a cheap check of structure: whether the virtual
+/// table and the right triggers are present. An audit checks whether the
+/// entries actually agree with the data, which structure can't tell you. An
+/// index can be [`SpatialIndexStatus::Current`] and still be wrong, in a file
+/// where rows were written while the triggers were absent, or that another
+/// tool populated incompletely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SpatialIndexAudit {
@@ -122,14 +122,14 @@ pub struct SpatialIndexAudit {
     pub indexable: usize,
     /// Entries in the RTree.
     pub entries: usize,
-    /// Indexable rows with no entry. These are lost by a bounding-box query.
+    /// Indexable rows with no entry. A bounding-box query misses these.
     pub missing: usize,
     /// Entries whose row is gone, or whose geometry is now NULL or empty.
     /// These make a query return a feature id it then cannot read.
     pub extra: usize,
-    /// Entries present but not covering their geometry's true envelope. Also
-    /// lossy, and not explained by the RTree's `f32` storage, which rounds
-    /// outward and so can only ever make an entry too large.
+    /// Entries that do not cover their geometry's true envelope. A query can
+    /// miss these rows too. The RTree's `f32` storage does not explain them,
+    /// because it rounds outward and so can only make an entry too large.
     pub not_covering: usize,
 }
 
@@ -137,8 +137,8 @@ impl SpatialIndexAudit {
     /// Returns `true` if the index describes exactly the rows it should,
     /// covering each.
     ///
-    /// False means a bounding-box query can return the wrong answer, and that
-    /// [`Layer::rebuild_spatial_index`] is the fix.
+    /// If this is false, a bounding-box query can return the wrong answer.
+    /// [`Layer::rebuild_spatial_index`] fixes the index.
     #[must_use]
     pub fn is_consistent(&self) -> bool {
         self.missing == 0 && self.extra == 0 && self.not_covering == 0
@@ -149,10 +149,9 @@ impl Layer<'_> {
     /// Classifies this layer's RTree spatial index (see
     /// [`SpatialIndexStatus`]).
     ///
-    /// A layer with no geometry column is [`SpatialIndexStatus::Absent`]. This
-    /// is the detector for the interrupted-bulk-build case: a
-    /// [`SpatialIndexStatus::Stale`] result directs the caller to
-    /// [`Self::repair_spatial_index`].
+    /// A layer with no geometry column is [`SpatialIndexStatus::Absent`]. Use
+    /// this to detect an interrupted bulk build. If the result is
+    /// [`SpatialIndexStatus::Stale`], call [`Self::repair_spatial_index`].
     pub fn spatial_index_status(&self) -> Result<SpatialIndexStatus> {
         let Some(geom) = self.geometry_column() else {
             return Ok(SpatialIndexStatus::Absent);
@@ -185,10 +184,10 @@ impl Layer<'_> {
     /// (creating that table on first use). The whole operation is one
     /// transaction.
     ///
-    /// Population takes the per-row triggered path (a single
-    /// `INSERT INTO rtree SELECT` driven by the registered `ST_*` functions) for
-    /// tables below [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD)
-    /// rows, and the bulk build above it. Use
+    /// A table below [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD)
+    /// rows is populated through the per-row triggered path: a single
+    /// `INSERT INTO rtree SELECT` driven by the registered `ST_*` functions.
+    /// Above it, the bulk build is used. Use
     /// [`Self::create_spatial_index_with`] to override the threshold.
     ///
     /// # Errors
@@ -205,10 +204,10 @@ impl Layer<'_> {
 
     /// Builds the RTree spatial index with an explicit choice of build path.
     ///
-    /// Identical to [`Self::create_spatial_index`] but with a caller-supplied
-    /// [`BulkIndexOptions`] controlling the bulk-vs-triggered threshold.
-    /// [`BulkIndexOptions::always_bulk`] and [`BulkIndexOptions::never_bulk`]
-    /// force a path.
+    /// The same as [`Self::create_spatial_index`], but you pass a
+    /// [`BulkIndexOptions`] that sets the threshold between the bulk and
+    /// triggered builds. [`BulkIndexOptions::always_bulk`] and
+    /// [`BulkIndexOptions::never_bulk`] force one path or the other.
     ///
     /// # Errors
     ///
@@ -278,9 +277,9 @@ impl Layer<'_> {
     /// `gpkg_extensions` registration row. The `gpkg_extensions` table itself is
     /// left in place.
     ///
-    /// Idempotent: a layer with no index is left unchanged and returns `Ok`.
-    /// Removal covers any trigger generation, so it also cleans up a legacy or
-    /// mixed set.
+    /// This is idempotent: a layer with no index is left unchanged and the
+    /// call returns `Ok`. It removes triggers of any generation, so it also
+    /// cleans up a legacy or mixed set.
     ///
     /// # Errors
     ///
@@ -307,29 +306,31 @@ impl Layer<'_> {
     /// Repairs a legacy, inconsistent, or desynchronised RTree spatial index:
     /// installs the GeoPackage 1.4 trigger set and rebuilds the index content.
     ///
-    /// The pre-1.4 `update1` trigger corrupts an index under `UPSERT`; 1.4
-    /// renamed the fixed triggers so the repaired state is detectable by name.
-    /// This is **never** invoked automatically: a rebuild is expensive, and an
-    /// index this crate will not trust is one it works around rather than one
-    /// that gives a wrong answer. Contrast [`Layer::extent`], which does record
-    /// what it measures; that method's documentation gives the reasons.
+    /// The pre-1.4 `update1` trigger corrupts an index under `UPSERT`. Version
+    /// 1.4 renamed the fixed triggers, so the repaired state can be detected by
+    /// name. This method is **never** called automatically. A rebuild is
+    /// expensive, and this crate works around an index it does not trust
+    /// rather than letting it give a wrong answer. [`Layer::extent`], by
+    /// contrast, does record what it measures. Its documentation gives the
+    /// reasons.
     ///
     /// Repairs every state except a healthy or an absent index (see
     /// [`SpatialIndexStatus`]):
     ///
     /// - [`SpatialIndexStatus::Current`]: already the 1.4 set with its virtual
-    ///   table, which is a no-op.
-    /// - [`SpatialIndexStatus::Legacy`]: a pre-1.4 or mixed trigger set; drop
-    ///   every RTree trigger, install the 1.4 set, rebuild the content.
+    ///   table. This is a no-op.
+    /// - [`SpatialIndexStatus::Legacy`]: a pre-1.4 or mixed trigger set. Drops
+    ///   every RTree trigger, installs the 1.4 set and rebuilds the content.
     /// - [`SpatialIndexStatus::Stale`]: a virtual table with missing triggers
     ///   (the state an interrupted bulk build or crash mid-[`Self::write_all`]
-    ///   leaves), or orphaned triggers with no table; same rebuild, so the
-    ///   index is made consistent and 1.4-current again.
-    /// - [`SpatialIndexStatus::Absent`]: nothing to repair:
-    ///   [`Error::NoSpatialIndex`]; use [`Self::create_spatial_index`].
+    ///   leaves), or orphaned triggers with no table. Runs the same rebuild,
+    ///   which makes the index consistent and 1.4-current again.
+    /// - [`SpatialIndexStatus::Absent`]: there is nothing to repair, so this
+    ///   returns [`Error::NoSpatialIndex`]. Use [`Self::create_spatial_index`].
     ///
-    /// The `gpkg_extensions` registration row is left as-is: a repair operates
-    /// on an index that was already created (and so already registered).
+    /// The `gpkg_extensions` registration row is left as it is, because a
+    /// repair works on an index that was already created, and so already
+    /// registered.
     ///
     /// # Errors
     ///
@@ -367,15 +368,15 @@ impl Layer<'_> {
     /// it is in: drops every RTree trigger, installs the 1.4 set, empties the
     /// virtual table and repopulates it, in one transaction.
     ///
-    /// [`Self::repair_spatial_index`] is the cheap operation and answers a
-    /// structural question, so it returns without doing anything when the
-    /// virtual table and the 1.4 triggers are both present. That says nothing
-    /// about the entries. This is the operation for an index whose *contents*
-    /// are in doubt, which [`Self::audit_spatial_index`] is how to find out.
+    /// [`Self::repair_spatial_index`] is the cheap operation. It only checks
+    /// structure, so it does nothing when the virtual table and the 1.4
+    /// triggers are both present, which says nothing about the entries. Use
+    /// this method when an index's *contents* are in doubt.
+    /// [`Self::audit_spatial_index`] checks them.
     ///
-    /// Like the repair, it is never invoked automatically, and for the same
-    /// reason: this reads every geometry in the layer and rewrites the tree,
-    /// which is too expensive to run unrequested.
+    /// Like the repair, it is never called automatically, for the same reason.
+    /// It reads every geometry in the layer and rewrites the tree, which is too
+    /// expensive to do unless you ask.
     ///
     /// # Errors
     ///
@@ -428,15 +429,16 @@ impl Layer<'_> {
 
     /// Compares the RTree's contents against the geometries they describe.
     ///
-    /// [`Self::spatial_index_status`] asks whether the index is *there*; this
-    /// asks whether it is *right*, which structure cannot answer. A file may
-    /// arrive with a structurally perfect index whose entries were never
-    /// populated, populated partially, or left behind by rows since deleted.
+    /// [`Self::spatial_index_status`] checks whether the index is *there*.
+    /// This method checks whether it is *right*, which structure can't tell
+    /// you. A file may arrive with a structurally perfect index whose entries
+    /// were never populated, were populated partially, or were left behind by
+    /// rows since deleted.
     ///
-    /// This reads every geometry in the layer and is priced accordingly: it is
-    /// a deliberate audit, not a check to run before each query. Nothing is
-    /// written, and [`Self::rebuild_spatial_index`] is the fix for a result
-    /// that is not [`SpatialIndexAudit::is_consistent`].
+    /// It reads every geometry in the layer, so it is expensive. Run it as a
+    /// deliberate audit, not before each query. It writes nothing. If the
+    /// result is not [`SpatialIndexAudit::is_consistent`], fix the index with
+    /// [`Self::rebuild_spatial_index`].
     ///
     /// # Errors
     ///
@@ -530,10 +532,11 @@ impl Layer<'_> {
 /// populates it from the table's existing rows, and registers the extension.
 ///
 /// Every statement runs on `conn`, which the caller must already have inside a
-/// transaction, and nothing is committed here. Two callers need that: the
-/// triggered branch of [`Layer::create_spatial_index`], which opens its own, and
-/// [`crate::GeoPackage::create_layer`], which builds the layer and its index in
-/// one transaction so a failure cannot leave a table behind without one.
+/// transaction, and nothing is committed here. Two callers need this. The
+/// triggered branch of [`Layer::create_spatial_index`] opens its own
+/// transaction. [`crate::GeoPackage::create_layer`] builds the layer and its
+/// index in one transaction, so a failure cannot leave a table behind without
+/// an index.
 ///
 /// The population statement is a no-op on the fresh, empty table `create_layer`
 /// hands it.
@@ -566,10 +569,11 @@ fn register_extension_row(conn: &Connection, table: &str, column: &str) -> Resul
 /// name.
 ///
 /// Triggers fire on the user table, so their `sqlite_master.tbl_name` is
-/// `table`; the ones belonging to this index share the `rtree_<table>_<column>_`
-/// name prefix (the same prefix rule [`triggers::classify_triggers`] uses).
+/// `table`. The ones belonging to this index share the
+/// `rtree_<table>_<column>_` name prefix, the same prefix rule
+/// [`triggers::classify_triggers`] uses.
 ///
-/// Shared with the bulk `write_all` path ([`crate::writer`]), which drops the
+/// The bulk `write_all` path ([`crate::writer`]) also uses this. It drops the
 /// triggers before a bulk insert so the index is not maintained per-row, then
 /// reinstalls them after the bulk rebuild.
 pub(crate) fn drop_all_rtree_triggers(conn: &Connection, table: &str, column: &str) -> Result<()> {
@@ -753,11 +757,11 @@ mod tests {
         );
     }
 
-    /// Dropping the triggers while leaving the virtual table is exactly the file
-    /// state an interrupted bulk build (or a crash mid-`write_all`) leaves: the
-    /// rows are committed, the rtree table is present but no longer maintained.
-    /// The status detector must flag it `Stale`, the read gate must reject it,
-    /// and `repair_spatial_index` must rebuild it to `Current`.
+    /// Dropping the triggers while leaving the virtual table produces the file
+    /// state an interrupted bulk build (or a crash mid-`write_all`) leaves. The
+    /// rows are committed, and the rtree table is present but no longer
+    /// maintained. The status detector must flag it `Stale`, the read gate must
+    /// reject it, and `repair_spatial_index` must rebuild it to `Current`.
     #[test]
     fn stale_index_is_detected_and_repaired() {
         let (_dir, gpkg) = populated(&[(1, 10.0, 20.0), (2, -5.0, 7.0), (3, 100.0, 100.0)]);

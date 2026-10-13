@@ -16,8 +16,8 @@ pub struct GeometryColumn {
     pub table_name: String,
     /// Name of the geometry column within that table.
     pub column_name: String,
-    /// Declared geometry type. Extension (non-linear) type names parse and are
-    /// accepted on read; see [`GeometryType`].
+    /// Declared geometry type. Extension (non-linear) type names are parsed and
+    /// accepted on read. See [`GeometryType`].
     pub geometry_type: GeometryType,
     /// Spatial reference system identifier of the geometries.
     pub srs_id: i32,
@@ -76,7 +76,7 @@ impl GeoPackage {
     /// Looks up the `gpkg_geometry_columns` row for `table_name`, if any.
     ///
     /// `gpkg_geometry_columns` is created lazily with the first feature table
-    /// and is absent from attribute-only files; a missing table is reported as
+    /// and is absent from attribute-only files. A missing table returns
     /// `Ok(None)`, not an error.
     pub fn geometry_column(&self, table_name: &str) -> Result<Option<GeometryColumn>> {
         if !table_exists(self.connection(), "gpkg_geometry_columns")? {
@@ -106,10 +106,10 @@ impl GeoPackage {
     /// Like [`GeoPackage::geometry_column`] but matching the table name
     /// case-insensitively.
     ///
-    /// The read path uses this so a feature layer keeps its geometry column
-    /// even when the `gpkg_geometry_columns` row spells the table name in a
-    /// different case than `gpkg_contents` or the physical table (one of the
-    /// conditions [`GeoPackage::open_lenient`] accepts and warns about).
+    /// The read path uses this so that a feature layer keeps its geometry
+    /// column even when the `gpkg_geometry_columns` row spells the table name
+    /// in a different case from `gpkg_contents` or the physical table.
+    /// [`GeoPackage::open_lenient`] accepts this condition and warns about it.
     pub(crate) fn geometry_column_ci(&self, table_name: &str) -> Result<Option<GeometryColumn>> {
         if !table_exists(self.connection(), "gpkg_geometry_columns")? {
             return Ok(None);
@@ -163,7 +163,7 @@ impl GeoPackage {
             .collect()
     }
 
-    /// Introspects a user table via `PRAGMA table_info`, attaching its
+    /// Reads a user table's schema from `PRAGMA table_info`, attaching its
     /// `gpkg_geometry_columns` row if one exists.
     ///
     /// # Errors
@@ -221,7 +221,7 @@ pub struct Column {
     pub name: String,
     /// The declared type exactly as stored in the schema (e.g. `"TEXT(64)"`,
     /// `"VARCHAR(20)"`, or the empty string for a column declared without a
-    /// type). Preserved verbatim even when it is outside the spec vocabulary.
+    /// type). It is kept verbatim even when it is outside the spec vocabulary.
     pub declared_type: String,
     /// The declared type parsed into the spec vocabulary, or `None` when
     /// [`Column::declared_type`] is outside it (lenient readers keep the raw
@@ -233,8 +233,8 @@ pub struct Column {
     pub default_value: Option<String>,
     /// Position of the column within the primary key: `0` if it is not part of
     /// the key, otherwise its 1-based position. SQLite reports a composite key
-    /// as `1, 2, …`; a conformant GeoPackage feature or attribute table has a
-    /// single `INTEGER` primary key column reported as `1`.
+    /// as `1, 2, …`. A conformant GeoPackage feature or attribute table has a
+    /// single `INTEGER` primary key column, reported as `1`.
     pub primary_key: u32,
     /// The column's `gpkg_data_columns` row, for a file with the
     /// `gpkg_schema` extension: a human-readable name and title, a
@@ -275,9 +275,9 @@ impl TableSchema {
     /// Returns the primary-key columns, ordered by their position within the
     /// key.
     ///
-    /// Empty when the table has no primary key; more than one element for a
-    /// composite key (which is not valid for a GeoPackage feature or attribute
-    /// table, but is surfaced here rather than rejected).
+    /// Empty when the table has no primary key. A composite key returns more
+    /// than one column. That is not valid for a GeoPackage feature or attribute
+    /// table, but this method returns it rather than rejecting it.
     pub fn primary_key_columns(&self) -> Vec<&Column> {
         let mut pk: Vec<&Column> = self.columns.iter().filter(|c| c.is_primary_key()).collect();
         pk.sort_by_key(|c| c.primary_key);
@@ -285,7 +285,7 @@ impl TableSchema {
     }
 
     /// Returns the single primary-key column, or `None` when the table has no
-    /// primary key or a composite one. This is the conventional `fid` column of a
+    /// primary key or a composite one. This is usually the `fid` column of a
     /// GeoPackage feature or attribute table, but the name is read from the
     /// schema and never assumed.
     pub fn primary_key(&self) -> Option<&Column> {
