@@ -153,7 +153,7 @@ impl TileAncillary {
 
     /// Sets the statistics of the samples in the tile.
     ///
-    /// This workspace does not decode samples, so the caller must supply the
+    /// This workspace does not decode samples, so you must supply the
     /// statistics.
     #[must_use]
     pub fn with_statistics(mut self, min: f64, max: f64, mean: f64, std_dev: f64) -> Self {
@@ -219,7 +219,7 @@ impl GeoPackage {
 /// rows as a tile pyramid), the ancillary metadata, the stored payloads, and a
 /// check of a payload against the coverage. [`Coverage::writer`] writes tiles.
 pub struct Coverage<'a> {
-    /// Private: the tile code is shared, but the handle is separate. Nothing
+    /// Private, because only the tile code is shared, not the handle. Nothing
     /// here exposes the write path of [`TilePyramid`].
     pyramid: TilePyramid<'a>,
     ancillary: CoverageAncillary,
@@ -299,9 +299,9 @@ impl<'a> Coverage<'a> {
     ///
     /// The spec gives the calculation as pseudo-code: multiply the stored value
     /// by the `scale` of the tile and add the `offset` of the tile, then do the
-    /// same with the pair of the coverage. The caller decodes the sample,
-    /// because this workspace does not read pixels. The arithmetic is part of
-    /// the extension, so this crate supplies it.
+    /// same with the pair of the coverage. You decode the sample, because this
+    /// workspace does not read pixels. The arithmetic is part of the extension,
+    /// so this crate supplies it.
     ///
     /// Do not use this function for `data_null`, which the requirement
     /// excludes. Use [`Coverage::is_null`].
@@ -686,10 +686,10 @@ impl GeoPackage {
     ///
     /// # Per-tile statistics
     ///
-    /// The file contains per-tile statistics only if the caller supplies them.
-    /// `min`, `max`, `mean` and `std_dev` come from the samples, this workspace
-    /// does not decode samples, and the table definition makes all four
-    /// optional. See [`CoverageWriter::put_with_ancillary`].
+    /// The file contains per-tile statistics only if you supply them. `min`,
+    /// `max`, `mean` and `std_dev` come from the samples, which this workspace
+    /// does not decode, and the table definition makes all four optional. See
+    /// [`CoverageWriter::put_with_ancillary`].
     ///
     /// # Errors
     ///
@@ -850,7 +850,7 @@ impl<'a> Coverage<'a> {
 /// A transaction over one coverage, with per-tile `put` and `delete`
 /// operations that maintain the ancillary rows of Requirement 10.
 ///
-/// Obtained from [`Coverage::writer`]. The writer writes a tile and its
+/// You get one from [`Coverage::writer`]. The writer writes a tile and its
 /// ancillary row together, and deletes them together. The normative table
 /// definition has no `ON DELETE CASCADE`, so the database does not delete the
 /// row. A tile without its row loses the scale and offset that give its samples
@@ -926,24 +926,24 @@ impl<'conn> CoverageWriter<'conn> {
         self.put_with_ancillary(coord, data, &TileAncillary::defaults())
     }
 
-    /// Writes one tile with the ancillary row the caller supplies.
+    /// Writes one tile with the ancillary row you supply.
     ///
-    /// A caller that decoded the samples supplies the statistics here. The
-    /// table definition makes the four statistics optional, and this workspace
-    /// does not decode samples, so it cannot calculate them.
+    /// If you decoded the samples, supply the statistics here. The table
+    /// definition makes the four statistics optional, and this workspace does
+    /// not decode samples, so it cannot calculate them.
     ///
     /// # Checks
     ///
     /// The payload is checked against the encoding profile (Requirements 15 to
     /// 20, or 13 for PNG), the `datatype` of the coverage (Requirements 13 and
     /// 14), and the pixel size of its zoom level. The writer rejects Deflate,
-    /// which a read accepts: Requirement 15 specifies baseline TIFF, and
-    /// Deflate is not baseline.
+    /// although a read accepts it, because Requirement 15 specifies baseline
+    /// TIFF and Deflate is not baseline.
     ///
     /// **This function does not check Requirement 21** ("all pixels … set with
     /// a valid component value … NaN and Inf SHALL NOT be used"). That
-    /// requirement is about samples, and this crate does not decode samples. A
-    /// caller that writes a payload from another source is responsible for it.
+    /// requirement is about samples, and this crate does not decode samples. If
+    /// you write a payload from another source, you are responsible for it.
     ///
     /// # Errors
     ///
