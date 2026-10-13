@@ -35,9 +35,9 @@ impl Date {
     /// Creates a calendar-validated date. Years are limited to 0–9999 by the
     /// four-digit text form.
     ///
-    /// Calendar rules (leap years, month lengths, the century rules) are
-    /// delegated to jiff; the year bound comes from the spec's text form, not
-    /// from the calendar.
+    /// jiff applies the calendar rules (leap years, month lengths, the century
+    /// rules). The year bound comes from the spec's text form, not from the
+    /// calendar.
     ///
     /// # Errors
     ///
@@ -79,8 +79,8 @@ impl Date {
             .ok_or(DateTimeError::OutOfRange("day"))
     }
 
-    /// Converts to a jiff date. Infallible: a [`Date`] is validated on
-    /// construction.
+    /// Converts to a jiff date. This cannot fail, because a [`Date`] is
+    /// validated on construction.
     fn to_jiff(self) -> JiffDate {
         Self::to_jiff_checked(self.year, self.month, self.day).unwrap_or(JiffDate::ZERO)
     }
@@ -108,7 +108,7 @@ impl Date {
         i32::try_from(hours / 24).unwrap_or(i32::MAX)
     }
 
-    /// Returns the date `days` days from the Unix epoch; the inverse of
+    /// Returns the date `days` days from the Unix epoch, the inverse of
     /// [`Self::days_since_epoch`].
     ///
     /// # Errors
@@ -216,7 +216,7 @@ impl DateTime {
     /// negative before it.
     ///
     /// This is the value an Arrow `Timestamp(Microsecond, "UTC")` column
-    /// stores. A value with a UTC offset is normalised to UTC; text with no
+    /// stores. A value with a UTC offset is normalised to UTC. A value with no
     /// zone designator, which only lenient parsing produces, is read as UTC,
     /// as the spec defines for `DATETIME` columns.
     ///
@@ -262,7 +262,7 @@ impl DateTime {
             .ok_or(DateTimeError::OutOfRange("datetime"))
     }
 
-    /// Returns the UTC instant `micros` microseconds from the Unix epoch; the
+    /// Returns the UTC instant `micros` microseconds from the Unix epoch, the
     /// inverse of [`Self::micros_since_epoch`].
     ///
     /// # Errors
@@ -451,9 +451,9 @@ impl DateTime {
 }
 
 impl fmt::Display for DateTime {
-    /// Formats in the strict spec shape: millisecond precision, and `Z` for
-    /// UTC/unzoned values. Sub-millisecond digits are printed only when
-    /// present; non-zero offsets print as `±HH:MM`.
+    /// Formats in the strict spec shape, with millisecond precision and `Z` for
+    /// UTC or unzoned values. Sub-millisecond digits are printed only when
+    /// present. Non-zero offsets print as `±HH:MM`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -641,8 +641,8 @@ mod epoch_tests {
         assert_eq!(utc, offset);
     }
 
-    /// Both conversions round-trip, which is what the columnar read and write
-    /// paths rely on when a layer is copied through Arrow.
+    /// Both conversions round-trip. The columnar read and write paths rely on
+    /// this when a layer is copied through Arrow.
     #[test]
     fn the_conversions_round_trip() {
         for (y, m, d) in [(1970, 1, 1), (1969, 12, 31), (2026, 7, 25), (1900, 1, 1)] {
@@ -668,8 +668,8 @@ mod epoch_tests {
         }
     }
 
-    /// The calendar rules now come from jiff, so the cases a hand-rolled
-    /// implementation gets wrong are worth keeping pointed at it.
+    /// The calendar rules now come from jiff. This keeps the cases a
+    /// hand-rolled implementation gets wrong pointed at it.
     #[test]
     fn the_calendar_is_still_validated() {
         Date::new(2026, 2, 30).unwrap_err();

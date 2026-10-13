@@ -147,10 +147,11 @@ pub enum TriggerGeneration {
     /// The 1.4 set (`update5`/`update6`/`update7` present, no legacy triggers).
     V1_4,
     /// A pre-1.4 set (`update1` and/or `update3` present, no 1.4 triggers).
-    /// Note: the buggy (≤1.2.0) and fixed (1.2.1–1.3.1) `update3` bodies
-    /// share a name; distinguishing them requires inspecting the SQL body.
+    /// The buggy (≤1.2.0) and fixed (1.2.1–1.3.1) `update3` bodies share a
+    /// name, so you must inspect the SQL body to tell them apart.
     PreV1_4,
-    /// Both generations present: inconsistent, and should be repaired.
+    /// Both generations present. The set is inconsistent and should be
+    /// repaired.
     Mixed,
     /// No rtree triggers found.
     None,

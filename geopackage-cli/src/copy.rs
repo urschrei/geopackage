@@ -31,8 +31,9 @@ use geopackage::{
 
 use crate::error::Result;
 
-/// Rows per write transaction. Large enough that the per-transaction cost
-/// disappears, small enough that a failure does not roll back the whole layer.
+/// Rows per write transaction. This is large enough to make the
+/// per-transaction cost negligible, and small enough that a failure does not
+/// roll back the whole layer.
 const BATCH: usize = 10_000;
 
 pub fn run(src_path: &Path, dst_path: &Path) -> Result<ExitCode> {
@@ -177,8 +178,8 @@ fn copy_layer(src: &GeoPackage, dst: &GeoPackage, layer: &Layer<'_>) -> Result<(
     Ok(())
 }
 
-/// Names anything in the source this command did not copy, so a copy is
-/// never quietly mistaken for the whole file.
+/// Names anything in the source that this command did not copy, so that a
+/// partial copy is never mistaken for the whole file.
 fn report_what_was_left(src: &GeoPackage, dst: &GeoPackage, copied: &[Layer<'_>]) -> Result<()> {
     let mut left = Vec::new();
 

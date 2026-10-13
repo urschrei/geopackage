@@ -24,9 +24,9 @@ use std::borrow::Cow;
 ///
 /// `definition` is WKT1 as used by the `gpkg_spatial_ref_sys.definition`
 /// column. Codes with no WKT1 form, such as the geographic 3D CRS EPSG:4979,
-/// are absent from this table by nature rather than by omission. The
-/// container crate registers those through the `gpkg_crs_wkt_1_1` extension
-/// column instead; see `GeoPackage::add_epsg_srs`.
+/// cannot appear in this table. The container crate registers those through
+/// the `gpkg_crs_wkt_1_1` extension column instead. See
+/// `GeoPackage::add_epsg_srs`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SrsDefinition {
     /// Human-readable SRS name.
@@ -41,8 +41,8 @@ pub struct SrsDefinition {
 
 /// Looks up the vendored definition for an EPSG code.
 ///
-/// Returns `None` for codes outside the vendored subset; callers are then
-/// expected to supply their own [`SrsDefinition`].
+/// Returns `None` for codes outside the vendored subset. In that case, supply
+/// your own [`SrsDefinition`].
 pub fn epsg_definition(code: i32) -> Option<SrsDefinition> {
     if let Some(&(code, name, wkt)) = epsg_wkt::EPSG_WKT1
         .binary_search_by_key(&code, |r| r.0)

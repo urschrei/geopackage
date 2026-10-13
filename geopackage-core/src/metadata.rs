@@ -43,10 +43,10 @@ pub struct MetadataRecord {
 
 /// A row of `gpkg_metadata_reference`: what a record is attached to.
 ///
-/// Which of `table_name`, `column_name` and `row_id_value` may be set is fixed
-/// by `scope` (Requirements 97 to 99); [`ReferenceScope::targets`] states the
-/// rule, and the three fields are `Option` here because the spec makes them so
-/// rather than because any combination is meaningful.
+/// `scope` fixes which of `table_name`, `column_name` and `row_id_value` may be
+/// set (Requirements 97 to 99), and [`ReferenceScope::targets`] states the
+/// rule. The three fields are `Option` because the spec makes them nullable,
+/// not because any combination is meaningful.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataReference {
     /// The granularity of the attachment.
@@ -70,11 +70,11 @@ pub struct MetadataReference {
 
 /// What a metadata record describes (`md_scope`, spec Table 15).
 ///
-/// **Open, not closed.** Requirement 94 first says each value SHALL be one of
-/// the table's names and then that it SHOULD be, adding "however, this list is
-/// not exhaustive; new scopes are permitted". The weaker reading is the one
-/// that keeps a conformant file readable, so an unlisted scope is
-/// [`MetadataScope::Other`] rather than an error.
+/// The set is open. Requirement 94 first says each value SHALL be one of the
+/// table's names, then says it SHOULD be, adding "however, this list is not
+/// exhaustive; new scopes are permitted". The weaker reading keeps a
+/// conformant file readable, so an unlisted scope is [`MetadataScope::Other`]
+/// rather than an error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MetadataScope {
@@ -123,8 +123,8 @@ pub enum MetadataScope {
 }
 
 impl MetadataScope {
-    /// Identifies an `md_scope` value. Never fails: an unlisted name becomes
-    /// [`MetadataScope::Other`].
+    /// Identifies an `md_scope` value. This never fails. An unlisted name
+    /// becomes [`MetadataScope::Other`].
     pub fn parse(value: &str) -> Self {
         match value {
             "undefined" => Self::Undefined,
@@ -192,8 +192,8 @@ impl fmt::Display for MetadataScope {
 
 /// The granularity of a metadata attachment (`reference_scope`).
 ///
-/// **Closed**, unlike [`MetadataScope`]: Requirement 96 says every value SHALL
-/// be one of these five in lowercase, with no escape hatch.
+/// Unlike [`MetadataScope`], this set is closed. Requirement 96 says every
+/// value SHALL be one of these five in lowercase, and allows no others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceScope {
     /// The whole GeoPackage.
@@ -224,8 +224,8 @@ impl ReferenceScope {
     /// Identifies a `reference_scope` value, or `None` when it is not one of
     /// the five (Requirement 96).
     ///
-    /// Matched case sensitively, because the requirement spells the values and
-    /// says "in lowercase".
+    /// Matching is case sensitive, because the requirement spells out the
+    /// values and says "in lowercase".
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "geopackage" => Some(Self::GeoPackage),

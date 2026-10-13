@@ -26,9 +26,9 @@ enum Command {
     /// Summarise a file: version, layers, schemas, spatial reference systems,
     /// index health and registered extensions.
     ///
-    /// Opens the file read-only and leniently, so a file with something wrong
-    /// with it can still be inspected; any warnings the lenient open collected
-    /// are printed first. Nothing is modified.
+    /// Opens the file read-only and leniently, so you can still inspect a file
+    /// with problems. Any warnings from the lenient open are printed first.
+    /// Nothing is modified.
     Info {
         /// The `.gpkg` file to read.
         file: PathBuf,
@@ -55,11 +55,11 @@ enum Command {
         /// The layer to index.
         layer: String,
     },
-    /// Repair spatial indexes that a legacy or mixed trigger set maintains, or
-    /// that were left desynchronised.
+    /// Repair spatial indexes that legacy or mixed triggers maintain, or that
+    /// are out of sync.
     ///
-    /// A layer with no index is left alone: that is a choice rather than a
-    /// defect, and `gpkg index` is how to request one.
+    /// A layer with no index is left alone, because that is a choice rather
+    /// than a defect. Use `gpkg index` to add one.
     Repair {
         /// The `.gpkg` file to write to.
         file: PathBuf,
@@ -68,20 +68,20 @@ enum Command {
     },
     /// Copy the feature and attribute layers of one file into a new one.
     ///
-    /// Tiles and the extension tables are not copied; whatever is left behind
-    /// is named at the end.
+    /// Tiles and the extension tables are not copied. The command names
+    /// whatever it left behind at the end.
     Copy {
         /// The `.gpkg` file to read.
         src: PathBuf,
         /// The `.gpkg` file to create. Must not already exist.
         dst: PathBuf,
     },
-    /// Tile pyramids: what a file contains, and the bytes of one tile.
+    /// List a file's tile pyramids, or extract one tile's bytes.
     Tiles {
         #[command(subcommand)]
         command: TileCommand,
     },
-    /// Tiled gridded coverages: elevation and other measured grids.
+    /// Inspect tiled gridded coverages: elevation and other measured grids.
     ///
     /// This command is separate from `tiles` because a coverage is a different
     /// kind of content. Its payloads contain measurements, not images, and the
@@ -133,10 +133,10 @@ enum TileCommand {
         /// Describe only this pyramid.
         pyramid: Option<String>,
     },
-    /// Write one tile's stored bytes out, addressed by zoom, column and row.
+    /// Write the stored bytes of one tile, addressed by zoom, column and row.
     ///
-    /// No image is decoded: the bytes come out exactly as the file stores them,
-    /// whatever `--out` is named.
+    /// The command does not decode the image. It writes the bytes exactly as
+    /// the file stores them, whatever name you give `--out`.
     Get {
         /// The `.gpkg` file to read.
         file: PathBuf,

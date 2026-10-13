@@ -68,8 +68,9 @@ fn count(findings: &[geopackage::Finding], severity: Severity) -> usize {
         .count()
 }
 
-/// `1 error`, `0 errors`. The plural is given rather than derived, because
-/// "advisory" does not pluralise by adding an `s`.
+/// Formats a count with its noun, as in `1 error` or `0 errors`. The caller
+/// passes the plural rather than deriving it, because "advisory" does not
+/// pluralise by adding an `s`.
 fn plural(count: usize, one: &str, many: &str) -> String {
     if count == 1 {
         format!("{count} {one}")

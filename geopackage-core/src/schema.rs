@@ -31,9 +31,9 @@ pub const EXTENSION_SCOPE: &str = "read-write";
 
 /// A row of `gpkg_data_columns`: what one column of one table means.
 ///
-/// Every field but the column's own name is optional, and a row with
-/// nothing but a `name` is both legal and common: the extension exists to
-/// supplement `sqlite_master` and `PRAGMA table_info`, not to replace them.
+/// Every field but the column's own name is optional. A row with nothing but
+/// a `name` is legal and common, because the extension supplements
+/// `sqlite_master` and `PRAGMA table_info` rather than replacing them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataColumn {
     /// The column this describes.
@@ -54,12 +54,12 @@ pub struct DataColumn {
 /// A constraint on a column's values, assembled from the
 /// `gpkg_data_column_constraints` rows sharing one `constraint_name`.
 ///
-/// An `enum` occupies one row per member and a `range` or `glob` exactly one
-/// row (Requirement 109), so this is a constraint rather than a row.
+/// An `enum` occupies one row per member, and a `range` or `glob` exactly one
+/// row (Requirement 109). This type therefore models a constraint, not a row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnConstraint {
-    /// The name rows reference this constraint by. Lowercase, per the column
-    /// description in the spec's table definition.
+    /// The name that rows use to reference this constraint. It is lowercase,
+    /// per the column description in the spec's table definition.
     pub name: String,
     /// What the constraint allows.
     pub kind: ConstraintKind,
@@ -88,10 +88,11 @@ pub enum ConstraintKind {
     /// `enum`: the set of allowed values, one per row, compared as text
     /// (Requirement 114 makes each row's `value` NOT NULL).
     ///
-    /// The order is the order the rows came back in, and has no meaning:
-    /// the spec calls this a set, and round-tripping a file through GDAL
-    /// reorders the members. Compare two enums as sets rather than by
-    /// [`PartialEq`] if the file has been through another implementation.
+    /// The members are in the order the rows came back in, and the order has
+    /// no meaning. The spec calls this a set, and round-tripping a file through
+    /// GDAL reorders the members. If the file has been through another
+    /// implementation, compare two enums as sets rather than with
+    /// [`PartialEq`].
     Enum(Vec<String>),
     /// `glob`: a pattern the value has to match, in SQLite's `GLOB` syntax.
     Glob(String),
@@ -109,7 +110,8 @@ impl ConstraintKind {
 }
 
 impl fmt::Display for ConstraintKind {
-    /// A one-line rendering, for an error message naming what was violated.
+    /// Formats the constraint on one line, for an error message that names
+    /// what was violated.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Range {
