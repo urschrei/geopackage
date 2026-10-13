@@ -73,8 +73,8 @@ use crate::handle::{LayerHandle, WriterHandle};
 use crate::util::borrow_str;
 use crate::value::{borrow_values, gpkg_value_t};
 
-/// A write transaction over one layer. Opaque; created by
-/// `gpkg_layer_writer`, and destroyed by `gpkg_writer_commit` or
+/// A write transaction over one layer. This opaque handle is created by
+/// `gpkg_layer_writer` and destroyed by `gpkg_writer_commit` or
 /// `gpkg_writer_free`.
 #[expect(
     non_camel_case_types,
@@ -103,7 +103,7 @@ unsafe fn writer_mut<'a>(
     Some(unsafe { &mut *writer })
 }
 
-/// Reads a caller-supplied geometry: `NULL` with a length of zero means none.
+/// Reads a caller-supplied geometry. `NULL` with a length of zero means none.
 ///
 /// # Safety
 ///
@@ -184,12 +184,11 @@ pub unsafe extern "C" fn gpkg_layer_writer(
     }
 }
 
-/// Commits the writer's work and destroys it.
+/// Commits the writer's work and destroys the writer.
 ///
-/// The handle is destroyed whether this succeeds or fails, so it must not be
-/// used again either way. Inside a transaction the caller opened with
-/// `gpkg_begin`, this stages the work rather than committing it, and their
-/// `gpkg_commit` is what makes it durable.
+/// The handle is destroyed whether this succeeds or fails, so don't use it
+/// again either way. Inside a transaction you opened with `gpkg_begin`, this
+/// only stages the work, and your `gpkg_commit` makes it durable.
 ///
 /// # Safety
 ///
@@ -221,13 +220,13 @@ pub unsafe extern "C" fn gpkg_writer_commit(
     }
 }
 
-/// Discards the writer's work and destroys it.
+/// Discards the writer's work and destroys the writer.
 ///
 /// Everything staged since `gpkg_layer_writer` is rolled back. Inside a
-/// transaction the caller opened, nothing is rolled back here: the work stays
-/// staged in that transaction, and `gpkg_rollback` is what discards it.
+/// transaction you opened, this rolls nothing back. The work stays staged in
+/// that transaction, and `gpkg_rollback` discards it.
 ///
-/// Freeing NULL does nothing.
+/// Passing NULL does nothing.
 ///
 /// # Safety
 ///
@@ -246,12 +245,12 @@ pub unsafe extern "C" fn gpkg_writer_free(writer: *mut gpkg_writer_t) {
 
 /// Inserts a feature, with or without a geometry.
 ///
-/// `fid` is NULL to have an id assigned, or points at the id to use. The id
-/// written is reported through `out_fid` when that is non-NULL.
+/// Pass NULL as `fid` to have an id assigned, or point it at the id to use.
+/// If `out_fid` is non-NULL, it receives the id that was written.
 ///
 /// `wkb` is the geometry, or NULL with `wkb_len` zero for a row with none.
-/// `values` covers the layer's value columns in order; `values_len` must match
-/// the layer.
+/// `values` holds the layer's value columns in order, and `values_len` must
+/// match the layer.
 ///
 /// # Safety
 ///
@@ -305,8 +304,8 @@ pub unsafe extern "C" fn gpkg_writer_insert(
 /// Updates the feature `fid`, replacing every value column and, when `wkb` is
 /// given, the geometry.
 ///
-/// `out_matched` reports whether a row with that id was there to update; a
-/// missing row is not an error.
+/// `out_matched` reports whether a row with that id existed. A missing row is
+/// not an error.
 ///
 /// # Safety
 ///
@@ -346,8 +345,7 @@ pub unsafe extern "C" fn gpkg_writer_update(
 /// Updates one column of the feature `fid`, leaving every other value and the
 /// geometry alone.
 ///
-/// The shape a caller wants when correcting one field: nothing else has to be
-/// supplied, and nothing else is touched.
+/// Use this to correct one field without supplying the rest of the row.
 ///
 /// # Safety
 ///
@@ -386,12 +384,12 @@ pub unsafe extern "C" fn gpkg_writer_update_column(
 
 /// Deletes the feature `fid`.
 ///
-/// `out_matched` reports whether a row with that id was there to delete; a
-/// missing row is not an error.
+/// `out_matched` reports whether a row with that id existed. A missing row is
+/// not an error.
 ///
-/// The layer's recorded bounding box is not shrunk, here or anywhere else: an
-/// over-estimate is what the specification permits, and shrinking would mean
-/// rescanning the layer.
+/// Neither this nor any other call shrinks the layer's recorded bounding box.
+/// The specification permits an over-estimate, and shrinking the box would
+/// mean rescanning the layer.
 ///
 /// # Safety
 ///

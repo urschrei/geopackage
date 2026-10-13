@@ -39,9 +39,9 @@ use crate::util::write_out_strings;
 
 /// Returns the number of `gpkg_extensions` rows in the file.
 ///
-/// Zero for a file with no `gpkg_extensions` table at all, which is a file
-/// registering no extensions. `gpkg_extension_at` walks the same list, ordered
-/// by extension name, then table, then column.
+/// A file with no `gpkg_extensions` table registers no extensions, and the
+/// count is zero. `gpkg_extension_at` reads the same list, ordered by
+/// extension name, then table, then column.
 ///
 /// # Safety
 ///
@@ -73,19 +73,22 @@ pub unsafe extern "C" fn gpkg_extensions_count(
     }
 }
 
-/// Returns one `gpkg_extensions` row, with the support level this library claims.
+/// Returns one `gpkg_extensions` row, with the support level this library
+/// claims for it.
 ///
-/// The list is the one `gpkg_extensions_count` counts. Every out-parameter
-/// may be NULL to skip it; each string written is owned by the caller and
-/// released with `gpkg_string_free`. `out_table` and `out_column` are NULL
-/// when the row applies to the whole file or the whole table, which is what
-/// their NULLs mean in the catalogue itself. `out_scope` is the row's
-/// declared scope, `read-write` or `write-only`; `out_support` is this
-/// library's support level for the extension, in the module documentation's
-/// vocabulary.
+/// This reads the list that `gpkg_extensions_count` counts. Pass NULL for any
+/// out-parameter to skip it. You own each string written, and free it with
+/// `gpkg_string_free`.
 ///
-/// An index at or beyond the count is `GPKG_STATUS_NOT_FOUND` rather than a
-/// failure to read. On any failure nothing is written.
+/// `out_table` and `out_column` are NULL when the row applies to the whole
+/// file or the whole table, matching what NULL means in those catalogue
+/// columns.
+/// `out_scope` is the row's declared scope, `read-write` or `write-only`.
+/// `out_support` is this library's support level for the extension, using
+/// the levels listed in the module documentation.
+///
+/// An index at or beyond the count returns `GPKG_STATUS_NOT_FOUND`, not a read
+/// error. On any failure, nothing is written.
 ///
 /// # Safety
 ///

@@ -40,14 +40,14 @@ use crate::error::{Status, gpkg_error_t, set_error, set_library_error};
 use crate::handle::Container;
 use crate::util::write_out_strings;
 
-/// What `gpkg_validate` found. Owns its findings outright: unlike a layer or
-/// tiles handle it borrows nothing, so it does not block `gpkg_close`.
+/// What `gpkg_validate` found. It owns its findings and, unlike a layer or
+/// tiles handle, borrows nothing, so it does not block `gpkg_close`.
 pub struct FindingsHandle {
     findings: Vec<Finding>,
 }
 
-/// The findings of one validation run. Opaque; created by `gpkg_validate` and
-/// destroyed by `gpkg_findings_free`.
+/// The findings of one validation run. This opaque handle is created by
+/// `gpkg_validate` and destroyed by `gpkg_findings_free`.
 #[expect(
     non_camel_case_types,
     reason = "the C name is the type's name; cbindgen emits it verbatim"
@@ -56,11 +56,12 @@ pub type gpkg_findings_t = FindingsHandle;
 
 /// Validates the file, returning the findings most severe first.
 ///
-/// Runs every check the library has: the container tables, the spatial
-/// indexes and their trigger generation, the extension catalogue, and the
-/// metadata, schema and relation extensions where the file has them. A
-/// conforming file returns an empty findings list, and the call succeeding
-/// says nothing about the file being clean: ask `gpkg_findings_count`.
+/// This runs every check the library has. It covers the container tables, the
+/// spatial indexes and their trigger generation, the extension catalogue, and
+/// the metadata, schema and relation extensions where the file has them.
+///
+/// A conforming file returns an empty findings list. A successful call does
+/// not mean the file is clean, so check `gpkg_findings_count`.
 ///
 /// # Safety
 ///
@@ -93,7 +94,7 @@ pub unsafe extern "C" fn gpkg_validate(
     }
 }
 
-/// Releases a findings handle. Passing NULL does nothing.
+/// Frees a findings handle. Passing NULL does nothing.
 ///
 /// # Safety
 ///
@@ -109,8 +110,10 @@ pub unsafe extern "C" fn gpkg_findings_free(findings: *mut gpkg_findings_t) {
     drop(unsafe { Box::from_raw(findings) });
 }
 
-/// Returns the number of findings the run produced. Zero for a clean file, and zero for
-/// NULL, so a caller need not branch.
+/// Returns the number of findings the run produced.
+///
+/// Returns zero for a clean file and for NULL, so you don't need to check for
+/// NULL first.
 ///
 /// # Safety
 ///
@@ -125,18 +128,20 @@ pub unsafe extern "C" fn gpkg_findings_count(findings: *const gpkg_findings_t) -
     handle.findings.len()
 }
 
-/// Returns one finding: severity, description, and repair advice where repair exists.
+/// Returns one finding's severity, description and, where a repair exists,
+/// repair advice.
 ///
-/// Findings are ordered most severe first. Every out-parameter may be NULL to
-/// skip it; each string written is owned by the caller and released with
-/// `gpkg_string_free`. `out_severity` is `error`, `warning` or `advisory`.
-/// `out_repair` names the library call that repairs the finding, and is NULL
-/// where the fix needs the producing writer or a decision about data this
-/// library should not take on the caller's behalf, which is most of the
-/// extension findings.
+/// Findings are ordered most severe first. Pass NULL for any out-parameter to
+/// skip it. You own each string written, and free it with `gpkg_string_free`.
+/// `out_severity` is `error`, `warning` or `advisory`.
 ///
-/// An index at or beyond the count is `GPKG_STATUS_NOT_FOUND`. On any failure
-/// nothing is written.
+/// `out_repair` names the library call that repairs the finding. It is NULL
+/// when the fix needs the program that wrote the file, or a decision about the
+/// data that this library should not make for you. Most extension findings
+/// are like that.
+///
+/// An index at or beyond the count returns `GPKG_STATUS_NOT_FOUND`. On any
+/// failure, nothing is written.
 ///
 /// # Safety
 ///

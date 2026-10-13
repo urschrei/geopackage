@@ -70,10 +70,10 @@ use geopackage::{
 
 /// What kind of failure occurred.
 ///
-/// A small set of categories rather than one constant per library error, so
-/// that a caller can branch on the code and read the message for the detail.
-/// The values are assigned explicitly and are never reused for another meaning,
-/// so a comparison written against this header keeps its meaning.
+/// The codes are a small set of categories, not one constant per library
+/// error. Branch on the code, and read the message for the detail. Each value
+/// is assigned explicitly and is never reused for another meaning, so a
+/// comparison you write against this header stays correct.
 // `#[repr(i32)]` is what makes cbindgen emit a plain C enum with those values.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,9 +84,9 @@ pub enum Status {
     Io = 1,
     /// The file is not a GeoPackage, or not one this library can identify.
     NotAGeoPackage = 2,
-    /// A named table, layer, column, SRS or record is not there.
+    /// A named table, layer, column, SRS or record does not exist.
     NotFound = 3,
-    /// Something the call would create is already there.
+    /// Something the call would create already exists.
     AlreadyExists = 4,
     /// An argument was rejected: a bad value, a type mismatch, a malformed
     /// geometry, or a count that does not line up.
@@ -95,8 +95,8 @@ pub enum Status {
     Unsupported = 6,
     /// A constraint the file or the schema declares was violated.
     Constraint = 7,
-    /// A handle is still borrowing what the call would destroy. Free the child
-    /// handles first; nothing was changed.
+    /// A child handle still borrows what the call would destroy. Nothing was
+    /// changed. Free the child handles first.
     HandleInUse = 8,
     /// A string argument was not valid UTF-8, or a required pointer was NULL.
     BadArgument = 9,
@@ -162,12 +162,12 @@ impl From<&Error> for Status {
     }
 }
 
-/// Classifies an Arrow failure, which reaches this crate when a stream the caller
-/// supplied to `gpkg_layer_write_arrow` fails part-way through.
+/// Classifies an Arrow failure. One reaches this crate when a stream that the
+/// caller supplied to `gpkg_layer_write_arrow` fails part-way through.
 ///
 /// `ArrowError` belongs to `arrow-schema` and is not `#[non_exhaustive]`, so an
-/// exhaustive match here would stop compiling on a dependency bump that adds a
-/// variant. Only the ones this crate's paths can produce are named; the rest
+/// exhaustive match here would stop compiling when a dependency update adds a
+/// variant. The match names only the variants this crate can produce. The rest
 /// describe compute, CSV, JSON and Parquet work that never runs here.
 fn arrow_status(error: &ArrowError) -> Status {
     match error {
@@ -196,8 +196,9 @@ fn arrow_status(error: &ArrowError) -> Status {
 /// Classifies a spec-level failure from `geopackage-core`, which `Error::Core`
 /// wraps whole.
 ///
-/// Four variants, three of which wrap enums of their own, so this and the two
-/// below follow the wrapping down to the variant that says what happened.
+/// There are four variants, and three of them wrap enums of their own. This
+/// function and the two below follow the wrapping down to the variant that
+/// says what happened.
 fn core_status(error: &CoreError) -> Status {
     match error {
         CoreError::Gpb(gpb) => gpb_status(gpb),
@@ -253,10 +254,10 @@ fn geometry_status(error: &GeometryError) -> Status {
 
 /// Classifies a tile failure, which `Error::Tile` wraps whole.
 ///
-/// Split out rather than folded into the match above because `TileError` is a
-/// twelve-variant enum in its own right, and its variants divide differently:
-/// most of them describe a pyramid that does not satisfy a rule the
-/// specification states, which is a constraint rather than a bad argument.
+/// This is a separate function, not part of the match above, because
+/// `TileError` is an enum of twelve variants that divide differently. Most of
+/// them describe a pyramid that breaks a rule the specification states, which
+/// is a constraint rather than a bad argument.
 fn tile_status(error: &TileError) -> Status {
     match error {
         // A pyramid whose own description of itself breaks a rule the spec
@@ -284,12 +285,12 @@ fn tile_status(error: &TileError) -> Status {
     }
 }
 
-/// A failure, as C sees it.
+/// The status code and message of a failed call.
 ///
 /// Initialise one as `{GPKG_STATUS_OK, NULL}` and pass its address to any call
 /// that takes a `gpkg_error_t *`. A successful call leaves it alone. A failing
-/// one sets `code` and stores an owned, NUL-terminated UTF-8 `message`, which
-/// the caller releases with `gpkg_error_clear` before reusing the variable.
+/// call sets `code` and stores a NUL-terminated UTF-8 `message` that you own.
+/// Release it with `gpkg_error_clear` before you reuse the variable.
 #[repr(C)]
 pub struct gpkg_error_t {
     /// What kind of failure occurred.
@@ -333,10 +334,11 @@ pub(crate) unsafe fn set_library_error(slot: *mut gpkg_error_t, error: &Error) {
     unsafe { set_error(slot, Status::from(error), &error.to_string()) }
 }
 
-/// Releases the message an error contains, and resets its code to `GPKG_STATUS_OK`.
+/// Frees an error's message and resets its code to `GPKG_STATUS_OK`.
 ///
-/// Safe to call on an error that was never filled in, and safe to call twice:
-/// the message pointer is cleared as it is freed. Passing NULL does nothing.
+/// You can call this on an error that was never filled in, and you can call it
+/// twice, because it sets the message pointer to NULL when it frees it.
+/// Passing NULL does nothing.
 ///
 /// ```c
 /// gpkg_error_t error = {GPKG_STATUS_OK, NULL};
@@ -373,9 +375,8 @@ pub unsafe extern "C" fn gpkg_error_clear(error: *mut gpkg_error_t) {
 mod tests {
     use super::*;
 
-    /// The Arrow classification is the one that cannot be reached from a C
-    /// program without fabricating a stream that fails on demand, so it is
-    /// checked here on the function itself.
+    /// A C program can reach the Arrow classification only through a stream
+    /// that fails on demand, so this tests the function directly.
     #[test]
     fn an_arrow_failure_classifies_by_variant() {
         assert_eq!(
@@ -393,10 +394,10 @@ mod tests {
         );
     }
 
-    /// The case worth pinning: one of this library's own errors boxed inside an
-    /// `ExternalError`, which is how it survives a stream boundary. A downcast
-    /// that stopped matching would fail silently, reporting `Other` for an
-    /// error whose category was already known.
+    /// One of this library's own errors, boxed inside an `ExternalError`, keeps
+    /// its category. That is how such an error crosses a stream boundary. If
+    /// the downcast stopped matching, it would fail silently and report `Other`
+    /// for an error whose category was already known.
     #[test]
     fn an_arrow_failure_wrapping_one_of_ours_keeps_its_category() {
         let inner = Error::NoSuchLayer {
