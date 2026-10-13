@@ -106,7 +106,8 @@ pub unsafe extern "C" fn gpkg_layer_kind(
     unsafe { out_string(kind, error) }
 }
 
-/// Returns the number of columns in the layer's table, geometry and primary key included.
+/// Returns the number of columns in the layer's table, including the geometry
+/// and primary key columns.
 ///
 /// # Safety
 ///
@@ -159,13 +160,13 @@ pub unsafe extern "C" fn gpkg_layer_column_name(
     unsafe { out_string(&name, error) }
 }
 
-/// Returns the declared SQL type of the `index`th column, exactly as the file spells
-/// it, or the empty string for a column declared without one.
+/// Returns the declared SQL type of the `index`th column, exactly as the file
+/// spells it, or the empty string for a column declared without one.
 ///
-/// The declared text rather than a parsed enum, because a GeoPackage may
-/// declare a type outside the spec's vocabulary and this crate keeps such a
-/// column rather than rejecting it. A caller wanting the spec's own names can compare
-/// against them.
+/// The result is the declared text, not a parsed type, because a GeoPackage
+/// may declare a type outside the spec's vocabulary and the library keeps such
+/// a column rather than rejecting it. To check for one of the spec's own type
+/// names, compare against it.
 ///
 /// Owned by the caller; release with `gpkg_string_free`.
 ///
@@ -192,8 +193,10 @@ pub unsafe extern "C" fn gpkg_layer_column_type(
     unsafe { out_string(&declared, error) }
 }
 
-/// Returns whether the `index`th column is the primary key. `false` for an index out
-/// of range, which [`gpkg_layer_column_count`] distinguishes.
+/// Returns whether the `index`th column is the primary key.
+///
+/// Returns `false` for an index out of range. Use [`gpkg_layer_column_count`]
+/// to tell the two cases apart.
 ///
 /// # Safety
 ///
@@ -218,8 +221,8 @@ pub unsafe extern "C" fn gpkg_layer_column_is_primary_key(
 
 /// Returns the geometry column's name, or NULL for an attribute layer.
 ///
-/// A NULL return with `error` left at `GPKG_STATUS_OK` means the layer simply
-/// has no geometry, which is not a failure.
+/// A NULL return with `error` left at `GPKG_STATUS_OK` means the layer has no
+/// geometry. That is not a failure.
 ///
 /// Owned by the caller; release with `gpkg_string_free`.
 ///
@@ -243,8 +246,8 @@ pub unsafe extern "C" fn gpkg_layer_geometry_column(
     unsafe { out_string(&name, error) }
 }
 
-/// Returns the geometry column's declared type, such as `"POINT"`, or NULL for an
-/// attribute layer.
+/// Returns the geometry column's declared type, such as `"POINT"`, or NULL for
+/// an attribute layer.
 ///
 /// Owned by the caller; release with `gpkg_string_free`.
 ///
@@ -304,14 +307,14 @@ pub unsafe extern "C" fn gpkg_layer_srs_id(
 
 /// Writes the layer's extent through the four out-parameters.
 ///
-/// The bounds recorded in `gpkg_contents`, in the layer's own spatial reference
-/// system. Where those bounds are unusable, they are measured from the
-/// geometries and recorded, so this call can write to the file; on a read-only
-/// handle it measures, returns the answer, and records nothing.
+/// The extent is the bounds recorded in `gpkg_contents`, in the layer's own
+/// spatial reference system. If those bounds are unusable, the call measures
+/// them from the geometries and records them, so it can write to the file. On
+/// a read-only handle it measures and returns the bounds but records nothing.
 ///
 /// Returns `GPKG_STATUS_NOT_FOUND` when the layer has no extent to report,
-/// which is an empty layer or one with no geometry column, leaving the
-/// out-parameters untouched.
+/// because it is empty or has no geometry column. The out-parameters are then
+/// left untouched.
 ///
 /// # Safety
 ///
@@ -377,9 +380,9 @@ pub unsafe extern "C" fn gpkg_layer_extent(
 /// set"` or `"stale"`.
 ///
 /// `"legacy trigger set"` is an index kept by the pre-1.4 triggers, which
-/// corrupt an index under `UPSERT`; `"stale"` is a virtual table without its
-/// triggers, or triggers without their table, which is what an interrupted
-/// build leaves. `gpkg_layer_repair_spatial_index` puts either right.
+/// corrupt an index under `UPSERT`. `"stale"` is a virtual table without its
+/// triggers, or triggers without their table, as an interrupted build leaves
+/// them. `gpkg_layer_repair_spatial_index` fixes either.
 ///
 /// Owned by the caller; release with `gpkg_string_free`.
 ///
@@ -408,12 +411,12 @@ pub unsafe extern "C" fn gpkg_layer_spatial_index_status(
     }
 }
 
-/// Returns whether a bounding-box query on this layer will use the spatial index.
+/// Returns whether a bounding-box query on this layer uses the spatial index.
 ///
-/// False for a `stale` or absent index: a desynchronised index is not trusted,
-/// and the query falls back to a correct full scan. So this answers how a
-/// bounding-box read will be served, not whether the file contains an RTree
-/// table; `gpkg_layer_spatial_index_status` answers that.
+/// Reports false for a `stale` or absent index. A desynchronised index is not
+/// trusted, so the query falls back to a full scan, which is still correct.
+/// This tells you how a bounding-box read will be served, not whether the file
+/// contains an RTree table. Use `gpkg_layer_spatial_index_status` for that.
 ///
 /// # Safety
 ///
@@ -474,9 +477,9 @@ pub unsafe extern "C" fn gpkg_layer_create_spatial_index(
 /// Drops the spatial index and its triggers.
 ///
 /// Removes the RTree virtual table, its triggers and its `gpkg_extensions`
-/// row, in one transaction. A feature layer with no index is not an error:
-/// there is nothing to remove and the call succeeds. Bounding-box reads still
-/// work afterwards, as a full scan returning the same rows.
+/// row, in one transaction. On a feature layer with no index there is nothing
+/// to remove, and the call succeeds. Bounding-box reads still work afterwards.
+/// They use a full scan and return the same rows.
 ///
 /// # Safety
 ///
@@ -494,12 +497,11 @@ pub unsafe extern "C" fn gpkg_layer_drop_spatial_index(
     unsafe { report(handle.layer().drop_spatial_index(), error) }
 }
 
-/// Puts a legacy or desynchronised spatial index right, rebuilding it and
+/// Repairs a legacy or desynchronised spatial index by rebuilding it and
 /// installing the GeoPackage 1.4 trigger set.
 ///
-/// A layer with no index is left alone: an absent index is a choice rather
-/// than a defect, and `gpkg_layer_create_spatial_index` is how one is asked
-/// for.
+/// A layer with no index is left alone, because an absent index is a choice
+/// rather than a defect. Use `gpkg_layer_create_spatial_index` to build one.
 ///
 /// # Safety
 ///
