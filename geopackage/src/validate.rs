@@ -1,16 +1,16 @@
-//! [`GeoPackage::validate`]: every check this crate can make about a file,
-//! collected into one pass over it.
+//! Whole-file validation: [`GeoPackage::validate`].
 //!
-//! The checks are not new. Most of them existed already, reachable one at a
-//! time: [`crate::Layer::audit_spatial_index`], [`crate::TilePyramid::validate`],
-//! the [`crate::OpenWarning`]s `open_lenient` reports, and the extension
-//! catalogue's support levels. What this module adds is one call that runs
-//! them all and returns typed findings, which is what an embedding caller
-//! needs and what `gpkg validate` will print.
+//! This runs every check this crate can make on a file, in one pass. Most of
+//! the checks are also available one at a time:
+//! [`crate::Layer::audit_spatial_index`], [`crate::TilePyramid::validate`], the
+//! [`crate::OpenWarning`]s that `open_lenient` reports, and the extension
+//! catalogue's support levels. This module adds one call that runs them all and
+//! returns typed findings. An embedding caller needs that, and `gpkg validate`
+//! prints it.
 //!
-//! Nothing here mutates. A [`Finding`] includes repair advice as text when a
-//! repair exists, and names the method that performs it; running that is the
-//! caller's decision.
+//! Nothing in this module modifies the file. When a repair exists, a
+//! [`Finding`] describes it as text and names the method that performs it.
+//! Whether to run that method is up to the caller.
 //!
 //! # Severity
 //!

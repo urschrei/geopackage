@@ -1,13 +1,13 @@
-//! Lenient open path: [`GeoPackage::open_lenient`] and the [`OpenWarning`]s it
+//! Lenient opening: [`GeoPackage::open_lenient`] and the [`OpenWarning`]s it
 //! collects.
 //!
 //! Strict [`GeoPackage::open`] identifies a GeoPackage and rejects anything it
-//! cannot. `open_lenient` opens the same files but, rather than being stricter,
-//! records typed warnings for conditions a fastidious reader would flag,
-//! legacy `application_id`s, a missing `gpkg_geometry_columns` table, and
-//! catalogue table names that match a real SQLite table only case-insensitively,
-//! so callers can inspect and iterate a lightly non-conforming file instead
-//! of failing to open it. Strict [`GeoPackage::open`] is unchanged.
+//! cannot. `open_lenient` opens the same files. Instead of being stricter, it
+//! records typed warnings for conditions a fastidious reader would flag: legacy
+//! `application_id`s, a missing `gpkg_geometry_columns` table, and catalogue
+//! table names that match a real SQLite table only case-insensitively. You can
+//! then inspect and iterate a lightly non-conforming file instead of failing to
+//! open it. Strict [`GeoPackage::open`] is unchanged.
 
 use crate::{GeoPackage, Result, resolve_table_name, table_exists};
 use geopackage_core::GpkgVersion;

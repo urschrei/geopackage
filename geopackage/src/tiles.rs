@@ -1,20 +1,24 @@
-//! Tile pyramids: [`TilePyramidBuilder`], [`GeoPackage::create_tile_pyramid`],
-//! and the [`TilePyramid`] handle over an existing one.
+//! Tile pyramids: creating them and reading existing ones.
+//!
+//! This module holds [`TilePyramidBuilder`],
+//! [`GeoPackage::create_tile_pyramid`], and the [`TilePyramid`] handle over an
+//! existing pyramid.
 //!
 //! A tile pyramid is the container's second data type, alongside features and
-//! attributes, and its payloads are opaque here: this crate stores, indexes and
-//! validates tiles, and decodes none of them. What it does read is each
-//! payload's header, which is how a tile written at the wrong pixel size, or in
-//! a format the table may not contain, is caught rather than stored (see
+//! attributes. Its payloads are opaque here: this crate stores, indexes and
+//! validates tiles, but decodes none of them. It does read each payload's
+//! header, so it catches a tile written at the wrong pixel size, or in a format
+//! the table may not contain, instead of storing it (see
 //! [`geopackage_core::tiles::probe`]).
 //!
 //! The geometry of a pyramid, and the spec's rules about it, live in
 //! [`geopackage_core::tiles`]. This module is the part that needs a database:
 //! the catalogue rows, the user table, and the extension registrations.
 //!
-//! Creation validates; reading does not. A pyramid another implementation wrote
-//! opens on whatever its `gpkg_tile_matrix` rows say, because a reader that
-//! rejects an imperfect file cannot be used to inspect one.
+//! Creating a pyramid validates it, but reading one does not. A pyramid written
+//! by another implementation opens with whatever its `gpkg_tile_matrix` rows
+//! say, because a reader that rejects an imperfect file can't be used to
+//! inspect one.
 
 use geopackage_core::ddl;
 use geopackage_core::ident::quote;

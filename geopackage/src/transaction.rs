@@ -1,37 +1,36 @@
-//! [`WriteTransaction`]: the transaction a write path runs in, whether it
-//! opened one or joined the caller's.
+//! [`WriteTransaction`]: the transaction a write path runs in, either its own
+//! or the caller's.
 //!
 //! # The problem
 //!
-//! SQLite has no nested transactions. A `BEGIN` issued while one is already
-//! open fails with "cannot start a transaction within a transaction", and every
-//! write path in this crate used to issue one unconditionally. So a caller who
-//! had begun a transaction on [`crate::GeoPackage::connection`] and then used
-//! the ordinary API got that error rather than their writes, and the C ABI
-//! could not offer `gpkg_begin` and `gpkg_commit` at all, because the sequence a
+//! SQLite has no nested transactions. A `BEGIN` issued while a transaction is
+//! already open fails with "cannot start a transaction within a transaction".
+//! Every write path in this crate used to issue one unconditionally. A caller
+//! who had begun a transaction on [`crate::GeoPackage::connection`] and then
+//! used the ordinary API got that error instead of their writes. The C ABI
+//! couldn't offer `gpkg_begin` and `gpkg_commit` at all, because the sequence a
 //! C consumer would reasonably write could not work.
 //!
 //! # Inheriting, rather than nesting
 //!
 //! When a transaction is already open, the write path runs its statements in
-//! that one. The atomicity is the same: the statements are grouped, they commit
-//! together, and a failure rolls them back together. What changes is who decides
-//! when that happens, which passes to whoever issued the `BEGIN`.
+//! that one. Atomicity is the same: the statements are grouped, they commit
+//! together, and a failure rolls them back together. What changes is who
+//! decides when that happens: whoever issued the `BEGIN`.
 //!
-//! [`crate::Layer::extent`] has worked this way since it was written, and this
-//! type is that branch made reusable rather than a new idea.
+//! [`crate::Layer::extent`] has worked this way since it was written. This type
+//! makes that branch reusable.
 //!
-//! Savepoints are the other way to get nesting, and they are rejected here.
-//! `rusqlite::Connection::savepoint` needs `&mut Connection`, and this crate
-//! has only `&Connection` (the read path shares it), so savepoints would have
-//! to be driven as raw `SAVEPOINT`/`RELEASE` text. That is more machinery for a
-//! finer rollback granularity nobody has requested. If a need arises, this is
-//! the one type that would have to change.
+//! Savepoints are the other way to get nesting, and this crate doesn't use
+//! them. `rusqlite::Connection::savepoint` needs `&mut Connection`, but this
+//! crate has only `&Connection` (the read path shares it), so savepoints would
+//! have to be driven as raw `SAVEPOINT`/`RELEASE` text. That is more machinery
+//! for a finer rollback granularity that nobody has asked for. If a need
+//! arises, this is the only type that would have to change.
 //!
 //! # What it costs the caller
 //!
-//! Three consequences follow, and each is documented at the API it belongs
-//! to:
+//! This has three consequences, each documented on the API it affects:
 //!
 //! - **`commit` does not commit** when the transaction was inherited. It still
 //!   does everything else a commit does, including flushing `gpkg_contents`,

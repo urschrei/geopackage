@@ -1,17 +1,17 @@
-//! Direct construction of SQLite RTree shadow-table contents.
+//! Builds SQLite RTree shadow-table contents directly.
 //!
-//! SQLite's RTree module has no bulk-load entry point, so the bulk build used to
+//! SQLite's RTree module has no bulk-load entry point. The bulk build used to
 //! insert every entry into a scratch RTree one row at a time and copy the
-//! result. That insertion, not the surrounding work, dominated the build (3.03 s
-//! of 4.87 s for 1M points), because each insert descends the tree and may split
-//! nodes. This module skips the module entirely and writes the node blobs
+//! result. Those inserts, not the surrounding work, dominated the build (3.03 s
+//! of 4.87 s for 1M points), because each one descends the tree and may split
+//! nodes. This module bypasses the RTree module and writes the node blobs
 //! itself, bottom-up, from a spatially sorted entry set.
 //!
 //! # Node format
 //!
-//! Taken from the RTree module's own documentation and its `rtreecheck`
-//! implementation (SQLite 3.51.3, `sqlite3.c`). Every node blob is exactly
-//! `node_size` bytes:
+//! The format comes from the RTree module's own documentation and its
+//! `rtreecheck` implementation (SQLite 3.51.3, `sqlite3.c`). Every node blob is
+//! exactly `node_size` bytes:
 //!
 //! ```text
 //! bytes 0..2    big-endian u16: tree depth, root node only (0 = root is a leaf);
@@ -28,13 +28,18 @@
 //!
 //! # What `rtreecheck` requires
 //!
-//! The gate runs `rtreecheck()` over the result, so the output must satisfy
-//! exactly what it verifies: `4 + ncell * 24 <= node_size`; `min <= max` on
-//! every dimension of every cell; every cell's bounds contained in its parent
-//! cell's bounds; a `%_rowid` row per leaf cell and a `%_parent` row per
-//! internal cell; and the counts of those two tables equal to the number of leaf
-//! and internal cells respectively. It does **not** require any minimum node
-//! fill, so nodes are packed full.
+//! The gate runs `rtreecheck()` over the result, so the output must pass every
+//! check it makes:
+//!
+//! - `4 + ncell * 24 <= node_size`
+//! - `min <= max` on every dimension of every cell
+//! - every cell's bounds lie within its parent cell's bounds
+//! - there is a `%_rowid` row for each leaf cell and a `%_parent` row for each
+//!   internal cell
+//! - the row counts of those two tables equal the number of leaf and internal
+//!   cells respectively
+//!
+//! It does **not** require any minimum node fill, so nodes are packed full.
 
 use crate::Result;
 use crate::bulk::DEFAULT_FILL_FACTOR;

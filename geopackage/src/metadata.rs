@@ -1,22 +1,24 @@
-//! The `gpkg_metadata` extension's two tables: `gpkg_metadata`, which stores
-//! documents, and `gpkg_metadata_reference`, which attaches them to a file's
-//! contents.
+//! Metadata documents and their references: the `gpkg_metadata` extension.
 //!
-//! Documents are stored and returned as written. What standard a document
-//! follows is what `md_standard_uri` and `mime_type` say, and this crate reads
-//! neither, so no XML parser is pulled in and no profile is interpreted. See
+//! `gpkg_metadata` stores documents, and `gpkg_metadata_reference` attaches
+//! them to a file's contents.
+//!
+//! Documents are stored and returned as written. The standard a document
+//! follows is given by `md_standard_uri` and `mime_type`. This crate reads
+//! neither, so it pulls in no XML parser and interprets no profile. See
 //! [`geopackage_core::metadata`] for the model.
 //!
-//! # References form a graph, and this module hands back its edges
+//! # References form a graph
 //!
 //! A reference may name a parent record through `md_parent_id`, so the
 //! attachments form a directed graph rather than a list. [`GeoPackage::
-//! metadata_references`] returns the edges as stored. Walking upwards is
-//! [`GeoPackage::metadata_ancestors`], which is a separate call because it can
-//! fail in ways enumeration cannot: Requirement 102 forbids only a record being
-//! its own parent, so a longer cycle is a file this crate has to survive rather
-//! than a case it can rule out. That walk is bounded and reports a cycle as a
-//! typed error, which is not a cost every enumeration should pay.
+//! metadata_references`] returns the edges as stored. To walk upwards, use
+//! [`GeoPackage::metadata_ancestors`]. It is a separate call because it can
+//! fail in ways enumeration cannot. Requirement 102 forbids only a record
+//! being its own parent, so a file can contain a longer cycle, and this crate
+//! has to cope with one rather than rule it out. The walk is bounded and
+//! reports a cycle as a typed error, a cost that not every enumeration should
+//! pay.
 
 use geopackage_core::datetime::DateTime;
 use geopackage_core::ddl;

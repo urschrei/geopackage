@@ -2,27 +2,27 @@
 //! types.
 //!
 //! [`Value`] and its borrowed counterpart [`ValueRef`] are the non-geometry
-//! cell types. A [`crate::Feature`] returns `ValueRef`s pointing into the
-//! buffer that stores its row, and the write path takes them; `Value` is the
-//! owned form, for a value that has to outlive the row or the call it was
+//! cell types. A [`crate::Feature`] returns `ValueRef`s that point into the
+//! buffer holding its row, and the write path accepts them. `Value` is the
+//! owned form, for a value that has to outlive its row or the call it was
 //! passed to.
-//! Conversion from a stored SQLite value is driven by the column's declared
-//! [`ColumnType`]: an
-//! `INTEGER`-declared column yields [`Value::Integer`], a `DATETIME`-declared
-//! column parses its text into a [`geopackage_core::datetime::DateTime`], and
-//! so on. A storage class that is incompatible with the declared type is
-//! reported as [`Error::ValueTypeMismatch`] rather than silently coerced.
 //!
-//! Two cases sit between those: a `BOOLEAN` column containing an integer other
-//! than `0` or `1`, and an integer reaching a `FLOAT`/`DOUBLE` column. Both are
-//! readable as the declared type and both are non-conformant, so which of those
-//! two facts wins is the caller's choice, through
-//! [`ConversionOptions::storage`] ([`StorageStrictness`]). The default reads
-//! them, since files containing them are read by other implementations without
-//! complaint.
+//! Conversion from a stored SQLite value depends on the column's declared
+//! [`ColumnType`]. An `INTEGER`-declared column yields [`Value::Integer`], a
+//! `DATETIME`-declared column parses its text into a
+//! [`geopackage_core::datetime::DateTime`], and so on. A storage class that is
+//! incompatible with the declared type is reported as
+//! [`Error::ValueTypeMismatch`] rather than silently coerced.
 //!
-//! Geometry columns are not represented here; they are read through the
-//! feature API.
+//! Two cases fall in between: a `BOOLEAN` column containing an integer other
+//! than `0` or `1`, and an integer in a `FLOAT`/`DOUBLE` column. Both can be
+//! read as the declared type, but both are non-conformant. You choose whether
+//! to read or reject them through [`ConversionOptions::storage`]
+//! ([`StorageStrictness`]). The default reads them, because other
+//! implementations read files containing them without complaint.
+//!
+//! Geometry columns are not represented here; they are read through the feature
+//! API.
 
 use crate::{Error, GeoPackage, Result};
 use geopackage_core::datetime::{Date, DateTime};

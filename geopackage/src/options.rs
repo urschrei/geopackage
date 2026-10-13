@@ -1,14 +1,14 @@
-//! Connection options for opening or creating a [`GeoPackage`]: the
-//! [`OpenOptions`] builder and its typed [`JournalMode`] and [`Synchronous`]
-//! settings.
+//! Options for opening or creating a [`GeoPackage`].
 //!
-//! [`OpenOptions`] mirrors [`std::fs::OpenOptions`]: build up the settings, then
-//! call a terminal [`OpenOptions::create`], [`OpenOptions::open`],
-//! [`OpenOptions::open_read_only`], or [`OpenOptions::from_connection`]. The
-//! plain [`GeoPackage::create`] / [`GeoPackage::open`] constructors are the
-//! default-options shortcuts.
+//! This module holds the [`OpenOptions`] builder and its typed [`JournalMode`]
+//! and [`Synchronous`] settings. [`OpenOptions`] mirrors
+//! [`std::fs::OpenOptions`]: you build up the settings, then call
+//! [`OpenOptions::create`], [`OpenOptions::open`],
+//! [`OpenOptions::open_read_only`] or [`OpenOptions::from_connection`]. The
+//! plain [`GeoPackage::create`] and [`GeoPackage::open`] constructors are
+//! shortcuts that use the default options.
 //!
-//! No rusqlite types appear here: journal mode and synchronous level are the
+//! No rusqlite types appear here. Journal mode and synchronous level are the
 //! crate's own enums, translated to the underlying `PRAGMA` values internally.
 
 use std::path::Path;
