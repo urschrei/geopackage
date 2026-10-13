@@ -32,8 +32,8 @@ pub struct ExtensionRow {
     /// The table the extension applies to, or `None` when it applies to the
     /// whole GeoPackage.
     ///
-    /// Requirement 60: this may name a table in `gpkg_contents`, or a new
-    /// table the extension itself requires, such as `gpkg_metadata`.
+    /// Requirement 60 allows this to name a table in `gpkg_contents`, or a
+    /// new table the extension itself requires, such as `gpkg_metadata`.
     pub table_name: Option<String>,
     /// The column the extension applies to, or `None` when it applies to the
     /// whole table (Requirement 61).
@@ -102,7 +102,7 @@ impl GeoPackage {
     /// by what it applies to.
     ///
     /// Empty for a file with no `gpkg_extensions` table, which Requirement 59
-    /// defines as a GeoPackage rather than an Extended GeoPackage, and empty
+    /// defines as a GeoPackage rather than an Extended GeoPackage. Also empty
     /// for a file whose table has no rows, which means the same thing.
     pub fn extensions(&self) -> Result<Vec<ExtensionRow>> {
         read_all(self.connection())
@@ -111,10 +111,11 @@ impl GeoPackage {
     /// Returns the rows that apply to one table.
     ///
     /// Rows with a NULL `table_name` apply to the whole GeoPackage rather than
-    /// to any table, so they are not included here; [`GeoPackage::extensions`]
-    /// has them. Table names are compared case-insensitively, as the note
-    /// under Requirement 60 asks: SQLite table names are not case sensitive,
-    /// and `gpkg_extensions` need not agree with `sqlite_master` on the case.
+    /// to any table, so they are left out. [`GeoPackage::extensions`]
+    /// includes them. Table names are compared case-insensitively, as the
+    /// note under Requirement 60 asks, because SQLite table names are not case
+    /// sensitive and `gpkg_extensions` need not agree with `sqlite_master` on
+    /// the case.
     pub fn table_extensions(&self, table_name: &str) -> Result<Vec<ExtensionRow>> {
         read_rows(
             self.connection(),
@@ -131,13 +132,13 @@ impl GeoPackage {
     ///
     /// A row covers a table when it names that table, or when its
     /// `table_name` is NULL and it therefore applies to the whole GeoPackage
-    /// (Requirement 60). Asking before writing is the "fail fast" clause 2.3.2
-    /// describes; the write paths ask on the caller's behalf and return
+    /// (Requirement 60). Checking before you write is the "fail fast" check
+    /// that clause 2.3.2 describes. The write methods check for you, and return
     /// [`Error::UnsupportedExtension`] if the answer is `Some`.
     ///
     /// Always `None` when
     /// [`OpenOptions::allow_unsupported_extension_writes`](crate::OpenOptions::allow_unsupported_extension_writes)
-    /// was set, since then nothing blocks a write.
+    /// was set, because then nothing blocks a write.
     ///
     /// [`Error::UnsupportedExtension`]: crate::Error::UnsupportedExtension
     pub fn blocking_extension(&self, table_name: &str) -> Result<Option<ExtensionRow>> {
@@ -174,9 +175,9 @@ impl GeoPackage {
 impl Layer<'_> {
     /// Returns the extensions registered against this layer's table.
     ///
-    /// See [`GeoPackage::table_extensions`], which this calls: an indexed
-    /// layer has a `gpkg_rtree_index` row here, and a layer with a
-    /// non-linear geometry type has a `gpkg_geom_<TYPE>` row.
+    /// This calls [`GeoPackage::table_extensions`]. An indexed layer has a
+    /// `gpkg_rtree_index` row here, and a layer with a non-linear geometry
+    /// type has a `gpkg_geom_<TYPE>` row.
     pub fn extensions(&self) -> Result<Vec<ExtensionRow>> {
         self.gpkg().table_extensions(self.table_name())
     }
@@ -185,9 +186,9 @@ impl Layer<'_> {
 impl TilePyramid<'_> {
     /// Returns the extensions registered against this pyramid's table.
     ///
-    /// See [`GeoPackage::table_extensions`], which this calls: a pyramid
-    /// containing WebP payloads has a `gpkg_webp` row here, and one whose zoom
-    /// levels do not step by factors of two has a `gpkg_zoom_other` row.
+    /// This calls [`GeoPackage::table_extensions`]. A pyramid containing WebP
+    /// payloads has a `gpkg_webp` row here, and one whose zoom levels do not
+    /// step by factors of two has a `gpkg_zoom_other` row.
     pub fn extensions(&self) -> Result<Vec<ExtensionRow>> {
         self.gpkg().table_extensions(self.table_name())
     }
@@ -222,10 +223,10 @@ pub(crate) fn register(
 /// already there, returning whether one was written.
 ///
 /// [`register`] is a plain `INSERT`, which the `ge_tce` unique constraint would
-/// reject on a repeat. This is for the callers that reach the same registration
-/// more than once and treat that as ordinary: the write path registering a
-/// geometry type it has just seen, which the layer's creation may already have
-/// registered, and which a second row of the same type reaches again.
+/// reject on a repeat. This function is for callers that expect to reach the
+/// same registration more than once. For example, the write path registers each
+/// geometry type it sees, but the layer's creation may already have registered
+/// it, and a second row of the same type reaches it again.
 ///
 /// The check is a query rather than `INSERT OR IGNORE` because a file written
 /// elsewhere need not have the unique constraint, and `OR IGNORE` would then
@@ -258,8 +259,8 @@ pub(crate) fn register_if_absent(
 /// Returns `true` if `name` is registered for `table`, which is `None` for an
 /// extension scoped to the whole GeoPackage.
 ///
-/// `false` for a file with no `gpkg_extensions` table at all, which is the
-/// common case rather than an error.
+/// `false` for a file with no `gpkg_extensions` table at all. That is the
+/// common case, not an error.
 pub(crate) fn is_registered(conn: &Connection, table: Option<&str>, name: &str) -> Result<bool> {
     if !table_exists(conn, "gpkg_extensions")? {
         return Ok(false);

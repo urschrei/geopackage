@@ -34,12 +34,13 @@ use crate::{Error, GeoPackage, Result, table_exists};
 const METADATA_TABLE: &str = "gpkg_metadata";
 const REFERENCE_TABLE: &str = "gpkg_metadata_reference";
 
-/// What a metadata reference is attached to, as a caller states it.
+/// What a metadata reference is attached to.
 ///
 /// The spec splits this across `reference_scope`, `table_name`, `column_name`
-/// and `row_id_value`, with Requirements 97 to 99 deciding which of the three
-/// are NULL for a given scope. Stating the target as one value makes an
-/// unrepresentable combination unrepresentable rather than merely invalid.
+/// and `row_id_value`, and Requirements 97 to 99 decide which of the three are
+/// NULL for each scope. This type states the target as one value, so a
+/// combination the spec forbids cannot be expressed at all, rather than being
+/// merely invalid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MetadataTarget {
     /// The GeoPackage as a whole.
@@ -75,7 +76,7 @@ pub enum MetadataTarget {
 }
 
 impl MetadataTarget {
-    /// The `reference_scope` this target is written as.
+    /// Returns the `reference_scope` this target is written as.
     pub fn scope(&self) -> ReferenceScope {
         match self {
             Self::GeoPackage => ReferenceScope::GeoPackage,
@@ -86,7 +87,7 @@ impl MetadataTarget {
         }
     }
 
-    /// The table this target names, or `None` for the whole GeoPackage.
+    /// Returns the table this target names, or `None` for the whole GeoPackage.
     pub fn table_name(&self) -> Option<&str> {
         match self {
             Self::GeoPackage => None,
@@ -111,7 +112,7 @@ impl MetadataTarget {
         }
     }
 
-    /// Rebuild a target from the four stored columns, or `None` when they do
+    /// Rebuilds a target from the four stored columns, or `None` when they do
     /// not satisfy Requirements 97 to 99 for their scope.
     fn from_columns(
         scope: ReferenceScope,
@@ -169,7 +170,7 @@ impl NewMetadata {
         }
     }
 
-    /// Override the MIME type.
+    /// Overrides the MIME type.
     #[must_use]
     pub fn mime_type(mut self, mime_type: impl Into<String>) -> Self {
         self.mime_type = mime_type.into();
@@ -180,8 +181,8 @@ impl NewMetadata {
 impl GeoPackage {
     /// Returns every `gpkg_metadata` record, by `id`.
     ///
-    /// An empty vector for a file with no metadata table, which is the common
-    /// case rather than an error.
+    /// An empty vector for a file with no metadata table. That is the common
+    /// case, not an error.
     ///
     /// # Errors
     ///
@@ -210,7 +211,7 @@ impl GeoPackage {
         Ok(rows)
     }
 
-    /// One `gpkg_metadata` record by `id`, or `None`.
+    /// Returns one `gpkg_metadata` record by `id`, or `None`.
     ///
     /// # Errors
     ///
@@ -268,12 +269,13 @@ impl GeoPackage {
 
     /// Attaches a metadata record to a target.
     ///
-    /// `parent_id` names a record this one refines. Requirement 102 forbids it
-    /// equalling `md_file_id`, which is rejected here rather than written.
+    /// `parent_id` names a record that this one refines. Requirement 102
+    /// forbids it from equalling `md_file_id`, so that case is rejected here
+    /// rather than written.
     ///
-    /// The timestamp is written in the spec's DATETIME form through
-    /// [`geopackage_core::datetime`], the same path every other DATETIME in
-    /// this crate takes.
+    /// The timestamp is written in the spec's DATETIME form by
+    /// [`geopackage_core::datetime`], like every other DATETIME this crate
+    /// writes.
     ///
     /// # Errors
     ///
@@ -345,8 +347,9 @@ impl GeoPackage {
 
     /// Returns every `gpkg_metadata_reference` row, as stored.
     ///
-    /// The edges of the reference graph, not a traversal of it: see the module
-    /// documentation, and [`GeoPackage::metadata_ancestors`] for the walk.
+    /// These are the edges of the reference graph, not a traversal of it. See
+    /// the module documentation, and use [`GeoPackage::metadata_ancestors`] to
+    /// walk the graph.
     ///
     /// # Errors
     ///
@@ -422,10 +425,11 @@ impl GeoPackage {
 
     /// Walks `md_parent_id` upwards from `id`, nearest parent first.
     ///
-    /// The returned records do not include `id` itself. The walk is the reason
-    /// enumeration hands back edges rather than a tree: `md_parent_id` is a
-    /// graph, and Requirement 102 rules out only the one-step cycle, so a
-    /// longer one has to be survived rather than assumed away.
+    /// The returned records do not include `id` itself. The listing methods
+    /// return edges rather than a tree, and leave the walk to this method,
+    /// because `md_parent_id` forms a graph. Requirement 102 rules out only the
+    /// one-step cycle, so the walk has to handle longer cycles rather than
+    /// assume there are none.
     ///
     /// # Errors
     ///
@@ -466,8 +470,8 @@ impl GeoPackage {
 
 /// Creates both tables and registers the extension, once.
 ///
-/// Both are registered even when only one is about to gain rows: the extension
-/// is the pair, and Annex F.8's test for it expects to find a row for each.
+/// Both are registered even when only one is about to gain rows, because the
+/// extension is the pair and Annex F.8's test for it expects a row for each.
 /// GDAL writes both rows too.
 fn ensure_tables(conn: &Connection) -> Result<()> {
     if table_exists(conn, METADATA_TABLE)? {

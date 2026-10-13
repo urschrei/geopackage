@@ -26,10 +26,10 @@ const CONSTRAINTS_TABLE: &str = "gpkg_data_column_constraints";
 
 /// Which spelling of the inclusivity columns a file uses.
 ///
-/// GeoPackage 1.0 named them `minIsInclusive` and `maxIsInclusive`; 1.1
-/// corrected that to `min_is_inclusive` and `max_is_inclusive`, and the spec
-/// warns that files written under the old names are still about. SQLite column
-/// names are case-insensitive, so the difference is the underscores.
+/// GeoPackage 1.0 named them `minIsInclusive` and `maxIsInclusive`. Version
+/// 1.1 renamed them `min_is_inclusive` and `max_is_inclusive`, and the spec
+/// warns that files with the old names are still around. SQLite column names
+/// are case-insensitive, so only the underscores differ.
 #[derive(Debug, Clone, Copy)]
 struct InclusiveColumns {
     min: &'static str,
@@ -69,8 +69,8 @@ impl GeoPackage {
     /// Returns the `gpkg_data_columns` rows describing one table's columns,
     /// in column order as the file stores them.
     ///
-    /// Empty for a file without the `gpkg_schema` extension, which is the
-    /// common case rather than an error. Table names are compared
+    /// Empty for a file without the `gpkg_schema` extension. That is the
+    /// common case, not an error. Table names are compared
     /// case-insensitively, as elsewhere in the catalogue.
     pub fn data_columns(&self, table_name: &str) -> Result<Vec<DataColumn>> {
         let conn = self.connection();
@@ -102,10 +102,11 @@ impl GeoPackage {
     /// # Errors
     ///
     /// [`Error::InvalidColumnConstraint`] for rows that declare a constraint
-    /// the spec's own rules rule out: a `constraint_type` outside the three of
+    /// the spec rules out: a `constraint_type` other than the three in
     /// Requirement 108, or a `range` without the bounds Requirement 111 makes
-    /// mandatory. Reading such a file is not an error until something asks
-    /// what the constraint allows, which such a row cannot answer.
+    /// mandatory. Reading such a file is not an error in itself. The error
+    /// comes only when something asks what the constraint allows, which such
+    /// a row cannot answer.
     pub fn column_constraint(&self, name: &str) -> Result<Option<ColumnConstraint>> {
         let conn = self.connection();
         if !table_exists(conn, CONSTRAINTS_TABLE)? {
@@ -156,8 +157,8 @@ impl GeoPackage {
     /// Describes a column, replacing any description it already has.
     ///
     /// Creates the extension's tables and registers `gpkg_schema` on first
-    /// use. The primary key is the table and column pair, so this is an upsert
-    /// rather than an insert: a column has one description or none.
+    /// use. The table and column pair is the primary key, so a column has one
+    /// description or none, and this is an upsert rather than an insert.
     ///
     /// # Errors
     ///
@@ -202,8 +203,8 @@ impl GeoPackage {
     /// Adds a constraint, replacing any of the same name.
     ///
     /// Creates the extension's tables and registers `gpkg_schema` on first
-    /// use. An `enum` becomes one row per member and a `range` or `glob` one
-    /// row, which is the shape Requirement 109 describes.
+    /// use. An `enum` is written as one row per member, and a `range` or
+    /// `glob` as one row, as Requirement 109 describes.
     ///
     /// # Errors
     ///
@@ -308,7 +309,7 @@ struct ConstraintRow {
     description: Option<String>,
 }
 
-/// Turn the rows sharing a name into one constraint.
+/// Turns the rows sharing a name into one constraint.
 fn assemble(name: &str, rows: Vec<ConstraintRow>) -> Result<Option<ColumnConstraint>> {
     let Some(first) = rows.first() else {
         return Ok(None);
@@ -358,10 +359,10 @@ fn assemble(name: &str, rows: Vec<ConstraintRow>) -> Result<Option<ColumnConstra
 
 /// Creates both tables and registers the extension, once.
 ///
-/// Requirement 141 asks for a row per table, so both are registered together
-/// even though only one of them may be about to gain rows: the tables are
-/// created together, and a `gpkg_data_columns` with no constraints table to
-/// point at would be a file half in the extension.
+/// Requirement 141 asks for a row per table. Both are registered together,
+/// even when only one is about to gain rows, because the tables are created
+/// together and a `gpkg_data_columns` with no constraints table to point at
+/// would leave the file half in the extension.
 fn ensure_tables(conn: &Connection) -> Result<()> {
     if table_exists(conn, DATA_COLUMNS_TABLE)? {
         return Ok(());

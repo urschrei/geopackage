@@ -283,9 +283,9 @@ impl Finding {
 
     /// Returns what would put this right, when anything here can.
     ///
-    /// `None` means the fix is outside this crate: it needs the writer that
-    /// produced the file, or a decision about data this crate should not take
-    /// on the caller's behalf.
+    /// `None` means the fix is outside this crate. It needs the writer that
+    /// produced the file, or a decision about data that this crate should not
+    /// make for you.
     pub fn repair(&self) -> Option<&'static str> {
         match self {
             Self::SpatialIndexOutOfStep { .. } => {
@@ -324,9 +324,9 @@ impl Finding {
 
 /// One line describing the finding, without its severity or repair advice.
 ///
-/// Those are [`Finding::severity`] and [`Finding::repair`], kept separate so a
-/// caller decides how to arrange them. This exists so that every caller that
-/// prints a finding does not write the same match; `gpkg validate` composes all
+/// Those are [`Finding::severity`] and [`Finding::repair`], kept separate so
+/// you can decide how to arrange them. This impl saves every caller that prints
+/// a finding from writing the same match. `gpkg validate` combines all
 /// three.
 impl fmt::Display for Finding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -494,7 +494,7 @@ impl fmt::Display for On<'_> {
 impl GeoPackage {
     /// Checks the file and reports what is wrong with it.
     ///
-    /// One pass over everything this crate knows how to check: the container's
+    /// Runs one pass over everything this crate can check: the container's
     /// version stamp and catalogue, the extension registrations, every feature
     /// table's spatial index, every tile pyramid's matrix rules, the ancillary
     /// rows and payloads of every tiled gridded coverage, and the two extension
@@ -503,15 +503,15 @@ impl GeoPackage {
     ///
     /// # Cost
     ///
-    /// Each check except one reads catalogue rows, pragmas and index shadow
+    /// Every check but one reads catalogue rows, pragmas and index shadow
     /// tables, so the work is proportional to the number of tables, not to the
-    /// size of the file. The exception is coverages: the encoding requirements
-    /// of the extension are statements about payloads, so the check reads each
-    /// coverage tile. For a file without a coverage, the cost does not change.
+    /// size of the file. The exception is coverages. The extension's encoding
+    /// requirements apply to payloads, so that check reads every coverage
+    /// tile. A file without a coverage does not pay this cost.
     ///
-    /// An empty vector means every check passed, not that the file is
-    /// conformant in every respect the spec defines: this reports what it can
-    /// see, and the OGC ETS remains the authority.
+    /// An empty vector means every check passed. It does not mean the file
+    /// conforms in every respect the spec defines. This method reports what it
+    /// can see, and the OGC ETS remains the authority.
     ///
     /// Nothing is modified. [`Finding::repair`] says what would put a finding
     /// right where this crate can.
@@ -637,12 +637,11 @@ impl GeoPackage {
     /// Checks every tiled gridded coverage: its ancillary rows, and its
     /// payloads.
     ///
-    /// This is the one pass with work that scales with the size of the file.
-    /// It reads every coverage tile, because the encoding requirements apply to
-    /// payloads, and the profile needs the header, not a prefix of the blob (the
-    /// IFD of a TIFF can follow its image data). The pass does not check a
-    /// sample of the tiles, because the result would then report on tiles that
-    /// it did not check.
+    /// This is the only pass whose work scales with the size of the file. It
+    /// reads every coverage tile, because the encoding requirements apply to
+    /// payloads, and the profile needs the header, not a prefix of the blob
+    /// (the IFD of a TIFF can follow its image data). It does not sample the
+    /// tiles, because the result would then report on tiles it did not check.
     fn validate_coverages(&self, findings: &mut Vec<Finding>) -> Result<()> {
         for entry in self.contents()? {
             if entry.data_type != ContentsDataType::Coverage {
@@ -771,10 +770,11 @@ impl GeoPackage {
     /// Checks every payload of one coverage against the encoding profile and
     /// against the `datatype` of the coverage.
     ///
-    /// Counts the payloads for each coverage, and does not report each tile. One
-    /// defective encoder that writes ten thousand tiles is one fault, and ten
-    /// thousand identical findings would hide all other findings. The finding
-    /// keeps the detail of the first payload, which identifies the fault.
+    /// Reports a count of payloads for each coverage, not a finding per tile.
+    /// One defective encoder that writes ten thousand tiles is one fault, and
+    /// ten thousand identical findings would hide all other findings. The
+    /// finding keeps the detail of the first payload, which identifies the
+    /// fault.
     fn validate_coverage_payloads(
         &self,
         coverage: &Coverage<'_>,

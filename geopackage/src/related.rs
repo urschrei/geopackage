@@ -34,7 +34,7 @@ pub struct NewRelation {
     /// The mapping table to create. Must not already exist.
     pub mapping_table_name: String,
     /// The base table's primary key column. `id` when `None`, which is the
-    /// column default, though a GeoPackage feature table conventionally uses
+    /// column default, although GeoPackage feature tables conventionally use
     /// `fid`.
     pub base_primary_column: Option<String>,
     /// The related table's primary key column. `id` when `None`.
@@ -60,14 +60,14 @@ impl NewRelation {
         }
     }
 
-    /// Name the base table's primary key column, when it is not `id`.
+    /// Sets the base table's primary key column, when it is not `id`.
     #[must_use]
     pub fn base_primary_column(mut self, column: impl Into<String>) -> Self {
         self.base_primary_column = Some(column.into());
         self
     }
 
-    /// Name the related table's primary key column, when it is not `id`.
+    /// Sets the related table's primary key column, when it is not `id`.
     #[must_use]
     pub fn related_primary_column(mut self, column: impl Into<String>) -> Self {
         self.related_primary_column = Some(column.into());
@@ -123,12 +123,12 @@ impl GeoPackage {
             .collect())
     }
 
-    /// The `related_id` values a relationship maps `base_id` to.
+    /// Returns the `related_id` values a relationship maps `base_id` to.
     ///
-    /// Returns the mapping table's rows as stored, in its own order, with
-    /// duplicates
-    /// kept: the spec constrains neither the cardinality nor the uniqueness of
-    /// a mapping, so removing anything here would be inventing a rule.
+    /// The values come back as the mapping table stores them, in its own
+    /// order and with duplicates kept. The spec constrains neither the
+    /// cardinality nor the uniqueness of a mapping, so removing anything here
+    /// would invent a rule.
     ///
     /// # Errors
     ///
@@ -153,8 +153,7 @@ impl GeoPackage {
     }
 
     /// Creates a relationship: its `gpkgext_relations` row, its mapping
-    /// table,
-    /// and the extension registrations both need.
+    /// table, and the extension registrations both need.
     ///
     /// Returns the new `gpkgext_relations.id`.
     ///
@@ -241,7 +240,7 @@ impl GeoPackage {
         Ok(id)
     }
 
-    /// Map `base_id` to `related_id` in a relationship's mapping table.
+    /// Maps `base_id` to `related_id` in a relationship's mapping table.
     ///
     /// # Errors
     ///
