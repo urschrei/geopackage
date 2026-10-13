@@ -22,9 +22,9 @@ use crate::ident;
 ///
 /// The spec's Extension Template gives `related_tables` and adds that "upon
 /// adoption the alias `gpkg_related_tables` MAY be used". This crate writes
-/// the prefixed form, the spelling found in files in circulation, GDAL's
-/// among them; both are recognised on read, and the spec's own tests accept
-/// either.
+/// the prefixed form, which is the spelling found in files in circulation,
+/// including GDAL's. Both are recognised on read, and the spec's own tests
+/// accept either.
 pub const EXTENSION_NAME: &str = "gpkg_related_tables";
 /// `gpkg_extensions.definition` value for [`EXTENSION_NAME`].
 pub const EXTENSION_DEFINITION: &str = "http://www.geopackage.org/18-000.html";
@@ -68,10 +68,10 @@ pub struct Relation {
 
 /// A relationship's kind (`relation_name`).
 ///
-/// Requirement 8: the value SHALL either name one of the requirements classes
-/// defined in this or another OGC standard, or be of the form
-/// `x-<author>_<relation_name>`. A value that is neither is non-conformant, and
-/// is kept as [`RelationName::Other`] so such a file still reads.
+/// Requirement 8 says the value SHALL either name one of the requirements
+/// classes defined in this or another OGC standard, or be of the form
+/// `x-<author>_<relation_name>`. A value that is neither is non-conformant. It
+/// is kept as [`RelationName::Other`] so that such a file still reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RelationName {
@@ -93,7 +93,7 @@ pub enum RelationName {
         name: String,
     },
     /// A value that is neither a defined class nor the `x-` form, kept as
-    /// written. Non-conformant per Requirement 8.
+    /// written. Requirement 8 makes it non-conformant.
     Other(String),
 }
 
@@ -151,8 +151,9 @@ impl fmt::Display for RelationName {
 /// Returns `CREATE TABLE` SQL for a user-defined mapping table.
 ///
 /// Requirement 9 asks for `base_id` and `related_id` and permits other
-/// columns; Table 3 gives both as non-null. GDAL leaves them nullable, which
-/// is accepted on read, but this crate writes the table definition's form.
+/// columns. Table 3 gives both as non-null. GDAL leaves them nullable, which
+/// is accepted on read, but this crate writes the form in the table
+/// definition.
 ///
 /// # Errors
 ///

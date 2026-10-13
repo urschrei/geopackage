@@ -51,8 +51,8 @@ pub const COVERAGE_EXTENSION_NAME: &str = "gpkg_2d_gridded_coverage";
 /// The `gpkg_extensions.definition` value for [`COVERAGE_EXTENSION_NAME`].
 ///
 /// This is the r1 URL. The Extension Table Record in the r2 spec source gives
-/// this URL, and GDAL writes it. The value is copied and not corrected, as with
-/// all normative text in this workspace.
+/// this URL, and GDAL writes it. As with all normative text in this workspace,
+/// the value is copied, not corrected.
 pub const COVERAGE_EXTENSION_DEFINITION: &str =
     "http://docs.opengeospatial.org/is/17-066r1/17-066r1.html";
 /// The `gpkg_extensions.scope` value for the three rows that a coverage
@@ -60,8 +60,8 @@ pub const COVERAGE_EXTENSION_DEFINITION: &str =
 pub const COVERAGE_EXTENSION_SCOPE: &str = "read-write";
 /// The `gpkg_contents.data_type` of a tiled gridded coverage (Requirement 5).
 ///
-/// The value is not `tiles`: a coverage is a different kind of content from a
-/// tile pyramid.
+/// The value is not `tiles`, because a coverage is a different kind of content
+/// from a tile pyramid.
 pub const COVERAGE_DATA_TYPE: &str = "2d-gridded-coverage";
 /// The per-coverage ancillary table (Requirement 1).
 pub const COVERAGE_ANCILLARY_TABLE: &str = "gpkg_2d_gridded_coverage_ancillary";
@@ -156,10 +156,10 @@ impl TiffCompression {
     /// Returns `true` if the scheme is part of baseline TIFF, which
     /// Requirement 15 specifies.
     ///
-    /// Deflate is not baseline. Requirement 18 says that LZW *MAY* be used, and
-    /// it does not say "only LZW", so Requirements 15 and 18 do not agree. A
-    /// reader accepts a Deflate payload, and a writer uses this predicate to
-    /// reject one.
+    /// Deflate is not baseline. Requirement 18 says that LZW *MAY* be used,
+    /// not "only LZW", so Requirements 15 and 18 do not agree. A reader
+    /// accepts a Deflate payload, and a writer uses this predicate to reject
+    /// one.
     pub fn is_baseline(self) -> bool {
         matches!(self, Self::None | Self::Lzw)
     }
@@ -186,9 +186,9 @@ pub struct CoverageTiff {
 /// contains the values that the payload *declares*. This function does not
 /// check Requirement 21, which applies to the samples.
 ///
-/// The checks run in the order 15, 19, 20, 16, 17, 18: the structure first,
-/// then the sample description. A payload with the wrong structure therefore
-/// does not fail first on, for example, `SampleFormat`.
+/// The checks run in the order 15, 19, 20, 16, 17, 18. The structure is
+/// checked before the sample description, so a payload with the wrong
+/// structure does not fail first on, for example, `SampleFormat`.
 ///
 /// # Errors
 ///
@@ -336,9 +336,9 @@ pub fn coverage_tiff(bytes: &[u8]) -> Result<CoverageTiff, TileError> {
 
 /// The header values of a conforming PNG coverage payload.
 ///
-/// The struct has no sample-type field. Requirement 13 permits one form only:
-/// "If type `png` is being used, the data _SHALL_ be 16-bit unsigned integer
-/// (single channel - "greyscale")". A `CoveragePng` is always 16-bit
+/// The struct has no sample-type field, because Requirement 13 permits only one
+/// form: "If type `png` is being used, the data _SHALL_ be 16-bit unsigned
+/// integer (single channel - "greyscale")". A `CoveragePng` is always 16-bit
 /// greyscale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -447,7 +447,7 @@ impl CoverageDatatype {
     ///   interprets Requirement 13 to include that rule, because floating-point
     ///   samples under the `datatype` `integer` make the column meaningless.
     ///
-    /// This is a predicate. A read does not enforce it, and the caller decides
+    /// This is a predicate only. A read does not enforce it, and you decide
     /// what to do with a failure.
     ///
     /// # Errors
@@ -483,7 +483,7 @@ impl CoverageDatatype {
 /// go to [`coverage_tiff`], which rejects a payload that is neither encoding.
 ///
 /// This function does not check that the encoding agrees with the coverage.
-/// [`CoverageDatatype::check_payload`] does that check.
+/// Use [`CoverageDatatype::check_payload`] for that.
 ///
 /// # Errors
 ///
@@ -580,8 +580,8 @@ pub fn coverage_png(bytes: &[u8]) -> Result<CoveragePng, TileError> {
 /// Reads the pixel dimensions of a TIFF payload from its first IFD.
 ///
 /// Does not apply the profile check. [`crate::tiles::probe`] uses this function
-/// for every TIFF payload, coverage or not, so that the crate has one IFD
-/// reader only. Two readers can disagree on a malformed file.
+/// for every TIFF payload, coverage or not, so that the crate has only one IFD
+/// reader. Two readers could disagree on a malformed file.
 pub(crate) fn dimensions(bytes: &[u8]) -> Result<(i64, i64), TileError> {
     FirstIfd::read(bytes)?.dimensions()
 }
@@ -608,7 +608,7 @@ struct FirstIfd {
 /// `Present(None)` is a tag with a value that this module does not read: a
 /// vector, or a type wider than its entry. Both need an offset to follow. Each
 /// tag that the profile constrains is a single number, so the result is the
-/// same as the result of a full read.
+/// same as a full read would give.
 #[derive(Debug, Default, Clone, Copy)]
 enum Tag {
     #[default]
@@ -745,8 +745,8 @@ impl FirstIfd {
     }
 }
 
-/// Reads the byte order and the version from a TIFF header. The walk uses this
-/// function, and so does the Requirement 15 check that runs before the walk.
+/// Reads the byte order and the version from a TIFF header. Both the walk and
+/// the Requirement 15 check that runs before it use this function.
 fn header(bytes: &[u8]) -> Option<(Endian, u16)> {
     let [order0, order1, version0, version1] = *bytes.first_chunk::<4>()?;
     let endian = match (order0, order1) {

@@ -27,9 +27,9 @@ pub enum ExtensionScope {
     ReadWrite,
     /// `write-only`: the extension affects only writers.
     ///
-    /// The spec's example is an extension defining a trigger that calls a
-    /// non-standard SQL function: triggers fire only on write, so read-only
-    /// access can ignore it safely.
+    /// The spec's example is an extension that defines a trigger calling a
+    /// non-standard SQL function. Triggers fire only on write, so read-only
+    /// access can safely ignore it.
     WriteOnly,
     /// A value Requirement 64 does not allow, kept as written.
     Other(String),
@@ -38,9 +38,9 @@ pub enum ExtensionScope {
 impl ExtensionScope {
     /// Classifies a `scope` column value.
     ///
-    /// Requirement 64 fixes the two valid values as lowercase, and anything
-    /// else becomes [`ExtensionScope::Other`] rather than an error: this is a
-    /// value read from a file someone else wrote.
+    /// Requirement 64 fixes the two valid values as lowercase. Anything else
+    /// becomes [`ExtensionScope::Other`] rather than an error, because the
+    /// value comes from a file someone else wrote.
     pub fn parse(value: &str) -> Self {
         match value {
             "read-write" => Self::ReadWrite,
@@ -61,8 +61,8 @@ impl ExtensionScope {
     /// Returns `true` if a reader must understand the extension to read the
     /// affected data correctly.
     ///
-    /// True for an unrecognised scope value: a value the spec does not define
-    /// says nothing about what can be ignored.
+    /// This is true for an unrecognised scope value too, because a value the
+    /// spec does not define says nothing about what can be ignored.
     pub fn affects_readers(&self) -> bool {
         !matches!(self, Self::WriteOnly)
     }
@@ -77,14 +77,15 @@ impl ExtensionScope {
 
 /// An extension name this workspace can identify.
 ///
-/// Names come from Annex F, from the two extensions the GeoPackage SWG voted
-/// to remove on 2016-08-15 (still numbered in the annex, and still present in
-/// files written before then), and from `gdal_aspatial`, which is not an OGC
-/// extension but is common enough in older GDAL output to be worth naming.
+/// The names come from Annex F and from the two extensions the GeoPackage SWG
+/// voted to remove on 2016-08-15. The removed extensions are still numbered in
+/// the annex and still present in files written before then. The list also
+/// includes `gdal_aspatial`, which is not an OGC extension but is common
+/// enough in older GDAL output to be worth naming.
 ///
-/// This is the interpretation of a name, not the name itself: several
+/// A variant is the interpretation of a name, not the name itself. Several
 /// extensions have been registered under more than one spelling over the
-/// years, and all of an extension's spellings map to one variant here.
+/// years, and all of an extension's spellings map to one variant.
 /// [`Extension::name`] returns the current spelling, so a name read from a
 /// file and passed back through this type is normalised rather than preserved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,9 +126,9 @@ pub enum Extension {
     /// `gpkg_2d_gridded_coverage` (Annex F.11, published separately as OGC
     /// 17-066r2): tile payloads that contain gridded values, not images.
     ///
-    /// Version 1.1 of the extension, which added integer samples to the TIFF
-    /// encoding. The `gpkg_extensions.definition` value is still the r1 URL, as
-    /// in the r2 spec source; see
+    /// This is version 1.1 of the extension, which added integer samples to the
+    /// TIFF encoding. The `gpkg_extensions.definition` value is still the r1
+    /// URL, as in the r2 spec source. See
     /// [`crate::coverage::COVERAGE_EXTENSION_DEFINITION`].
     ///
     /// Also matches the two earlier spellings, `gpkg_elevation_tiles` from
@@ -143,7 +144,7 @@ pub enum Extension {
     /// `gdal_aspatial`: GDAL's pre-1.2 convention for a table with no
     /// geometry, superseded by the `attributes` data type.
     ///
-    /// Not an OGC extension: the author prefix is `gdal`.
+    /// This is not an OGC extension. Its author prefix is `gdal`.
     GdalAspatial,
     /// A name this workspace does not recognise, kept as written.
     Other(String),
@@ -160,11 +161,11 @@ impl Extension {
     /// Identifies an `extension_name` column value.
     ///
     /// Names are case sensitive per Requirement 62, and are matched that way,
-    /// with one exception: the geometry type in a `gpkg_geom_<TYPE>` name is
+    /// with one exception. The geometry type in a `gpkg_geom_<TYPE>` name is
     /// parsed the way [`GeometryType::parse`] parses one from
     /// `gpkg_geometry_columns`, which accepts the spellings found in the
-    /// wild. A `gpkg_geom_` name whose type this crate cannot parse, or is
-    /// not an extension type, is [`Extension::Other`].
+    /// wild. A `gpkg_geom_` name whose type this crate cannot parse, or whose
+    /// type is not an extension type, is [`Extension::Other`].
     pub fn from_name(name: &str) -> Self {
         if let Some(geometry_type) = name.strip_prefix(GEOM_PREFIX) {
             return match GeometryType::parse(geometry_type) {
@@ -193,9 +194,9 @@ impl Extension {
 
     /// Returns the current `extension_name` spelling.
     ///
-    /// For an extension registered under more than one name over the years
-    /// this is the newest spelling, which is not necessarily the one in the
-    /// file being read.
+    /// For an extension registered under more than one name, this is the
+    /// newest spelling, which is not necessarily the one in the file being
+    /// read.
     pub fn name(&self) -> String {
         match self {
             Self::GeometryType(geometry_type) => {
@@ -220,9 +221,9 @@ impl Extension {
     /// Returns what this workspace can do with the extension.
     ///
     /// This lives beside the names rather than in the `geopackage` crate so
-    /// that the match is exhaustive: adding a variant above stops compiling
-    /// until its support level is stated, where a wildcard in another crate
-    /// would silently classify it as [`ExtensionSupport::Unrecognised`].
+    /// that the match is exhaustive. A new variant does not compile until its
+    /// support level is stated. A wildcard in another crate would silently
+    /// classify it as [`ExtensionSupport::Unrecognised`].
     pub fn support(&self) -> ExtensionSupport {
         match self {
             // A non-linear geometry column is read and written: the blobs are
@@ -251,7 +252,7 @@ impl Extension {
     /// Returns `true` if OGC removed this extension from the standard.
     ///
     /// Both removals happened on 2016-08-15, in the same SWG vote, over
-    /// interoperability concerns. Files may still contain them; this
+    /// interoperability concerns. Files may still contain them. This
     /// workspace reads such files but never writes either extension.
     pub fn is_removed(&self) -> bool {
         self.support() == ExtensionSupport::Removed
@@ -260,9 +261,9 @@ impl Extension {
 
 /// What this workspace can do with a registered extension.
 ///
-/// This describes the implementation, not the extension: an extension is
+/// This describes the implementation, not the extension. An extension is
 /// [`ExtensionSupport::Known`] when this workspace can identify it and the
-/// tables it owns, which is enough to leave it alone safely, and
+/// tables it owns, which is enough to leave it safely alone. It is
 /// [`ExtensionSupport::Implemented`] only when it is read and written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -271,10 +272,9 @@ pub enum ExtensionSupport {
     Implemented,
     /// Identified, but not read or written.
     ///
-    /// The extension's own tables are left untouched, and writing to an
-    /// ordinary feature or tile table in the same file is unaffected, because
-    /// what these extensions add sits beside the feature data rather than
-    /// inside it.
+    /// The extension's own tables are left untouched. Writing to an ordinary
+    /// feature or tile table in the same file is unaffected, because what these
+    /// extensions add sits beside the feature data, not inside it.
     Known,
     /// Removed from the standard by the SWG vote of 2016-08-15.
     ///
@@ -282,8 +282,8 @@ pub enum ExtensionSupport {
     Removed,
     /// Not recognised.
     ///
-    /// Nothing can be assumed about what such an extension requires of a
-    /// writer, which is what separates it from [`ExtensionSupport::Known`].
+    /// Unlike [`ExtensionSupport::Known`], nothing can be assumed about what
+    /// such an extension requires of a writer.
     Unrecognised,
 }
 

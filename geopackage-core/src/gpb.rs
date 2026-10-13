@@ -118,12 +118,12 @@ const HEADER_BASE_LEN: usize = 8;
 /// Returns the byte offset of the WKB body within a GPB blob, without
 /// decoding the envelope.
 ///
-/// [`parse_header`] also decodes the envelope's doubles, which are not needed
-/// to locate the body: the offset follows from the envelope indicator in the
-/// flags byte alone. Reading a whole geometry column as WKB is exactly that
-/// case, and the decode would otherwise happen once per row. The magic,
-/// version and indicator are still validated, so a malformed blob is an error
-/// here as it is there.
+/// [`parse_header`] also decodes the envelope's doubles, but you don't need
+/// them to locate the body. The offset follows from the envelope indicator in
+/// the flags byte alone. Reading a whole geometry column as WKB needs only the
+/// offset, and would otherwise decode the envelope once per row. This function
+/// still validates the magic, version and indicator, so a malformed blob is an
+/// error here just as it is in the full parse.
 ///
 /// # Errors
 ///
@@ -277,11 +277,11 @@ pub fn encode_header(srs_id: i32, envelope: &Envelope, empty: bool, extended: bo
     out
 }
 
-/// Encodes a GPB header into an existing buffer; [`encode_header`] with the
-/// allocation under the caller's control.
+/// Encodes a GPB header into an existing buffer. This is [`encode_header`]
+/// with the allocation under your control.
 ///
-/// The write path builds one blob per geometry: sizing the buffer for the
-/// header and the body up front and appending both encodes a row in a single
+/// The write path builds one blob per geometry. If you size the buffer for the
+/// header and the body up front and append both, each row needs only a single
 /// allocation.
 #[hotpath::measure(label = "gpb::encode_header_into")]
 pub fn encode_header_into(
@@ -413,8 +413,8 @@ mod body_offset_tests {
         out
     }
 
-    /// The cheap offset must agree with the full parse for every indicator,
-    /// which is the only thing that makes it safe to substitute.
+    /// The cheap offset must agree with the full parse for every indicator.
+    /// Only that agreement makes it safe to use one in place of the other.
     #[test]
     fn agrees_with_parse_header_for_every_indicator() {
         for (indicator, doubles) in [(0u8, 0usize), (1, 4), (2, 6), (3, 6), (4, 8)] {

@@ -47,7 +47,7 @@ pub fn build(path: &Path, layer_name: &str) -> Result<ExitCode> {
     }
 }
 
-/// `gpkg repair`: put right the index of every layer that needs it, or of one
+/// `gpkg repair`: repair the index of every layer that needs it, or of one
 /// named layer.
 pub fn repair(path: &Path, layer_name: Option<&str>) -> Result<ExitCode> {
     let gpkg = GeoPackage::open_lenient(path)?;

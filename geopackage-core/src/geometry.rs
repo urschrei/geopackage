@@ -37,24 +37,23 @@ pub enum GeometryError {
     /// The GPB header could not be parsed.
     #[error(transparent)]
     Header(#[from] gpb::GpbError),
-    /// The ISO WKB body could not be read. This includes non-linear curve
-    /// types (`CIRCULARSTRING`, `CURVEPOLYGON`, …) that the `wkb` crate does
-    /// not yet support, as well as structurally malformed bodies.
+    /// The ISO WKB body could not be read. This covers structurally malformed
+    /// bodies and the non-linear curve types (`CIRCULARSTRING`,
+    /// `CURVEPOLYGON`, …) that the `wkb` crate does not yet support.
     ///
-    /// Raised by paths that read a body through the `wkb` reader, such as
-    /// [`GpbGeometry`]. [`encode_gpb_from_wkb`] reads bodies with
-    /// [`crate::curve`] instead and reports structural problems with that
-    /// scanner's variants.
+    /// Code that reads a body through the `wkb` reader, such as
+    /// [`GpbGeometry`], returns this variant. [`encode_gpb_from_wkb`] reads
+    /// bodies with [`crate::curve`] instead, and reports structural problems
+    /// with that scanner's variants.
     #[error("WKB body is unreadable (unsupported curve type or malformed geometry)")]
     Body(#[from] wkb::error::WkbError),
-    /// A body whose own type is one of the core ones but which contains a
-    /// non-linear member, such as a `GEOMETRYCOLLECTION` containing a
-    /// `CIRCULARSTRING`.
+    /// A body of a core type that contains a non-linear member, such as a
+    /// `GEOMETRYCOLLECTION` containing a `CIRCULARSTRING`.
     ///
-    /// The byte scanner reads such a body, but reading it back as a geometry
+    /// The byte scanner can read such a body. Reading it back as a geometry
     /// goes through the `wkb` reader, which is chosen by the body's own type
-    /// code and cannot read the member. Writing one would produce a blob this
-    /// crate's own read path cannot return, so the write path rejects it.
+    /// code and cannot read the member. Writing one would produce a blob that
+    /// this crate's own read path cannot return, so the write path rejects it.
     #[error(
         "a {container} containing a {member} cannot be written: a non-linear geometry is writable only as a body's own type"
     )]
@@ -94,17 +93,17 @@ pub enum GeometryError {
     /// Nested geometry containers exceeded the walk's depth limit.
     #[error("WKB geometry nesting is too deep")]
     NestingTooDeep,
-    /// The geometry could not be encoded to WKB: the georust `wkb` writer
-    /// rejected it (for example a coordinate dimension it cannot serialise).
+    /// The georust `wkb` writer could not encode the geometry, for example
+    /// because it has a coordinate dimension the writer cannot serialise.
     #[error("failed to encode geometry to WKB")]
     EncodeWkb(#[source] wkb::error::WkbError),
 }
 
 /// A GeoPackage geometry: a parsed GPB header plus its ISO WKB body.
 ///
-/// Construct with [`GpbGeometry::parse`]. The wrapper borrows the source blob;
-/// coordinate access is constant-time (the underlying `wkb` reader performs a
-/// single validating pass on construction) but not zero-copy.
+/// Construct one with [`GpbGeometry::parse`]. The wrapper borrows the source
+/// blob. The underlying `wkb` reader makes a single validating pass on
+/// construction, so coordinate access is constant-time, but not zero-copy.
 #[derive(Debug, Clone)]
 pub struct GpbGeometry<'a> {
     header: GpbHeader,
@@ -139,7 +138,7 @@ impl<'a> GpbGeometry<'a> {
 
     /// Returns the raw ISO WKB body slice (everything after the GPB header).
     ///
-    /// This may include trailing bytes beyond the geometry; use
+    /// The slice may include trailing bytes beyond the geometry. Use
     /// [`GpbGeometry::wkb`] and [`wkb::reader::Wkb::buf`] for the exact
     /// geometry extent.
     pub fn wkb_body(&self) -> &'a [u8] {
@@ -167,11 +166,11 @@ impl<'a> GpbGeometry<'a> {
     /// coordinate (an empty geometry).
     ///
     /// This is the fallback the `ST_*` SQL functions use when the GPB header
-    /// has no envelope. Coordinates are visited through the `geo-traits`
-    /// interface, so every geometry type the `wkb` crate can read is handled,
-    /// in either byte order and with any Z/M dimensions (Z and M are ignored;
-    /// only X and Y bound the box). Non-finite coordinates (the NaN empty-point
-    /// convention, or malformed values) do not contribute to the box.
+    /// has no envelope. The walk goes through the `geo-traits` interface, so
+    /// it handles every geometry type the `wkb` crate can read, in either byte
+    /// order and with any Z/M dimensions. Only X and Y bound the box; Z and M
+    /// are ignored. Non-finite coordinates, such as the NaN empty-point
+    /// convention or malformed values, do not contribute to the box.
     pub fn xy_envelope(&self) -> Option<[f64; 4]> {
         let mut bounds = XyBounds::new();
         visit_coords(&self.wkb, &mut |x, y, _| bounds.add(x, y));
@@ -181,9 +180,9 @@ impl<'a> GpbGeometry<'a> {
     /// Returns `true` if this geometry is empty.
     ///
     /// A geometry is empty when the header's empty flag is set, or when the
-    /// body has no finite coordinate: an empty point (the all-NaN convention),
-    /// an empty linestring/polygon/multi-geometry, or an empty geometry
-    /// collection.
+    /// body has no finite coordinate. That covers an empty point (the all-NaN
+    /// convention), an empty linestring/polygon/multi-geometry, and an empty
+    /// geometry collection.
     pub fn is_empty(&self) -> bool {
         self.header.empty || self.xy_envelope().is_none()
     }
@@ -221,18 +220,18 @@ impl<'a> GpbGeometry<'a> {
 /// Returns `true` if the WKB geometry type `actual` satisfies a column
 /// declared as `declared`, per the GeoPackage instantiable-type rules.
 ///
-/// The rules are deliberately narrow: there is no general subtype lattice
-/// walk. A value satisfies its column when one of the following holds:
+/// The rules are deliberately narrow, with no general walk of the subtype
+/// lattice. A value satisfies its column when one of the following holds:
 ///
-/// - it is an exact type match; or
+/// - its type matches exactly;
 /// - the column is declared `GEOMETRY`, the root supertype, which accepts any
-///   geometry; or
+///   geometry;
 /// - the column is declared `GEOMETRYCOLLECTION`, which accepts only the
 ///   collection types (`GEOMETRYCOLLECTION`, `MULTIPOINT`, `MULTILINESTRING`,
 ///   `MULTIPOLYGON`, `MULTICURVE`, `MULTISURFACE`).
 ///
-/// In particular a `LINESTRING` does **not** satisfy a `MULTILINESTRING`
-/// column: a multi-geometry is a collection of its parts, not their supertype.
+/// A `LINESTRING` does **not** satisfy a `MULTILINESTRING` column, because a
+/// multi-geometry is a collection of its parts, not their supertype.
 pub fn geometry_type_matches(actual: GeometryType, declared: GeometryType) -> bool {
     use GeometryType::*;
     if declared == Geometry || declared == actual {
@@ -254,12 +253,12 @@ pub fn geometry_type_matches(actual: GeometryType, declared: GeometryType) -> bo
 
 /// Traverses a GPB blob's body for its XY bounds, non-linear types included.
 ///
-/// Every body is walked by [`crate::curve`], which reads all the Annex G
-/// types directly from the WKB bytes and is the faster reader over
-/// coordinate runs. One consequence: a core-typed container holding a
-/// non-linear member, which this crate's writer refuses and the `wkb`-reader
-/// read path cannot return, still yields its bounds here, so a file another
-/// tool wrote that way can be indexed.
+/// [`crate::curve`] walks every body. It reads all the Annex G types directly
+/// from the WKB bytes and is the faster reader over coordinate runs. As a
+/// result, a core-typed container holding a non-linear member still yields its
+/// bounds here, so you can index a file that another tool wrote that way. This
+/// crate's writer refuses such a container, and the `wkb`-reader read path
+/// cannot return it.
 fn body_xy_bounds(blob: &[u8]) -> Result<Option<[f64; 4]>, GeometryError> {
     let (_, offset) = gpb::parse_header(blob)?;
     // `parse_header` guarantees `offset <= blob.len()`.
@@ -270,8 +269,8 @@ fn body_xy_bounds(blob: &[u8]) -> Result<Option<[f64; 4]>, GeometryError> {
 /// Returns the XY bounds `[min_x, max_x, min_y, max_y]` of a GPB blob, or
 /// `None` when the geometry is empty.
 ///
-/// Reads the header envelope when one is present, which is constant-time, and
-/// traverses the body otherwise. Backs `ST_MinX` and its three siblings.
+/// Reads the header envelope in constant time when one is present, and
+/// traverses the body otherwise. `ST_MinX` and its three siblings use this.
 ///
 /// # Errors
 ///
@@ -286,9 +285,9 @@ pub fn blob_xy_envelope(blob: &[u8]) -> Result<Option<[f64; 4]>, GeometryError> 
 
 /// Returns `true` if a GPB blob's geometry is empty.
 ///
-/// Reads the header's empty flag when set, which is constant-time, and
-/// traverses the body otherwise: a geometry with no finite coordinate is
-/// empty whatever the flag says. Backs `ST_IsEmpty`.
+/// Checks the header's empty flag first, in constant time, and traverses the
+/// body only when the flag is not set. A geometry with no finite coordinate is
+/// empty whatever the flag says. `ST_IsEmpty` uses this.
 ///
 /// # Errors
 ///
@@ -304,11 +303,11 @@ pub fn blob_is_empty(blob: &[u8]) -> Result<bool, GeometryError> {
 /// Returns the XY bounds of a GPB blob and whether it is empty, from a single
 /// traversal.
 ///
-/// The bulk index build needs both, and needs them to agree with what the
+/// The bulk index build needs both values, and they must agree with what the
 /// `ST_IsEmpty`-guarded triggers would have indexed. Calling
 /// [`blob_is_empty`] and [`blob_xy_envelope`] separately would traverse the
-/// body twice, so this pairs them: emptiness is decided from the traversal, and
-/// the bounds are the header envelope when there is one.
+/// body twice. This function decides emptiness from the traversal, and uses
+/// the header envelope for the bounds when there is one.
 ///
 /// # Errors
 ///
@@ -333,10 +332,10 @@ pub fn blob_envelope_and_empty(blob: &[u8]) -> Result<(Option<[f64; 4]>, bool), 
 /// without reading coordinates.
 ///
 /// Unlike [`GpbGeometry::geometry_type`], this works on curve types the `wkb`
-/// crate cannot fully read, which is what a declared-type validator needs: a
-/// `CURVEPOLYGON` body in a column declared `POLYGON` must be detectable.
-/// GeoPackage bodies are ISO WKB; an extended-WKB (EWKB) type flag is handled
-/// defensively but is not expected in a GPB blob.
+/// crate cannot fully read. A declared-type validator needs this, because it
+/// must detect a `CURVEPOLYGON` body in a column declared `POLYGON`.
+/// GeoPackage bodies are ISO WKB. This function also handles an extended-WKB
+/// (EWKB) type flag defensively, but a GPB blob is not expected to have one.
 #[hotpath::measure(label = "geometry::wkb_geometry_type")]
 pub fn wkb_geometry_type(wkb_body: &[u8]) -> Result<GeometryType, GeometryError> {
     // Byte-order marker plus the four-byte type code; a shorter body is
@@ -371,12 +370,12 @@ pub fn wkb_geometry_type(wkb_body: &[u8]) -> Result<GeometryType, GeometryError>
 /// This crate's writer always emits an envelope, so readers and the `ST_*`
 /// functions get the bounds without traversing the WKB body.
 ///
-/// The envelope is [`Envelope::Xyz`] when the geometry has a Z dimension
-/// (including for a single point), otherwise [`Envelope::Xy`]. An M dimension
-/// never widens the envelope: readers and the rtree only use X, Y (and, for
-/// 3D, Z) bounds. A geometry with no finite coordinate is *empty*: the returned
-/// envelope is [`Envelope::None`] and the boolean is `true`, so the encoder
-/// omits the envelope and sets the header empty flag.
+/// The envelope is [`Envelope::Xyz`] when the geometry has a Z dimension, even
+/// for a single point, and [`Envelope::Xy`] otherwise. An M dimension never
+/// widens the envelope, because readers and the rtree use only X and Y bounds,
+/// plus Z for 3D. A geometry with no finite coordinate is *empty*. For one,
+/// the function returns [`Envelope::None`] and `true`, so the encoder omits
+/// the envelope and sets the header empty flag.
 ///
 /// [`Envelope::Xy`]: crate::gpb::Envelope::Xy
 /// [`Envelope::Xyz`]: crate::gpb::Envelope::Xyz
@@ -399,30 +398,31 @@ pub fn write_envelope<G: GeometryTrait<T = f64>>(geom: &G) -> (gpb::Envelope, bo
 /// Encodes a GPB blob from a body that is already ISO WKB, without
 /// re-serialising it.
 ///
-/// [`encode_gpb`] serialises a geometry object through the `wkb` writer. When
-/// the caller already has ISO WKB bytes, as a GeoArrow column does, that step
-/// is unnecessary: the GPB body *is* ISO WKB, so the bytes can be copied
-/// after the header. This is the write-side counterpart of reading a geometry
+/// [`encode_gpb`] serialises a geometry object through the `wkb` writer. If
+/// you already have ISO WKB bytes, as a GeoArrow column does, you don't need
+/// that step. The GPB body *is* ISO WKB, so this function copies the bytes
+/// after the header. It is the write-side counterpart of reading a geometry
 /// column as WKB by skipping the header.
 ///
-/// The bytes are still parsed, for two reasons. The envelope has to be
-/// computed for the header, which always includes one, and for the spatial
-/// index, which needs a coordinate traversal either way. And parsing rejects
-/// a body that is not ISO WKB, such as PostGIS EWKB, which would otherwise be
-/// copied verbatim into a file claiming to be conformant.
+/// The function still parses the bytes, for two reasons. First, it must
+/// compute the envelope for the header, which always includes one, and for
+/// the spatial index, which needs a coordinate traversal either way. Second,
+/// parsing rejects a body that is not ISO WKB, such as PostGIS EWKB. Without
+/// the parse, such a body would be copied verbatim into a file that claims to
+/// be conformant.
 ///
 /// Only the geometry's own extent is copied, not any trailing bytes beyond
 /// it.
 ///
 /// Returns the blob, its XY envelope as [`encode_gpb`] does, and the body's
-/// dimensions, so the caller can check them against the column's `z`/`m`
+/// dimensions, so you can check them against the column's `z`/`m`
 /// constraints without a second parse.
 ///
-/// Every body is parsed by [`crate::curve::scan`], which reads all the
-/// Annex G types. A non-linear body's header sets the extended flag, per
-/// Annex F.1 Requirement 68. Writing one still needs the matching
-/// `gpkg_geom_<TYPE>` row in `gpkg_extensions`; registering it is the
-/// caller's responsibility, since this function sees a body, not a table.
+/// [`crate::curve::scan`] parses every body and reads all the Annex G types.
+/// For a non-linear body, the header sets the extended flag, per Annex F.1
+/// Requirement 68. Writing one still needs the matching `gpkg_geom_<TYPE>` row
+/// in `gpkg_extensions`. You must register it yourself, because this function
+/// sees a body, not a table.
 ///
 /// # Errors
 ///
@@ -466,8 +466,8 @@ pub struct EncodedGpb {
     pub xy_envelope: Option<[f64; 4]>,
     /// The dimensions the WKB body declares, for checking against the column.
     pub dimensions: Dimensions,
-    /// The non-linear types the body contains, at every nesting depth, each of
-    /// which needs a `gpkg_geom_<TYPE>` row for the column it is written to.
+    /// The non-linear types the body contains, at every nesting depth. Each
+    /// one needs a `gpkg_geom_<TYPE>` row for the column it is written to.
     ///
     /// Empty for a body containing only core types. A container's members are
     /// not implied by its own type, so extension registration must use this
@@ -475,15 +475,17 @@ pub struct EncodedGpb {
     pub extension_types: GeometryTypeSet,
 }
 
-/// Encodes a geometry as a complete GeoPackage Binary (GPB) blob: an
-/// always-little-endian header ([`gpb::encode_header`]) with an envelope per
-/// [`write_envelope`], followed by the little-endian ISO WKB body written by
-/// the georust `wkb` crate.
+/// Encodes a geometry as a complete GeoPackage Binary (GPB) blob.
 ///
-/// `srs_id` is written into the header (the geometry column's spatial reference
-/// system). Returns the blob and its XY envelope `[min_x, max_x, min_y, max_y]`
-/// (`None` for an empty geometry) so a caller can fold it into a running
-/// bounding box without re-traversing the geometry.
+/// The blob is an always-little-endian header ([`gpb::encode_header`]) with an
+/// envelope per [`write_envelope`], followed by the little-endian ISO WKB body
+/// that the georust `wkb` crate writes.
+///
+/// `srs_id` is the geometry column's spatial reference system, and is written
+/// into the header. Returns the blob and its XY envelope
+/// `[min_x, max_x, min_y, max_y]`, or `None` for an empty geometry, so you can
+/// fold the envelope into a running bounding box without traversing the
+/// geometry again.
 ///
 /// # Errors
 ///
@@ -544,14 +546,16 @@ impl XyBounds {
         self.seen = true;
     }
 
-    /// [`Self::add`] without the skip branch: a non-finite pair is mapped to
-    /// NaN, which `min` and `max` ignore by definition (they return the other
-    /// operand), so it contributes nothing, exactly as the early return does.
+    /// [`Self::add`] without the skip branch.
     ///
-    /// Straight-line code is what lets the compiler vectorise a fold over a
-    /// long coordinate run, but it costs a little more per coordinate than
-    /// the branch when the run is too short to vectorise, so the scanner
-    /// chooses per sequence and everything else uses [`Self::add`].
+    /// A non-finite pair is mapped to NaN. `min` and `max` ignore NaN by
+    /// definition, returning the other operand, so the pair contributes
+    /// nothing, exactly as with the early return.
+    ///
+    /// Straight-line code lets the compiler vectorise a fold over a long
+    /// coordinate run. When the run is too short to vectorise, it costs a
+    /// little more per coordinate than the branch. The scanner therefore
+    /// chooses per sequence, and everything else uses [`Self::add`].
     pub(crate) fn add_branchless(&mut self, x: f64, y: f64) {
         let finite = x.is_finite() & y.is_finite();
         let x = if finite { x } else { f64::NAN };
@@ -570,7 +574,7 @@ impl XyBounds {
 }
 
 /// Accumulator for an XY bounding box plus, when present, a Z bounds range.
-/// Feeds [`write_envelope`]'s always-envelope policy.
+/// [`write_envelope`] uses it to build the envelope it always writes.
 ///
 /// Shared with [`crate::curve`], which fills it by walking WKB bytes rather
 /// than through the `wkb` reader.
@@ -604,8 +608,8 @@ impl XyzBounds {
     }
 
     /// [`Self::add`] built on [`XyBounds::add_branchless`], for the scanner's
-    /// long-sequence fold. The `Some` test constant-folds away there, where
-    /// the coordinate layout fixes `z` one way or the other.
+    /// long-sequence fold. The `Some` test constant-folds away there, because
+    /// the coordinate layout fixes whether `z` is present.
     pub(crate) fn add_branchless(&mut self, x: f64, y: f64, z: Option<f64>) {
         self.xy.add_branchless(x, y);
         if let Some(z) = z {
@@ -672,8 +676,8 @@ fn visit_polygon(
 
 /// Walks a geometry through the `geo-traits` interface, passing every
 /// coordinate's `(x, y, z?)` to `visit`. Recurses into geometry collections.
-/// The XY-only accumulation (read-path envelope) ignores the third argument;
-/// the write-path envelope uses it.
+/// The read-path envelope accumulates only X and Y and ignores the third
+/// argument. The write-path envelope uses it.
 fn visit_coords<G: GeometryTrait<T = f64>>(
     geom: &G,
     visit: &mut impl FnMut(f64, f64, Option<f64>),
@@ -1142,10 +1146,10 @@ mod encode_from_wkb_tests {
     use super::*;
     use geo_types::{Geometry, LineString, Point};
 
-    /// The pass-through encoder must produce what the re-serialising one does,
-    /// for a body the re-serialising one wrote. That equivalence is the whole
-    /// claim: the GPB body is ISO WKB, so copying it is not a shortcut with
-    /// different semantics.
+    /// For a body the re-serialising encoder wrote, the pass-through encoder
+    /// must produce the same output. The pass-through encoder rests on this:
+    /// the GPB body is ISO WKB, so copying it is not a shortcut with different
+    /// semantics.
     #[test]
     fn agrees_with_encode_gpb() {
         let cases: Vec<Geometry<f64>> = vec![
