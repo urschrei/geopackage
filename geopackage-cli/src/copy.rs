@@ -6,20 +6,19 @@
 //! systems, their rows, and a spatial index wherever the source had one.
 //!
 //! **Not** tiles, and not the extension tables (`gpkg_metadata`, `gpkg_schema`,
-//! the Related Tables mapping tables). Those are out of scope for this
-//! command. A source containing anything not copied is reported at the end
-//! rather than passed over in silence, so the output is never mistaken for
-//! the whole file.
+//! the Related Tables mapping tables). Those are out of scope for this command.
+//! If the source contains anything that is not copied, the command reports it
+//! at the end, so you don't mistake the output for the whole file.
 //!
-//! # How geometry crosses
+//! # How geometry is copied
 //!
-//! By its WKB bytes, through `FeatureWriter::insert_wkb`, which copies the
-//! body into the new blob rather than re-serialising it. Reading the geometry
-//! into a `geo-types` value and writing that back would lose the non-linear
-//! curve types entirely, since `geo-traits` cannot represent an arc, and would
-//! put every coordinate through a needless parse. The body is located with
-//! `gpb::body_offset`, which reads the header only, so a curve passes through
-//! a copy without anything ever parsing it.
+//! Geometry is copied as WKB bytes through `FeatureWriter::insert_wkb`, which
+//! copies the body into the new blob rather than re-serialising it. Reading the
+//! geometry into a `geo-types` value and writing that back would lose the
+//! non-linear curve types entirely, since `geo-traits` cannot represent an arc,
+//! and would parse every coordinate for no reason. `gpb::body_offset` locates
+//! the body by reading the header only, so a curve passes through a copy
+//! without ever being parsed.
 
 use std::path::Path;
 use std::process::ExitCode;

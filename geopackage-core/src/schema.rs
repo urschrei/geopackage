@@ -1,22 +1,23 @@
 //! The `gpkg_schema` extension's model (Annex F.9): column descriptions and
 //! the constraints on their values.
 //!
-//! Two tables. `gpkg_data_columns` describes a column: a human-readable name,
-//! a title, a description, a MIME type for a BLOB column, and optionally the
-//! name of a constraint. `gpkg_data_column_constraints` stores the constraints,
-//! keyed by that name, in three forms: a numeric `range`, an `enum` of allowed
-//! values, or a `glob` pattern.
+//! The extension has two tables. `gpkg_data_columns` describes a column: a
+//! human-readable name, a title, a description, a MIME type for a BLOB column,
+//! and optionally the name of a constraint. `gpkg_data_column_constraints`
+//! stores the constraints, keyed by that name, in three forms: a numeric
+//! `range`, an `enum` of allowed values, or a `glob` pattern.
 //!
-//! This module is the model only: what a file says. Deciding whether a value
-//! satisfies a constraint belongs to the `geopackage` crate, because one of
-//! the three forms cannot be decided here. A `glob` is a pattern in SQLite's
-//! `GLOB` syntax, whose definition is whatever the engine that opens the
-//! file implements, so the engine is asked rather than a copy of its rules
-//! being kept here. See `geopackage::OpenOptions::enforce_column_constraints`.
+//! This module is only the model of what a file says. Checking whether a value
+//! satisfies a constraint belongs to the `geopackage` crate, because one of the
+//! three forms cannot be checked here. A `glob` is a pattern in SQLite's `GLOB`
+//! syntax, which is defined by whatever the engine that opens the file
+//! implements. The check therefore asks that engine rather than keeping a copy
+//! of its rules here. See
+//! `geopackage::OpenOptions::enforce_column_constraints`.
 //!
-//! The spec is explicit that these constraints are advisory as far as the file
-//! format goes: "These restrictions MAY be enforced by SQL triggers or by code
-//! in applications that update GeoPackage data values."
+//! The spec states explicitly that these constraints are advisory as far as the
+//! file format goes: "These restrictions MAY be enforced by SQL triggers or by
+//! code in applications that update GeoPackage data values."
 
 use std::fmt;
 

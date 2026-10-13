@@ -14,8 +14,8 @@
 //! then        ISO WKB geometry (its own embedded byte-order markers)
 //! ```
 //!
-//! This module parses and encodes the header only; the WKB body is opaque here
-//! (the `geopackage` crate delegates it to georust `wkb`).
+//! This module parses and encodes the header only. It treats the WKB body as
+//! opaque, and the `geopackage` crate delegates the body to georust `wkb`.
 
 /// Byte order of the GPB header integers and envelope doubles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

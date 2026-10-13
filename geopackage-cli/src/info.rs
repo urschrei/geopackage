@@ -1,9 +1,10 @@
 //! `gpkg info`: what a file declares and what state it is in.
 //!
-//! Opened with [`GeoPackage::open_read_only_lenient`], so a file with something wrong
-//! with it is reported rather than rejected: an inspection tool that will not
-//! open the files worth inspecting is not much use. The warnings that leniency
-//! collected are printed first, before anything they might explain.
+//! The command opens the file with [`GeoPackage::open_read_only_lenient`], so
+//! it reports on a file with problems instead of rejecting it. An
+//! inspection tool that refused to open the files most worth inspecting would
+//! not be much use. The warnings collected while opening the file are printed
+//! first, before anything they might explain.
 
 use std::path::Path;
 use std::process::ExitCode;
