@@ -140,8 +140,8 @@ impl Container {
 
     /// Opens a layer projected to the named columns, as a child handle.
     ///
-    /// `attributes` picks which open runs underneath, since the two entry
-    /// points differ only there.
+    /// `attributes` picks which open runs underneath. That is the only place
+    /// the two entry points differ.
     ///
     /// # Errors
     ///
@@ -165,7 +165,7 @@ impl Container {
     ///
     /// The lifetime `'_` on the way in is a borrow of `*self.gpkg`, which lives
     /// as long as `self` and does not move. On the way out it is `'static`,
-    /// which claims more than the borrow can support on its own; what supports
+    /// which claims more than the borrow can support on its own. What supports
     /// it is the module's invariants. The layer is only reachable through a
     /// [`LayerHandle`], and dropping that handle is what decrements the counter
     /// that keeps `self` alive.
@@ -306,12 +306,11 @@ impl LayerHandle {
     /// Begins a write transaction over this layer as a child handle.
     ///
     /// No borrow is erased here, unlike the layer and pyramid handles.
-    /// `Layer::writer`
-    /// returns a `FeatureWriter` with the layer's own lifetime parameter
-    /// rather than a borrow of `&self`, and this layer's parameter is already
-    /// `'static`, so the writer arrives erased. What it still needs is the
-    /// count: the writer points into the same container, so the container must
-    /// not close while it lives.
+    /// `Layer::writer` returns a `FeatureWriter` with the layer's own lifetime
+    /// parameter rather than a borrow of `&self`, and this layer's parameter is
+    /// already `'static`, so the writer arrives erased. What it still needs is
+    /// the count: the writer points into the same container, so the container
+    /// must not close while it lives.
     ///
     /// # Errors
     ///
@@ -352,7 +351,8 @@ pub struct WriterHandle {
 }
 
 impl WriterHandle {
-    /// Returns the writer mutably, which is what every staging call needs.
+    /// Returns a mutable reference to the writer, which every staging call
+    /// needs.
     pub fn writer_mut(&mut self) -> &mut FeatureWriter<'static> {
         &mut self.writer
     }
@@ -408,9 +408,9 @@ impl TilesHandle {
 
     /// Begins a stored-tile scan as a child handle.
     ///
-    /// The cursor visits what the pyramid stores rather than probing the
-    /// declared grid, which on a sparse pyramid is the difference between
-    /// O(stored) and O(grid). It counts against the *container*, not against
+    /// The cursor visits the tiles the pyramid stores instead of probing the
+    /// declared grid, so on a sparse pyramid it costs O(stored) rather than
+    /// O(grid). It counts against the *container*, not against
     /// this handle: the statement underneath borrows the container's
     /// connection, so the tiles handle itself may be freed while the cursor
     /// lives, and the container still cannot close until the cursor is
@@ -458,7 +458,7 @@ pub struct TileCursorHandle {
     /// The scan in progress. Erased; borrows `_cursor`.
     stream: TileStream<'static>,
     /// The prepared statement the stream walks. Boxed so its address is
-    /// stable while the stream borrows it; never touched again directly.
+    /// stable while the stream borrows it. Never touched again directly.
     _cursor: Box<TileCursor<'static>>,
     /// What keeps the container alive while this handle exists.
     _token: ChildToken,
@@ -467,9 +467,9 @@ pub struct TileCursorHandle {
 impl TileCursorHandle {
     /// Returns the next stored tile, or `None` at the end of the scan.
     ///
-    /// The returned [`Tile`] borrows the row's payload: it is valid until the
-    /// next call on this handle, exactly as the Rust lending cursor's borrow
-    /// rules state, and the C contract repeats.
+    /// The returned [`Tile`] borrows the row's payload, so it is valid until
+    /// the next call on this handle. The Rust lending cursor's borrow rules
+    /// state this, and the C contract repeats it.
     ///
     /// # Errors
     ///
