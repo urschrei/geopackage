@@ -36,10 +36,11 @@ use geopackage::core::datetime::{Date, DateTime};
 use crate::error::{Status, gpkg_error_t, set_error};
 use crate::util::borrow_str;
 
-/// Which case a [`gpkg_value_t`] contains.
+/// Which case a [`gpkg_value_t`] holds.
 ///
-/// `#[repr(i32)]` so cbindgen emits a plain C enum with stable values. Values
-/// are assigned explicitly and must never be reused for another meaning.
+/// The enum is `#[repr(i32)]`, so cbindgen emits a plain C enum with stable
+/// values. Each value is assigned explicitly and must never be reused for
+/// another meaning.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueKind {
@@ -63,12 +64,12 @@ pub enum ValueKind {
 
 /// A calendar date: year 0 to 9999, month 1 to 12, day 1 to the month's length.
 ///
-/// Checked when the value is read, so an impossible date is a rejected call
-/// rather than a bad row.
+/// The library checks the date when it reads the value, so an impossible date
+/// makes the call fail rather than writing a bad row.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct gpkg_date_t {
-    /// Year, 0 to 9999. The four-digit text form is what bounds it.
+    /// Year, 0 to 9999. The four-digit text form sets the bound.
     pub year: u16,
     /// Month, 1 to 12.
     pub month: u8,
@@ -78,8 +79,8 @@ pub struct gpkg_date_t {
 
 /// A date and time, with an optional UTC offset.
 ///
-/// `has_offset` false means the time has no offset, which the spec permits
-/// and which is not the same as an offset of zero: zero is `Z`.
+/// If `has_offset` is false, the time has no offset. The spec permits that,
+/// and it is not the same as an offset of zero, which is `Z`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct gpkg_datetime_t {
@@ -93,7 +94,7 @@ pub struct gpkg_datetime_t {
     pub second: u8,
     /// Sub-second component, 0 to 999 999 999.
     pub nanosecond: u32,
-    /// Whether `offset_minutes` is to be read.
+    /// Whether `offset_minutes` is read.
     pub has_offset: bool,
     /// UTC offset in minutes. `0` with `has_offset` set is `Z`.
     pub offset_minutes: i16,
@@ -111,8 +112,8 @@ pub struct gpkg_blob_t {
     pub len: usize,
 }
 
-/// The payload of a [`gpkg_value_t`]. Which member is live is given by the
-/// accompanying [`ValueKind`].
+/// The payload of a [`gpkg_value_t`]. The accompanying [`ValueKind`] says
+/// which member is live.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub union gpkg_value_payload {
@@ -134,20 +135,20 @@ pub union gpkg_value_payload {
 
 /// One cell of a row: a tag and a payload.
 ///
-/// Nothing here is owned by the library. Text and binary point at the caller's
-/// memory and are read during the call that takes them.
+/// The library owns none of it. Text and binary point at your memory and are
+/// read during the call that takes them.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct gpkg_value_t {
     /// Which case `value` contains.
     pub kind: ValueKind,
-    /// The payload. Read according to `kind`; not read at all for
+    /// The payload, read according to `kind`. It is not read at all for
     /// [`ValueKind::Null`].
     pub value: gpkg_value_payload,
 }
 
 impl gpkg_date_t {
-    /// Validate this into a [`Date`].
+    /// Validates this into a [`Date`].
     fn to_date(self) -> Result<Date, String> {
         Date::new(self.year, self.month, self.day).map_err(|source| {
             format!(
@@ -159,7 +160,7 @@ impl gpkg_date_t {
 }
 
 impl gpkg_datetime_t {
-    /// Validate this into a [`DateTime`].
+    /// Validates this into a [`DateTime`].
     fn to_datetime(self) -> Result<DateTime, String> {
         let date = self.date.to_date()?;
         if self.hour > 23 || self.minute > 59 || self.second > 59 {
@@ -182,14 +183,15 @@ impl gpkg_datetime_t {
     }
 }
 
-/// Reads one caller-supplied value into the borrowed form the write path takes.
+/// Converts one caller-supplied value into the borrowed form the write path
+/// takes.
 ///
 /// The returned `ValueRef` borrows `value`'s text or binary, so it lives only
-/// as long as the caller's memory does, which for these entry points is the
+/// as long as the caller's memory. For these entry points, that is the
 /// duration of the call.
 ///
-/// `index` names the position in the caller's array, so a rejected cell says
-/// which one it was.
+/// `index` is the position in the caller's array. The error message for a
+/// rejected cell includes it.
 ///
 /// # Safety
 ///

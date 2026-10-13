@@ -61,7 +61,7 @@ pub(crate) unsafe fn borrow_str<'a>(
     }
 }
 
-/// Converts a Rust string into an owned C allocation, to be released with
+/// Copies a Rust string into a new C string, which the caller frees with
 /// [`gpkg_string_free`].
 ///
 /// # Safety
@@ -86,11 +86,11 @@ pub(crate) unsafe fn out_string(text: &str, error: *mut gpkg_error_t) -> *mut c_
     }
 }
 
-/// Releases a string this library returned.
+/// Frees a string this library returned.
 ///
-/// Every call that returns a `char *` returns an allocation the caller owns,
-/// so each one is paired with this. Passing NULL does nothing, which is what
-/// makes the pairing safe to write before the failure has been checked:
+/// Every call that returns a `char *` returns an allocation that you own, so
+/// free each one with this. Passing NULL does nothing, so you can free the
+/// result without first checking whether the call failed:
 ///
 /// ```c
 /// char *kind = gpkg_layer_kind(layer, &error);
@@ -115,12 +115,13 @@ pub unsafe extern "C" fn gpkg_string_free(text: *mut c_char) {
     drop(unsafe { CString::from_raw(text) });
 }
 
-/// Converts and writes a set of optional strings to NULL-able out-parameters.
+/// Converts optional strings and writes them to out-parameters that may be
+/// NULL.
 ///
-/// Everything is converted before anything is written, so a failure writes
-/// nothing and the caller has nothing partial to free. An absent value writes
-/// NULL to its slot when the slot was requested, which `gpkg_string_free`
-/// accepts harmlessly; a NULL slot is skipped.
+/// Every string is converted before any is written, so a failure writes
+/// nothing and leaves the caller nothing partial to free. An absent value
+/// writes NULL to a requested slot, which `gpkg_string_free` accepts. A NULL
+/// slot is skipped.
 ///
 /// # Safety
 ///
