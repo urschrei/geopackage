@@ -169,7 +169,8 @@ unsafe fn open_with(path: *const c_char, error: *mut gpkg_error_t, how: How) -> 
 ///
 /// `path` must be a valid pointer to a NUL-terminated UTF-8 string. `error`
 /// must be NULL or point at a writable `gpkg_error_t`. The returned handle must
-/// be destroyed with `gpkg_close`, on the thread that created it.
+/// be destroyed with `gpkg_close`. It and every handle taken from it must be
+/// used from one thread at a time.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gpkg_open(path: *const c_char, error: *mut gpkg_error_t) -> *mut gpkg_t {
     // SAFETY: forwarded to this function's own contract.

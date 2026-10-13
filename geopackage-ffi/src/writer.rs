@@ -155,7 +155,8 @@ unsafe fn failed(err: &geopackage::Error, error: *mut gpkg_error_t) -> Status {
 ///
 /// `layer` must be a live layer handle and `error` NULL or writable. The
 /// returned writer must be destroyed exactly once, with `gpkg_writer_commit` or
-/// `gpkg_writer_free`, on the thread that created it.
+/// `gpkg_writer_free`, and used only while no other thread is using its
+/// container or any handle taken from it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gpkg_layer_writer(
     layer: *const LayerHandle,
