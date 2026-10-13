@@ -14,25 +14,25 @@ use rusqlite::{Connection, OptionalExtension};
 /// The CRS WKT 1.1 document lists three rows as required: `gpkg_crs_wkt`
 /// against `definition_12_063`, and `gpkg_crs_wkt_1_1` against each of
 /// `definition_12_063` and `epoch`. GDAL writes the first of those on its own
-/// while a file has no epoch column, and on adding one it *renames* that row
-/// to `gpkg_crs_wkt_1_1` rather than keeping both
+/// while a file has no epoch column. When it adds one, it *renames* that row
+/// to `gpkg_crs_wkt_1_1` instead of keeping both
 /// (`OGRGeoPackageDataSource`, `UPDATE gpkg_extensions SET extension_name =
 /// 'gpkg_crs_wkt_1_1' WHERE extension_name = 'gpkg_crs_wkt'`), so a 1.1 file
 /// from GDAL has the two rows this crate writes and no `gpkg_crs_wkt` row.
-/// The ETS agrees, since its `gpkg_crs_wkt` check is "not testable" on an
-/// empty result set. This crate writes the same two rows: interoperating with
-/// the files that exist beats matching a table no widespread implementation
-/// produces.
+/// The ETS agrees, because its `gpkg_crs_wkt` check is "not testable" on an
+/// empty result set. This crate writes the same two rows, because working
+/// with the files that exist matters more than matching a table that no
+/// widespread implementation produces.
 const CRS_WKT_EXTENSION: &str = "gpkg_crs_wkt_1_1";
 const CRS_WKT_DEFINITION: &str = "http://www.geopackage.org/spec/#extension_crs_wkt";
 
 /// A row of `gpkg_spatial_ref_sys`.
 ///
 /// The last two fields belong to the `gpkg_crs_wkt` extension (Annex F.10) and
-/// its 1.1 revision, and are `None` for a file without it. Between
-/// them the fields cover the whole of that extension's table definition, which
-/// is why this is a plain struct rather than a builder: the spec fixes the
-/// column set, so there is nothing here that is expected to grow.
+/// its 1.1 revision, and are `None` for a file without it. Together, the fields
+/// cover the whole of that extension's table definition. The spec fixes the
+/// column set, so nothing here is expected to grow, which is why this is a
+/// plain struct and not a builder.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Srs {
     /// Human-readable SRS name.
@@ -51,11 +51,11 @@ pub struct Srs {
     /// The `definition_12_063` column: a WKT2 definition, per the
     /// `gpkg_crs_wkt` extension.
     ///
-    /// `None` when the file does not register the extension. Where both this and
-    /// [`Srs::definition`] are populated, this one takes priority, which is
-    /// the note under Requirement 117. Some CRSs have no WKT1 form at all, so
-    /// for them [`Srs::definition`] is the literal `undefined` and this is
-    /// where the definition lives.
+    /// `None` if the file doesn't register the extension. If both this and
+    /// [`Srs::definition`] are populated, this one takes priority, as the note
+    /// under Requirement 117 says. Some CRSs have no WKT1 form at all. For
+    /// them, [`Srs::definition`] is the literal `undefined` and the definition
+    /// is stored here.
     pub definition_wkt2: Option<String>,
     /// The `epoch` column: the coordinate epoch, per the 1.1 revision of the
     /// `gpkg_crs_wkt` extension.
@@ -73,9 +73,9 @@ const BASE_COLUMNS: &str =
 
 /// Which of the `gpkg_crs_wkt` extension's columns a file has.
 ///
-/// The two are added together by this crate and by GDAL, but they arrived in
-/// different versions of the extension, so a file can have `definition_12_063`
-/// without `epoch` and the two are checked separately rather than inferred
+/// This crate and GDAL add the two together, but they arrived in different
+/// versions of the extension. A file can therefore have `definition_12_063`
+/// without `epoch`, so the two are checked separately instead of inferred
 /// from each other.
 #[derive(Debug, Clone, Copy)]
 struct CrsWktColumns {
@@ -84,7 +84,7 @@ struct CrsWktColumns {
 }
 
 impl CrsWktColumns {
-    /// One `PRAGMA table_info` rather than one per column.
+    /// Reads both with one `PRAGMA table_info`, instead of one per column.
     fn read(conn: &Connection) -> Result<Self> {
         let mut stmt = conn.prepare("PRAGMA table_info(gpkg_spatial_ref_sys)")?;
         let mut rows = stmt.query([])?;
@@ -103,8 +103,8 @@ impl CrsWktColumns {
         Ok(columns)
     }
 
-    /// The select list: the base columns, then the extension columns the file
-    /// has, so the reader can index by position either way.
+    /// Returns the select list: the base columns, then whichever extension
+    /// columns the file has, so the reader can index by position either way.
     fn select_list(self) -> String {
         let mut list = BASE_COLUMNS.to_owned();
         if self.definition_12_063 {
@@ -188,16 +188,16 @@ impl GeoPackage {
 
     /// Inserts an SRS row.
     ///
-    /// Returns `true` if the row was inserted, `false` if a row with that
-    /// `srs_id` already exists (the existing row is left untouched: within a
-    /// file, the existing definition is authoritative).
+    /// Returns `true` if the row was inserted, or `false` if a row with that
+    /// `srs_id` already exists. The existing row is left untouched, because
+    /// within a file the existing definition is authoritative.
     ///
-    /// Supplying [`Srs::definition_wkt2`] or [`Srs::epoch`] adds the
+    /// If you supply [`Srs::definition_wkt2`] or [`Srs::epoch`], this adds the
     /// `gpkg_crs_wkt` extension's columns to the file and registers the
-    /// extension if it is not there already, which is how a caller supplies a
-    /// definition for a CRS that has no WKT1 form. The added columns and the
-    /// insert share one transaction, so a failure leaves the file as it was
-    /// rather than half-extended.
+    /// extension if it isn't there already. That is how you supply a definition
+    /// for a CRS that has no WKT1 form. Adding the columns and inserting the
+    /// row share one transaction, so a failure leaves the file as it was
+    /// instead of half-extended.
     pub fn add_srs(&self, srs: &Srs) -> Result<bool> {
         if self.srs(srs.srs_id)?.is_some() {
             return Ok(false);
@@ -280,11 +280,11 @@ impl GeoPackage {
     /// Registers an EPSG code that has no WKT1 form in the vendored subset,
     /// using WKT2 in the `gpkg_crs_wkt_1_1` extension column.
     ///
-    /// Some CRSs cannot be expressed in WKT1 at all: geographic 3D codes such
-    /// as EPSG:4979 are the common case, since WKT1's `GEOGCS` has no way to
-    /// express a third axis. For those the spec's answer is the extension
-    /// column, and `definition` contains the literal `undefined`. This is what
-    /// GDAL writes for the same codes, so the files interoperate.
+    /// Some CRSs can't be expressed in WKT1 at all. Geographic 3D codes such
+    /// as EPSG:4979 are the common case, because WKT1's `GEOGCS` has no way to
+    /// express a third axis. For those, the spec uses the extension column,
+    /// and `definition` contains the literal `undefined`. GDAL writes the same
+    /// for these codes, so the files interoperate.
     fn add_epsg_srs_via_wkt2(&self, code: i32) -> Result<bool> {
         let wkt2 = epsg_utils::epsg_to_wkt2(code)
             .ok()
@@ -335,8 +335,8 @@ fn enable_crs_wkt_extension(conn: &Connection) -> Result<()> {
 /// code the registry knows.
 ///
 /// Without this, a file that gains the extension would have WKT2 for the code
-/// that triggered it and `undefined` for every code registered earlier, which
-/// reads as "these have no WKT2 form" when they do. GDAL backfills the same
+/// that triggered it and `undefined` for every code registered earlier. That
+/// would wrongly say those codes have no WKT2 form. GDAL backfills the same
 /// way. Rows outside the registry keep `undefined`, which is accurate.
 fn backfill_wkt2(conn: &Connection) -> Result<()> {
     let codes: Vec<i32> = conn
@@ -371,8 +371,8 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
 /// Extracts the CRS name from a WKT2 string: the quoted token right after the
 /// opening keyword, as in `GEODCRS["WGS 84",...`.
 ///
-/// A full parse would buy nothing here. If the shape is unexpected the code is
-/// used instead, which is always a usable name.
+/// A full parse isn't needed here. If the string has an unexpected shape, the
+/// code is used instead, which is always a usable name.
 fn srs_name_from_wkt2(wkt2: &str, code: i32) -> String {
     wkt2.split_once('"')
         .and_then(|(_, rest)| rest.split_once('"'))
@@ -387,7 +387,7 @@ mod crs_wkt_tests {
     use crate::GeoPackage;
 
     /// EPSG:4979 is geographic 3D, so it has no WKT1 form at all. Before the
-    /// extension it was simply unregistrable.
+    /// extension, it couldn't be registered.
     #[test]
     fn geographic_3d_code_lands_in_the_extension_column() {
         let dir = tempfile::tempdir().unwrap();

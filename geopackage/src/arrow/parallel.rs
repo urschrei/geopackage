@@ -8,8 +8,9 @@ use crate::{Error, Result};
 use super::BatchSource;
 use super::options::ArrowReadOptions;
 
-/// The file backing a connection's `main` database, or `None` for one with no
-/// file: a `:memory:` or temporary database, which no other connection can open.
+/// Returns the file behind a connection's `main` database, or `None` if it has
+/// no file. A `:memory:` or temporary database has none, and no other
+/// connection can open it.
 pub(crate) fn database_path(conn: &Connection) -> Result<Option<std::path::PathBuf>> {
     let file: String = conn.query_row(
         "SELECT file FROM pragma_database_list WHERE name = 'main'",
@@ -22,13 +23,13 @@ pub(crate) fn database_path(conn: &Connection) -> Result<Option<std::path::PathB
     Ok(Some(std::path::PathBuf::from(file)))
 }
 
-/// The `(first, last)` primary key of `table` when the key has no gaps, or
-/// `None` when it has gaps or the table is empty.
+/// Returns the `(first, last)` primary key of `table` if the key has no gaps,
+/// or `None` if it has gaps or the table is empty.
 ///
-/// Density is what lets a worker be handed a key range before any row is read
-/// and know how many rows it covers. Testing `max - min + 1 == count` is a
-/// slightly wider rule than GDAL's `min == 1 && max == count`, and costs the
-/// same single scan.
+/// A dense key lets a worker be given a key range before any row is read, and
+/// know how many rows it covers. Testing `max - min + 1 == count` is slightly
+/// less strict than GDAL's `min == 1 && max == count`, and costs the same
+/// single scan.
 pub(crate) fn dense_key_span(
     conn: &Connection,
     table: &str,
@@ -55,7 +56,7 @@ pub(crate) fn dense_key_span(
 ///
 /// Worker `w` of `n` reads batches `w`, `w + n`, `w + 2n`, and so on, and the
 /// consumer takes from the workers in the same rotation. Batches therefore
-/// arrive in key order without any reordering buffer, and each worker's channel
+/// arrive in key order without a reordering buffer. Each worker's channel
 /// buffers one batch, so the memory in flight is bounded by the thread count.
 pub(crate) struct ParallelBatches {
     /// One receiver per worker, drained in rotation.
@@ -152,8 +153,9 @@ impl Drop for ParallelBatches {
     }
 }
 
-/// One worker: open a read-only connection of its own and read the batches
-/// assigned to it, in order, until the layer runs out or the consumer goes away.
+/// Runs one worker. It opens its own read-only connection and reads the
+/// batches assigned to it, in order, until the layer runs out or the consumer
+/// goes away.
 #[expect(
     clippy::too_many_arguments,
     reason = "a worker's whole context, passed once at spawn; a struct would be used by this call site alone"
@@ -248,7 +250,7 @@ fn run_worker(
 /// Batches arrive in key order because each worker owns a fixed, repeating
 /// slice of the key space and the consumer takes their windows in rotation.
 /// The byte ceiling can split one window into several batches, so a worker
-/// marks where its window ends rather than the consumer assuming one batch per
+/// marks where its window ends, instead of the consumer assuming one batch per
 /// turn.
 enum WorkerMessage {
     Batch(RecordBatch),

@@ -18,16 +18,16 @@ const KEY_ALIAS: &str = "__gpkg_key";
 
 /// Largest key gap folded into one candidate segment.
 ///
-/// Sorted rtree candidates are walked as key ranges rather than fetched id by
-/// id, so a gap inside a segment over-fetches the rows in it, each dropped by
-/// the exact re-test. Folding small gaps is the cheaper side of that trade:
-/// continuing a range scan over a few dozen rows costs less than ending the
-/// page and starting a fresh index probe at the next island, and clustered
-/// data, where filtered reads matter, produces mostly such gaps.
+/// Sorted RTree candidates are read as key ranges, not fetched one id at a
+/// time, so a gap inside a segment fetches extra rows, which the exact re-test
+/// drops. Folding small gaps in is still cheaper. Continuing a range scan over
+/// a few dozen rows costs less than ending the page and starting a new index
+/// probe at the next cluster of candidates. Clustered data, where filtered
+/// reads matter, produces mostly such gaps.
 const SEGMENT_GAP: i64 = 64;
 
-/// Sorted candidate ids folded into closed key ranges, gaps up to
-/// [`SEGMENT_GAP`] included.
+/// Folds sorted candidate ids into closed key ranges, bridging gaps of up to
+/// [`SEGMENT_GAP`].
 fn segment_runs(ids: &[i64]) -> Vec<(i64, i64)> {
     let mut runs = Vec::new();
     let mut ids = ids.iter().copied();
@@ -50,54 +50,56 @@ fn segment_runs(ids: &[i64]) -> Vec<(i64, i64)> {
 impl Layer<'_> {
     /// Reads this layer as a stream of Arrow [`RecordBatch`](arrow_array::RecordBatch)es.
     ///
-    /// Reads on several threads where it can, which is the common case and the
-    /// default; see [Threading](#threading) below for the conditions and for how
-    /// to ask for a single thread instead.
+    /// By default it reads on several threads where it can, which is the
+    /// common case. See [Threading](#threading) below for the conditions, and
+    /// for how to use a single thread instead.
     ///
-    /// Attribute columns follow the mapping in the [module documentation](super);
-    /// the geometry column is WKB with the `geoarrow.wkb` extension name.
+    /// Attribute columns follow the mapping in the
+    /// [module documentation](super). The geometry column is WKB with the
+    /// `geoarrow.wkb` extension name.
     ///
-    /// This does not go through [`crate::Feature`] or [`crate::Value`]. Arrow
-    /// arrays are built straight from the statement's column values, which is
-    /// the whole point of the path: GDAL measured its generic implementation,
-    /// which does route through a per-row feature object, as *slower* than the
+    /// This doesn't go through [`crate::Feature`] or [`crate::Value`]. Arrow
+    /// arrays are built directly from the statement's column values. That is
+    /// the reason for this path: GDAL measured its generic implementation,
+    /// which does go through a per-row feature object, as *slower* than the
     /// row API it wraps.
     ///
     /// # Threading
     ///
     /// `options.threads` defaults to `min(4, available parallelism)`. Set it to
-    /// `1` for a read that touches no thread but the caller's.
+    /// `1` to read only on the calling thread.
     ///
-    /// Threads are used only when all of the following hold, and the read is
-    /// otherwise single-threaded rather than failing:
+    /// Threads are used only when all of the following are true. Otherwise the
+    /// read is single-threaded instead of failing.
     ///
     /// - **The database is a file.** Workers read through their own
     ///   connections, and a `:memory:` database is private to the connection
     ///   that created it.
     /// - **The primary key is dense**, with no gaps between its smallest and
-    ///   largest value. Workers are handed key ranges before any row is read, so
-    ///   a range has to imply a known row count. GDAL's driver requires the
-    ///   same, in the stricter form of a key starting at 1.
+    ///   largest value. Workers are given key ranges before any row is read, so
+    ///   a range has to imply a known row count. GDAL's driver has the same
+    ///   requirement in a stricter form: the key must start at 1.
     /// - **There is more than one batch of rows.** Below that, opening
     ///   connections and starting threads costs more than it saves.
     ///
-    /// Workers open their connections **read-only**, which is what makes it safe
-    /// for several connections to read one table without agreeing on a snapshot:
+    /// Workers open their connections **read-only**. Several connections can
+    /// therefore read one table safely without agreeing on a snapshot, because
     /// there is no writer to race.
     ///
     /// Batches arrive in primary-key order regardless of thread count.
     ///
-    /// Dropping the reader before it is drained stops the workers, but waits for
-    /// each to finish the batch it is on, so the drop can block for as long as
-    /// one batch takes to read.
+    /// Dropping the reader before it is drained stops the workers. The drop
+    /// waits for each worker to finish its current batch, so it can block for
+    /// as long as one batch takes to read.
     ///
     /// # Consistency
     ///
     /// Each batch is a separate query, paginated on the primary key, so a
     /// concurrent writer can change the table between batches. Wrap the read in
     /// your own transaction on [`crate::GeoPackage::connection`] if you need a
-    /// stable snapshot across the whole layer. This shape is what lets batches
-    /// be fetched by key range, which the threaded path needs.
+    /// stable snapshot across the whole layer. Running each batch as its own
+    /// query lets batches be fetched by key range, which the threaded path
+    /// needs.
     ///
     /// # Errors
     ///
@@ -125,31 +127,31 @@ impl Layer<'_> {
 
     /// Reads the layer's rows intersecting `bbox` as Arrow record batches.
     ///
-    /// The columnar counterpart of [`Layer::features_in`], returning the same
-    /// rows in the same order. Single-threaded: the parallel path assigns key
-    /// *windows* to workers on the assumption that a window's key span implies
-    /// its row count, and a spatial filter voids that, since matching rows
-    /// scatter through the key space. Whether a threaded filtered read pays is
-    /// a separate question, to be answered by measurement against this.
+    /// This is the columnar equivalent of [`Layer::features_in`], and returns
+    /// the same rows in the same order. It is single-threaded. The parallel
+    /// path gives key *windows* to workers and assumes that a window's key
+    /// span implies its row count. A spatial filter breaks that assumption,
+    /// because matching rows are scattered through the key space. Whether a
+    /// threaded filtered read would be faster is a separate question, to be
+    /// answered by measuring it against this one.
     ///
-    /// Uses the RTree index when the layer has one, and falls back to a full
-    /// scan applying the same exact filter when it does not, exactly as
-    /// [`Layer::features_in`] does. Either way the geometry of every candidate
-    /// is re-tested against its true `f64` envelope, because the index stores
-    /// `f32` envelopes and is queried with widened bounds, so its candidates
-    /// are a superset.
+    /// Like [`Layer::features_in`], it uses the RTree index if the layer has
+    /// one, and otherwise falls back to a full scan with the same exact
+    /// filter. Either way, each candidate's geometry is re-tested against its
+    /// true `f64` envelope. The index stores `f32` envelopes and is queried
+    /// with widened bounds, so its candidates are a superset.
     ///
     /// The index is scanned once, when the read is opened, and the candidate
-    /// set is fixed from then on: a row inserted while batches are still
-    /// being pulled is not returned, even if it intersects the box. A row
-    /// deleted in that window simply stops arriving. This is one consistent
-    /// answer rather than a mixture, and it is also what makes the read fast:
-    /// pages walk candidate key ranges instead of re-querying the index.
+    /// set is then fixed. A row inserted while batches are still being read is
+    /// not returned, even if it intersects the box. A row deleted in that time
+    /// stops being returned. This gives one consistent answer instead of a
+    /// mixture. It also makes the read fast, because pages walk candidate key
+    /// ranges instead of re-querying the index.
     ///
-    /// A batch can therefore come back with fewer rows than the batch size
-    /// while rows remain: filtering removes candidates after the query has
-    /// bounded them. That is already true of the byte ceiling, so a caller
-    /// reading until `None` is unaffected.
+    /// A batch can have fewer rows than the batch size even when more rows
+    /// remain, because filtering removes candidates after the query has
+    /// limited them. The byte ceiling already has the same effect, so if you
+    /// read until `None`, this makes no difference.
     ///
     /// # Errors
     ///
@@ -169,29 +171,29 @@ impl Layer<'_> {
     }
 
     /// Reads the rows matching a caller-supplied `WHERE` clause as Arrow
-    /// record
-    /// batches.
+    /// record batches.
     ///
-    /// The columnar counterpart of [`Layer::select`], with the same contract:
-    /// `where_clause` is appended (parenthesised) to the query and is **raw
-    /// SQL, trusted from the caller**; this crate does not parse or sanitise
-    /// it. Its placeholders are `?1` to `?N` and `params` bind in slice order,
-    /// exactly as [`Layer::select`] binds them; the pagination this read adds
-    /// around the clause is numbered after `N` and never collides with it.
+    /// This is the columnar equivalent of [`Layer::select`], with the same
+    /// contract. `where_clause` is appended, in parentheses, to the query. It
+    /// is **raw SQL, trusted from the caller**, and this crate doesn't parse
+    /// or sanitise it. Its placeholders are `?1` to `?N`, and `params` bind in
+    /// slice order, exactly as [`Layer::select`] binds them. The pagination
+    /// this read adds around the clause is numbered after `N`, so the two
+    /// never collide.
     ///
-    /// This is also the columnar read for a single row: `fid = ?1` with the
-    /// key as its parameter.
+    /// To read a single row, use `fid = ?1` with the key as its parameter.
     ///
     /// The filter runs inside SQLite, so unlike [`Layer::read_arrow_in`] there
-    /// is no client-side re-test and a batch under-fills only at the byte
-    /// ceiling. Single-threaded, like every filtered read: the parallel path
-    /// assigns key windows to workers on the assumption that a window's key
-    /// span implies its row count, and a filter voids that.
+    /// is no client-side re-test, and only the byte ceiling cuts a batch
+    /// short. Like every filtered read, it is single-threaded. The parallel
+    /// path gives key windows to workers and assumes that a window's key span
+    /// implies its row count, which a filter breaks.
     ///
     /// # Errors
     ///
-    /// As [`Layer::read_arrow`]; a clause SQLite cannot prepare surfaces
-    /// through the iterator's first item, since each batch is its own query.
+    /// As [`Layer::read_arrow`]. A clause that SQLite can't prepare is
+    /// reported through the iterator's first item, because each batch is its
+    /// own query.
     pub fn read_arrow_where(
         &self,
         where_clause: &str,
@@ -204,12 +206,12 @@ impl Layer<'_> {
     /// Reads the rows intersecting `bbox` **and** matching a caller-supplied
     /// `WHERE` clause, as Arrow record batches.
     ///
-    /// The two filters compose: the rows are
-    /// [`Layer::features_in`]'s intersected with [`Layer::select`]'s, in
-    /// primary-key order. The bounding box uses the RTree index on
-    /// [`Layer::read_arrow_in`]'s terms, including the exact re-test; the
-    /// clause keeps [`Layer::read_arrow_where`]'s contract, including its
-    /// `?1` to `?N` placeholder numbering.
+    /// The result is the intersection of the rows from
+    /// [`Layer::features_in`] and [`Layer::select`], in primary-key order. The
+    /// bounding box uses the RTree index as [`Layer::read_arrow_in`] does,
+    /// including the exact re-test. The clause has the same contract as in
+    /// [`Layer::read_arrow_where`], including its `?1` to `?N` placeholder
+    /// numbering.
     ///
     /// # Errors
     ///
@@ -230,14 +232,14 @@ impl Layer<'_> {
         self.read_arrow_filtered(options, Some(bbox), Some((where_clause, params)))
     }
 
-    /// The single-threaded reader, which the threaded one falls back to and its
-    /// workers are built from.
+    /// Returns the single-threaded reader. The threaded reader falls back to
+    /// it, and its workers are built from it.
     fn read_arrow_sequential(&self, options: ArrowReadOptions) -> Result<ArrowBatches<'_>> {
         self.read_arrow_filtered(options, None, None)
     }
 
-    /// The single-threaded reader, optionally filtered to a bounding box and a
-    /// caller-supplied `WHERE` clause.
+    /// Returns the single-threaded reader, optionally filtered to a bounding
+    /// box and a caller-supplied `WHERE` clause.
     #[hotpath::measure(label = "arrow::read_arrow_filtered")]
     fn read_arrow_filtered(
         &self,
@@ -466,8 +468,8 @@ impl Layer<'_> {
         })
     }
 
-    /// The worker pool for this read, or `None` when the conditions in
-    /// [`Self::read_arrow`] do not hold.
+    /// Returns the worker pool for this read, or `None` if the conditions in
+    /// [`Self::read_arrow`] don't hold.
     fn parallel_source(&self, options: ArrowReadOptions) -> Result<Option<ParallelBatches>> {
         let Some(path) = database_path(self.gpkg().connection())? else {
             return Ok(None);

@@ -23,9 +23,9 @@ pub(crate) struct AggregateState {
 impl AggregateState {
     /// Registers the function under a name unique to this reader.
     ///
-    /// Unique because two readers can share a connection, and a shared name
-    /// would have the second overwrite the first's function and the first's
-    /// drop remove the second's.
+    /// The name is unique because two readers can share a connection. With a
+    /// shared name, the second reader would overwrite the first's function, and
+    /// dropping the first would remove the second's.
     pub(crate) fn register(conn: &Connection, arg_count: i32, filler: BatchFiller) -> Result<Self> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let name = format!(
@@ -51,15 +51,15 @@ impl AggregateState {
 
 /// The aggregate that fills one batch, registered as a SQL function.
 ///
-/// Filling a batch inside a SQL aggregate keeps the fetch loop inside SQLite
-/// instead of returning into this crate once per row, which measures at a tenth
-/// the cost of the row loop over every value of every row (see
+/// Filling a batch inside a SQL aggregate keeps the fetch loop inside SQLite,
+/// instead of returning to this crate once per row. Measured over every value
+/// of every row, this costs a tenth as much as the row loop (see
 /// `roadmap/benchmarks/2026-07-25-gdal-arrow-comparison.md`). GDAL's GeoPackage
 /// driver uses the same technique.
 ///
-/// The builders live in the accumulator rather than here, so appending a row
-/// needs no synchronisation at all; [`Aggregate::finalize`] moves them into
-/// `output` once per batch, which is the only time the lock is taken.
+/// The builders live in the accumulator, not here, so appending a row needs no
+/// synchronisation. [`Aggregate::finalize`] moves them into `output` once per
+/// batch, which is the only time the lock is taken.
 pub(crate) struct BatchFiller {
     pub(crate) names: Vec<String>,
     pub(crate) types: Vec<DataType>,
@@ -77,10 +77,10 @@ pub(crate) struct BatchFiller {
     /// The first append failure, kept so a typed error survives instead of
     /// becoming a bare SQL error.
     ///
-    /// Beside the accumulator rather than inside it, because the accumulator
-    /// must be `UnwindSafe` and [`Error`] is not: it boxes a `dyn Error` whose
-    /// interior mutability the compiler cannot rule out. Failures are rare, so
-    /// taking a lock for one costs nothing that matters.
+    /// It is kept beside the accumulator, not inside it, because the
+    /// accumulator must be `UnwindSafe`. [`Error`] is not, because it boxes a
+    /// `dyn Error` whose interior mutability the compiler can't rule out.
+    /// Failures are rare, so the cost of taking a lock for one doesn't matter.
     pub(crate) failure: Arc<Mutex<Option<Error>>>,
 }
 
@@ -91,9 +91,9 @@ pub(crate) struct FilledBatch {
     pub(crate) last_key: Option<i64>,
     /// Geometry bytes appended so far, against the batch's byte ceiling.
     pub(crate) bytes: usize,
-    /// Set once the ceiling is reached. Rows after it are left for the next
-    /// batch rather than appended, and `last_key` stops advancing, so the
-    /// pagination cursor resumes at the first row that did not fit.
+    /// Set once the ceiling is reached. Later rows are left for the next batch
+    /// instead of being appended, and `last_key` stops advancing, so the
+    /// pagination cursor resumes at the first row that didn't fit.
     pub(crate) truncated: bool,
 }
 

@@ -73,18 +73,18 @@ pub use options::default_max_batch_bytes;
 /// A stream of Arrow [`RecordBatch`]es over one layer, from
 /// [`crate::Layer::read_arrow`].
 ///
-/// Implements [`RecordBatchReader`], so it can be handed to anything in the
-/// Arrow ecosystem that consumes one. Batches arrive in primary-key order
-/// whether the read is threaded or not.
+/// Implements [`RecordBatchReader`], so you can pass it to anything in the
+/// Arrow ecosystem that accepts one. Batches arrive in primary-key order
+/// whether or not the read uses threads.
 pub struct ArrowBatches<'a> {
     pub(crate) schema: SchemaRef,
     pub(crate) source: BatchSource<'a>,
 }
 
 pub(crate) enum BatchSource<'a> {
-    /// Boxed: the sequential reader stores its query text, schema handles
-    /// and segment list, several times the parallel variant's size, and an
-    /// `ArrowBatches` should stay cheap to move.
+    /// Boxed because the sequential reader holds its query text, schema
+    /// handles and segment list, several times the size of the parallel
+    /// variant, and an `ArrowBatches` should stay cheap to move.
     Sequential(Box<SequentialBatches<'a>>),
     Parallel(ParallelBatches),
 }

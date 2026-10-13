@@ -30,10 +30,11 @@ pub(crate) enum ColumnBuilder {
 }
 
 impl ColumnBuilder {
-    /// The builder for one field of the schema, sized for `capacity` rows.
+    /// Creates the builder for one field of the schema, sized for `capacity`
+    /// rows.
     ///
-    /// The byte estimates for the variable-width types only decide the first
-    /// allocation; a longer value grows the buffer as usual.
+    /// The byte estimates for the variable-width types only set the first
+    /// allocation. A longer value grows the buffer as usual.
     pub(crate) fn new(data_type: &DataType, is_geometry: bool, capacity: usize) -> Result<Self> {
         /// Assumed bytes per WKB geometry, enough for a point or a short line.
         const GEOMETRY_BYTES: usize = 64;
@@ -74,10 +75,10 @@ impl ColumnBuilder {
 
     /// Appends one stored value.
     ///
-    /// `names` and `index` locate the column for diagnostics, rather than a
-    /// resolved `&str`, so the lookup happens only on the failure paths. It is
-    /// otherwise a bounds-checked index and a deref per value, and there are
-    /// tens of millions of values in a large read.
+    /// `names` and `index` identify the column for diagnostics, instead of a
+    /// resolved `&str`, so the lookup happens only on failure paths. Otherwise
+    /// it would cost a bounds-checked index and a deref per value, and a large
+    /// read has tens of millions of values.
     pub(crate) fn append(
         &mut self,
         names: &[String],
@@ -152,7 +153,7 @@ impl ColumnBuilder {
         Ok(())
     }
 
-    /// Append a NULL to whichever array this is.
+    /// Appends a NULL to whichever array this is.
     fn append_null(&mut self) {
         match self {
             Self::Boolean(builder) => builder.append_null(),
@@ -165,7 +166,7 @@ impl ColumnBuilder {
         }
     }
 
-    /// The Arrow type name, for diagnostics.
+    /// Returns the Arrow type name, for diagnostics.
     fn type_name(&self) -> &'static str {
         match self {
             Self::Boolean(_) => "Boolean",
@@ -198,17 +199,17 @@ impl ColumnBuilder {
     }
 }
 
-/// The name of column `index`, for an error message.
+/// Returns the name of column `index`, for an error message.
 pub(crate) fn column_name(names: &[String], index: usize) -> String {
     names.get(index).cloned().unwrap_or_default()
 }
 
-/// Decode SQLite TEXT bytes as UTF-8.
+/// Decodes SQLite TEXT bytes as UTF-8.
 pub(crate) fn text(bytes: &[u8]) -> Result<&str> {
     Ok(std::str::from_utf8(bytes).map_err(rusqlite::Error::from)?)
 }
 
-/// The SQLite storage class name of a value, for diagnostics.
+/// Returns the SQLite storage class name of a value, for diagnostics.
 pub(crate) fn storage_class(value: ValueRef<'_>) -> &'static str {
     match value {
         ValueRef::Null => "NULL",
