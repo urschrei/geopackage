@@ -1,11 +1,10 @@
-//! `gpkg_t`: opening, closing, and what a file declares.
+//! Open, create and close a `gpkg_t`, and read what the file declares.
 //!
-//! Three ways in and one way out. [`gpkg_open`] opens an existing file
-//! read-write and validates it strictly. [`gpkg_open_read_only`] opens one
-//! read-only and accepts legacy and lightly non-conforming files, recording
-//! what it accepted as warnings. [`gpkg_create`] makes a new GeoPackage 1.4
-//! file. All three return NULL on failure, and [`gpkg_close`] destroys the
-//! handle.
+//! [`gpkg_open`] opens an existing file read-write and validates it strictly.
+//! [`gpkg_open_read_only`] opens one read-only, accepts legacy and lightly
+//! non-conforming files, and records what it accepted as warnings.
+//! [`gpkg_create`] makes a new GeoPackage 1.4 file. All three return NULL on
+//! failure. [`gpkg_close`] destroys the handle.
 //!
 //! # Opening a file and reading what it declares
 //!
@@ -50,11 +49,11 @@
 //!
 //! # Transactions
 //!
-//! [`gpkg_begin`], [`gpkg_commit`] and [`gpkg_rollback`] put a sequence of
-//! writes under one commit. Every write made through the handle while a
-//! transaction is open joins it, including the calls that would otherwise open
-//! one of their own, so a layer's DDL, its spatial index and its rows can land
-//! together or not at all.
+//! [`gpkg_begin`], [`gpkg_commit`] and [`gpkg_rollback`] group a sequence of
+//! writes into one commit. While a transaction is open, every write made
+//! through the handle joins it, including calls that would otherwise open a
+//! transaction of their own. A layer's DDL, its spatial index and its rows can
+//! therefore be committed together or not at all.
 //!
 //! ```c
 //! if (gpkg_begin(gpkg, &error) != GPKG_STATUS_OK) {
@@ -76,11 +75,10 @@
 //! }
 //! ```
 //!
-//! SQLite does not nest transactions, so each of the three fails when the
-//! state is not what it needs: [`gpkg_begin`] when one is already open, and
-//! [`gpkg_commit`] and [`gpkg_rollback`] when none is.
-//! [`gpkg_in_transaction`] asks without provoking the error, which is what a
-//! cleanup path wants:
+//! SQLite does not nest transactions. [`gpkg_begin`] fails if a transaction is
+//! already open, and [`gpkg_commit`] and [`gpkg_rollback`] fail if none is.
+//! [`gpkg_in_transaction`] checks without causing an error, so use it in a
+//! cleanup path:
 //!
 //! ```c
 //! if (gpkg_in_transaction(gpkg)) {
@@ -88,10 +86,10 @@
 //! }
 //! ```
 //!
-//! Rolling back undoes schema changes as well as rows, because SQLite's DDL is
-//! transactional: dropping a spatial index inside a transaction takes the
-//! virtual table, its triggers and its `gpkg_extensions` row with it, and a
-//! rollback brings all of that back.
+//! A rollback undoes schema changes as well as rows, because DDL in SQLite is
+//! transactional. For example, dropping a spatial index inside a transaction
+//! removes the virtual table, its triggers and its `gpkg_extensions` row, and a
+//! rollback restores all of them.
 
 use std::ffi::c_char;
 

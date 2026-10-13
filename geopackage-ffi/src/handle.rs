@@ -1,12 +1,12 @@
-//! The handle representation, and the one piece of lifetime erasure the crate
-//! rests on.
+//! Handle representation, and the one place the crate erases a lifetime.
 //!
 //! # What a C caller sees
 //!
-//! Three opaque pointers, each with one destructor, and one rule between them:
-//! a container cannot be closed while anything taken from it is still alive.
-//! The attempt returns `GPKG_STATUS_HANDLE_IN_USE`, changes nothing, and leaves
-//! the container open, so the caller can free the children and try again.
+//! A C caller sees three opaque pointer types, each with one destructor. One
+//! rule connects them: you cannot close a container while anything taken from
+//! it is still alive. The attempt returns `GPKG_STATUS_HANDLE_IN_USE`, changes
+//! nothing, and leaves the container open, so you can free the children and try
+//! again.
 //!
 //! ```c
 //! gpkg_error_t error = {GPKG_STATUS_OK, NULL};
@@ -26,9 +26,9 @@
 //! ```
 //!
 //! An Arrow stream from `gpkg_layer_read_arrow` counts as a child in the same
-//! way, and is freed through its own `release` callback rather than by a
+//! way. You free it through its own `release` callback rather than with a
 //! `gpkg_*_free` call. Freeing a child twice, or using one after it has been
-//! freed, is undefined behaviour: the rule protects the container from its
+//! freed, is undefined behaviour. The rule protects the container from its
 //! children, not each handle from its own caller.
 //!
 //! # The problem it solves
@@ -38,25 +38,26 @@
 //! frees them in whatever order it likes, so a borrow cannot be expressed
 //! across the boundary.
 //!
-//! The alternative to erasing it is for each call to rebuild the borrowed
-//! handle from its parent, which was measured rather than assumed. Building one
-//! costs a near-constant 37 to 51 microseconds, since it is a fixed set of
-//! catalogue queries, and it is constant whatever the call it precedes costs:
-//! +778% on `get_tile`, and +131% to +150% on a small bounding-box query. So
-//! the borrow is erased once, when the handle is made, and the cost of a call
-//! from C is the cost of the call.
+//! The alternative to erasing the borrow is for each call to rebuild the
+//! borrowed handle from its parent. This cost was measured rather than assumed.
+//! Rebuilding runs a fixed set of catalogue queries and takes a near-constant
+//! 37 to 51 microseconds, however much the call that follows costs. The
+//! overhead is +778% on `get_tile`, and +131% to +150% on a small bounding-box
+//! query. So the crate erases the borrow once, when it makes the handle, and a
+//! call from C costs only what the call itself costs.
 //!
-//! # The shape
+//! # Representation
 //!
 //! A container handle owns its `GeoPackage` behind a `Box`, so the address of
 //! the `GeoPackage` is fixed for as long as the handle lives, whatever happens
 //! to the handle itself. A child handle stores a `Layer<'static>` produced by
-//! erasing the borrow, plus a pointer back to its parent so it can announce its
-//! own death.
+//! erasing the borrow, plus a pointer back to its parent so that it can tell
+//! the parent when it is freed.
 //!
-//! # Why that is sound
+//! # Soundness
 //!
-//! Three invariants, all enforced here rather than assumed of the caller:
+//! The crate enforces three invariants itself, rather than assuming them of the
+//! caller:
 //!
 //! 1. **The borrowed-from value never moves.** `Container::gpkg` is a `Box`,
 //!    and nothing in this crate takes the `GeoPackage` out of it or produces a
@@ -64,18 +65,18 @@
 //!    once it is behind a raw pointer, would not move the `GeoPackage`.
 //! 2. **A child never outlives its parent.** The only path that destroys a
 //!    container checks [`Container::outstanding_children`] first and fails
-//!    while it is non-zero; freeing a child decrements it. So the `GeoPackage`
+//!    while it is non-zero. Freeing a child decrements it. So the `GeoPackage`
 //!    a `Layer<'static>` points into is still alive whenever that layer is
 //!    used.
 //! 3. **Nothing crosses a thread.** `geopackage::GeoPackage` is `Send` but not
 //!    `Sync`, because `rusqlite::Connection` is, so a handle belongs to the
-//!    thread that made it. The ABI documents handle-per-thread, and the counter
-//!    below is a plain `Cell` on that basis rather than an atomic, which would
+//!    thread that made it. The ABI documents handle-per-thread. On that basis
+//!    the counter below is a plain `Cell` rather than an atomic, which would
 //!    imply a guarantee this crate does not make.
 //!
-//! Invariant 2 is the one a C caller sees, as the `GPKG_STATUS_HANDLE_IN_USE`
-//! failure in the example above. The Rust API keeps its compile-time version, since `close` there
-//! takes `self` and a live `Layer` borrows it.
+//! A C caller sees invariant 2 as the `GPKG_STATUS_HANDLE_IN_USE` failure in
+//! the example above. The Rust API enforces the same rule at compile time,
+//! since `close` there takes `self` and a live `Layer` borrows it.
 
 use std::cell::Cell;
 

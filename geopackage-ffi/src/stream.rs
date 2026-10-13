@@ -1,24 +1,23 @@
-//! The Arrow C Data Interface data plane.
+//! Read and write layers through the Arrow C Data Interface.
 //!
-//! Feature data crosses the boundary as Arrow record batches, in both
+//! Feature data crosses the boundary as Arrow record batches in both
 //! directions. [`gpkg_layer_read_arrow`], [`gpkg_layer_read_arrow_in`] and
-//! [`gpkg_layer_read_arrow_filtered`] fill in an `ArrowArrayStream` the caller
-//! owns and pulls from; [`gpkg_layer_write_arrow`] consumes one. The geometry
-//! is a GeoArrow WKB
-//! column whose Arrow metadata records the coordinate reference system, which
-//! is what lets [`gpkg_create_layer_from_arrow_schema`] build a destination
-//! layer out of a source stream's schema, with no schema-description API on
-//! this side at all.
+//! [`gpkg_layer_read_arrow_filtered`] fill in an `ArrowArrayStream` that you
+//! own and pull from. [`gpkg_layer_write_arrow`] consumes one. The geometry is
+//! a GeoArrow WKB column whose Arrow metadata records the coordinate reference
+//! system. That lets [`gpkg_create_layer_from_arrow_schema`] build a
+//! destination layer from a source stream's schema, so the C API needs no
+//! schema-description functions at all.
 //!
-//! The `ArrowSchema`, `ArrowArray` and `ArrowArrayStream` structs are declared
-//! in the header, verbatim from the Arrow specification and behind the guards
-//! it names, so a consumer that already has them from another Arrow-exporting
-//! library keeps its own definitions.
+//! The header declares the `ArrowSchema`, `ArrowArray` and `ArrowArrayStream`
+//! structs verbatim from the Arrow specification, behind the guards the
+//! specification names. A program that already has them from another
+//! Arrow-exporting library keeps its own definitions.
 //!
 //! # Reading a layer
 //!
-//! A stream is consumed exactly as the specification says: `get_schema` once,
-//! then `get_next` until it returns a released array, then `release`.
+//! Consume a stream as the specification says: call `get_schema` once, then
+//! `get_next` until it returns a released array, then `release`.
 //!
 //! ```c
 //! struct ArrowArrayStream stream;
@@ -55,12 +54,13 @@
 //! stream.release(&stream);
 //! ```
 //!
-//! A stream failure is reported the interface's way, as a non-zero return with
-//! the detail behind `get_last_error`, rather than through a `gpkg_error_t`.
-//! The `gpkg_error_t` these calls take covers only opening the stream.
+//! A stream reports failure the way the interface specifies, as a non-zero
+//! return with the detail available from `get_last_error`, not through a
+//! `gpkg_error_t`. The `gpkg_error_t` these calls take covers only opening the
+//! stream.
 //!
-//! [`gpkg_layer_read_arrow_in`] is the same with a bounding box, and returns
-//! the rows whose geometry envelope intersects it:
+//! [`gpkg_layer_read_arrow_in`] also takes a bounding box, and returns the rows
+//! whose geometry envelope intersects it:
 //!
 //! ```c
 //! struct ArrowArrayStream stream;
@@ -74,11 +74,10 @@
 //!
 //! # Writing a layer
 //!
-//! A layer is created from a schema and then filled from a stream, and filling
-//! is appending: nothing on this side updates or deletes a row that is already
-//! there. The schema
-//! can come from anywhere that produces one; taking it from a source layer's
-//! own stream is what makes a copy possible without describing any columns:
+//! Create a layer from a schema, then fill it from a stream. Filling only
+//! appends: nothing in this module updates or deletes an existing row. The
+//! schema can come from any producer. If you take it from a source layer's own
+//! stream, you can copy the layer without describing any columns:
 //!
 //! ```c
 //! // The whole copy under one commit, so the SRS row, the layer and its rows
@@ -105,32 +104,34 @@
 //! gpkg_commit(dst, &error);
 //! ```
 //!
-//! `examples/roundtrip.c` is that program in full, error handling included, and
-//! is compiled and run by the test suite.
+//! `examples/roundtrip.c` is the full program, including error handling, and
+//! the test suite compiles and runs it.
 //!
-//! # Why this is hand-rolled
+//! # Why the stream is implemented by hand
 //!
 //! `FFI_ArrowArrayStream::new` takes `Box<dyn RecordBatchReader + Send>`, so
-//! `Send + 'static`. `geopackage::ArrowBatches<'a>` is neither: it borrows the
-//! layer, and its sequential variant keeps a `&Connection`, which is not `Send`
-//! because `rusqlite::Connection` is not `Sync`.
+//! the reader must be `Send + 'static`. `geopackage::ArrowBatches<'a>` is
+//! neither. It borrows the layer, and its sequential variant keeps a
+//! `&Connection`, which is not `Send` because `rusqlite::Connection` is not
+//! `Sync`.
 //!
-//! The lifetime is the easy half, erased exactly as [`crate::handle`] erases a
-//! layer's, and made sound by the same rule: a stream counts as a child of its
-//! container, so the container cannot close while the stream is alive.
+//! The lifetime is the easy part. It is erased exactly as [`crate::handle`]
+//! erases a layer's, and the same rule makes that sound: a stream counts as a
+//! child of its container, so the container cannot close while the stream is
+//! alive.
 //!
-//! `Send` is the half that cannot be supplied truthfully. Adding
-//! `unsafe impl Send` would assert that a caller may pull batches from a thread
-//! other than the one holding the connection, which is exactly what
-//! `Connection: !Sync` denies, and no refcount can enforce the difference.
-//! Rather than claim it, this module fills in the four `ArrowArrayStream`
-//! callbacks itself. The struct's fields are public, so nothing here relies on
-//! arrow-rs internals; what it avoids is arrow-rs's `Send` bound, which exists
-//! for its own constructor rather than for the C interface, since the C Data
-//! Interface makes no threading claim of its own.
+//! `Send` cannot be supplied truthfully. Adding `unsafe impl Send` would assert
+//! that a caller may pull batches from a thread other than the one holding the
+//! connection, which is exactly what `Connection: !Sync` denies, and no
+//! refcount can enforce the difference. Instead of making that claim, this
+//! module fills in the four `ArrowArrayStream` callbacks itself. The struct's
+//! fields are public, so nothing here relies on arrow-rs internals. What the
+//! module avoids is arrow-rs's `Send` bound, which exists for arrow-rs's own
+//! constructor rather than for the C interface: the C Data Interface makes no
+//! threading claim of its own.
 //!
-//! The stream therefore inherits this crate's ordinary rule: use it on the
-//! thread that created it.
+//! So the stream follows this crate's ordinary rule: use it on the thread that
+//! created it.
 //!
 //! # Panics across the boundary
 //!

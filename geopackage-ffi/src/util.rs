@@ -1,9 +1,8 @@
-//! Marshalling helpers: strings in, strings out.
+//! Helpers for passing strings across the C API.
 //!
-//! Strings are NUL-terminated UTF-8 in both directions, and ownership follows
-//! the direction of travel. A string the caller passes in is borrowed for the
-//! duration of the call only. A string this library returns is a fresh
-//! allocation the caller owns and releases with [`gpkg_string_free`].
+//! Strings are NUL-terminated UTF-8 in both directions. A string you pass in is
+//! borrowed for the duration of the call only. A string this library returns is
+//! a fresh allocation that you own and release with [`gpkg_string_free`].
 //!
 //! ```c
 //! char *name = gpkg_layer_name_at(gpkg, 0, &error);
@@ -14,10 +13,10 @@
 //! gpkg_string_free(name);                                     // owned
 //! ```
 //!
-//! A returning call can also fail because the text it would return contains an
-//! interior NUL and so cannot be a C string at all. That is only reachable for
-//! a name a file itself supplies, and it is reported as
-//! `GPKG_STATUS_INVALID_ARGUMENT` rather than passed on truncated.
+//! A call that returns a string can also fail if the text contains an interior
+//! NUL, because such text cannot be a C string. This can happen only with a
+//! name the file itself supplies. The call reports it as
+//! `GPKG_STATUS_INVALID_ARGUMENT` rather than returning a truncated string.
 
 use std::ffi::{CStr, CString, c_char};
 

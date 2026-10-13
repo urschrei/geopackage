@@ -1,10 +1,9 @@
-//! The `gpkg_extensions` catalogue: what a file registers, and whether this
-//! library supports it.
+//! The `gpkg_extensions` catalogue, and this library's support for each entry.
 //!
-//! The catalogue exists so a client can "fail fast": ask what a file registers
-//! before working on it, instead of learning mid-write that a table is under
-//! an extension this library cannot honour (which fails as
-//! `GPKG_STATUS_UNSUPPORTED` at the write). This pair is the asking. [`gpkg_extensions_count`] sizes the catalogue and
+//! Use the catalogue to check what a file registers before you work on it,
+//! rather than finding out mid-write that a table is under an extension this
+//! library cannot honour. That write would fail with `GPKG_STATUS_UNSUPPORTED`.
+//! [`gpkg_extensions_count`] returns the number of rows, and
 //! [`gpkg_extension_at`] reads one row, with the support level this library
 //! claims for it.
 //!
@@ -27,10 +26,10 @@
 //! ```
 //!
 //! The support level is one of `implemented`, `known, not read or written`,
-//! `removed from the standard in 2016`, and `unrecognised`. A file whose
-//! every row reports `implemented` contains nothing this library will reject;
-//! a row reporting `unrecognised` names a table this library will not write
-//! unless the open opted out of that protection.
+//! `removed from the standard in 2016`, or `unrecognised`. If every row reports
+//! `implemented`, the file contains nothing this library will reject. A row
+//! reporting `unrecognised` names a table this library will not write unless
+//! the file was opened with that protection turned off.
 
 use std::ffi::c_char;
 
