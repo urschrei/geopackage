@@ -26,9 +26,11 @@
  *   gpkg_layer_writer inserts, updates and deletes a row at a time. There is
  *   no separate save step: a write is durable when its call returns, or at
  *   gpkg_commit inside an open transaction.
- * - One handle per thread. A handle may be created on one thread and used on
- *   another, but never used from two at once, and nothing is locked
- *   internally. For concurrent reads, open the file once per thread.
+ * - One thread at a time per container. A gpkg_t and every handle taken from
+ *   it share one SQLite connection, so use them all from one thread at a
+ *   time, freeing included. They may move to another thread together. Nothing
+ *   is locked internally. For concurrent reads, open the file once per
+ *   thread.
  */
 
 #ifndef GEOPACKAGE_H
@@ -460,7 +462,8 @@ extern "C" {
  *
  * `path` must be a valid pointer to a NUL-terminated UTF-8 string. `error`
  * must be NULL or point at a writable `gpkg_error_t`. The returned handle must
- * be destroyed with `gpkg_close`, on the thread that created it.
+ * be destroyed with `gpkg_close`. It and every handle taken from it must be
+ * used from one thread at a time.
  */
 gpkg_t *gpkg_open(const char *path, gpkg_error_t *error);
 
@@ -1219,7 +1222,9 @@ gpkg_status gpkg_layer_repair_spatial_index(const gpkg_layer_t *layer, gpkg_erro
  *
  * `layer` must be a live layer handle, `out` must point at writable storage
  * for an `ArrowArrayStream`, and `error` must be NULL or writable. The
- * returned stream must be used from the thread that created it.
+ * returned stream follows the threading rule for its container: use it, and
+ * release it, only while no other thread is using that container or any
+ * handle taken from it.
  */
 gpkg_status gpkg_layer_read_arrow(const gpkg_layer_t *layer,
                                   struct ArrowArrayStream *out,
@@ -2079,7 +2084,8 @@ gpkg_status gpkg_finding_at(const gpkg_findings_t *findings,
  *
  * `layer` must be a live layer handle and `error` NULL or writable. The
  * returned writer must be destroyed exactly once, with `gpkg_writer_commit` or
- * `gpkg_writer_free`, on the thread that created it.
+ * `gpkg_writer_free`, and used only while no other thread is using its
+ * container or any handle taken from it.
  */
 gpkg_writer_t *gpkg_layer_writer(const gpkg_layer_t *layer, gpkg_error_t *error);
 

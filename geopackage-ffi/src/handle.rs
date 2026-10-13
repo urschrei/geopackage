@@ -68,11 +68,15 @@
 //!    while it is non-zero. Freeing a child decrements it. So the `GeoPackage`
 //!    a `Layer<'static>` points into is still alive whenever that layer is
 //!    used.
-//! 3. **Nothing crosses a thread.** `geopackage::GeoPackage` is `Send` but not
-//!    `Sync`, because `rusqlite::Connection` is, so a handle belongs to the
-//!    thread that made it. The ABI documents handle-per-thread. On that basis
-//!    the counter below is a plain `Cell` rather than an atomic, which would
-//!    imply a guarantee this crate does not make.
+//! 3. **A container and its children are used from one thread at a time.**
+//!    `geopackage::GeoPackage` is `Send` but not `Sync`, because
+//!    `rusqlite::Connection` is, and every child handle borrows the same
+//!    connection. The ABI documents this as a rule for the whole set: it may
+//!    move between threads together, but no two of its handles may be in use
+//!    on different threads at once. On that basis the counter below is a plain
+//!    `Cell` rather than an atomic. An atomic would make only the count
+//!    thread-safe, not the shared connection, so it would imply a guarantee
+//!    this crate does not make.
 //!
 //! A C caller sees invariant 2 as the `GPKG_STATUS_HANDLE_IN_USE` failure in
 //! the example above. The Rust API enforces the same rule at compile time,
@@ -91,9 +95,10 @@ pub struct Container {
     gpkg: Box<GeoPackage>,
     /// Live child handles. Non-zero blocks [`Self::close`].
     ///
-    /// A `Cell`, not an `AtomicUsize`: the handles are not `Sync` and the ABI
-    /// documents handle-per-thread, so an atomic here would suggest a
-    /// cross-thread guarantee that the rest of the type cannot keep.
+    /// A `Cell`, not an `AtomicUsize`: the container and its children share
+    /// one connection, and the ABI requires them to be used from one thread at
+    /// a time, so an atomic here would suggest a cross-thread guarantee that
+    /// the rest of the type cannot keep.
     children: Cell<usize>,
 }
 
@@ -274,8 +279,9 @@ impl Drop for ChildToken {
     fn drop(&mut self) {
         // SAFETY: `parent` came from `std::ptr::from_ref` on a live `Container`
         // in `Container::token`, and the container outlives every token it
-        // made, because closing refuses while any is outstanding. Tokens are
-        // not `Send`, so this runs on the container's own thread.
+        // made, because closing refuses while any is outstanding. The ABI's
+        // threading rule means no other thread is using the container while
+        // this runs, so the non-atomic decrement does not race.
         let parent = unsafe { &*self.parent };
         parent.release_child();
     }

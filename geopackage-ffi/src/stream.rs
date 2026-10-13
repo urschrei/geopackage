@@ -130,8 +130,8 @@
 //! constructor rather than for the C interface: the C Data Interface makes no
 //! threading claim of its own.
 //!
-//! So the stream follows this crate's ordinary rule: use it on the thread that
-//! created it.
+//! So the stream follows this crate's ordinary rule: use it from one thread at
+//! a time, together with its container and the container's other handles.
 //!
 //! # Panics across the boundary
 //!
@@ -362,7 +362,9 @@ fn export_batches(batches: ArrowBatches<'static>, token: ChildToken) -> FFI_Arro
 ///
 /// `layer` must be a live layer handle, `out` must point at writable storage
 /// for an `ArrowArrayStream`, and `error` must be NULL or writable. The
-/// returned stream must be used from the thread that created it.
+/// returned stream follows the threading rule for its container: use it, and
+/// release it, only while no other thread is using that container or any
+/// handle taken from it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gpkg_layer_read_arrow(
     layer: *const LayerHandle,

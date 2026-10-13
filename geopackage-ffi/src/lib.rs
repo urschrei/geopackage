@@ -243,12 +243,18 @@
 //!
 //! # Threading
 //!
-//! Use each handle from one thread at a time. `geopackage::GeoPackage` is
-//! `Send` but not `Sync`, like `rusqlite::Connection`, so a handle can move
-//! between threads but must not be used from two at once. There is no internal
-//! locking: for concurrent access, open the file once per thread. Reading
-//! through separate connections is safe, and is how the library's
-//! multithreaded Arrow reader works.
+//! A container and every handle taken from it (layers, tiles handles, writers,
+//! tile cursors and Arrow streams) must be used from one thread at a time.
+//! They share the container's SQLite connection, and `rusqlite::Connection` is
+//! `Send` but not `Sync`. The whole set may move to another thread together,
+//! but you must not use a child on one thread while its container, or another
+//! child of the same container, is in use on another. This includes freeing a
+//! child. A `gpkg_findings_t` is the exception: it borrows nothing from its
+//! container, so it can move to another thread on its own.
+//!
+//! There is no internal locking. For concurrent access, open the file once per
+//! thread. Reading through separate connections is safe, and is how the
+//! library's multithreaded Arrow reader works.
 
 pub mod container;
 pub mod error;
