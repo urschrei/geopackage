@@ -29,8 +29,8 @@ and no internal tiles.
 
 ## A coverage payload is not a GeoTIFF
 
-A common assumption is that the TIFF payloads of a coverage are GeoTIFFs. They
-are not, and this has a practical consequence.
+The TIFF payloads of a coverage are often assumed to be GeoTIFFs. They are
+not.
 
 The georeferencing is in `gpkg_tile_matrix_set`, the same extent and grid that
 a basemap pyramid uses, so the payload does not need any. The extension does
@@ -38,8 +38,8 @@ not use `GeoKeyDirectory`, `ModelPixelScale` or `ModelTiepoint`. It specifies
 a small profile of *baseline* TIFF, and each rule in the profile is a
 statement about a tag, not about a pixel.
 
-For this reason, this library can check a coverage payload completely without
-an image codec. `geopackage_core::coverage::coverage_tiff` walks the first IFD,
+So this library can check a coverage payload completely without an image
+codec. `geopackage_core::coverage::coverage_tiff` walks the first IFD,
 reads seven tags, and checks the encoding requirements against them.
 `coverage_png` does the same for `IHDR`. Neither function decodes a sample.
 
@@ -120,7 +120,7 @@ and nothing reports an error.
 
 ## Files from other writers
 
-As in all of this library, a read accepts more than a write. A coverage with a
+As elsewhere in this library, a read accepts more than a write. A coverage with a
 `datatype` value that the requirement does not permit still opens, and
 `Coverage::datatype` returns `None`. A read accepts a payload with Deflate
 compression, although Requirement 15 specifies baseline TIFF and Deflate is not
