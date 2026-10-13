@@ -1,20 +1,20 @@
 //! Registered extension names (Annex F) and the `scope` values a
 //! `gpkg_extensions` row may take.
 //!
-//! This is the naming half of the extension mechanism (spec clause 2.3.2,
-//! `spec/core/2e_extensions-mechanism.adoc`). Reading a file's catalogue, and
-//! deciding what this workspace does about a row it finds there, belong to the
-//! `geopackage` crate's `extensions` module.
+//! This module is the naming half of the extension mechanism (spec clause
+//! 2.3.2, `spec/core/2e_extensions-mechanism.adoc`). The `geopackage` crate's
+//! `extensions` module reads a file's catalogue and decides what this workspace
+//! does about each row it finds there.
 //!
 //! An extension name is `<author>_<extension name>`, case sensitive, with
 //! `gpkg` reserved for extensions OGC maintains (Requirement 62). Two names
-//! here have other authors: `gdal_aspatial`, which predates the attributes
-//! data type, and `related_tables`, which OGC 18-000 registered without an
-//! author prefix at all.
+//! here have other authors: `gdal_aspatial`, which predates the attributes data
+//! type, and `related_tables`, which OGC 18-000 registered with no author
+//! prefix.
 //!
-//! Annex F numbers the extensions in the order the annex includes them, so the
-//! two extensions removed in 2016 still occupy F.2, F.4 and F.5 and everything
-//! after them is numbered around the gaps.
+//! Annex F numbers the extensions in the order the annex includes them. The two
+//! extensions removed in 2016 still occupy F.2, F.4 and F.5, and the extensions
+//! after them are numbered around the gaps.
 
 use std::fmt;
 

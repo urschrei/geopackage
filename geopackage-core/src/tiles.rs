@@ -3,15 +3,16 @@
 //! satisfies.
 //!
 //! A tile pyramid is a `gpkg_contents` row with `data_type = 'tiles'`, one
-//! `gpkg_tile_matrix_set` row fixing the pyramid's bounding box and spatial
+//! `gpkg_tile_matrix_set` row that fixes the pyramid's bounding box and spatial
 //! reference system, one `gpkg_tile_matrix` row per zoom level, and a user
-//! table containing the tiles themselves. The table definition SQL for the two
-//! catalogue tables is in [`crate::ddl`]; the user table is per-pyramid, so it
-//! is built here.
+//! table that holds the tiles themselves. The table definition SQL for the two
+//! catalogue tables is in [`crate::ddl`]. Each pyramid has its own user table,
+//! so this module builds it.
 //!
-//! [`TileMatrixSet`] and [`TileMatrix`] hold no table name: they describe the
-//! shape of a pyramid, and the container decides which table it belongs to. [`TileMatrixSet::validate`] checks a pyramid against Requirements
-//! 45 to 53. Nothing here reads or writes a database.
+//! [`TileMatrixSet`] and [`TileMatrix`] hold no table name. They describe the
+//! shape of a pyramid, and the container decides which table it belongs to.
+//! [`TileMatrixSet::validate`] checks a pyramid against Requirements 45 to 53.
+//! Nothing here reads or writes a database.
 
 use crate::Error;
 use crate::ident::quote;

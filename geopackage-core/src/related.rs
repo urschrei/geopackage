@@ -1,17 +1,17 @@
 //! The Related Tables Extension's model (OGC 18-000): relationships between a
 //! base table and a table of related content, through a mapping table.
 //!
-//! One catalogue table, `gpkgext_relations`, names each relationship; each row
+//! One catalogue table, `gpkgext_relations`, names each relationship. Each row
 //! points at a user-defined mapping table whose `base_id` and `related_id`
-//! columns store the pairs. The mapping table is the relationship's data, and
-//! this crate neither constrains nor infers its cardinality: the spec is
-//! explicit that a `UNIQUE` constraint could enforce one-to-many but is NOT
-//! RECOMMENDED, because SQLite does not expose such constraints in an easily
-//! queryable way.
+//! columns store the pairs. The mapping table holds the relationship's data,
+//! and this crate neither constrains nor infers its cardinality. The spec
+//! states explicitly that a `UNIQUE` constraint could enforce one-to-many but
+//! is NOT RECOMMENDED, because SQLite does not expose such constraints in an
+//! easily queryable way.
 //!
 //! 18-000 has exactly one published version, 1.0, approved 2019-03-26. The
-//! `related_tables` and `gpkg_related_tables` spellings are not two versions:
-//! the document names the first and sanctions the second as an alias, and its
+//! `related_tables` and `gpkg_related_tables` spellings are not two versions.
+//! The document names the first and sanctions the second as an alias, and its
 //! own abstract test suite queries for both.
 
 use std::fmt;

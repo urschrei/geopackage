@@ -1,18 +1,18 @@
 //! Lazy geometry wrapper over a GeoPackage Binary (GPB) blob.
 //!
 //! A [`GpbGeometry`] pairs a parsed GPB header (see [`crate::gpb`]) with the
-//! ISO WKB body that follows it. The body is read through the georust
-//! [`wkb`] crate: [`GpbGeometry`] implements [`geo_traits::GeometryTrait`] by
-//! delegating to [`wkb::reader::Wkb`], so callers can traverse coordinates
-//! without materialising an owned geometry, and can convert to `geo-types`
-//! via [`GpbGeometry::to_geo`] when the `geo-types` feature is enabled.
+//! ISO WKB body that follows it. The georust [`wkb`] crate reads the body:
+//! [`GpbGeometry`] implements [`geo_traits::GeometryTrait`] by delegating to
+//! [`wkb::reader::Wkb`], so you can traverse coordinates without materialising
+//! an owned geometry. When the `geo-types` feature is enabled, you can convert
+//! to `geo-types` with [`GpbGeometry::to_geo`].
 //!
-//! Placement: this wrapper and the envelope traversal below live in
-//! `geopackage-core` rather than the container crate, which keeps the fuzz
-//! workspace free of the SQLite dependency. The intended long-term home is an
-//! upstreamed `gpb` feature in georust `wkb` itself.
+//! This wrapper and the envelope traversal below live in `geopackage-core`
+//! rather than the container crate, which keeps the fuzz workspace free of the
+//! SQLite dependency. The intended long-term home is an upstreamed `gpb`
+//! feature in georust `wkb` itself.
 //!
-//! Parsing arbitrary bytes never panics: a malformed header, a truncated body,
+//! Parsing arbitrary bytes never panics. A malformed header, a truncated body,
 //! or a geometry type the `wkb` crate cannot read all yield a
 //! [`GeometryError`].
 

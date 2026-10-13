@@ -1,11 +1,12 @@
 //! `gpkg validate`: what this crate can see wrong with a file.
 //!
-//! Read-only and lenient, for the same reason as `gpkg info`: a file with
-//! nothing wrong with it does not need validating, so failing to open the
-//! interesting ones would defeat the command.
+//! The command opens files read-only and in lenient mode, for the same reason
+//! as `gpkg info`. A file with nothing wrong with it does not need validating,
+//! so refusing to open the problem files would defeat the purpose of the
+//! command.
 //!
-//! Nothing is modified. Where a finding has a repair, the advice names the
-//! library method that performs it, and running it stays the caller's decision.
+//! The command modifies nothing. Where a finding has a repair, the advice names
+//! the library method that performs it, and you decide whether to run it.
 
 use std::path::Path;
 use std::process::ExitCode;

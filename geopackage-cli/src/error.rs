@@ -1,8 +1,8 @@
 //! The CLI's error type.
 //!
-//! `geopackage::Error` covers what the library does; a tool also writes files
-//! and parses arguments, which it has no variants for and should not grow them
-//! for. This wraps it rather than widening it.
+//! `geopackage::Error` covers what the library does. A command-line tool also
+//! writes files and parses arguments, and the library error has no variants for
+//! those and should not gain them. This type wraps it rather than widening it.
 
 /// Anything a subcommand can fail with.
 #[derive(Debug, thiserror::Error)]

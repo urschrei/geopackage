@@ -1,24 +1,24 @@
 //! `DATE` / `DATETIME` column value parsing and formatting.
 //!
 //! GeoPackage stores dates and datetimes as ISO 8601 TEXT. The 1.4 spec kept
-//! the strict datetime form `YYYY-MM-DDTHH:MM:SS.SSSZ` (UTC, millisecond
-//! precision: the shape `strftime('%Y-%m-%dT%H:%M:%fZ', ...)` produces).
-//! Files in the wild also contain second-precision values, other fractional
-//! widths, numeric UTC offsets, and space separators; [`DateTime::parse_lenient`]
-//! accepts those.
+//! the strict datetime form `YYYY-MM-DDTHH:MM:SS.SSSZ`, UTC with millisecond
+//! precision. This is the shape that `strftime('%Y-%m-%dT%H:%M:%fZ', ...)`
+//! produces. Files in the wild also contain second-precision values, other
+//! fractional widths, numeric UTC offsets, and space separators.
+//! [`DateTime::parse_lenient`] accepts those.
 //!
-//! These are calendar-validated value types, not a datetime library: no time
-//! zone database, no arithmetic. Convert to your preferred datetime crate at
-//! the boundary.
+//! These are calendar-validated value types, not a datetime library. They have
+//! no time zone database and offer no arithmetic. Convert to your preferred
+//! datetime crate at the boundary.
 //!
-//! Calendar arithmetic (date validation, epoch conversion) is delegated to
-//! [jiff](https://docs.rs/jiff); this module keeps only the GeoPackage
-//! concerns, namely which text forms are accepted on read and exactly which
-//! form is written back. jiff is built with no timezone database
-//! (`default-features = false`, `std` only): a GeoPackage `DATETIME` is UTC by
-//! definition, and this crate transforms neither coordinates nor times. No
-//! jiff type appears in this crate's API, so a jiff major version bump is not
-//! a breaking change here.
+//! This module delegates calendar arithmetic (date validation, epoch
+//! conversion) to [jiff](https://docs.rs/jiff) and keeps only the GeoPackage
+//! concerns: which text forms are accepted on read, and exactly which form is
+//! written back. jiff is built with no timezone database
+//! (`default-features = false`, `std` only), because a GeoPackage `DATETIME` is
+//! UTC by definition and this crate transforms neither coordinates nor times.
+//! No jiff type appears in this crate's API, so a jiff major version bump is
+//! not a breaking change here.
 
 use jiff::civil::Date as JiffDate;
 use std::fmt;

@@ -1,13 +1,13 @@
 //! `gpkg index` and `gpkg repair`: the two commands that write.
 //!
-//! Both open read-write and lenient. Lenient because the files worth repairing
-//! are by definition ones something is wrong with, and rejecting a legacy
-//! `application_id` would put the repair out of reach of the files that need
-//! it most.
+//! Both open the file read-write and in lenient mode. The files worth repairing
+//! are by definition ones with something wrong, and rejecting a legacy
+//! `application_id` would put repair out of reach of the files that need it
+//! most.
 //!
-//! What each does is chosen from the layer's [`SpatialIndexStatus`] rather than
-//! attempted blindly, so the tool says what it is about to do and skips a layer
-//! that does not need it.
+//! Each command chooses what to do from the layer's [`SpatialIndexStatus`]
+//! rather than acting blindly, so the tool says what it is about to do and
+//! skips a layer that does not need it.
 
 use std::path::Path;
 use std::process::ExitCode;

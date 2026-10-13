@@ -1,40 +1,41 @@
 //! XY envelopes computed directly from ISO WKB bytes, curve types included.
 //!
-//! [`crate::geometry::write_envelope`] derives an envelope by traversing a
-//! geometry through the georust `wkb` reader, which cannot read the non-linear
+//! [`crate::geometry::write_envelope`] computes an envelope by traversing a
+//! geometry with the georust `wkb` reader, which cannot read the non-linear
 //! types (`CIRCULARSTRING`, `COMPOUNDCURVE`, `CURVEPOLYGON`, `MULTICURVE`,
-//! `MULTISURFACE`). This module walks the WKB structure itself instead, so a
-//! curve body yields an envelope without waiting on upstream support.
+//! `MULTISURFACE`). This module walks the WKB structure itself, so curve
+//! geometries get an envelope without waiting on upstream support.
 //!
 //! # Why the control points are not enough
 //!
-//! A circular arc bulges away from the chord joining its endpoints, and may
-//! bulge past its middle control point too, so the bounding box of the three
-//! points that define an arc can be smaller than the arc's own. An envelope
-//! that is too small is not a tuning problem: the GPB header envelope and the
-//! rtree entry are both derived from it, and a reader that trusts either will
-//! silently drop features that do intersect the query window.
+//! A circular arc bulges away from the chord between its endpoints, and can
+//! bulge past its middle control point too. The bounding box of the three
+//! points that define an arc can therefore be smaller than the arc's own. An
+//! envelope that is too small causes incorrect query results: the GPB header
+//! envelope and the rtree entry are both derived from it, and a reader that
+//! trusts either will silently drop features that do intersect the query
+//! window.
 //!
-//! [`arc_envelope`] therefore computes the exact box. The arc lies on a circle
-//! through the three points, so its extremes in x and y are either the
-//! endpoints or the points of that circle furthest along each axis, and the
-//! chord between the endpoints decides which of those four candidates the arc
-//! actually reaches. This is the approach PostGIS takes in
-//! `lw_arc_calculate_gbox_cartesian_2d`; GDAL computes the same box from
+//! [`arc_envelope`] therefore computes the exact box. The arc lies on the
+//! circle through its three points, so its extremes in x and y are either the
+//! endpoints or the points of that circle furthest along each axis. The chord
+//! between the endpoints decides which of those four candidates the arc
+//! actually reaches. PostGIS takes the same approach in
+//! `lw_arc_calculate_gbox_cartesian_2d`, and GDAL computes the same box from
 //! swept angles in `OGRCircularString::ExtendEnvelopeWithCircular`.
 //!
 //! # Planar by definition
 //!
-//! An arc is a circle in the coordinate space of the layer's CRS, including
-//! when that CRS is geographic: three lon/lat points define a circle in degree
-//! space, not a small circle on the ellipsoid. PostGIS and GDAL both read it
-//! that way, and the GeoPackage rtree indexes the same space, so no geodesic
-//! arithmetic enters here.
+//! An arc is a circle in the coordinate space of the layer's CRS, even when
+//! that CRS is geographic: three lon/lat points define a circle in degree
+//! space, not a small circle on the ellipsoid. PostGIS and GDAL both interpret
+//! arcs this way, and the GeoPackage rtree indexes the same space, so this
+//! module does no geodesic arithmetic.
 //!
 //! # Tightness
 //!
 //! The returned box is the minimum bounding box, with no outward margin. The
-//! rtree path widens it anyway: rtree columns are 32-bit floats, and
+//! rtree path widens it anyway. Rtree columns are 32-bit floats, and
 //! `packed.rs` rounds each bound outward when narrowing, so a stored cell
 //! always contains the `f64` box. Annex F.3 of the spec also tells clients to
 //! expand query windows to absorb that rounding.

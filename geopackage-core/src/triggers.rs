@@ -1,13 +1,14 @@
 //! RTree spatial index extension (`gpkg_rtree_index`, spec Annex F.3).
 //!
-//! GeoPackage 1.4 replaced the trigger set: `update1` → `update6` + `update7`
-//! (UPSERT compatibility) and `update3` → `update5` (rename, so the fixed
-//! variant is detectable by name). This module emits the 1.4 set and
-//! classifies/repairs older generations.
+//! GeoPackage 1.4 replaced the trigger set. `update1` became `update6` and
+//! `update7` (for UPSERT compatibility), and `update3` became `update5`,
+//! renamed so that the fixed variant is detectable by name. This module emits
+//! the 1.4 set and classifies and repairs older generations.
 //!
-//! The triggers call `ST_IsEmpty`, `ST_MinX`, `ST_MaxX`, `ST_MinY`, `ST_MaxY`,
-//! which are **not** built into SQLite: every connection that writes to an
-//! indexed table must register them (the `geopackage` crate does this on open).
+//! The triggers call `ST_IsEmpty`, `ST_MinX`, `ST_MaxX`, `ST_MinY` and
+//! `ST_MaxY`, which are **not** built into SQLite. Every connection that writes
+//! to an indexed table must register them. The `geopackage` crate does this on
+//! open.
 
 use crate::Error;
 use crate::ident::quote;

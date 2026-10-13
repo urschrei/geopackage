@@ -4,8 +4,7 @@
 //! A coverage tile is **not a GeoTIFF**. The georeferencing is in
 //! `gpkg_tile_matrix_set`, and the extension does not use GeoKeys,
 //! `ModelPixelScale` or `ModelTiepoint`. The extension specifies a small
-//! profile of baseline TIFF, and each constraint in the profile is a tag
-//! value:
+//! profile of baseline TIFF, in which each constraint is a tag value:
 //!
 //! | Requirement | Constraint |
 //! |---|---|
@@ -17,9 +16,9 @@
 //! | 20 | *SHALL NOT* contain internal tiles |
 //! | 21 | Every pixel valid; no NaN, no Inf |
 //!
-//! For this reason, the module does not need an image codec.
-//! [`coverage_tiff`] checks Requirements 15 to 20 from the first IFD, the same
-//! header that [`crate::tiles::probe`] reads, and does not decode samples.
+//! This module therefore needs no image codec. [`coverage_tiff`] checks
+//! Requirements 15 to 20 from the first IFD, the same header that
+//! [`crate::tiles::probe`] reads, and does not decode samples.
 //!
 //! An integer coverage can use PNG instead (Requirement 13): 16-bit unsigned,
 //! single channel. [`coverage_png`] reads the `IHDR` chunk and nothing more.
@@ -30,8 +29,8 @@
 //! **This module does not check Requirement 21.** "All pixels in a tile of
 //! coverage data _SHALL_ be set with a valid component value … Special
 //! floating point values such as NaN and Inf SHALL NOT be used" is a statement
-//! about samples, and a check of the samples needs a decoder. A payload that
-//! this module accepts satisfies the structural requirements only.
+//! about samples, and checking samples needs a decoder. A payload that this
+//! module accepts satisfies the structural requirements only.
 //!
 //! The requirement numbers are those of the migrated spec source,
 //! [`spec/2d-gridded-coverage/requirements`](https://github.com/opengeospatial/geopackage/tree/master/spec/2d-gridded-coverage/requirements).
@@ -39,10 +38,10 @@
 //! # Untrusted payloads
 //!
 //! This crate reads `tile_data` BLOBs that it did not write, and no schema
-//! constrains them. The walk of the first IFD is therefore bounded: one pass,
-//! no recursion, no allocation from a count in the file, and no value offset
-//! followed. A tag with a value that does not fit in its entry is unread. This
-//! does not change a result, because each tag that the profile constrains is a
+//! constrains them, so the walk of the first IFD is bounded: one pass, no
+//! recursion, no allocation from a count in the file, and no value offset
+//! followed. A tag whose value does not fit in its entry is not read. This does
+//! not change any result, because each tag that the profile constrains is a
 //! single number.
 
 use crate::tiles::TileError;

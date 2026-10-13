@@ -1,18 +1,19 @@
 //! Spatial reference system definitions: a vendored EPSG subset.
 //!
-//! Policy: no PROJ dependency and no coordinate transformation, ever. This
-//! module ships WKT1 definitions for a small set of EPSG codes that cover the
-//! bulk of real-world GeoPackage traffic, plus synthesised definitions for all
-//! WGS 84 UTM zones (EPSG:32601-32660 north, 32701-32760 south), which differ
-//! only in name, central meridian, false northing, and authority code. A
-//! failed lookup here is not final: the container crate falls back to the
-//! EPSG registry in `epsg-utils` and writes WKT2 through the `gpkg_crs_wkt_1_1`
-//! extension, and only a code in neither place is a typed "supply the
-//! definition yourself" error. Nothing here ever writes a silent `undefined` in
+//! This workspace has no PROJ dependency and never transforms coordinates.
+//! This module ships WKT1 definitions for a small set of EPSG codes that cover
+//! most real-world GeoPackage use, plus synthesised definitions for all WGS 84
+//! UTM zones (EPSG:32601-32660 north, 32701-32760 south), which differ only in
+//! name, central meridian, false northing, and authority code.
+//!
+//! If a code isn't found here, the container crate falls back to the EPSG
+//! registry in `epsg-utils` and writes WKT2 through the `gpkg_crs_wkt_1_1`
+//! extension. A code found in neither place returns a typed error asking you to
+//! supply the definition yourself. Nothing here silently writes `undefined` in
 //! place of a definition it has.
 //!
-//! Literal definitions live in the generated `epsg_wkt` table (private
-//! submodule); regenerate with `scripts/generate_epsg_wkt.py`.
+//! Literal definitions live in the generated `epsg_wkt` table (a private
+//! submodule). Regenerate it with `scripts/generate_epsg_wkt.py`.
 
 mod epsg_wkt;
 

@@ -1,20 +1,20 @@
 //! The `gpkg_metadata` extension's model (Annex F.8): metadata records and
 //! what they are attached to.
 //!
-//! Two tables. `gpkg_metadata` stores a document: its scope, the URI of the
-//! standard it follows, its MIME type, and the document itself.
+//! The extension has two tables. `gpkg_metadata` stores a document: its scope,
+//! the URI of the standard it follows, its MIME type, and the document itself.
 //! `gpkg_metadata_reference` attaches a record to something in the file, at one
-//! of five granularities, and optionally names a parent record so the
-//! attachments form a hierarchy.
+//! of five granularities, and can name a parent record so that the attachments
+//! form a hierarchy.
 //!
-//! This module is the model only: what a file says. The SQL that reads and
+//! This module is only the model of what a file says. The SQL that reads and
 //! writes the rows lives in the `geopackage` crate, as it does for
 //! [`crate::schema`].
 //!
 //! Payloads stay strings. The spec allows any authoritative metadata encoding,
 //! naming ISO 19115, ISO 19139, Dublin Core, CSDGM, DDMS and others, and this
-//! crate interprets none of them: `mime_type` and `md_standard_uri` say what a
-//! reader would need to know, and the document is returned as written. Tile
+//! crate interprets none of them. `mime_type` and `md_standard_uri` tell a
+//! reader what it needs to know, and the document is returned as written. Tile
 //! payloads are treated the same way.
 
 use std::fmt;
