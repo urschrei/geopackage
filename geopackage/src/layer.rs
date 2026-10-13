@@ -1,35 +1,34 @@
 //! Feature and attribute layers: typed handles over a user table, and the
-//! streaming read path ([`Layer::features`], [`Layer::features_in`],
+//! read path ([`Layer::features`], [`Layer::features_in`],
 //! [`Layer::select`]).
 //!
-//! A [`Layer`] borrows the [`GeoPackage`] it came from and caches the table's
-//! introspected [`TableSchema`], its resolved geometry column (feature layers),
-//! and its single-column primary key. The read methods build a prepared
-//! statement from that schema and yield owned [`Feature`]s: a row's values do
-//! not outlive the SQLite cursor, so each [`Feature`] owns its geometry blob
-//! and its converted column values rather than borrowing the row. The values
-//! are stored in one buffer with a range recorded per value and read back as
-//! [`crate::ValueRef`]s, so a row costs at most two allocations regardless of
-//! its width, and a dropped feature returns both to a small thread-local pool
-//! that later rows reuse.
-//! Neither the geometry nor the primary key is among those values: they
-//! are reached through [`Feature::geometry`] and [`Feature::fid`], and the
-//! write path takes exactly the same value set.
+//! A [`Layer`] borrows the [`GeoPackage`] it came from. It caches the table's
+//! introspected [`TableSchema`], its resolved geometry column if it is a
+//! feature layer, and its single-column primary key. The read methods build a
+//! prepared statement from that schema and yield owned [`Feature`]s. A row's
+//! values don't outlive the SQLite cursor, so each [`Feature`] owns its
+//! geometry blob and its converted column values instead of borrowing the row.
+//! The values share one buffer, with a range recorded for each, and are read
+//! back as [`crate::ValueRef`]s. A row therefore costs at most two allocations
+//! whatever its width, and a dropped feature returns both to a small
+//! thread-local pool for later rows to reuse. The geometry and the primary key
+//! aren't among those values. You reach them through [`Feature::geometry`] and
+//! [`Feature::fid`], and the write path takes exactly the same set of values.
 //!
-//! There are two ways to read features, and they return the same rows.
+//! You can read features in two ways, and both return the same rows.
 //! [`Layer::features`], [`Layer::features_in`] and [`Layer::select`]
 //! materialise the whole result set into owned features before returning the
-//! iterator: one call, and the right default for layers small enough that the
-//! result set is not a problem. [`Layer::cursor`], [`Layer::cursor_in`] and
-//! [`Layer::cursor_select`] stream, reading one row at a time. Streaming takes
-//! two calls because rusqlite's row cursor borrows its `Statement`: an
-//! iterator owning both would be self-referential, which this crate's
-//! `#![forbid(unsafe_code)]` rules out without a helper crate. Handing the
-//! statement to the caller keeps the borrow one-way, the shape rusqlite itself
-//! uses. Measured over 100k features, streaming reads in 13.5 ms against
-//! 17.8 ms materialised, with peak memory bounded by one row rather than by
-//! the result set. Both paths build the same [`Feature`]s through the same
-//! code, so the choice affects memory, not results.
+//! iterator. That takes one call, and is the right default when a layer is
+//! small enough that holding the result set isn't a problem. [`Layer::cursor`],
+//! [`Layer::cursor_in`] and [`Layer::cursor_select`] stream, reading one row at
+//! a time. Streaming takes two calls because rusqlite's row cursor borrows its
+//! `Statement`. An iterator owning both would be self-referential, which this
+//! crate's `#![forbid(unsafe_code)]` rules out without a helper crate. Handing
+//! the statement to the caller keeps the borrow one-way, the same shape
+//! rusqlite itself uses. Measured over 100k features, streaming reads in
+//! 13.5 ms against 17.8 ms materialised, and its peak memory is bounded by one
+//! row rather than by the result set. Both paths build the same [`Feature`]s
+//! with the same code, so the choice affects memory, not results.
 
 use std::sync::Arc;
 

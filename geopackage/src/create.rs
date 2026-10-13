@@ -1,17 +1,17 @@
-//! Layer creation: the [`TableSchemaBuilder`] and the
-//! [`GeoPackage::create_layer`] / [`GeoPackage::create_attributes_table`]
-//! entry points.
+//! Creating tables with [`TableSchemaBuilder`], [`GeoPackage::create_layer`]
+//! and [`GeoPackage::create_attributes_table`].
 //!
-//! A builder declares a user table's columns, primary key, and (for feature
-//! tables) geometry column; the create methods emit the user-table DDL and the
-//! `gpkg_contents` (and, for feature tables, `gpkg_geometry_columns`) catalogue
-//! rows in one transaction. `gpkg_geometry_columns` is created lazily on first
-//! use from the normative [`ddl::CREATE_GPKG_GEOMETRY_COLUMNS`].
+//! A builder declares a user table's columns, its primary key and, for a
+//! feature table, its geometry column. In one transaction, the create methods
+//! run the user table's DDL and write its catalogue rows: `gpkg_contents`, plus
+//! `gpkg_geometry_columns` for a feature table. The `gpkg_geometry_columns`
+//! table itself is created on first use from the normative
+//! [`ddl::CREATE_GPKG_GEOMETRY_COLUMNS`].
 //!
-//! Schema is declared through an explicit builder, not a derive macro, so a
-//! table's shape can be chosen at run time rather than fixed at compile time.
-//! Column defaults are raw SQL text, trusted from the caller; every identifier
-//! is quoted via [`ident::quote`].
+//! Schemas are declared with a builder rather than a derive macro, so you can
+//! choose a table's shape at run time instead of fixing it at compile time.
+//! Column defaults are raw SQL text and are trusted as the caller gives them.
+//! Every identifier is quoted with [`ident::quote`].
 
 use geopackage_core::ddl;
 use geopackage_core::extensions::{Extension, GEOM_TYPE_EXTENSION_DEFINITION};

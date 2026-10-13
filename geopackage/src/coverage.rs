@@ -1,22 +1,22 @@
 //! Tiled gridded coverages: the [`Coverage`] handle, the [`CoverageBuilder`]
 //! that creates one, and the two ancillary tables that describe a coverage.
 //!
-//! A coverage is a tile pyramid with payloads that are measurements, not
-//! images: elevations, depths, temperatures. The spec gives it a separate
-//! `gpkg_contents.data_type` (`2d-gridded-coverage`, Requirement 5), a row that
-//! states what the samples mean ([`CoverageAncillary`], Requirement 1), and a
-//! row for each tile with the scale, offset and statistics of that tile
-//! ([`TileAncillary`], Requirements 2 and 10). This module contains the parts
-//! that use the database. The payload profile is in
+//! A coverage is a tile pyramid whose payloads are measurements, such as
+//! elevations, depths or temperatures, rather than images. The spec gives it a
+//! separate `gpkg_contents.data_type` (`2d-gridded-coverage`, Requirement 5), a
+//! row that states what the samples mean ([`CoverageAncillary`],
+//! Requirement 1), and a row for each tile with the scale, offset and
+//! statistics of that tile ([`TileAncillary`], Requirements 2 and 10). This
+//! module contains the parts that use the database. The payload profile is in
 //! [`geopackage_core::coverage`].
 //!
 //! # Samples
 //!
-//! This module reads and writes metadata and bytes only. The samples of a
-//! coverage are in a TIFF or a PNG, and this workspace does not decode either
-//! format. [`Coverage::get_tile`] returns the stored payload, and
+//! This module reads and writes metadata and bytes only. A coverage's samples
+//! are stored as TIFF or PNG, and this workspace decodes neither format.
+//! [`Coverage::get_tile`] returns the stored payload, and
 //! [`Coverage::check_payload`] checks that the coverage permits the payload.
-//! [`Coverage::value`] converts a sample that the caller decoded into a value.
+//! [`Coverage::value`] converts a sample you have decoded into a value.
 //!
 //! # Why a coverage is not a [`TilePyramid`](crate::TilePyramid)
 //!

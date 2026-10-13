@@ -1,13 +1,15 @@
-//! The `gpkg_schema` extension's two tables: `gpkg_data_columns`, which
-//! describes a column, and `gpkg_data_column_constraints`, which stores the
-//! constraints those descriptions point at.
+//! The `gpkg_schema` extension's tables of column descriptions and constraints.
 //!
-//! Both are read here and written here. A constraint is assembled from the
-//! rows sharing its name rather than returned row by row, since an `enum`
-//! occupies one row per member while a `range` or `glob` occupies exactly one
-//! (Requirement 109). The descriptions themselves are attached to
-//! [`crate::Column`] by [`crate::GeoPackage::table_schema`], so a caller
-//! reading a layer's schema sees them without asking twice.
+//! `gpkg_data_columns` describes a column, and `gpkg_data_column_constraints`
+//! stores the constraints those descriptions point at. This module reads and
+//! writes both.
+//!
+//! A constraint is assembled from all the rows that share its name, rather than
+//! returned row by row, because an `enum` occupies one row per member while a
+//! `range` or `glob` occupies exactly one (Requirement 109).
+//! [`crate::GeoPackage::table_schema`] attaches the descriptions to
+//! [`crate::Column`], so you see them when you read a layer's schema, without a
+//! separate call.
 
 use geopackage_core::ddl;
 use geopackage_core::schema::{

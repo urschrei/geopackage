@@ -1,48 +1,49 @@
-//! RTree spatial-index lifecycle on a [`Layer`]: [`Layer::create_spatial_index`],
+//! Creating, checking and repairing the RTree spatial index on a [`Layer`].
+//!
+//! The methods are [`Layer::create_spatial_index`],
 //! [`Layer::drop_spatial_index`], [`Layer::repair_spatial_index`],
 //! [`Layer::audit_spatial_index`] and [`Layer::rebuild_spatial_index`].
 //!
-//! Two questions can be asked of an index and they have different prices.
-//! [`Layer::spatial_index_status`] is structural: does the virtual table exist,
-//! and which generation of trigger set maintains it. It is cheap, it is what
-//! [`Layer::repair_spatial_index`] acts on, and it cannot tell whether the
-//! entries agree with the geometries. [`Layer::audit_spatial_index`] answers
-//! that second question by reading every geometry in the layer, and
-//! [`Layer::rebuild_spatial_index`] is its remedy, doing unconditionally what
-//! the repair does only when the structure is wrong.
+//! You can check an index in two ways, at different costs.
+//! [`Layer::spatial_index_status`] checks structure: whether the virtual table
+//! exists, and which generation of trigger set maintains it. It is cheap, and
+//! it is what [`Layer::repair_spatial_index`] acts on, but it can't tell
+//! whether the entries agree with the geometries.
+//! [`Layer::audit_spatial_index`] checks that by reading every geometry in the
+//! layer. [`Layer::rebuild_spatial_index`] fixes what the audit finds: it does
+//! unconditionally what the repair does only when the structure is wrong.
 //!
-//! Of these, only the audit and the status never write; see the crate-level
-//! documentation for what each call does on a read-only connection.
+//! Of these, only the audit and the status check never write. The crate-level
+//! documentation describes what each call does on a read-only connection.
 //!
-//! The normative SQL (the `rtree_<table>_<column>` virtual table, the
-//! GeoPackage 1.4 trigger set, and the population statement) is emitted by
-//! [`geopackage_core::triggers`] (spec Annex F.3, reproduced verbatim there).
-//! This module drives it against the live connection and maintains the
-//! `gpkg_extensions` registration row (spec Annex F.3 requirements 75/76).
+//! [`geopackage_core::triggers`] generates the normative SQL, reproduced
+//! verbatim from spec Annex F.3: the `rtree_<table>_<column>` virtual table,
+//! the GeoPackage 1.4 trigger set, and the population statement. This module
+//! runs that SQL on the live connection and maintains the `gpkg_extensions`
+//! registration row (spec Annex F.3 requirements 75/76).
 //!
 //! A new index always gets the 1.4 trigger set (`update5`/`update6`/`update7`),
-//! which is UPSERT-safe. Older generations are never repaired automatically:
-//! [`Layer::repair_spatial_index`] is the sole, explicitly user-invoked path
-//! that rewrites an existing trigger set.
+//! which is UPSERT-safe. Older generations are never repaired automatically.
+//! [`Layer::repair_spatial_index`] is the only path that rewrites an existing
+//! trigger set, and it runs only when you call it explicitly.
 //!
-//! That is a judgement about indexes rather than a rule that reading never
-//! writes, which is not one this crate keeps: [`Layer::extent`] records an
-//! extent it had to measure. The difference is what the two cost and what
-//! their absence does. Rebuilding an index reads every geometry in the layer
-//! and rewrites the tree, which is too expensive to run as the side effect of
-//! a question; and an index that is stale or of an older generation is not
-//! silently believed, because [`Layer::has_spatial_index`] reports it as
-//! unusable and queries fall back to a correct scan. An extent is neither:
-//! measuring it is comparatively cheap, and a wrong one is believed
-//! indefinitely by every reader.
+//! That is a decision about indexes, not a rule that reading never writes. This
+//! crate has no such rule: [`Layer::extent`] records an extent it had to
+//! measure. The two differ in what they cost and in what happens without them.
+//! Rebuilding an index reads every geometry in the layer and rewrites the tree,
+//! which is too expensive to do as a side effect of checking it. A stale or
+//! older-generation index is also not silently believed, because
+//! [`Layer::has_spatial_index`] reports it as unusable and queries fall back to
+//! a correct scan. Neither is true of an extent. Measuring one is comparatively
+//! cheap, and every reader believes a wrong one indefinitely.
 //!
-//! Population takes one of two paths. Below the [`BulkIndexOptions`] threshold
-//! it is a single `INSERT INTO rtree SELECT` over the existing rows, using the
-//! registered `ST_*` functions and skipping empty/NULL geometries exactly as
-//! the triggers do. At or above the threshold it is the bulk shadow-table build
-//! in [`crate::bulk`]: accumulate the envelopes, build the tree in memory, and
-//! write the shadow tables directly, gated with automatic fallback to the
-//! triggered path.
+//! An index is populated in one of two ways. Below the [`BulkIndexOptions`]
+//! threshold, a single `INSERT INTO rtree SELECT` runs over the existing rows,
+//! using the registered `ST_*` functions and skipping empty or NULL geometries
+//! exactly as the triggers do. At or above the threshold, [`crate::bulk`]
+//! builds the index directly: it accumulates the envelopes, builds the tree in
+//! memory and writes the shadow tables, with a gate that falls back
+//! automatically to the triggered path.
 
 use geopackage_core::ident::quote;
 use geopackage_core::triggers::{self, TriggerGeneration};

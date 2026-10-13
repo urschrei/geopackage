@@ -1,20 +1,21 @@
-//! `gpkg_extensions`: the catalogue of extensions a file declares, the one
-//! place this crate writes to it, and what this crate can do with each row.
+//! The `gpkg_extensions` table, which lists the extensions a file declares.
 //!
-//! Every extension row has the same five values, so the differences between
-//! extensions live in the constants their own modules define, not in repeated
-//! insert statements. The table is created on first registration and never
-//! dropped: an empty `gpkg_extensions` is legal, and a file that once
-//! registered an extension keeps the table after the extension is removed, as
+//! This module is the only place the crate writes to the table. It also reports
+//! what the crate can do with each row.
+//!
+//! Every extension row has the same five values, so each extension's own module
+//! defines constants for its row instead of repeating the insert statement. The
+//! table is created when the first extension is registered and is never
+//! dropped. An empty `gpkg_extensions` is legal, so a file that once registered
+//! an extension keeps the table after the extension is removed, as
 //! [`crate::Layer::drop_spatial_index`] does.
 //!
-//! Reading the catalogue is what lets a caller "fail fast", which is the
-//! purpose the spec gives the table: an application "can query the
-//! `gpkg_extensions` table instead of the contents of all the user data tables
-//! to determine if it has the required capabilities to read or write to tables
-//! with extensions, and to 'fail fast' and return an error message if it does
-//! not" (clause 2.3.2). [`ExtensionRow::support`] is this crate's answer to
-//! that question for one row.
+//! The spec's purpose for the table is to let a caller "fail fast": an
+//! application "can query the `gpkg_extensions` table instead of the contents
+//! of all the user data tables to determine if it has the required capabilities
+//! to read or write to tables with extensions, and to 'fail fast' and return an
+//! error message if it does not" (clause 2.3.2). [`ExtensionRow::support`]
+//! answers that question for one row.
 
 use geopackage_core::ddl;
 use geopackage_core::extensions::{Extension, ExtensionScope, ExtensionSupport};

@@ -1,23 +1,24 @@
 //! SQL functions required by the RTree spatial index triggers.
 //!
-//! The spec's rtree triggers call `ST_IsEmpty`, `ST_MinX`, `ST_MaxX`,
-//! `ST_MinY`, `ST_MaxY`, which SQLite does not provide. They are registered
-//! on every connection this crate opens, so writes to indexed tables work on
-//! any GeoPackage, including files created by other tools.
+//! The spec's rtree triggers call `ST_IsEmpty`, `ST_MinX`, `ST_MaxX`, `ST_MinY`
+//! and `ST_MaxY`, which SQLite doesn't provide. This crate registers them on
+//! every connection it opens, so writes to indexed tables work on any
+//! GeoPackage, including files created by other tools.
 //!
-//! Envelope values are taken from the GPB header when present (an O(1) read;
-//! the rtree triggers call four of these per row). When the header has no
-//! envelope (as for GDAL-written points and other envelope-less blobs) the
-//! functions fall back to a full traversal of the WKB body via
-//! [`geopackage_core::geometry::GpbGeometry`], which handles every geometry
-//! type the georust `wkb` crate can read (all byte orders, any Z/M variant).
-//! `ST_IsEmpty` reports emptiness from the same wrapper (header empty flag,
-//! the NaN empty-point convention, and zero-coordinate geometries).
+//! The envelope functions read from the GPB header when it has an envelope.
+//! That is an O(1) read, and the rtree triggers call four of these functions
+//! per row. When the header has no envelope, as with GDAL-written points and
+//! other envelope-less blobs, the functions fall back to a full traversal of
+//! the WKB body through [`geopackage_core::geometry::GpbGeometry`]. That
+//! handles every geometry type the georust `wkb` crate can read, in all byte
+//! orders and any Z/M variant. `ST_IsEmpty` reports emptiness from the same
+//! wrapper, using the header's empty flag, the NaN empty-point convention, and
+//! geometries with zero coordinates.
 //!
 //! The non-linear types (`CIRCULARSTRING`, `CURVEPOLYGON`, …) are read by
-//! `geopackage_core::curve`, which walks the WKB bytes rather than going
-//! through the `wkb` crate, so a curve geometry indexes like any other. Only
-//! the abstract `CURVE`/`SURFACE` codes, which cannot be instantiated, and
+//! `geopackage_core::curve`, which walks the WKB bytes itself rather than going
+//! through the `wkb` crate, so a curve geometry is indexed like any other. Only
+//! the abstract `CURVE`/`SURFACE` codes, which can't be instantiated, and
 //! structurally malformed bodies produce a typed SQL error.
 
 use geopackage_core::geometry::{self, GeometryError};

@@ -1,87 +1,86 @@
 //! The layer extent recorded in `gpkg_contents`: [`Layer::extent`] and
 //! [`Layer::recompute_extent`].
 //!
-//! # The extent is not to be trusted
+//! # The stored extent is unreliable
 //!
 //! The four `gpkg_contents` bounds are the least reliable values in a
-//! GeoPackage, and that is by the standard's design rather than by neglect. The
-//! spec text is prose rather than a numbered requirement, identical in every
-//! version from 1.2.0 to 1.4.0: the bounding box "provides an informative
-//! bounding box of the content", applications "may use this bounding box as the
-//! extents of a default view", and "there are no requirements that this bounding
-//! box be exact or represent the minimum bounding box of the content". The
-//! columns are nullable and no requirement governs their values. The OGC SWG
-//! considered adding a test that features fall inside the recorded extent and
+//! GeoPackage, by the standard's design rather than by neglect. The spec covers
+//! them in prose rather than a numbered requirement, and the text is identical
+//! in every version from 1.2.0 to 1.4.0: the bounding box "provides an
+//! informative bounding box of the content", applications "may use this
+//! bounding box as the extents of a default view", and "there are no
+//! requirements that this bounding box be exact or represent the minimum
+//! bounding box of the content". The columns are nullable and no requirement
+//! governs their values. The OGC SWG considered adding a test that features
+//! fall inside the recorded extent and
 //! [declined in 2018](https://github.com/opengeospatial/geopackage/issues/443),
 //! on the grounds that maintaining it on insert and delete is too expensive.
 //!
-//! So a file that arrives from elsewhere may record an extent that is stale,
-//! inflated, or simply wrong, and it is still conformant. Nothing in this crate
-//! ever uses the stored extent to answer a query: [`Layer::features_in`] and
-//! [`Layer::cursor_in`] go through the RTree or a full scan with an exact `f64`
-//! re-filter, never a short-circuit against the recorded bounds. That rule is
-//! worth keeping. An optimisation that skips a scan because the query box misses
-//! the recorded extent would be correct against files this crate wrote and wrong
-//! against files it did not.
+//! A file from elsewhere may therefore record an extent that is stale, inflated
+//! or simply wrong, and still be conformant. This crate never uses the stored
+//! extent to answer a query. [`Layer::features_in`] and [`Layer::cursor_in`] go
+//! through the RTree or a full scan with an exact `f64` re-filter, and never
+//! short-circuit against the recorded bounds. Keep it that way. An optimisation
+//! that skips a scan because the query box misses the recorded extent would be
+//! correct for files this crate wrote and wrong for files it didn't.
 //!
 //! # Why a wrong extent is worse than an absent one
 //!
-//! The columns are nullable, and readers treat the two cases very differently.
-//! GDAL validates only that the four values are present and that `min <= max`
-//! per axis; a well-ordered extent that is wrong is returned verbatim and never
-//! recomputed, even when the caller passes `bForce`. A NULL extent, by contrast,
-//! makes GDAL compute the real one. QGIS behaves the same way, and since 3.34
-//! its "Update Extents" action is a no-op for a local GeoPackage, so a user who
-//! receives a file with a wrong extent has no way to repair it short of a full
-//! edit session.
+//! The columns are nullable, and readers treat a wrong extent and a NULL one
+//! very differently. GDAL checks only that the four values are present and that
+//! `min <= max` on each axis. It returns a wrong extent verbatim as long as it
+//! is well-ordered, and never recomputes it, even when the caller passes
+//! `bForce`. A NULL extent, by contrast, makes GDAL compute the real one. QGIS
+//! behaves the same way. Since 3.34 its "Update Extents" action does nothing
+//! for a local GeoPackage, so a user who receives a file with a wrong extent
+//! has no way to repair it short of a full edit session.
 //!
-//! The rule this crate follows is therefore: **never record an extent that
-//! cannot be guaranteed to cover the layer**. NULL is spec-legal, accurate,
-//! and self-repairing at the reader. A wrong box is believed forever.
-//! Concretely:
+//! So this crate follows one rule: **never record an extent that cannot be
+//! guaranteed to cover the layer**. NULL is legal under the spec and accurate,
+//! and a reader that finds it computes the real extent. Readers believe a wrong
+//! box forever. In practice:
 //!
-//! - [`crate::FeatureWriter`] grows the recorded box to cover what it writes and
-//!   never shrinks it, so the result is exact or an over-estimate, which the
-//!   spec expressly permits.
-//! - A writer that cannot rely on its starting point leaves the extent alone
-//!   rather than replacing it with a box covering only the rows it wrote. That
-//!   is the case where the stored extent is absent, NULL or inverted while the
-//!   table already contains rows.
+//! - [`crate::FeatureWriter`] grows the recorded box to cover what it writes
+//!   and never shrinks it, so the result is exact or an over-estimate, which
+//!   the spec expressly permits.
+//! - If the stored extent is absent, NULL or inverted while the table already
+//!   contains rows, a writer can't rely on it as a starting point. The writer
+//!   leaves the extent alone rather than replacing it with a box covering only
+//!   the rows it wrote.
 //! - [`Layer::extent`] and [`Layer::recompute_extent`] write NULL, rather than
 //!   anything invented, for a layer with no geometries to measure.
-//! - [`Layer::extent`] records what it measured only when it could measure the
-//!   whole layer inside one transaction. Losing that race to another writer
-//!   means the measurement describes a layer that changed underneath it, so the
-//!   file keeps what it had.
+//! - [`Layer::extent`] records its measurement only if it measured the whole
+//!   layer inside one transaction. If it loses that race to another writer, the
+//!   measurement describes a layer that changed underneath it, so the file
+//!   keeps what it had.
 //!
 //! # Reading an extent can write one
 //!
 //! [`Layer::extent`] records what it measures, so **reading the extent of a
-//! file whose recorded extent is unusable modifies that file**: its content and
-//! its modification time both change. The point is that a file improves by
-//! being read: the next reader, here or anywhere else, finds a usable box and
-//! no longer has to scan. GDAL behaves the same way: its `GetExtent` persists
-//! through `SaveExtent` on any dataset open for update.
+//! file whose recorded extent is unusable modifies that file**. Both its
+//! content and its modification time change. In return, the file improves: the
+//! next reader, this crate or any other, finds a usable box and no longer has
+//! to scan. GDAL does the same: its `GetExtent` persists through `SaveExtent`
+//! on any dataset open for update.
 //!
-//! The cost is that a pipeline checksumming its inputs will see them change. If
-//! that matters, open read-only, which suppresses the write entirely, or read
-//! [`crate::GeoPackage::contents`] for the recorded values without measuring
-//! anything.
+//! The downside is that a pipeline that checksums its inputs will see them
+//! change. If that matters, open the file read-only, which suppresses the write
+//! entirely, or read the recorded values from [`crate::GeoPackage::contents`]
+//! without measuring anything.
 //!
-//! Note the asymmetry this leaves with [`Layer::repair_spatial_index`], which
-//! still never writes unless asked. The index is repaired only on request
-//! because a rebuild is expensive and its absence is not silently wrong; an
-//! unusable extent is cheap to fix and *is* silently wrong for every reader
-//! until someone fixes it.
+//! [`Layer::repair_spatial_index`], by contrast, still never writes unless
+//! asked. The index is repaired only on request because a rebuild is expensive
+//! and a missing index is not silently wrong. An unusable extent is cheap to
+//! fix, and it *is* silently wrong for every reader until someone fixes it.
 //!
 //! # Deviation from GDAL
 //!
-//! One. GDAL prefers the RTree when it has to compute an extent, which is
-//! faster but yields a box rounded outward to `f32` and takes the index's word
-//! for what the layer contains. This crate always measures the geometries. A
-//! value about to be written into a file and believed indefinitely is worth
-//! measuring exactly, and measuring removes any dependence on the index being
-//! current.
+//! There is only one. When GDAL has to compute an extent it prefers the RTree.
+//! That is faster, but the box is rounded outward to `f32`, and GDAL takes the
+//! index's word for what the layer contains. This crate always measures the
+//! geometries. A value that will be written into a file and believed
+//! indefinitely should be measured exactly, and measuring removes any
+//! dependence on the index being current.
 
 use geopackage_core::ident::quote;
 use rusqlite::OptionalExtension;
