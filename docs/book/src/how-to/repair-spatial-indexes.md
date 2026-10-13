@@ -1,12 +1,12 @@
 # How to repair a file's spatial indexes
 
-An index that arrives with a file may be maintained by a pre-1.4 trigger set,
-or may have lost its triggers entirely. Neither is trusted for queries here,
-so bounding-box reads fall back to a full scan until the index is put right.
-This guide restores them.
+An index in a file you receive may be maintained by a pre-1.4 trigger set, or
+may have lost its triggers entirely. This library trusts neither for queries,
+so bounding-box reads fall back to a full scan until the index is repaired.
+This guide shows you how to repair it.
 
-Repairing is never automatic. Nothing in this library rewrites an existing
-trigger set unless you call for it.
+Repair is never automatic. The library rewrites an existing trigger set only
+when you ask it to.
 
 ## From the shell
 
@@ -23,22 +23,21 @@ To repair one named layer, add its name:
 $ gpkg repair places.gpkg points
 ```
 
-When nothing needs doing the command says so and exits zero:
+If nothing needs repairing, the command says so and exits zero:
 
 ```console
 $ gpkg repair places.gpkg
 nothing to repair
 ```
 
-A layer with no index at all is left alone by `gpkg repair`, because an
-unindexed layer reads correctly. See
-[How to add a spatial index to an existing layer](add-spatial-index.md) if you
-want one built.
+`gpkg repair` leaves a layer with no index alone, because an unindexed layer
+reads correctly. If you want an index built, see
+[How to add a spatial index to an existing layer](add-spatial-index.md).
 
 ## From Rust
 
-Open read-write, and prefer the lenient open: a file worth repairing is by
-definition one with something wrong with it, and a strict open can fail on a
+Open the file read-write, preferably with the lenient open. A file that needs
+repair already has something wrong with it, and a strict open can fail on a
 legacy `application_id` before you reach the index.
 
 ```rust,no_run
@@ -69,10 +68,10 @@ without doing anything when the index is already current, and fails with
 
 ## If the structure is right but the contents are in doubt
 
-`spatial_index_status` is a structural question and cannot tell whether the
+`spatial_index_status` checks only the structure. It cannot tell whether the
 entries agree with the geometries. An index can be `Current` and still be
-wrong, in a file where rows were written while the triggers were absent, or
-that another tool populated incompletely. To answer that, audit it:
+wrong if rows were written while the triggers were absent, or if another tool
+populated it incompletely. To check the contents, audit the index:
 
 ```rust,no_run
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -90,19 +89,19 @@ if !audit.is_consistent() {
 # Ok(()) }
 ```
 
-The audit reads every geometry in the layer, so price it as a deliberate
-check rather than something to run before each query. It writes nothing.
-`rebuild_spatial_index` is the remedy, and does unconditionally what the
-repair does only when the structure is wrong.
+The audit reads every geometry in the layer, so run it as a deliberate check,
+not before each query. It writes nothing. To fix what it finds, call
+`rebuild_spatial_index`. It does unconditionally what the repair does only when
+the structure is wrong.
 
-`gpkg validate` runs the same audit across the whole file, which is the
-cheaper way to find out whether any layer needs it: see
+`gpkg validate` runs the same audit across the whole file. This is the cheaper
+way to find out whether any layer needs rebuilding. See
 [How to validate a GeoPackage and act on the findings](validate.md).
 
 ## Then
 
 - [The spatial index: structure, contents, and the bulk build](../explanation/spatial-index.md)
-  covers why repair is never automatic, and what makes a legacy trigger set
+  explains why repair is never automatic, and why a legacy trigger set is
   worth replacing.
 - API reference:
   [`Layer::spatial_index_status`](https://docs.rs/geopackage/latest/geopackage/struct.Layer.html#method.spatial_index_status),

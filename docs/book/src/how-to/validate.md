@@ -1,12 +1,12 @@
 # How to validate a GeoPackage and act on the findings
 
-`GeoPackage::validate` makes one pass over a file and returns what is wrong
-with it, without modifying anything. This guide runs that check, reads the
-result, and applies the repairs it names.
+`GeoPackage::validate` checks a file in one pass and returns what is wrong
+with it. It modifies nothing. This guide shows you how to run the check, read
+the result, and apply the repairs it names.
 
-What this reports is what these checks can see, not conformance in every
-respect the spec defines. The OGC executable test suite remains the authority
-on that.
+The report covers only what these checks can see. It does not establish
+conformance in every respect the spec defines. For that, the OGC executable
+test suite remains the authority.
 
 ## In a script or a CI job
 
@@ -21,12 +21,11 @@ places.gpkg
 
 Exit codes:
 
-- Zero when there are no findings, and when the findings are warnings and
-  advisories only.
-- Non-zero when any finding is an error, the severity meaning a reader can get
-  a wrong answer from the file.
+- Zero when there are no findings, or only warnings and advisories.
+- Non-zero when any finding is an error. An error means a reader can get a
+  wrong answer from the file.
 
-If warnings should fail the job too, add `--strict`:
+To fail on warnings too, add `--strict`:
 
 ```console
 $ gpkg validate --strict places.gpkg
@@ -34,8 +33,8 @@ $ echo $?
 1
 ```
 
-The file is opened read-only and leniently, so one with something wrong with
-it is reported rather than rejected.
+The command opens the file read-only and leniently, so a file with problems
+is reported on rather than rejected.
 
 ## In Rust
 
@@ -57,31 +56,32 @@ let failed = findings.iter().any(|f| f.severity() == Severity::Error);
 # Ok(()) }
 ```
 
-Findings come back most severe first, and stably ordered within a severity, so
-a diff of the output is a diff of the findings rather than of their order.
+Findings are sorted most severe first, in a stable order within each
+severity. If you diff the output of two runs, any differences are in the
+findings, not in their order.
 
 ## Read the severities
 
-Severity is about consequence, not about how hard something is to fix:
+Severity reflects the consequence of a problem, not how hard it is to fix:
 
-- **`Severity::Error`**: a reader can get a wrong answer. A `gpkg_contents`
-  row naming a table that is not there, a spatial index that no longer
-  describes its rows, a metadata or relation row pointing at something that
-  has gone.
-- **`Severity::Warning`**: the file is out of step with the current spec but
-  reads correctly. A pre-1.2 `application_id`, a pre-1.4 index trigger set, an
-  extension these checks cannot identify, a tile pyramid that breaks the
-  matrix rules.
-- **`Severity::Advisory`**: a remark rather than a defect. A feature table
-  with no spatial index is the case: it reads correctly, and not indexing a
-  layer is a decision someone may have taken deliberately.
+- **`Severity::Error`**: a reader can get a wrong answer. For example, a
+  `gpkg_contents` row naming a missing table, a spatial index that no longer
+  describes its rows, or a metadata or relation row that points at something
+  that no longer exists.
+- **`Severity::Warning`**: the file reads correctly but does not follow the
+  current spec. For example, a pre-1.2 `application_id`, a pre-1.4 index
+  trigger set, an extension these checks cannot identify, or a tile pyramid
+  that breaks the matrix rules.
+- **`Severity::Advisory`**: a remark, not a defect. The advisory case is a
+  feature table with no spatial index. It reads correctly, and someone may have chosen not to
+  index the layer.
 
 ## Apply the repairs
 
 `Finding::repair` returns the advice as text, naming the method that performs
-it. `None` means the fix is outside this library: it needs the writer that
-produced the file, or a decision about the data that should not be taken on
-your behalf. To act on the findings rather than print them, match on the
+it. `None` means this library cannot make the fix. It needs the writer that
+produced the file, or a decision about the data that the library should not
+make for you. To act on the findings instead of printing them, match on the
 variant:
 
 ```rust,no_run
@@ -109,18 +109,17 @@ for finding in gpkg.validate()? {
 # Ok(()) }
 ```
 
-Note that the handle has to be open read-write for any of these, and that
-`Finding` is `#[non_exhaustive]`: a variant added in a later version reaches
-the catch-all arm rather than breaking the build.
+The handle must be open read-write for any of these repairs. `Finding` is
+`#[non_exhaustive]`, so a variant added in a later version falls through to the
+catch-all arm instead of breaking the build.
 
-For the index repairs in particular, see
-[How to repair a file's spatial indexes](repair-spatial-indexes.md), which
-covers doing the same work without validating the whole file first.
+To repair indexes without validating the whole file first, see
+[How to repair a file's spatial indexes](repair-spatial-indexes.md).
 
 ## Then
 
 - [The spatial index: structure, contents, and the bulk build](../explanation/spatial-index.md)
-  covers what an audit checks that a status cannot.
+  explains what an audit checks that a status cannot.
 - API reference:
   [`GeoPackage::validate`](https://docs.rs/geopackage/latest/geopackage/struct.GeoPackage.html#method.validate),
   [`Finding`](https://docs.rs/geopackage/latest/geopackage/enum.Finding.html),
