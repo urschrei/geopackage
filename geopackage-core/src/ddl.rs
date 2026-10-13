@@ -99,7 +99,7 @@ CREATE TABLE 'gpkg_2d_gridded_coverage_ancillary' (
 /// `gpkg_2d_gridded_tile_ancillary` (OGC 17-066r2 Annex C), the per-tile
 /// table. Created with the first coverage.
 ///
-/// The table has no `ON DELETE CASCADE` on `tpudt_id`. A delete of a tile does
+/// The table has no `ON DELETE CASCADE` on `tpudt_id`. Deleting a tile does
 /// not delete its ancillary row, so a writer must delete both.
 pub const CREATE_GPKG_2D_GRIDDED_TILE_ANCILLARY: &str = "\
 CREATE TABLE gpkg_2d_gridded_tile_ancillary (
@@ -130,12 +130,13 @@ CREATE TABLE gpkg_extensions (
 /// `gpkg_data_columns` (Annex F.9, Requirement 103), the first of the two
 /// tables the `gpkg_schema` extension defines.
 ///
-/// Verbatim from the spec, less the comments: the spec source writes them with
-/// `//`, which SQLite does not accept.
+/// The SQL is verbatim from the spec, without the comments. The spec source
+/// writes them with `//`, which SQLite does not accept.
 ///
 /// The primary key is `(table_name, column_name)`, so a column has at most one
-/// row. Before 1.2.1 `table_name` had a foreign key to `gpkg_contents`;
-/// that was relaxed, but files written under the old definition still have it.
+/// row. Before 1.2.1, `table_name` had a foreign key to `gpkg_contents`. Later
+/// versions relaxed this, but files written under the old definition still
+/// have it.
 pub const CREATE_GPKG_DATA_COLUMNS: &str = "\
 CREATE TABLE gpkg_data_columns (
   table_name TEXT NOT NULL,
@@ -152,16 +153,17 @@ CREATE TABLE gpkg_data_columns (
 /// `gpkg_data_column_constraints` (Annex F.9, Requirement 107), the second of
 /// the `gpkg_schema` tables.
 ///
-/// Verbatim, less the `//` comments, as [`CREATE_GPKG_DATA_COLUMNS`].
+/// Like [`CREATE_GPKG_DATA_COLUMNS`], the SQL is verbatim without the `//`
+/// comments.
 ///
-/// One constraint occupies one row for `range` and `glob`, and one row per
-/// member for `enum`, which is why the unique constraint spans
+/// A `range` or `glob` constraint takes one row, and an `enum` constraint
+/// takes one row per member. The unique constraint therefore spans
 /// `(constraint_name, constraint_type, value)` rather than the name alone.
 /// `min` and `max` are NUMERIC, the spec's only exception to its own rule that
 /// column types come from Table 1.
 ///
 /// In GeoPackage 1.0 the inclusivity columns were named `minIsInclusive` and
-/// `maxIsInclusive`; files written then still use those names.
+/// `maxIsInclusive`, and files written then still use those names.
 pub const CREATE_GPKG_DATA_COLUMN_CONSTRAINTS: &str = "\
 CREATE TABLE gpkg_data_column_constraints (
   constraint_name TEXT NOT NULL,
@@ -206,10 +208,10 @@ CREATE TABLE gpkg_metadata (
 /// `gpkg_metadata_reference` (Annex C.12, extension Annex F.8).
 ///
 /// GeoPackage 1.2 also defined `gpkg_metadata_reference_column_name_insert`
-/// and `_update` triggers over this table. GeoPackage 1.4 does not: Annex D
-/// defines trigger SQL only for `gpkg_tile_matrix` and the two sample tables,
-/// so nothing here creates them, and a file that has them is not wrong, only
-/// older.
+/// and `_update` triggers over this table. GeoPackage 1.4 does not. Its
+/// Annex D defines trigger SQL only for `gpkg_tile_matrix` and the two sample
+/// tables, so this crate does not create them. A file that has them is not
+/// wrong, only older.
 pub const CREATE_GPKG_METADATA_REFERENCE: &str = "\
 CREATE TABLE gpkg_metadata_reference (
   reference_scope TEXT NOT NULL,
