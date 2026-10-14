@@ -1,12 +1,13 @@
 version: 2
 updates:
   - package-ecosystem: cargo
-    directories:
-      - "/"
-      - "/geopackage-core/fuzz"
+    directory: "/"
     schedule:
       interval: weekly
     groups:
+      # arrow-array and arrow-schema must move together.
+      arrow:
+        patterns: ["arrow-*"]
       cargo-minor-and-patch:
         update-types: [minor, patch]
 
