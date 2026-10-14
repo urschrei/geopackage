@@ -11,10 +11,12 @@ updates:
       cargo-minor-and-patch:
         update-types: [minor, patch]
     ignore:
-      # From 0.28, `hotpath::measure` emits `#[export_name]`, which the
-      # workspace's `forbid(unsafe_code)` rejects in the profiling build.
+      # From 0.26, hotpath exports a symbol per label whose name contains a
+      # `"`, which breaks the linker's version script for the geopackage-ffi
+      # cdylib when the `hotpath` feature is on. From 0.28, its
+      # `#[export_name]` also trips the workspace's `forbid(unsafe_code)`.
       - dependency-name: hotpath
-        versions: [">=0.28"]
+        versions: [">=0.26"]
 
   - package-ecosystem: github-actions
     directory: "/"
