@@ -20,6 +20,14 @@
 //! the body by reading the header only, so a curve passes through a copy
 //! without ever being parsed.
 //!
+//! # Threads
+//!
+//! Each layer is read on a second thread, through a second read-only
+//! connection to the source, and written on the calling thread. The reader
+//! sends owned rows to the writer in chunks over a bounded channel, so the two
+//! halves overlap and memory use stays bounded. The writer commits every
+//! `BATCH` rows, independently of the chunk size.
+//!
 //! # Durability
 //!
 //! The output is opened with `synchronous = OFF`, as GDAL does for a new
@@ -33,12 +41,13 @@
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 use geopackage::core::gpb;
 use geopackage::core::types::ColumnType;
 use geopackage::{
     ColumnSpec, ContentsDataType, GeoPackage, GeometrySpec, Layer, OpenOptions, Synchronous,
-    TableSchemaBuilder,
+    TableSchemaBuilder, Value, ValueRef,
 };
 
 use crate::error::Result;
@@ -47,6 +56,25 @@ use crate::error::Result;
 /// per-transaction cost negligible, and small enough that a failure does not
 /// roll back the whole layer.
 const BATCH: usize = 10_000;
+
+/// The reader sends a chunk when it holds this many rows.
+const CHUNK_ROWS: usize = 1_000;
+
+/// The reader also sends a chunk when its geometry bodies reach this many
+/// bytes, so that a layer of large geometries does not fill memory.
+const CHUNK_BYTES: usize = 8 << 20;
+
+/// Chunks that can wait in the channel before the reader blocks.
+const CHANNEL_DEPTH: usize = 8;
+
+/// One source row, owned, so that it can go to the writer thread.
+struct Row {
+    fid: i64,
+    /// The WKB body, without the GeoPackage header. `None` for a row with no
+    /// geometry, and for every row of an attribute table.
+    body: Option<Vec<u8>>,
+    values: Vec<Value>,
+}
 
 pub fn run(src_path: &Path, dst_path: &Path, out: &mut impl Write) -> Result<ExitCode> {
     if dst_path.exists() {
@@ -65,7 +93,7 @@ pub fn run(src_path: &Path, dst_path: &Path, out: &mut impl Write) -> Result<Exi
 
     let layers = src.layers()?;
     for layer in &layers {
-        copy_layer(&src, &dst, layer, out)?;
+        copy_layer(&src, src_path, &dst, layer, out)?;
     }
 
     report_what_was_left(&src, &dst, &layers, out)?;
@@ -75,6 +103,7 @@ pub fn run(src_path: &Path, dst_path: &Path, out: &mut impl Write) -> Result<Exi
 
 fn copy_layer(
     src: &GeoPackage,
+    src_path: &Path,
     dst: &GeoPackage,
     layer: &Layer<'_>,
     out: &mut impl Write,
@@ -160,42 +189,102 @@ fn copy_layer(
         dst.attributes(name)?
     };
 
-    let mut copied = 0u64;
-    let mut writer = target.writer()?;
-    let mut cursor = layer.cursor()?;
-    let mut rows = cursor.features()?;
-    let mut in_batch = 0usize;
-    for feature in rows.by_ref() {
-        let feature = feature?;
-        let values: Vec<_> = feature.values().collect();
-
-        match feature.geometry_bytes() {
-            // The WKB body, located from the header alone, so a non-linear
-            // geometry crosses without being parsed.
-            Some(blob) => {
-                let offset =
-                    gpb::body_offset(blob).map_err(|e| geopackage::Error::Core(e.into()))?;
-                let body = blob.get(offset..).unwrap_or_default();
-                writer.insert_wkb(Some(feature.fid()), body, &values)?;
-            }
-            None => {
-                writer.insert_row(Some(feature.fid()), &values)?;
-            }
+    let is_feature = layer.geometry_column().is_some();
+    let copied = std::thread::scope(|scope| -> Result<u64> {
+        let (tx, rx) = sync_channel(CHANNEL_DEPTH);
+        let reader = scope.spawn(move || read_rows(src_path, name, is_feature, &tx));
+        // `write_rows` takes `rx` and drops it when it returns. A reader that is
+        // blocked on a full channel then gets an error and stops.
+        let written = write_rows(&target, rx);
+        match reader.join() {
+            Ok(read) => read?,
+            Err(panic) => std::panic::resume_unwind(panic),
         }
-
-        copied += 1;
-        in_batch += 1;
-        if in_batch >= BATCH {
-            writer.commit()?;
-            writer = target.writer()?;
-            in_batch = 0;
-        }
-    }
-    writer.commit()?;
+        written
+    })?;
 
     let index_note = if indexed { ", indexed" } else { "" };
     writeln!(out, "{name}: {copied} rows{index_note}")?;
     Ok(())
+}
+
+/// Reads every row of the layer `name` through a new connection to the source
+/// and sends the rows to `tx` in chunks.
+///
+/// Returns `Ok` without reading further if the writer has stopped: the writer
+/// reports its own error.
+fn read_rows(
+    src_path: &Path,
+    name: &str,
+    is_feature: bool,
+    tx: &SyncSender<Vec<Row>>,
+) -> Result<()> {
+    let src = GeoPackage::open_read_only_lenient(src_path)?;
+    let layer = if is_feature {
+        src.layer(name)?
+    } else {
+        src.attributes(name)?
+    };
+    let mut chunk = Vec::with_capacity(CHUNK_ROWS);
+    let mut chunk_bytes = 0;
+    let mut cursor = layer.cursor()?;
+    let mut rows = cursor.features()?;
+    for feature in rows.by_ref() {
+        let feature = feature?;
+        // The WKB body, located from the header alone, so a non-linear
+        // geometry crosses without being parsed.
+        let body = match feature.geometry_bytes() {
+            Some(blob) => {
+                let offset =
+                    gpb::body_offset(blob).map_err(|e| geopackage::Error::Core(e.into()))?;
+                Some(blob.get(offset..).unwrap_or_default().to_vec())
+            }
+            None => None,
+        };
+        chunk_bytes += body.as_ref().map_or(0, Vec::len);
+        chunk.push(Row {
+            fid: feature.fid(),
+            body,
+            values: feature.values().map(|value| value.to_value()).collect(),
+        });
+        if chunk.len() >= CHUNK_ROWS || chunk_bytes >= CHUNK_BYTES {
+            let full = std::mem::replace(&mut chunk, Vec::with_capacity(CHUNK_ROWS));
+            chunk_bytes = 0;
+            if tx.send(full).is_err() {
+                return Ok(());
+            }
+        }
+    }
+    if !chunk.is_empty() && tx.send(chunk).is_err() {
+        return Ok(());
+    }
+    Ok(())
+}
+
+/// Writes the rows that arrive on `rx` into `target`, and commits every
+/// `BATCH` rows. Returns the number of rows written.
+fn write_rows(target: &Layer<'_>, rx: Receiver<Vec<Row>>) -> Result<u64> {
+    let mut copied = 0u64;
+    let mut in_batch = 0usize;
+    let mut writer = target.writer()?;
+    for chunk in rx {
+        for row in &chunk {
+            let values: Vec<_> = row.values.iter().map(ValueRef::from).collect();
+            match &row.body {
+                Some(body) => writer.insert_wkb(Some(row.fid), body, &values)?,
+                None => writer.insert_row(Some(row.fid), &values)?,
+            };
+            copied += 1;
+            in_batch += 1;
+            if in_batch >= BATCH {
+                writer.commit()?;
+                writer = target.writer()?;
+                in_batch = 0;
+            }
+        }
+    }
+    writer.commit()?;
+    Ok(copied)
 }
 
 /// Names anything in the source that this command did not copy, so that a

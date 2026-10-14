@@ -22,6 +22,8 @@ While the version is below 1.0 the API may change in any release.
   new GeoPackage, and does not sync the file when it completes. It no longer
   waits for a sync at each commit. Run `sync` after the command if the output
   must be on disk when it returns.
+- `gpkg copy` reads each layer on a second thread while it writes on the
+  first, and holds a bounded number of rows in memory between them.
 
 ### Fixed
 
