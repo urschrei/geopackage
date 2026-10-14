@@ -60,8 +60,8 @@ hotpath-alloc = ["hotpath/hotpath-alloc"]
 
 [dev-dependencies]
 tempfile.workspace = true
-# The `arrow_bench` example counts rows in a batch, which needs the array crate
-# directly. Already an optional dependency, so this adds no build cost.
+# The Arrow tests build batches with the array crate directly. Already an
+# optional dependency, so this adds no build cost.
 arrow-array.workspace = true
 # Used by the `arrow` bench only, to measure a SQLite aggregate function against
 # the ordinary row loop. Already a normal dependency, so this adds no build cost.
@@ -99,15 +99,9 @@ name = "arrow"
 harness = false
 required-features = ["arrow"]
 
-# Uses the Arrow data plane, so it cannot build without it. The bench above
-# already declares this; without it here, `cargo nextest r -p geopackage`
-# fails to build the example.
-[[example]]
-name = "arrow_bench"
-required-features = ["arrow"]
-
-# Times both the scalar and the columnar paths over a real file, so it needs
-# the Arrow data plane for the same reason `arrow_bench` does.
+# Times both the scalar and the columnar paths, so it cannot build without the
+# Arrow data plane. Without this, `cargo nextest r -p geopackage` fails to build
+# the example.
 [[example]]
 name = "dataset_bench"
 required-features = ["arrow"]
