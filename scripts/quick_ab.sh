@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Compare two builds of dataset_bench on small subsets of the benchmark
-# datasets, by the instructions each run executes.
+# Compare two builds of dataset_bench on the subsets of the benchmark datasets
+# that `bench_datasets.sh subset` makes, by the instructions each run
+# executes.
 #
 # A run's user-space instruction count changes by less than 0.1 % from one run
 # to the next, so a few runs resolve a difference of 1 %. Cycles and wall time

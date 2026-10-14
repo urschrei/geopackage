@@ -15,13 +15,13 @@
 #   exec <cmd>               run one shell command on the machine
 #   upload [file...]         copy local benchdata .gpkg files onto the volume
 #   fetch                    download and convert the datasets onto the volume
-#   bench [ref] [reps]       build `ref` and run bench_datasets.sh over it
+#   bench [rev] [reps]       build the local jj revision `rev` (default @)
+#                            and run bench_datasets.sh over the dataset
+#                            subsets, making them if needed
 #   ab <refA> <refB> [iters] interleaved A/B of the admin write arm
-#   copy [ref] [reps]        build `gpkg` at `ref` and run
-#                            compare_gdal_copy.sh over it
 #   quick <revA> <revB> [reps] [filter]
 #                            compare two local jj revisions with
-#                            quick_ab.sh on 10 % subsets of the datasets
+#                            quick_ab.sh on the dataset subsets
 #   stop                     destroy the machine; the volume persists
 #   destroy                  destroy the machine, the volume and the app
 #
@@ -109,9 +109,10 @@ EOF
 # and the tools that time the runs onto this machine's rootfs.
 emit_gdal() {
     cat <<EOF
-if ! command -v hyperfine >/dev/null || [[ ! -x /usr/bin/time ]] || ! command -v bzip2 >/dev/null; then
+if [[ ! -x /usr/bin/time ]] || ! command -v bzip2 >/dev/null || ! command -v rsync >/dev/null \
+    || ! ls /usr/lib/linux-tools/*/perf >/dev/null 2>&1; then
     apt-get update -q
-    apt-get install -q -y hyperfine time bzip2
+    apt-get install -q -y time bzip2 rsync linux-tools-common linux-tools-generic >/dev/null
 fi
 gdal_env=/data/mamba/envs/gdal-$GDAL
 if [[ ! -x \$gdal_env/bin/ogr2ogr ]]; then
@@ -124,79 +125,70 @@ fi
 EOF
 }
 
-cmd_copy() {
-    local ref="${1:-origin/main}" reps="${2:-5}"
-    local job
-    job="$(mktemp)"
-    cat > "$job" <<EOF
-$(emit_gdal)
-if [[ ! -d /data/src/.git ]]; then
-    git clone --quiet $REPO_URL /data/src
-fi
-git -C /data/src fetch --quiet --tags origin
-git -C /data/src checkout --quiet --detach $ref
-echo "building gpkg at \$(git -C /data/src rev-parse --short HEAD)"
-(cd /data/src && cargo build --release --quiet -p geopackage-cli)
-bash /data/src/scripts/compare_gdal_copy.sh /data/benchdata \
-    /data/src/target/release/gpkg $reps \$gdal_env/bin/ogr2ogr \
-    2>&1 | tee "/data/logs/copy-\$(git -C /data/src rev-parse --short HEAD).log"
-EOF
-    remote_run "$job"
-    rm -f "$job"
+# Sends local jj revisions, which need not be pushed, to /data/rev on the
+# volume as `git archive`s, and prints their commit ids.
+send_revs() {
+    local tmp rev commit
+    tmp="$(mktemp -d)"
+    cmd_exec "mkdir -p /data/rev && find /data/rev -maxdepth 1 -type f -delete" >/dev/null
+    for rev in "$@"; do
+        commit="$(jj log -r "$rev" --no-graph -T 'commit_id')"
+        git archive --format=tar.gz -o "$tmp/$commit.tar.gz" "$commit"
+        printf 'put %s /data/rev/%s.tar.gz\n' "$tmp/$commit.tar.gz" "$commit" \
+            | fly ssh sftp shell -a "$APP" >/dev/null
+        echo "$commit"
+    done
+    rm -rf "$tmp"
 }
 
-# Two local revisions, which need not be pushed, compared by quick_ab.sh.
-# Each revision travels as a `git archive` and is built in one tree on the
-# volume. rsync rewrites only the files whose contents differ, so cargo
-# rebuilds only what changed; a source's archive mtime would otherwise be
-# older than the last build and cargo would reuse it. Builds are kept by
-# commit, so the B of one comparison is the A of the next without a rebuild.
-# The subsets are made once, from the datasets on the volume.
+# Shell lines that make the tree `$2` the sources of commit `$1`. rsync
+# rewrites only the files whose contents differ, so cargo rebuilds only what
+# changed; a file's archive mtime is its commit time, older than the last
+# build, and cargo would otherwise reuse the old build.
+emit_tree() {
+    cat <<EOF
+rm -rf /data/rev/src && mkdir /data/rev/src && tar -xzf /data/rev/$1.tar.gz -C /data/rev/src
+mkdir -p $2 && rsync -rc --delete --exclude /target /data/rev/src/ $2/
+EOF
+}
+
+# Two local revisions compared by quick_ab.sh. Builds are kept by commit, so
+# the B of one comparison is the A of the next without a rebuild.
 cmd_quick() {
     local rev_a="${1:?usage: bench_fly.sh quick <revA> <revB> [reps] [filter]}"
     local rev_b="${2:?usage: bench_fly.sh quick <revA> <revB> [reps] [filter]}"
     local reps="${3:-3}" filter="${4:-.}"
-    local a b tmp job
-    a="$(jj log -r "$rev_a" --no-graph -T 'commit_id')"
-    b="$(jj log -r "$rev_b" --no-graph -T 'commit_id')"
-    tmp="$(mktemp -d)"
-    git archive --format=tar.gz -o "$tmp/$a.tar.gz" "$a"
-    git archive --format=tar.gz -o "$tmp/$b.tar.gz" "$b"
-    cmd_exec "mkdir -p /data/quick-ab/in && rm -f /data/quick-ab/in/*" >/dev/null
-    local f
-    for f in "$tmp/$a.tar.gz" "$tmp/$b.tar.gz" "$(dirname "$0")/quick_ab.sh"; do
-        printf 'put %s /data/quick-ab/in/%s\n' "$f" "$(basename "$f")" \
+    local commits a b job
+    commits="$(send_revs "$rev_a" "$rev_b")"
+    a="$(sed -n 1p <<<"$commits")"
+    b="$(sed -n 2p <<<"$commits")"
+    local script
+    for script in quick_ab.sh bench_datasets.sh; do
+        printf 'put %s /data/rev/%s\n' "$(dirname "$0")/$script" "$script" \
             | fly ssh sftp shell -a "$APP" >/dev/null
     done
-    rm -rf "$tmp"
     job="$(mktemp)"
-    cat > "$job" <<EOF
-$(emit_gdal)
-if ! command -v rsync >/dev/null || ! ls /usr/lib/linux-tools/*/perf >/dev/null 2>&1; then
-    apt-get install -q -y rsync linux-tools-common linux-tools-generic >/dev/null
-fi
-mkdir -p /data/quick
-for p in "ca_buildings buildings 1154291" "hydrorivers rivers 847788" "gadm_noidx gadm 15000"; do
-    set -- \$p
-    [[ -s /data/quick/\$1.gpkg ]] && continue
-    echo "making the \$2 subset"
-    PROJ_DATA=\$gdal_env/share/proj GDAL_DATA=\$gdal_env/share/gdal \$gdal_env/bin/ogr2ogr \
-        -f GPKG -lco SPATIAL_INDEX=NO -preserve_fid -limit \$3 -nln \$2 \
-        /data/quick/\$1.gpkg /data/benchdata/\$1.gpkg \$2
-done
-cd /data/quick-ab
-mkdir -p bin tree
-for c in $a $b; do
-    [[ -x bin/\$c ]] && continue
-    echo "building \${c:0:12}"
-    rm -rf src && mkdir src && tar -xzf in/\$c.tar.gz -C src
-    rsync -rc --delete src/ tree/
-    (cd tree && CARGO_TARGET_DIR=/data/quick-ab/target cargo build --release --quiet \
-        -p geopackage --features arrow,bundled --example dataset_bench)
-    cp target/release/examples/dataset_bench bin/\$c
-done
-bash in/quick_ab.sh bin/$a bin/$b /data/quick $reps '$filter'
+    {
+        emit_gdal
+        cat <<EOF
+mkdir -p /data/quick-ab/bin
+PATH=\$gdal_env/bin:\$PATH PROJ_DATA=\$gdal_env/share/proj GDAL_DATA=\$gdal_env/share/gdal \
+    bash /data/rev/bench_datasets.sh subset /data/benchdata /data/quick
 EOF
+        local c
+        for c in "$a" "$b"; do
+            cat <<EOF
+if [[ ! -x /data/quick-ab/bin/$c ]]; then
+    echo "building ${c:0:12}"
+$(emit_tree "$c" /data/quick-ab/tree)
+    (cd /data/quick-ab/tree && CARGO_TARGET_DIR=/data/quick-ab/target cargo build --release --quiet \
+        -p geopackage --features arrow,bundled --example dataset_bench)
+    cp /data/quick-ab/target/release/examples/dataset_bench /data/quick-ab/bin/$c
+fi
+EOF
+        done
+        echo "bash /data/rev/quick_ab.sh /data/quick-ab/bin/$a /data/quick-ab/bin/$b /data/quick $reps '$filter'"
+    } > "$job"
     remote_run "$job"
     rm -f "$job"
 }
@@ -258,15 +250,18 @@ EOF
 }
 
 cmd_bench() {
-    local ref="${1:-origin/main}" reps="${2:-3}"
-    local job
+    local rev="${1:-@}" reps="${2:-3}"
+    local commit job
+    commit="$(send_revs "$rev")"
     job="$(mktemp)"
     cat > "$job" <<EOF
 $(emit_gdal)
-$(emit_build /data/src "$ref")
-GDAL_CONFIG=\$gdal_env/bin/gdal-config \
-    bash /data/src/scripts/bench_datasets.sh run /data/benchdata $reps \
-    2>&1 | tee "/data/logs/bench-\$(git -C /data/src rev-parse --short HEAD).log"
+$(emit_tree "$commit" /data/bench-tree)
+cd /data/bench-tree
+PATH=\$gdal_env/bin:\$PATH PROJ_DATA=\$gdal_env/share/proj GDAL_DATA=\$gdal_env/share/gdal \
+    bash scripts/bench_datasets.sh subset /data/benchdata /data/quick
+GDAL_CONFIG=\$gdal_env/bin/gdal-config bash scripts/bench_datasets.sh run /data/quick $reps \
+    2>&1 | tee /data/logs/bench-${commit:0:12}.log
 EOF
     remote_run "$job"
     rm -f "$job"
@@ -338,7 +333,6 @@ case "${1:-}" in
     fetch)   cmd_fetch ;;
     bench)   shift; cmd_bench "$@" ;;
     ab)      shift; cmd_ab "$@" ;;
-    copy)    shift; cmd_copy "$@" ;;
     quick)   shift; cmd_quick "$@" ;;
     stop)    cmd_stop ;;
     destroy) cmd_destroy ;;
