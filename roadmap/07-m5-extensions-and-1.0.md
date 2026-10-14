@@ -203,7 +203,7 @@ widespread implementation produces.
       can be measured against a figure we already publish.
       *(**About 31%** on a 200,000-row write with two constrained columns,
       159 ms to 209 ms, recorded in
-      [benchmarks/2026-07-27-constraint-enforcement.md](benchmarks/2026-07-27-constraint-enforcement.md),
+      [benchmarks/2026-07-27-constraint-enforcement.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-27-constraint-enforcement.md),
       along with the per-call comparison of the two glob implementations. An
       earlier pair of figures from the same benchmark, 569 ms and 651 ms, was
       taken while the machine was running the test suite and is not comparable
@@ -672,7 +672,7 @@ FFI merely surfaces, so it sits before phase 9 rather than inside it.
       selectivities where filtering matters the read is already at
       interactive latency. Figures, the two reopening conditions and the
       reproducible bench are in
-      [benchmarks/2026-08-02-threaded-filtered-read.md](benchmarks/2026-08-02-threaded-filtered-read.md).)*
+      [benchmarks/2026-08-02-threaded-filtered-read.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-08-02-threaded-filtered-read.md).)*
 
 ### The handle-lifetime question, and what it costs
 
@@ -691,7 +691,7 @@ proportional to how cheap the call is: 778% on `get_tile`, 675% on `extent`,
 13% only at a thousand rows. Streaming paths are unaffected, since their handle
 is built once per scan. An owned handle would add 3.77 ns per construction, and
 nothing builds a handle per row or per batch. See
-[benchmarks/2026-07-28-handle-construction.md](benchmarks/2026-07-28-handle-construction.md).
+[benchmarks/2026-07-28-handle-construction.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-28-handle-construction.md).
 
 These figures bear on the C ABI only because of the scope decision above. Under
 the earlier narrow sketch, `get_tile` and `features_in` did not cross the
@@ -1053,7 +1053,7 @@ The items the sense-check produced, in rough order of consumer value:
       whether the packer has enough history by then to make the gate opt-in, or to keep only
       the cheaper half. Decide it on the evidence at the time rather than on the
       benchmark alone, and if it is relaxed, keep a way to turn it back on. See
-      [benchmarks/2026-07-24-gdal-like-for-like.md](benchmarks/2026-07-24-gdal-like-for-like.md).
+      [benchmarks/2026-07-24-gdal-like-for-like.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-24-gdal-like-for-like.md).
 - [ ] OSS-Fuzz onboarding (gpb, WKB fallback, `open()` on arbitrary SQLite
       files, tile matrix parsing, and the new parsers from phases 3 to 6).
 - [ ] Full-corpus soak: every file opened, fully read, indexes rebuilt and

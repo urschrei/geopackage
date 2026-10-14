@@ -8,6 +8,23 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Changed
+
+- `roadmap/benchmarks/README.md` replaces the dated benchmark write-ups. It
+  compares the library and `gpkg copy` with GDAL 3.13.3 on the three
+  benchmark datasets, measured at 0.11.0.
+- `scripts/bench_datasets.sh` times GDAL beside this crate for each operation,
+  through the new `scripts/gdal_dataset_bench.c`. The `dataset_bench` write
+  and index arms use `synchronous = OFF`, and its box query builds each
+  geometry.
+
+### Removed
+
+- `scripts/compare_gdal_arrow.sh`, `scripts/compare_gdal_arrow_write.sh`,
+  `scripts/compare_gdal_index.sh`, `scripts/gdal_baseline.sh`, their C
+  programs, and the `arrow_bench` and `index_bench` examples.
+  `scripts/bench_datasets.sh` replaces them.
+
 ## [0.11.0] - 2026-10-14
 
 ### Changed
@@ -476,7 +493,7 @@ While the version is below 1.0 the API may change in any release.
   conforming file may hold values its own constraints forbid. It covers every
   write path, the columnar one included, and costs about 31% on a 200,000-row
   write with two constrained columns
-  ([benchmark](roadmap/benchmarks/2026-07-27-constraint-enforcement.md)).
+  ([benchmark](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-27-constraint-enforcement.md)).
 
   The `glob` form is evaluated by SQLite, through a `SELECT ?1 GLOB ?2`
   prepared once per writer. Its pattern language has no definition beyond what

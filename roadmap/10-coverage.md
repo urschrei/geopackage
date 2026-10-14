@@ -329,7 +329,7 @@ only if another implementation wrote it.
       `geopackage/tests/extensions.rs` with it.
 - [x] Benchmark the per-tile cost. Requirement 10 makes three statements per
       tile where a pyramid makes one, and
-      [benchmarks/2026-09-20-coverage-writes.md](benchmarks/2026-09-20-coverage-writes.md)
+      [benchmarks/2026-09-20-coverage-writes.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-09-20-coverage-writes.md)
       is what that costs: **about 26%** of per-tile write throughput, 3.6 µs a
       tile, measured against a pyramid control on the same machine in the same
       run. Three statements for the price of 1.26, because most of a tile
