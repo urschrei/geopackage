@@ -11,7 +11,8 @@
 //!
 //! [`TileMatrixSet`] and [`TileMatrix`] hold no table name. They describe the
 //! shape of a pyramid, and the container decides which table it belongs to.
-//! [`TileMatrixSet::validate`] checks a pyramid against Requirements 45 to 53.
+//! [`TileMatrixSet::validate`] checks a pyramid against Requirement 144 and
+//! Requirements 45 to 53.
 //! Nothing here reads or writes a database.
 
 use crate::Error;
@@ -549,8 +550,8 @@ impl TileMatrixSet {
         self.max_y - self.min_y
     }
 
-    /// Checks a whole pyramid: the extent, then every tile matrix against
-    /// Requirements 45 to 53, in ascending zoom order.
+    /// Checks a whole pyramid: the extent against Requirement 144, then every
+    /// tile matrix against Requirements 45 to 53, in ascending zoom order.
     ///
     /// `matrices` may be in any order and may be empty. A pyramid with no zoom
     /// levels declared breaks no rule, because the spec requires a

@@ -12,9 +12,9 @@
 //! type, and `related_tables`, which OGC 18-000 registered with no author
 //! prefix.
 //!
-//! Annex F numbers the extensions in the order the annex includes them. The two
-//! extensions removed in 2016 still occupy F.2, F.4 and F.5, and the extensions
-//! after them are numbered around the gaps.
+//! Annex F numbers the extensions in the order the annex includes them. The
+//! three extensions removed in 2016 still occupy F.2, F.4 and F.5, and the
+//! extensions after them are numbered around the gaps.
 
 use std::fmt;
 
@@ -77,11 +77,11 @@ impl ExtensionScope {
 
 /// An extension name this workspace can identify.
 ///
-/// The names come from Annex F and from the two extensions the GeoPackage SWG
-/// voted to remove on 2016-08-15. The removed extensions are still numbered in
-/// the annex and still present in files written before then. The list also
-/// includes `gdal_aspatial`, which is not an OGC extension but is common
-/// enough in older GDAL output to be worth naming.
+/// The names come from Annex F and from two of the three extensions the
+/// GeoPackage SWG voted to remove on 2016-08-15. The removed extensions are
+/// still numbered in the annex and still present in files written before
+/// then. The list also includes `gdal_aspatial`, which is not an OGC extension
+/// but is common enough in older GDAL output to be worth naming.
 ///
 /// A variant is the interpretation of a name, not the name itself. Several
 /// extensions have been registered under more than one spelling over the

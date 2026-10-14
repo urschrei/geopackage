@@ -1,6 +1,6 @@
 [package]
 name = "geopackage-cli"
-description = "Command-line tool for OGC GeoPackage (.gpkg) files: inspect, validate, index and copy"
+description = "Command-line tool for OGC GeoPackage (.gpkg) files: inspect, validate, index, repair and copy, and read tiles and coverages"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
