@@ -219,8 +219,8 @@ engineering.
   pre-allocates from an untrusted element count
   (`Vec::with_capacity(num_geometries)` / `num_rings`) without bounding it
   against the buffer, so a malformed count drives an out-of-memory, found by
-  our `gpb_geometry` fuzz target; (2) no reader support for the non-linear
-  curve types. The second no longer blocks us: `geopackage-core::curve` reads
+  our `gpb_geometry` fuzz target and fixed in `wkb` 0.9.3; (2) no reader
+  support for the non-linear curve types. The second no longer blocks us: `geopackage-core::curve` reads
   those bodies itself for envelopes and passes the bytes through. Reading a
   curve back as a geometry object rather than as bytes would need a `geo-traits`
   representation for an arc as much as it needs a reader, and we are not waiting

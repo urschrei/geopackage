@@ -51,12 +51,7 @@ also allocates its output. What you avoid is the intermediate object, not
 every allocation.
 
 Parsing arbitrary bytes never panics. A malformed header, a truncated body, or
-a type the reader cannot handle all produce a typed error. There is one known
-limitation close to that guarantee. The `wkb` reader pre-allocates from element
-counts read out of the blob without checking them against the buffer size, so
-a malformed geometry declaring a `0xFFFFFFFF`-member collection causes a very
-large allocation. The fix belongs upstream. Until it lands, be careful when
-parsing GeoPackage files from untrusted sources.
+a type the reader cannot handle all produce a typed error.
 
 ## Bytes in, bytes out
 

@@ -65,15 +65,6 @@
 //! - **`geo-types`** (default): Enables [`GpbGeometry::to_geo`], which converts
 //!   a parsed geometry to a `geo-types` geometry. The [`geo_traits`]
 //!   implementation doesn't need it
-//!
-//! # Untrusted input
-//!
-//! [`GpbGeometry`] parses WKB with the `wkb` crate. Its 0.9.2 reader allocates
-//! based on element counts read from the blob without checking them against
-//! the blob's length, so a malformed geometry can trigger a multi-gigabyte
-//! allocation. Until this is fixed upstream in
-//! [georust/wkb](https://github.com/georust/wkb), don't parse geometries from
-//! untrusted sources.
 
 // `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
 // workspace lints table (root Cargo.toml). This crate never uses `unsafe`; the

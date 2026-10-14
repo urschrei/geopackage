@@ -5,13 +5,6 @@
 //! the envelope traversal and the declared-type helpers must all terminate
 //! without panicking on any input. `wkb_geometry_type` is also exercised
 //! directly on the raw body, including curve-type bodies the reader rejects.
-//!
-//! Known issue (not a wrapper bug): `wkb` 0.9.2's reader pre-allocates from an
-//! untrusted element count (`Vec::with_capacity(num_geometries)` /
-//! `num_rings`), so a body declaring an enormous count drives an out-of-memory
-//! inside `GpbGeometry::parse` before any assertion here runs. This target
-//! surfaces that OOM class deliberately; the fix is upstream in `wkb` (see the
-//! roadmap item in `roadmap/03-m1-read-path.md`). Our own code never panics.
 
 #![no_main]
 

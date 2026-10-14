@@ -857,6 +857,29 @@ mod tests {
         GpbGeometry::parse(&gpb(&wkb_point(1.0, 2.0)[..10])).unwrap_err();
     }
 
+    /// A little-endian WKB header of type `code` and a member count.
+    fn wkb_counted(code: u32, count: u32) -> Vec<u8> {
+        let mut b = vec![1u8];
+        b.extend_from_slice(&code.to_le_bytes());
+        b.extend_from_slice(&count.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn huge_declared_counts_and_deep_nesting_error_without_allocating() {
+        // `wkb` 0.9.2 reserved memory for each declared count before it read
+        // a member, and recursed once for each nested collection. These bodies
+        // aborted the process on an allocation failure or a stack overflow.
+        for code in [3, 5, 6, 7] {
+            GpbGeometry::parse(&gpb(&wkb_counted(code, u32::MAX))).unwrap_err();
+        }
+        let mut nested = Vec::new();
+        for _ in 0..100_000 {
+            nested.extend_from_slice(&wkb_counted(7, 1));
+        }
+        GpbGeometry::parse(&gpb(&nested)).unwrap_err();
+    }
+
     #[test]
     #[cfg(feature = "geo-types")]
     fn to_geo_yields_geo_types() {

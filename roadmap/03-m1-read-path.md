@@ -80,7 +80,7 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       abstract `CURVE`/`SURFACE` codes still error, correctly: they have no
       encoding. See [07-m5-extensions-and-1.0.md](07-m5-extensions-and-1.0.md)
       phase 6.
-- [ ] **wkb upstream (fuzz finding):** `wkb` 0.9.2 pre-allocates from an
+- [x] **wkb upstream (fuzz finding):** `wkb` 0.9.2 pre-allocates from an
       untrusted element count without bounding it against the remaining buffer
       (`Vec::with_capacity(num_geometries)` in `reader::GeometryCollection`,
       `Vec::with_capacity(num_rings)` in `reader::Polygon`). A 17-byte GPB blob
@@ -88,7 +88,9 @@ fast, including files produced by GDAL, QGIS, and NGA tools.
       a ~240 GB allocation (out-of-memory), found by the `gpb_geometry` fuzz
       target. This is a `wkb` bug, not the wrapper (our code never panics); fix
       upstream by growing the vec on demand or capping capacity by the bytes
-      left. Until fixed, the `gpb_geometry` fuzz target exposes this OOM class.
+      left. Fixed in `wkb` 0.9.3 (2026-10-14), which bounds each capacity by
+      the bytes left and caps collection nesting at 128; the workspace requires
+      0.9.3.
 - [x] Reject/flag geometry column type mismatches (declared POINT, blob says
       LINESTRING) behind a validation option. The primitive
       (`geometry::geometry_type_matches` + `wkb_geometry_type`, and
