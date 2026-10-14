@@ -69,9 +69,9 @@ impl GpkgVersion {
 
     /// Returns the version as written in the specification, such as `"1.4"`.
     ///
-    /// The minor-patch part is not included because the pragmas do not record
-    /// it. A `user_version` of 10401 and one of 10400 both classify as
-    /// [`Self::V1_4`].
+    /// The patch level is not included. `user_version` records it, but the
+    /// classification drops it: a `user_version` of 10401 and one of 10400
+    /// both classify as [`Self::V1_4`].
     pub fn as_str(self) -> &'static str {
         match self {
             Self::V1_0 => "1.0",

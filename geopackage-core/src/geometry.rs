@@ -165,12 +165,13 @@ impl<'a> GpbGeometry<'a> {
     /// walking the WKB body, or `None` when the geometry has no finite
     /// coordinate (an empty geometry).
     ///
-    /// This is the fallback the `ST_*` SQL functions use when the GPB header
-    /// has no envelope. The walk goes through the `geo-traits` interface, so
-    /// it handles every geometry type the `wkb` crate can read, in either byte
-    /// order and with any Z/M dimensions. Only X and Y bound the box; Z and M
-    /// are ignored. Non-finite coordinates, such as the NaN empty-point
-    /// convention or malformed values, do not contribute to the box.
+    /// The `ST_*` SQL functions use [`blob_xy_envelope`] instead, which also
+    /// reads the curve types. The walk here goes through the `geo-traits`
+    /// interface, so it handles every geometry type the `wkb` crate can read,
+    /// in either byte order and with any Z/M dimensions. Only X and Y bound
+    /// the box; Z and M are ignored. Non-finite coordinates, such as the NaN
+    /// empty-point convention or malformed values, do not contribute to the
+    /// box.
     pub fn xy_envelope(&self) -> Option<[f64; 4]> {
         let mut bounds = XyBounds::new();
         visit_coords(&self.wkb, &mut |x, y, _| bounds.add(x, y));
@@ -189,8 +190,9 @@ impl<'a> GpbGeometry<'a> {
 
     /// Returns the geometry type of the WKB body, as a [`GeometryType`].
     ///
-    /// This reflects what the `wkb` crate parsed, so it is always one of the
-    /// seven linear types. To classify a body whose type the `wkb` crate
+    /// This reflects what the `wkb` crate parsed, so it is one of the seven
+    /// linear types, or [`GeometryType::Geometry`] for a type a later `wkb`
+    /// release learns to read. To classify a body whose type the `wkb` crate
     /// cannot read (a curve type), read the raw discriminator with
     /// [`wkb_geometry_type`] instead.
     pub fn geometry_type(&self) -> GeometryType {
