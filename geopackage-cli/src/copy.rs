@@ -19,6 +19,16 @@
 //! and would parse every coordinate for no reason. `gpb::body_offset` locates
 //! the body by reading the header only, so a curve passes through a copy
 //! without ever being parsed.
+//!
+//! # Durability
+//!
+//! The output is opened with `synchronous = OFF`, as GDAL does for a new
+//! GeoPackage. If the copy stops before it completes, the output is incomplete
+//! whatever the setting, so a sync at each commit gives no protection. The
+//! command does not sync the file when it completes, as `cp` and `ogr2ogr` do
+//! not: the operating system writes it to disk later. A power loss in that
+//! interval can leave the output damaged. Run `sync` after the command if the
+//! output must be on disk when it returns.
 
 use std::io::Write;
 use std::path::Path;
@@ -27,7 +37,8 @@ use std::process::ExitCode;
 use geopackage::core::gpb;
 use geopackage::core::types::ColumnType;
 use geopackage::{
-    ColumnSpec, ContentsDataType, GeoPackage, GeometrySpec, Layer, TableSchemaBuilder,
+    ColumnSpec, ContentsDataType, GeoPackage, GeometrySpec, Layer, OpenOptions, Synchronous,
+    TableSchemaBuilder,
 };
 
 use crate::error::Result;
@@ -44,7 +55,9 @@ pub fn run(src_path: &Path, dst_path: &Path, out: &mut impl Write) -> Result<Exi
     }
 
     let src = GeoPackage::open_read_only_lenient(src_path)?;
-    let dst = GeoPackage::create(dst_path)?;
+    let dst = OpenOptions::new()
+        .synchronous(Synchronous::Off)
+        .create(dst_path)?;
 
     for warning in src.open_warnings() {
         writeln!(out, "source warning: {warning}")?;
