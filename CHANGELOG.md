@@ -8,7 +8,33 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- `OpenOptions::mmap_size` reads the file through a memory map of up to the
+  given size (`PRAGMA mmap_size`). It is off by default. A threaded
+  `read_arrow` gives its worker connections the same size.
+- The `ST_EnvIntersects(geom, minx, miny, maxx, maxy)` SQL function, with the
+  name and arguments of GDAL's, is registered with the `ST_*` functions.
+
 ### Changed
+
+- `GeoPackage::open` and `open_read_only` open the connection with
+  `SQLITE_OPEN_NO_MUTEX`, as `create` already did. SQLite no longer locks a
+  mutex around each column read: a scalar read of the rivers dataset takes
+  8.2 s instead of 10.2 s.
+- Row reads select the columns in the order the table stores them. On a table
+  that stores the geometry first, as GDAL does, SQLite no longer
+  reads a row's last overflow page twice: a scalar read of the admin dataset
+  takes 3.0 s instead of 3.4 s.
+- A threaded `read_arrow` no longer needs a primary key without gaps, and no
+  longer counts the rows first. Workers read windows of `batch_size`
+  consecutive keys, so a batch has fewer rows where the key has gaps. A read
+  of the buildings dataset takes 1.4 s instead of 2.8 s.
+- A bounding-box query on a layer with no spatial index tests each row's
+  envelope in SQL, with `ST_EnvIntersects`, so SQLite reads only the geometry
+  of a row outside the box. `features_in_sql` returns the new query, which
+  has four box parameters. A query of the rivers dataset takes 1.7 s instead
+  of 3.2 s.
 
 - `roadmap/benchmarks/README.md` replaces the dated benchmark write-ups. It
   compares the library and `gpkg copy` with GDAL 3.13.3 on the three
