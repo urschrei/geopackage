@@ -37,7 +37,7 @@ use crate::error::{Status, gpkg_error_t, set_error, set_library_error};
 use crate::handle::Container;
 use crate::util::write_out_strings;
 
-/// Returns the number of `gpkg_extensions` rows in the file.
+/// Writes the number of `gpkg_extensions` rows in the file through `out`.
 ///
 /// A file with no `gpkg_extensions` table registers no extensions, and the
 /// count is zero. `gpkg_extension_at` reads the same list, ordered by
@@ -84,8 +84,9 @@ pub unsafe extern "C" fn gpkg_extensions_count(
 /// file or the whole table, matching what NULL means in those catalogue
 /// columns.
 /// `out_scope` is the row's declared scope, `read-write` or `write-only`.
-/// `out_support` is this library's support level for the extension, using
-/// the levels listed in the module documentation.
+/// `out_support` is this library's support level for the extension: one of
+/// `implemented`, `known, not read or written`, `removed from the standard in
+/// 2016`, or `unrecognised`.
 ///
 /// An index at or beyond the count returns `GPKG_STATUS_NOT_FOUND`, not a read
 /// error. On any failure, nothing is written.

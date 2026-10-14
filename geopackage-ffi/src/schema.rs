@@ -106,8 +106,8 @@ pub unsafe extern "C" fn gpkg_layer_kind(
     unsafe { out_string(kind, error) }
 }
 
-/// Returns the number of columns in the layer's table, including the geometry
-/// and primary key columns.
+/// Writes the number of columns in the layer's table through `out`, including
+/// the geometry and primary key columns.
 ///
 /// # Safety
 ///
@@ -411,7 +411,8 @@ pub unsafe extern "C" fn gpkg_layer_spatial_index_status(
     }
 }
 
-/// Returns whether a bounding-box query on this layer uses the spatial index.
+/// Writes through `out` whether a bounding-box query on this layer uses the
+/// spatial index.
 ///
 /// Reports false for a `stale` or absent index. A desynchronised index is not
 /// trusted, so the query falls back to a full scan, which is still correct.

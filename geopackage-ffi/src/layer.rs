@@ -52,8 +52,8 @@ use crate::handle::{Container, LayerHandle};
 use crate::util::{borrow_str, out_string};
 
 /// An opaque handle to a layer of an open GeoPackage. Create one with
-/// `gpkg_layer_open` or `gpkg_attributes_open`, and destroy it with
-/// `gpkg_layer_free`.
+/// `gpkg_layer_open`, `gpkg_attributes_open` or their `_with_columns`
+/// variants, and destroy it with `gpkg_layer_free`.
 #[expect(
     non_camel_case_types,
     reason = "the C name is the type's name; cbindgen emits it verbatim"
@@ -276,18 +276,20 @@ unsafe fn open_layer_with_columns(
 ///
 /// # Safety
 ///
-/// `layer` must be NULL, or a handle from `gpkg_layer_open` or
-/// `gpkg_attributes_open` that has not already been freed. The container it
-/// came from must still be alive, which is guaranteed by `gpkg_close` failing
-/// while this handle exists.
+/// `layer` must be NULL, or a handle from `gpkg_layer_open`,
+/// `gpkg_attributes_open`, `gpkg_layer_open_with_columns` or
+/// `gpkg_attributes_open_with_columns` that has not already been freed. The
+/// container it came from must still be alive, which is guaranteed by
+/// `gpkg_close` failing while this handle exists.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gpkg_layer_free(layer: *mut gpkg_layer_t) {
     if layer.is_null() {
         return;
     }
     // SAFETY: the caller guarantees the pointer came from `Box::into_raw` in
-    // `open_layer` and has not been freed. Dropping it decrements the
-    // container's child count, which is what later permits a close.
+    // `open_layer` or `open_layer_with_columns` and has not been freed.
+    // Dropping it decrements the container's child count, which is what later
+    // permits a close.
     drop(unsafe { Box::from_raw(layer) });
 }
 
@@ -349,7 +351,7 @@ pub unsafe extern "C" fn gpkg_layer_count(
     }
 }
 
-/// Returns the number of feature layers the file declares.
+/// Writes the number of feature layers the file declares through `out`.
 ///
 /// Only feature layers are counted. A table that `gpkg_contents` declares as
 /// `attributes` or `tiles` is not counted, and neither is a `features` row

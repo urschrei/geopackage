@@ -191,7 +191,9 @@ impl gpkg_datetime_t {
 /// duration of the call.
 ///
 /// `index` is the position in the caller's array. The error message for a
-/// rejected cell includes it.
+/// NULL value, a NULL blob, or a rejected date or datetime includes it. A NULL
+/// or non-UTF-8 text payload is reported by `borrow_str` as `value text`,
+/// without the index.
 ///
 /// # Safety
 ///

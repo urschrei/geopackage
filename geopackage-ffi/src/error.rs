@@ -47,7 +47,7 @@
 //!
 //! # Why the codes are categories
 //!
-//! `geopackage::Error` has 46 variants, and gains more as the library grows. If
+//! `geopackage::Error` has 50 variants, and gains more as the library grows. If
 //! each variant had its own C constant, every new variant would be a breaking
 //! change to the header. Instead, the codes are a small, closed set of
 //! categories to branch on, and the message carries the detail. A new library
@@ -255,7 +255,7 @@ fn geometry_status(error: &GeometryError) -> Status {
 /// Classifies a tile failure, which `Error::Tile` wraps whole.
 ///
 /// This is a separate function, not part of the match above, because
-/// `TileError` is an enum of twelve variants that divide differently. Most of
+/// `TileError` is an enum of thirteen variants that divide differently. Most of
 /// them describe a pyramid that breaks a rule the specification states, which
 /// is a constraint rather than a bad argument.
 fn tile_status(error: &TileError) -> Status {
