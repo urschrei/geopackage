@@ -398,8 +398,9 @@
 //!   See [`GeoPackage`].
 //! - [`BulkIndexOptions`] controls how an RTree index is built, through
 //!   [`Layer::create_spatial_index_with`], [`Layer::write_all_with`] and
-//!   [`Layer::write_arrow_with`]. Above the bulk threshold the index is built
-//!   in one pass instead of row by row through triggers.
+//!   [`Layer::write_arrow_with`]. At or above the bulk threshold the index is
+//!   brought up to date once, after the rows are written, instead of row by
+//!   row through triggers.
 //! - Leaving out the geometry with [`Layer::without_geometry`] saves copying
 //!   it into every row when you only need attributes.
 //! - [`Layer::write_all`] and [`Layer::write_arrow`] take a `batch_size`: the

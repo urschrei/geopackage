@@ -261,8 +261,9 @@ fn geometry_status(error: &GeometryError) -> Status {
 fn tile_status(error: &TileError) -> Status {
     match error {
         // A pyramid whose own description of itself breaks a rule the spec
-        // states, or a tile that does not match what its zoom level declares.
-        // Reported against the file or the ladder, not against the call.
+        // states, a tile that does not match what its zoom level declares, or
+        // a coverage tile that breaks the coverage profile. Reported against
+        // the file or the ladder, not against the call.
         TileError::InvalidExtent { .. }
         | TileError::NegativeZoomLevel { .. }
         | TileError::NonPositiveDimension { .. }
@@ -270,7 +271,8 @@ fn tile_status(error: &TileError) -> Status {
         | TileError::PixelSizeNotDescending { .. }
         | TileError::ExtentMismatch { .. }
         | TileError::DuplicateZoomLevel { .. }
-        | TileError::PayloadSizeMismatch { .. } => Status::Constraint,
+        | TileError::PayloadSizeMismatch { .. }
+        | TileError::CoverageProfileViolation { .. } => Status::Constraint,
         // What the call was given: an address off the grid, bytes that are not
         // a readable image, or a zoom range that does not describe a ladder.
         TileError::CoordOutsideMatrix { .. }
@@ -409,5 +411,16 @@ mod tests {
         // Anything else in that box has no category to recover.
         let foreign = ArrowError::ExternalError(Box::new(std::fmt::Error));
         assert_eq!(arrow_status(&foreign), Status::Other);
+    }
+
+    /// The C API has no coverage functions yet, so no C program can reach a
+    /// coverage profile violation. This pins its category for when one can.
+    #[test]
+    fn a_coverage_profile_violation_is_a_constraint() {
+        let error = TileError::CoverageProfileViolation {
+            requirement: 5,
+            detail: "PNG coverage tile is 8-bit".to_owned(),
+        };
+        assert_eq!(tile_status(&error), Status::Constraint);
     }
 }

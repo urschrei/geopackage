@@ -20,11 +20,12 @@ cover their geometry's true envelope.
 
 An index can pass the first check and fail the second. This happens in a file
 where rows were written while the triggers were absent, or that another tool
-populated incompletely. This library's own writes cannot produce that state.
-Because an index can pass one check and fail the other, the two have separate
-remedies. Repair puts the
-structure right and rebuilds the content, and does nothing when the structure
-is already current. Rebuild does the content work unconditionally.
+populated incompletely. This library's own writes aren't expected to produce
+it, but with bulk verification off, which is the default, nothing checks each
+bulk build for it. Because an index can pass one check and fail the other, the
+two have separate remedies. Repair puts the structure right and rebuilds the
+content, and does nothing when the structure is already current. Rebuild does
+the content work unconditionally.
 
 A file can arrive in one of four structural states:
 
@@ -109,10 +110,12 @@ caller's transaction and leave a window in which a crash commits the rows but
 not the index. Built directly, the whole build is one transaction: dropping the
 triggers, every row insert, the `gpkg_contents` flush, the index work and
 reinstalling the triggers all commit together. The rows can never be
-committed against an index that was not brought up to date with them.
+committed against an index that was not brought up to date with them. The
+exception is a write inside a transaction you opened yourself. A failed call
+leaves its work staged there, and committing it anyway leaves a stale index.
 
-The entry set comes either from a scan of the table through the `ST_*`
-functions or, when the caller can account for every indexable row, from the
+The entry set comes either from a scan of the table, which parses each geometry
+once in Rust, or, when the caller can account for every indexable row, from the
 envelopes computed while encoding the geometries. Because of that second
 source, building the index during a write costs between 20% and 47% less than
 building it afterwards. It is also why creating a layer leaves an empty index
@@ -121,27 +124,28 @@ in place for the first bulk write to fill.
 ## The verification gate, and its cost
 
 A hand-written RTree uses an on-disk format that SQLite does not document as
-an interface. So the library checks the result before anything relies on it.
+an interface, so the library can check the result before anything relies on
+it.
 
-A gated build must contain exactly the accumulated `(fid, envelope)` set, by
-row count and by a per-row containment check. It must also pass a structural
-check: `rtreecheck` on the index, or optionally a whole-database
-`PRAGMA integrity_check`. Any anomaly discards the built index and falls back
-to the triggered population, so a failed gate costs time, not correctness.
+The check has three levels. The first reads the index back and requires
+exactly the accumulated `(fid, envelope)` set, by row count and by a per-row
+containment check. The second adds `rtreecheck` on the index, and the third
+adds a whole-database `PRAGMA integrity_check`. Any anomaly discards the built
+index and falls back to the triggered population, so a failed check costs
+time, not correctness.
 
-The cost is substantial. Profiled over one million points, the gate is about
-45% of the build: roughly 745 ms of a 1593 ms build. The time is split about
-evenly between the bijection scan, which reads every entry back out of the
-index, and `rtreecheck`, which walks the whole tree. GDAL's builder runs no
-equivalent check. With the gate on, this library is level with GDAL, not
+The cost is substantial. Profiled over one million points, the second level is
+about 45% of the build: roughly 745 ms of a 1593 ms build. The time is split
+about evenly between the bijection scan, which reads every entry back out of
+the index, and `rtreecheck`, which walks the whole tree. GDAL's builder runs no
+equivalent check. With that check on, this library is level with GDAL, not
 ahead of it.
 
-Verification is therefore opt-in, at three levels: contents only, contents
-plus `rtreecheck`, and both plus a whole-database integrity check. With
-verification off, nothing is read back, so a build cannot fail its check and
-cannot fall back to the triggered path. The automatic fallback exists only
-where a check does. If you are writing files that matter, or bisecting a
-suspected index problem, turn verification on to get both.
+Verification is therefore opt-in, and off by default. With verification off,
+nothing is read back, so a build cannot fail its check and cannot fall back to
+the triggered path. The automatic fallback exists only where a check does. If
+you are writing files that matter, or bisecting a suspected index problem, turn
+verification on to get both.
 
 ## Node fill
 
