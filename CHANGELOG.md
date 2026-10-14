@@ -41,11 +41,16 @@ While the version is below 1.0 the API may change in any release.
   has four box parameters. A query of the rivers dataset takes 1.7 s instead
   of 3.2 s.
 - `roadmap/benchmarks/README.md` replaces the dated benchmark write-ups. It
-  compares the library and `gpkg copy` with GDAL 3.13.3 on the three
-  benchmark datasets, measured at 0.11.0.
+  compares the library and `gpkg copy` with GDAL 3.13.3.
+- `scripts/bench_datasets.sh` measures over subsets of about 250 MB per
+  dataset, which its `subset` mode makes, and times `gpkg copy` against
+  `ogr2ogr` as one more operation. Peak memory comes from the timed runs.
+  GDAL's results are kept in one file per GDAL version, so a run with them
+  cached measures this crate's side only. `scripts/bench_fly.sh bench` builds
+  a local jj revision.
 - `scripts/bench_fly.sh quick <revA> <revB>` compares two local revisions in
-  about a minute, by the instructions each operation executes on 10 %
-  subsets of the benchmark datasets (`scripts/quick_ab.sh`).
+  about a minute, by the instructions each operation executes on the
+  benchmark subsets (`scripts/quick_ab.sh`).
 - `scripts/bench_datasets.sh` times GDAL beside this crate for each operation,
   through the new `scripts/gdal_dataset_bench.c`. The `dataset_bench` write
   and index arms use `synchronous = OFF`, and its box query builds each
@@ -54,8 +59,9 @@ While the version is below 1.0 the API may change in any release.
 ### Removed
 
 - `scripts/compare_gdal_arrow.sh`, `scripts/compare_gdal_arrow_write.sh`,
-  `scripts/compare_gdal_index.sh`, `scripts/gdal_baseline.sh`, their C
-  programs, and the `arrow_bench` and `index_bench` examples.
+  `scripts/compare_gdal_index.sh`, `scripts/compare_gdal_copy.sh`,
+  `scripts/gdal_baseline.sh`, their C programs, the `arrow_bench` and
+  `index_bench` examples, and `scripts/bench_fly.sh copy`.
   `scripts/bench_datasets.sh` replaces them.
 
 ## [0.11.0] - 2026-10-14

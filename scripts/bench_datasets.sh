@@ -1,40 +1,51 @@
 #!/usr/bin/env bash
 #
-# Time the read, write, index-build and query paths of this crate and of GDAL
-# over three published GeoPackages.
+# Time the read, write, index-build, query and copy paths of this crate and
+# of GDAL over subsets of three published GeoPackages.
 #
 #   buildings  Microsoft Building Footprints, California. 11.5M polygons of
 #              four or five vertices.
 #   rivers     HydroRIVERS v1.0, global. 8.5M linestrings with 16 attributes.
 #   admin      GADM 4.1, global administrative areas. 356k multipolygons with
-#              54 attributes and about 7 kB of geometry each.
+#              54 attributes.
 #
-# The fetch step converts each source to an unindexed GeoPackage with ogr2ogr.
+# `fetch` downloads them and converts each to an unindexed GeoPackage with
+# ogr2ogr (about 7 GB). `subset` copies the first rows of each, about 250 MB
+# per dataset, into another directory. `run` measures over that directory.
 #
-# The two sides are geopackage/examples/dataset_bench.rs and
-# scripts/gdal_dataset_bench.c, which have the same subcommands. The script
-# compiles the C program against the GDAL that `$GDAL_CONFIG` (default
-# `gdal-config`) names. Each tool times the operation inside its process.
+# This crate's side is geopackage/examples/dataset_bench.rs and `gpkg copy`.
+# GDAL's is scripts/gdal_dataset_bench.c, which has the subcommands of
+# dataset_bench, and `ogr2ogr`. The script compiles the C program against the
+# GDAL that `$GDAL_CONFIG` (default `gdal-config`) names.
 #
 # Method, per dataset and operation:
 #
-#   1. `reps` runs of each side, alternating which side runs first, and the
-#      median of each side.
+#   1. `reps` runs of each side, alternating which side runs first. The
+#      script reports the median time and the median peak resident memory of
+#      each side, both from the same runs. dataset_bench and
+#      gdal_dataset_bench time the operation inside the process; the copy is
+#      timed from outside.
 #   2. The index build gets a fresh copy of the dataset for each run. The
 #      indexed query then runs against the index that the same side built.
 #   3. The write reads the source into memory as Arrow batches (not timed),
 #      then times the write of those batches into a new file.
-#   4. Writes on both sides use synchronous = OFF.
-#   5. Peak resident memory for the columnar read, the index build and the
-#      write, as the median of `reps` extra runs. Needs /usr/bin/time.
-#   6. Each side's row and hit counts, so that a side that read less is
+#   4. Writes on both sides use synchronous = OFF. Neither side syncs the
+#      copy.
+#   5. Each side's row and hit counts, so that a side that read less is
 #      visible.
 #
-# The page cache is warm for every run.
+# GDAL's results are kept in `$GDAL_CACHE` (default `<dir>/gdal-cache`), in
+# one file per GDAL version, under a key of the dataset's name, row count,
+# query box and file size. A dataset whose results are in the file is
+# measured on this crate's side only. Delete the file to measure GDAL again,
+# and after moving to another machine type.
+#
+# The page cache is warm for every run. Needs /usr/bin/time.
 #
 # Usage:
-#   scripts/bench_datasets.sh fetch [dir]         download and convert (~5 GB)
-#   scripts/bench_datasets.sh run   [dir] [reps]  measure
+#   scripts/bench_datasets.sh fetch  [dir]          download and convert
+#   scripts/bench_datasets.sh subset [dir] <out>    make the subsets
+#   scripts/bench_datasets.sh run    [dir] [reps]   measure
 
 set -euo pipefail
 
@@ -42,17 +53,22 @@ MODE="${1:-run}"
 DIR="${2:-${GEOPACKAGE_BENCH_DIR:-$PWD/benchdata}}"
 REPS="${3:-3}"
 GDAL_CONFIG="${GDAL_CONFIG:-gdal-config}"
+GDAL_CACHE="${GDAL_CACHE:-$DIR/gdal-cache}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OURS="$ROOT/target/release/examples/dataset_bench"
+GPKG="$ROOT/target/release/gpkg"
 
-# name | layer | gpkg | query box (minx miny maxx maxy)
-# The boxes are San Francisco, part of the Amazon basin, and western Europe.
+# name | layer | gpkg | rows in the subset | query box (minx miny maxx maxy)
+# The boxes are San Francisco, part of East Africa, and western Europe, each
+# inside its subset.
 DATASETS=(
-    "buildings|buildings|ca_buildings.gpkg|-122.52 37.70 -122.35 37.83"
-    "rivers|rivers|hydrorivers.gpkg|-70 -10 -60 0"
-    "admin|gadm|gadm_noidx.gpkg|0 45 10 55"
+    "buildings|buildings|ca_buildings.gpkg|1154291|-122.52 37.70 -122.35 37.83"
+    "rivers|rivers|hydrorivers.gpkg|847788|30 0 40 10"
+    "admin|gadm|gadm_noidx.gpkg|15000|0 45 10 55"
 )
+OPS=(scan arrow arrow_1_thread bbox_unindexed index_build bbox_indexed write
+    write_with_index copy)
 
 fetch() {
     mkdir -p "$DIR"
@@ -96,12 +112,35 @@ fetch() {
     ls -la "$DIR"/*.gpkg
 }
 
+# Copies the first rows of each dataset, keeping the fids, into `$1`.
+subset() {
+    local out="${1:?usage: bench_datasets.sh subset [dir] <out>}"
+    mkdir -p "$out"
+    command -v ogr2ogr >/dev/null || { echo "ogr2ogr not found on PATH" >&2; exit 1; }
+    local entry name layer file rows box
+    for entry in "${DATASETS[@]}"; do
+        IFS='|' read -r name layer file rows box <<<"$entry"
+        [[ -s "$out/$file" ]] && continue
+        echo "copying the first $rows rows of $name"
+        ogr2ogr -f GPKG -lco SPATIAL_INDEX=NO -preserve_fid -limit "$rows" \
+            -nln "$layer" "$out/$file" "$DIR/$file" "$layer"
+    done
+}
+
 median() {
     python3 -c "
 import sys
 xs = sorted(float(x) for x in sys.argv[1:])
 print(f'{xs[len(xs)//2]:.1f}')
 " "$@"
+}
+
+# The median of field `$1` of the space-separated samples that follow.
+column_median() {
+    local field="$1"; shift
+    local values
+    read -r -a values <<<"$(printf '%s\n' "$@" | cut -d' ' -f"$field" | tr '\n' ' ')"
+    median "${values[@]}"
 }
 
 # Peak resident set size from a /usr/bin/time report, in MiB. macOS `time -l`
@@ -111,90 +150,123 @@ rss_mib() {
          /Maximum resident set size/ { printf "%.0f", $6 / 1024; exit }' "$1"
 }
 
-# Run one side's tool. Print its elapsed_ms, or its peak RSS in MiB when
-# MEASURE is `rss`. Keep the full output in $WORK/last-<side>.txt.
-run_tool() {
+# Seconds since the epoch, to the microsecond. EPOCHREALTIME needs bash 5.
+now() {
+    if [[ -n ${EPOCHREALTIME:-} ]]; then echo "$EPOCHREALTIME"
+    else python3 -c 'import time; print(time.time())'; fi
+}
+
+# Runs one command under /usr/bin/time and prints `<ms> <MiB>`: the
+# `elapsed_ms` the command reports, or else the wall time, and the peak
+# resident memory. Keeps the command's output in $WORK/last-<side>.txt.
+timed() {
     local side="$1"; shift
-    local bin="$OURS" out="$WORK/last-$side.txt"
-    [[ $side == gdal ]] && bin="$GDAL"
-    if [[ ${MEASURE:-time} == rss ]]; then
-        local flag=-v
-        [[ $(uname -s) == Darwin ]] && flag=-l
-        /usr/bin/time "$flag" "$bin" "$@" >"$out" 2>"$WORK/rss.txt"
-        rss_mib "$WORK/rss.txt"
+    local out="$WORK/last-$side.txt" flag=-v start end ms
+    [[ $(uname -s) == Darwin ]] && flag=-l
+    start="$(now)"
+    /usr/bin/time "$flag" "$@" >"$out" 2>"$WORK/time.txt" \
+        || { echo "failed: $*" >&2; cat "$WORK/time.txt" >&2; exit 1; }
+    end="$(now)"
+    ms="$(sed -n 's/^elapsed_ms=//p' "$out")"
+    if [[ -z $ms ]]; then
+        ms="$(python3 -c "print(f'{($end - $start) * 1000:.1f}')")"
+    fi
+    echo "$ms $(rss_mib "$WORK/time.txt")"
+}
+
+# Runs dataset_bench or gdal_dataset_bench.
+tool() {
+    local side="$1"; shift
+    if [[ $side == ours ]]; then timed ours "$OURS" "$@"; else timed gdal "$GDAL" "$@"; fi
+}
+
+# The operations. Each takes the side as its first argument.
+
+op_scan() {
+    if [[ $1 == ours ]]; then tool ours scan "$src" "$layer" geo 1
+    else tool gdal scan "$src" "$layer"; fi
+}
+
+op_arrow() {
+    if [[ $1 == ours ]]; then tool ours arrow "$src" "$layer" 1 0
+    else tool gdal arrow "$src" "$layer"; fi
+}
+
+op_arrow_1_thread() {
+    if [[ $1 == ours ]]; then tool ours arrow "$src" "$layer" 1 1
+    else OGR_GPKG_NUM_THREADS=1 tool gdal arrow "$src" "$layer"; fi
+}
+
+op_index_build() {
+    cp "$src" "$WORK/indexed-$1.gpkg"
+    tool "$1" index "$WORK/indexed-$1.gpkg" "$layer"
+}
+
+# The query box against `$2`.
+bbox() {
+    # shellcheck disable=SC2086
+    if [[ $1 == ours ]]; then tool ours bbox "$2" "$layer" $box 1
+    else tool gdal bbox "$2" "$layer" $box; fi
+}
+op_bbox_unindexed() { bbox "$1" "$src"; }
+op_bbox_indexed() { bbox "$1" "$WORK/indexed-$1.gpkg"; }
+
+op_write() {
+    rm -f "$WORK/written-$1.gpkg"
+    tool "$1" write "$src" "$layer" "$WORK/written-$1.gpkg" no
+}
+
+op_write_with_index() {
+    rm -f "$WORK/written-$1.gpkg"
+    tool "$1" write "$src" "$layer" "$WORK/written-$1.gpkg" yes
+}
+
+# The `ogr2ogr` flags do what `gpkg copy` does with an unindexed source: keep
+# the fids, commit every 10,000 rows, and build no index.
+op_copy() {
+    rm -f "$WORK/copy-$1.gpkg"
+    if [[ $1 == ours ]]; then
+        timed ours "$GPKG" copy "$src" "$WORK/copy-$1.gpkg"
     else
-        "$bin" "$@" >"$out"
-        sed -n 's/^elapsed_ms=//p' "$out"
+        timed gdal "$OGR2OGR" -q -f GPKG -lco SPATIAL_INDEX=NO -preserve_fid -gt 10000 \
+            "$WORK/copy-$1.gpkg" "$src"
     fi
 }
 
-# The operations. Each takes the side first.
-
-op_scan() {
-    if [[ $1 == ours ]]; then run_tool ours scan "$src" "$layer" geo 1
-    else run_tool gdal scan "$src" "$layer"; fi
+# Prints the counts one side's last run of `op` reported.
+counts() {
+    local side="$1" op="$2"
+    case "$op" in
+        copy) "$OURS" info "$WORK/copy-$side.gpkg" "$layer" | sed -n 's/^rows=/rows=/p' ;;
+        index_build) echo "file_bytes=$(stat -c%s "$WORK/indexed-$side.gpkg" 2>/dev/null \
+            || stat -f%z "$WORK/indexed-$side.gpkg")" ;;
+        *) grep -E '^(rows|hits|geometries)=' "$WORK/last-$side.txt" || true ;;
+    esac | tr '\n' ' '
 }
 
-# The second argument is the thread count: 0 is each side's default.
-op_arrow() {
-    if [[ $1 == ours ]]; then run_tool ours arrow "$src" "$layer" 1 "$2"
-    elif [[ $2 == 0 ]]; then run_tool gdal arrow "$src" "$layer"
-    else OGR_GPKG_NUM_THREADS="$2" run_tool gdal arrow "$src" "$layer"; fi
-}
-
-op_index() {
-    cp "$src" "$WORK/indexed-$1.gpkg"
-    run_tool "$1" index "$WORK/indexed-$1.gpkg" "$layer"
-}
-
-# The second argument is the file to query.
-op_bbox() {
-    local file="$2"
-    [[ $file == indexed ]] && file="$WORK/indexed-$1.gpkg"
-    # shellcheck disable=SC2086
-    if [[ $1 == ours ]]; then run_tool ours bbox "$file" "$layer" $box 1
-    else run_tool gdal bbox "$file" "$layer" $box; fi
-}
-
-# The second argument is yes or no: build the index during the write.
-op_write() {
-    rm -f "$WORK/written-$1.gpkg"
-    run_tool "$1" write "$src" "$layer" "$WORK/written-$1.gpkg" "$2"
-    rm -f "$WORK/written-$1.gpkg"
-}
-
-# Run one operation `reps` times on each side, alternating which side runs
-# first. Print the median of each side, then each side's counts from its last
-# run.
+# Runs `op` `reps` times on this crate's side, and on GDAL's unless `$2` is
+# `cached`, alternating which side runs first. Prints one tab-separated
+# line per side: side, op, median ms, median MiB, counts.
 measure() {
-    local label="$1"; shift
-    local ours=() gdal=() rep
+    local op="$1" mode="$2" ours=() gdal=() rep
     for rep in $(seq 1 "$REPS"); do
-        if (( rep % 2 )); then
-            ours+=("$("$@" ours)"); gdal+=("$("$@" gdal)")
+        if [[ $mode == cached ]]; then
+            ours+=("$("op_$op" ours)")
+        elif (( rep % 2 )); then
+            ours+=("$("op_$op" ours)"); gdal+=("$("op_$op" gdal)")
         else
-            gdal+=("$("$@" gdal)"); ours+=("$("$@" ours)")
+            gdal+=("$("op_$op" gdal)"); ours+=("$("op_$op" ours)")
         fi
     done
-    printf '  %-26s %12s %12s\n' "$label" "$(median "${ours[@]}")" "$(median "${gdal[@]}")"
-    local counts
+    local side samples
     for side in ours gdal; do
-        counts="$(grep -E '^(rows|hits|geometries)=' "$WORK/last-$side.txt" | tr '\n' ' ' || true)"
-        [[ -n $counts ]] && printf '    %s: %s\n' "$side" "$counts"
+        [[ $side == gdal && $mode == cached ]] && continue
+        if [[ $side == ours ]]; then samples=("${ours[@]}"); else samples=("${gdal[@]}"); fi
+        printf '%s\t%s\t%s\t%s\t%s\n' "$side" "$op" \
+            "$(column_median 1 "${samples[@]}")" "$(column_median 2 "${samples[@]}")" \
+            "$(counts "$side" "$op")"
     done
-    return 0
 }
-
-# `measure` passes the side last, so each operation is wrapped to put the side
-# first.
-scan() { op_scan "$1"; }
-arrow_default() { op_arrow "$1" 0; }
-arrow_single() { op_arrow "$1" 1; }
-index() { op_index "$1"; }
-bbox_unindexed() { op_bbox "$1" "$src"; }
-bbox_indexed() { op_bbox "$1" indexed; }
-write_plain() { op_write "$1" no; }
-write_indexed() { op_write "$1" yes; }
 
 run() {
     command -v "$GDAL_CONFIG" >/dev/null || { echo "$GDAL_CONFIG not found" >&2; exit 1; }
@@ -206,9 +278,12 @@ run() {
     echo "building both tools"
     cargo build --release --quiet --manifest-path "$ROOT/Cargo.toml" \
         -p geopackage --features arrow,bundled --example dataset_bench
-    local prefix
+    cargo build --release --quiet --manifest-path "$ROOT/Cargo.toml" -p geopackage-cli
+    local prefix version cache
     prefix="$("$GDAL_CONFIG" --prefix)"
+    version="$("$GDAL_CONFIG" --version)"
     GDAL="$WORK/gdal_dataset_bench"
+    OGR2OGR="$prefix/bin/ogr2ogr"
     # shellcheck disable=SC2046
     cc -O2 -o "$GDAL" "$ROOT/scripts/gdal_dataset_bench.c" \
         $("$GDAL_CONFIG" --cflags) $("$GDAL_CONFIG" --libs) -Wl,-rpath,"$prefix/lib"
@@ -216,42 +291,54 @@ run() {
     if [[ $prefix != /usr && -d $prefix/share/proj ]]; then
         export PROJ_DATA="$prefix/share/proj" GDAL_DATA="$prefix/share/gdal"
     fi
+    mkdir -p "$GDAL_CACHE"
+    cache="$GDAL_CACHE/gdal-$version.tsv"
+    touch "$cache"
 
     echo
     echo "environment"
     echo "  $(uname -sr), $(nproc 2>/dev/null || sysctl -n hw.ncpu) CPUs"
-    echo "  GDAL $("$GDAL_CONFIG" --version) at $prefix"
+    echo "  $("$GPKG" --version)"
+    echo "  GDAL $version at $prefix; results kept in $cache"
     echo "  reps=$REPS"
     echo "  host load at start:$(uptime | sed 's/.*load averages*://')"
 
+    local entry name file rows lines op
     for entry in "${DATASETS[@]}"; do
-        IFS='|' read -r name layer file box <<<"$entry"
+        IFS='|' read -r name layer file rows box <<<"$entry"
         src="$DIR/$file"
-        [[ -f "$src" ]] || { echo "missing $src; run the fetch step" >&2; exit 1; }
+        [[ -f "$src" ]] || { echo "missing $src; run the subset step" >&2; exit 1; }
 
         echo
         echo "=== $name ($file, layer $layer)"
         "$OURS" info "$src" "$layer" | sed 's/^/  /'
-        printf '  %-26s %12s %12s\n' "milliseconds" "ours" "gdal"
-
-        measure scan scan
-        measure arrow arrow_default
-        measure arrow_1_thread arrow_single
-        measure bbox_unindexed bbox_unindexed
-        measure index_build index
-        measure bbox_indexed bbox_indexed
-        for side in ours gdal; do
-            echo "    $side indexed bytes: $(stat -c%s "$WORK/indexed-$side.gpkg" 2>/dev/null || stat -f%z "$WORK/indexed-$side.gpkg")"
+        # A dataset's GDAL results are used only if every operation has one.
+        local key cached=cached
+        key="$name/$rows/${box// /,}/$(stat -c%s "$src" 2>/dev/null || stat -f%z "$src")"
+        for op in "${OPS[@]}"; do
+            grep -qF "$key	gdal	$op	" "$cache" || cached=measure
         done
-        rm -f "$WORK"/indexed-*.gpkg
-        measure write write_plain
-        measure write_with_index write_indexed
-
-        printf '  %-26s %12s %12s\n' "peak MiB" "ours" "gdal"
-        MEASURE=rss measure arrow_peak arrow_default
-        MEASURE=rss measure index_peak index
-        rm -f "$WORK"/indexed-*.gpkg
-        MEASURE=rss measure write_peak write_plain
+        [[ $cached == cached ]] && echo "  GDAL: from $cache"
+        lines=""
+        for op in "${OPS[@]}"; do
+            lines+="$(measure "$op" "$cached")"$'\n'
+        done
+        if [[ $cached == measure ]]; then
+            grep -vF "$key	" "$cache" >"$WORK/cache" || true
+            grep "^gdal	" <<<"$lines" | sed "s|^|$key	|" >>"$WORK/cache"
+            cp "$WORK/cache" "$cache"
+        fi
+        lines+="$(grep -F "$key	gdal	" "$cache" | cut -f2-)"
+        printf '  %-18s %10s %10s %9s %9s\n' "" "ours ms" "gdal ms" "ours MiB" "gdal MiB"
+        for op in "${OPS[@]}"; do
+            local o g
+            o="$(grep -m1 "^ours	$op	" <<<"$lines")"
+            g="$(grep -m1 "^gdal	$op	" <<<"$lines")"
+            printf '  %-18s %10s %10s %9s %9s\n' "$op" \
+                "$(cut -f3 <<<"$o")" "$(cut -f3 <<<"$g")" "$(cut -f4 <<<"$o")" "$(cut -f4 <<<"$g")"
+            printf '    ours: %s\n    gdal: %s\n' "$(cut -f5 <<<"$o")" "$(cut -f5 <<<"$g")"
+        done
+        rm -f "$WORK"/*.gpkg
     done
 
     echo
@@ -260,6 +347,7 @@ run() {
 
 case "$MODE" in
     fetch) fetch ;;
+    subset) subset "${3:-}" ;;
     run) run ;;
-    *) echo "usage: scripts/bench_datasets.sh <fetch|run> [dir] [reps]" >&2; exit 1 ;;
+    *) echo "usage: scripts/bench_datasets.sh <fetch|subset|run> [dir] [reps|out]" >&2; exit 1 ;;
 esac

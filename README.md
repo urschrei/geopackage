@@ -120,7 +120,8 @@ a round trip through GDAL byte for byte. See the [changelog](CHANGELOG.md) and
 details.
 
 [The benchmarks](roadmap/benchmarks/README.md) compare reads, writes, index
-builds, queries and `gpkg copy` with GDAL on three datasets of 2 to 3 GB.
+builds, queries and `gpkg copy` with GDAL on subsets of three published
+datasets.
 
 ## License
 
