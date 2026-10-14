@@ -368,10 +368,10 @@ fn a_threaded_read_matches_a_single_threaded_one() {
     assert_eq!(threaded, sequential, "the two paths disagree");
 }
 
-/// A layer whose keys have gaps reads correctly, because the threaded path
-/// declines to engage rather than assuming a row count from a key range.
+/// A layer whose keys have gaps reads on threads, with every row once and in
+/// key order. Windows that fall in a gap are empty.
 #[test]
-fn gaps_in_the_key_fall_back_to_a_single_thread() {
+fn gaps_in_the_key_are_read_on_threads() {
     let dir = tempfile::tempdir().unwrap();
     let gpkg = GeoPackage::create(dir.path().join("g.gpkg")).unwrap();
     let builder =
@@ -388,6 +388,26 @@ fn gaps_in_the_key_fall_back_to_a_single_thread() {
     let options = ArrowReadOptions::with_batch_size(32).with_threads(4);
     let expected: Vec<i64> = (1..=99).chain(201..=300).collect();
     assert_eq!(fids_via(&gpkg, options), expected);
+}
+
+/// A gap far wider than a window is skipped with a lookup of the next key,
+/// instead of one query for each empty window in it.
+#[test]
+fn a_wide_gap_in_the_key_is_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("w.gpkg")).unwrap();
+    let builder =
+        TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326));
+    let layer = gpkg.create_layer(&builder).unwrap();
+    let fids: Vec<i64> = (1..=50).chain(1_000_000_000..=1_000_000_050).collect();
+    let features: Vec<NewFeature<Point<f64>>> = fids
+        .iter()
+        .map(|&i| NewFeature::new(Point::new(0.0, 0.0), Vec::new()).with_fid(i))
+        .collect();
+    layer.write_all(features, 0).unwrap();
+
+    let options = ArrowReadOptions::with_batch_size(8).with_threads(3);
+    assert_eq!(fids_via(&gpkg, options), fids);
 }
 
 /// An in-memory database cannot be opened by a second connection, so the
