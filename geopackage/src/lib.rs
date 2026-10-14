@@ -1,14 +1,14 @@
 //! Read and write [OGC GeoPackage](https://www.geopackage.org/spec140/) files.
 //!
-//! A GeoPackage is an SQLite database with a standard schema for vector
-//! features, attribute tables and raster tiles. This crate reads and writes all
-//! three, maintains their RTree spatial indexes, and can move features in and
-//! out as Apache Arrow record batches.
+//! This crate reads and writes feature and attribute tables, tile pyramids and
+//! tiled gridded coverages. It builds and repairs spatial indexes, validates
+//! files against the specification, and moves features in and out as Apache
+//! Arrow record batches.
 //!
 //! # Overview
 //!
-//! - **[`GeoPackage`]**: An open file. Create one with [`GeoPackage::create`],
-//!   or open one with [`GeoPackage::open`] or [`GeoPackage::open_read_only`]
+//! - **[`GeoPackage`]**: A file, from [`GeoPackage::create`],
+//!   [`GeoPackage::open`] or [`GeoPackage::open_read_only`]
 //! - **[`Layer`]**: A feature or attribute table, from [`GeoPackage::layer`] or
 //!   [`GeoPackage::attributes`]
 //! - **[`TilePyramid`]**: A table of raster tiles, from [`GeoPackage::tiles`]
