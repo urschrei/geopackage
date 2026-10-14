@@ -19,6 +19,9 @@
 #   ab <refA> <refB> [iters] interleaved A/B of the admin write arm
 #   copy [ref] [reps]        build `gpkg` at `ref` and run
 #                            compare_gdal_copy.sh over it
+#   quick <revA> <revB> [reps] [filter]
+#                            compare two local jj revisions with
+#                            quick_ab.sh on 10 % subsets of the datasets
 #   stop                     destroy the machine; the volume persists
 #   destroy                  destroy the machine, the volume and the app
 #
@@ -137,6 +140,62 @@ echo "building gpkg at \$(git -C /data/src rev-parse --short HEAD)"
 bash /data/src/scripts/compare_gdal_copy.sh /data/benchdata \
     /data/src/target/release/gpkg $reps \$gdal_env/bin/ogr2ogr \
     2>&1 | tee "/data/logs/copy-\$(git -C /data/src rev-parse --short HEAD).log"
+EOF
+    remote_run "$job"
+    rm -f "$job"
+}
+
+# Two local revisions, which need not be pushed, compared by quick_ab.sh.
+# Each revision travels as a `git archive` and is built in one tree on the
+# volume. rsync rewrites only the files whose contents differ, so cargo
+# rebuilds only what changed; a source's archive mtime would otherwise be
+# older than the last build and cargo would reuse it. Builds are kept by
+# commit, so the B of one comparison is the A of the next without a rebuild.
+# The subsets are made once, from the datasets on the volume.
+cmd_quick() {
+    local rev_a="${1:?usage: bench_fly.sh quick <revA> <revB> [reps] [filter]}"
+    local rev_b="${2:?usage: bench_fly.sh quick <revA> <revB> [reps] [filter]}"
+    local reps="${3:-3}" filter="${4:-.}"
+    local a b tmp job
+    a="$(jj log -r "$rev_a" --no-graph -T 'commit_id')"
+    b="$(jj log -r "$rev_b" --no-graph -T 'commit_id')"
+    tmp="$(mktemp -d)"
+    git archive --format=tar.gz -o "$tmp/$a.tar.gz" "$a"
+    git archive --format=tar.gz -o "$tmp/$b.tar.gz" "$b"
+    cmd_exec "mkdir -p /data/quick-ab/in && rm -f /data/quick-ab/in/*" >/dev/null
+    local f
+    for f in "$tmp/$a.tar.gz" "$tmp/$b.tar.gz" "$(dirname "$0")/quick_ab.sh"; do
+        printf 'put %s /data/quick-ab/in/%s\n' "$f" "$(basename "$f")" \
+            | fly ssh sftp shell -a "$APP" >/dev/null
+    done
+    rm -rf "$tmp"
+    job="$(mktemp)"
+    cat > "$job" <<EOF
+$(emit_gdal)
+if ! command -v rsync >/dev/null || ! ls /usr/lib/linux-tools/*/perf >/dev/null 2>&1; then
+    apt-get install -q -y rsync linux-tools-common linux-tools-generic >/dev/null
+fi
+mkdir -p /data/quick
+for p in "ca_buildings buildings 1154291" "hydrorivers rivers 847788" "gadm_noidx gadm 15000"; do
+    set -- \$p
+    [[ -s /data/quick/\$1.gpkg ]] && continue
+    echo "making the \$2 subset"
+    PROJ_DATA=\$gdal_env/share/proj GDAL_DATA=\$gdal_env/share/gdal \$gdal_env/bin/ogr2ogr \
+        -f GPKG -lco SPATIAL_INDEX=NO -preserve_fid -limit \$3 -nln \$2 \
+        /data/quick/\$1.gpkg /data/benchdata/\$1.gpkg \$2
+done
+cd /data/quick-ab
+mkdir -p bin tree
+for c in $a $b; do
+    [[ -x bin/\$c ]] && continue
+    echo "building \${c:0:12}"
+    rm -rf src && mkdir src && tar -xzf in/\$c.tar.gz -C src
+    rsync -rc --delete src/ tree/
+    (cd tree && CARGO_TARGET_DIR=/data/quick-ab/target cargo build --release --quiet \
+        -p geopackage --features arrow,bundled --example dataset_bench)
+    cp target/release/examples/dataset_bench bin/\$c
+done
+bash in/quick_ab.sh bin/$a bin/$b /data/quick $reps '$filter'
 EOF
     remote_run "$job"
     rm -f "$job"
@@ -280,6 +339,7 @@ case "${1:-}" in
     bench)   shift; cmd_bench "$@" ;;
     ab)      shift; cmd_ab "$@" ;;
     copy)    shift; cmd_copy "$@" ;;
+    quick)   shift; cmd_quick "$@" ;;
     stop)    cmd_stop ;;
     destroy) cmd_destroy ;;
     *)

@@ -40,10 +40,12 @@ While the version is below 1.0 the API may change in any release.
   of a row outside the box. `features_in_sql` returns the new query, which
   has four box parameters. A query of the rivers dataset takes 1.7 s instead
   of 3.2 s.
-
 - `roadmap/benchmarks/README.md` replaces the dated benchmark write-ups. It
   compares the library and `gpkg copy` with GDAL 3.13.3 on the three
   benchmark datasets, measured at 0.11.0.
+- `scripts/bench_fly.sh quick <revA> <revB>` compares two local revisions in
+  about a minute, by the instructions each operation executes on 10 %
+  subsets of the benchmark datasets (`scripts/quick_ab.sh`).
 - `scripts/bench_datasets.sh` times GDAL beside this crate for each operation,
   through the new `scripts/gdal_dataset_bench.c`. The `dataset_bench` write
   and index arms use `synchronous = OFF`, and its box query builds each
