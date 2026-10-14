@@ -23,6 +23,8 @@
 #   fetch                    download and convert the datasets onto the volume
 #   bench [ref] [reps]       build `ref` and run bench_datasets.sh over it
 #   ab <refA> <refB> [iters] interleaved A/B of the admin write arm
+#   copy [ref] [reps]        build `gpkg` at `ref` and compare `gpkg copy`
+#                            against ogr2ogr (compare_gdal_copy.sh)
 #   stop                     destroy the machine; the volume persists
 #   destroy                  destroy the machine, the volume and the app
 #
@@ -31,6 +33,7 @@
 #   FLY_BENCH_ORG     organisation slug   (default personal)
 #   FLY_BENCH_REGION  region              (default ams)
 #   FLY_BENCH_VM      machine size        (default performance-8x)
+#   FLY_BENCH_GDAL    conda-forge GDAL    (default 3.13.3), for `copy`
 #
 # The machine size and memory are part of the protocol: published figures
 # must name them, and comparisons are only valid within one machine type.
@@ -41,6 +44,7 @@ APP="${FLY_BENCH_APP:-geopackage-bench}"
 ORG="${FLY_BENCH_ORG:-personal}"
 REGION="${FLY_BENCH_REGION:-ams}"
 VM="${FLY_BENCH_VM:-performance-8x}"
+GDAL="${FLY_BENCH_GDAL:-3.13.3}"
 MEMORY_MB=16384
 VOLUME=bench_data
 VOLUME_GB=25
@@ -102,6 +106,42 @@ echo "building dataset_bench at \$(git -C $dir rev-parse --short HEAD)"
 (cd $dir && cargo build --release --quiet -p geopackage \
     --features arrow,bundled --example dataset_bench)
 EOF
+}
+
+# `gpkg copy` against two GDALs: the conda-forge release named by
+# FLY_BENCH_GDAL, installed once onto the volume, and Ubuntu's own, which the
+# preamble installs. The tools that time the runs live on the rootfs, so they
+# are installed on each new machine.
+cmd_copy() {
+    local ref="${1:-origin/main}" reps="${2:-5}"
+    local job
+    job="$(mktemp)"
+    cat > "$job" <<EOF
+if ! command -v hyperfine >/dev/null || [[ ! -x /usr/bin/time ]] || ! command -v bzip2 >/dev/null; then
+    apt-get update -q
+    apt-get install -q -y hyperfine time bzip2
+fi
+env_dir=/data/mamba/envs/gdal-$GDAL
+if [[ ! -x \$env_dir/bin/ogr2ogr ]]; then
+    echo "installing GDAL $GDAL from conda-forge onto the volume"
+    mkdir -p /data/mamba
+    [[ -x /data/mamba/bin/micromamba ]] || curl -fsSL \
+        https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C /data/mamba bin/micromamba
+    /data/mamba/bin/micromamba create -y -q -r /data/mamba -p \$env_dir -c conda-forge gdal=$GDAL
+fi
+if [[ ! -d /data/src/.git ]]; then
+    git clone --quiet $REPO_URL /data/src
+fi
+git -C /data/src fetch --quiet --tags origin
+git -C /data/src checkout --quiet --detach $ref
+echo "building gpkg at \$(git -C /data/src rev-parse --short HEAD)"
+(cd /data/src && cargo build --release --quiet -p geopackage-cli)
+bash /data/src/scripts/compare_gdal_copy.sh /data/benchdata \
+    /data/src/target/release/gpkg $reps \$env_dir/bin/ogr2ogr /usr/bin/ogr2ogr \
+    2>&1 | tee "/data/logs/copy-\$(git -C /data/src rev-parse --short HEAD).log"
+EOF
+    remote_run "$job"
+    rm -f "$job"
 }
 
 cmd_setup() {
@@ -241,6 +281,7 @@ case "${1:-}" in
     fetch)   cmd_fetch ;;
     bench)   shift; cmd_bench "$@" ;;
     ab)      shift; cmd_ab "$@" ;;
+    copy)    shift; cmd_copy "$@" ;;
     stop)    cmd_stop ;;
     destroy) cmd_destroy ;;
     *)
