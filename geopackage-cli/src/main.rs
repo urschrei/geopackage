@@ -1,5 +1,6 @@
 //! `gpkg`: a command-line tool over the `geopackage` crate.
 
+use std::io::{self, ErrorKind, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -157,14 +158,15 @@ enum TileCommand {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let stdout = &mut io::stdout().lock();
     let result = match cli.command {
-        Command::Info { file } => info::run(&file),
-        Command::Validate { file, strict } => validate::run(&file, strict),
-        Command::Index { file, layer } => index::build(&file, &layer),
-        Command::Repair { file, layer } => index::repair(&file, layer.as_deref()),
-        Command::Copy { src, dst } => copy::run(&src, &dst),
+        Command::Info { file } => info::run(&file, stdout),
+        Command::Validate { file, strict } => validate::run(&file, strict, stdout),
+        Command::Index { file, layer } => index::build(&file, &layer, stdout),
+        Command::Repair { file, layer } => index::repair(&file, layer.as_deref(), stdout),
+        Command::Copy { src, dst } => copy::run(&src, &dst, stdout),
         Command::Tiles { command } => match command {
-            TileCommand::Info { file, pyramid } => tiles::info(&file, pyramid.as_deref()),
+            TileCommand::Info { file, pyramid } => tiles::info(&file, pyramid.as_deref(), stdout),
             TileCommand::Get {
                 file,
                 pyramid,
@@ -177,10 +179,13 @@ fn main() -> ExitCode {
                 &pyramid,
                 geopackage::core::tiles::TileCoord::new(zoom, column, row),
                 out.as_deref(),
+                stdout,
             ),
         },
         Command::Coverage { command } => match command {
-            CoverageCommand::Info { file, coverage } => coverage::info(&file, coverage.as_deref()),
+            CoverageCommand::Info { file, coverage } => {
+                coverage::info(&file, coverage.as_deref(), stdout)
+            }
             CoverageCommand::Get {
                 file,
                 coverage,
@@ -193,12 +198,24 @@ fn main() -> ExitCode {
                 &coverage,
                 geopackage::core::tiles::TileCoord::new(zoom, column, row),
                 out.as_deref(),
+                stdout,
             ),
         },
     };
+    // Flush here, so that a failed write of the buffered output is an error
+    // like any other. Rust ignores flush errors at exit.
+    let result = result.and_then(|code| {
+        stdout.flush()?;
+        Ok(code)
+    });
 
     match result {
         Ok(code) => code,
+        // The reader closed the pipe, as `gpkg info f | head` does. Exit with no
+        // message and with the status a shell gives a process that SIGPIPE stops.
+        Err(error::Error::Io(error)) if error.kind() == ErrorKind::BrokenPipe => {
+            ExitCode::from(141)
+        }
         Err(error) => {
             eprintln!("gpkg: {error}");
             ExitCode::FAILURE

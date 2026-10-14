@@ -5,6 +5,7 @@
 //! the ancillary metadata that states what the samples mean, and the values
 //! that the header of each payload declares.
 
+use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -14,7 +15,7 @@ use geopackage::{Coverage, GeoPackage};
 use crate::error::Result;
 
 /// `gpkg coverage info`: every coverage in a file, or one named coverage.
-pub fn info(path: &Path, coverage_name: Option<&str>) -> Result<ExitCode> {
+pub fn info(path: &Path, coverage_name: Option<&str>, out: &mut impl Write) -> Result<ExitCode> {
     let gpkg = GeoPackage::open_read_only_lenient(path)?;
 
     let coverages = match coverage_name {
@@ -22,59 +23,64 @@ pub fn info(path: &Path, coverage_name: Option<&str>) -> Result<ExitCode> {
         None => gpkg.coverages()?,
     };
     if coverages.is_empty() {
-        println!("{}: no tiled gridded coverages", path.display());
+        writeln!(out, "{}: no tiled gridded coverages", path.display())?;
         return Ok(ExitCode::SUCCESS);
     }
 
     for coverage in &coverages {
-        print_coverage(&gpkg, coverage)?;
+        print_coverage(&gpkg, coverage, out)?;
     }
     Ok(ExitCode::SUCCESS)
 }
 
-fn print_coverage(gpkg: &GeoPackage, coverage: &Coverage<'_>) -> Result<()> {
+fn print_coverage(gpkg: &GeoPackage, coverage: &Coverage<'_>, out: &mut impl Write) -> Result<()> {
     let set = coverage.matrix_set();
     let ancillary = coverage.ancillary();
-    println!("coverage {:?}", coverage.table_name());
-    println!("  tiles:    {}", coverage.tile_count()?);
-    println!(
+    writeln!(out, "coverage {:?}", coverage.table_name())?;
+    writeln!(out, "  tiles:    {}", coverage.tile_count()?)?;
+    writeln!(
+        out,
         "  samples:  {}{}",
         ancillary.datatype,
         match ancillary.uom.as_deref() {
             Some(uom) => format!(" in {uom}"),
             None => String::new(),
         }
-    );
+    )?;
     if let Some(field_name) = &ancillary.field_name {
-        println!("  field:    {field_name}");
+        writeln!(out, "  field:    {field_name}")?;
     }
     // The three numbers that a reader needs to convert a sample to a value,
     // and the number that marks a sample as no value.
-    println!(
+    writeln!(
+        out,
         "  scale:    {} offset: {}",
         ancillary.scale, ancillary.offset
-    );
+    )?;
     match ancillary.data_null {
-        Some(null) => println!("  null:     {null}"),
-        None => println!("  null:     none declared"),
+        Some(null) => writeln!(out, "  null:     {null}")?,
+        None => writeln!(out, "  null:     none declared")?,
     }
     if let Some(encoding) = &ancillary.grid_cell_encoding {
-        println!("  cells:    {encoding}");
+        writeln!(out, "  cells:    {encoding}")?;
     }
     if let Some(srs) = gpkg.srs(set.srs_id)? {
-        println!(
+        writeln!(
+            out,
             "  srs:      {} ({}:{})",
             srs.name, srs.organization, srs.organization_coordsys_id
-        );
+        )?;
     }
-    println!(
+    writeln!(
+        out,
         "  extent:   {} {} {} {}",
         set.min_x, set.min_y, set.max_x, set.max_y
-    );
+    )?;
 
-    println!("  zoom levels:");
+    writeln!(out, "  zoom levels:")?;
     for matrix in coverage.matrices() {
-        println!(
+        writeln!(
+            out,
             "    {:<3} {:>6} x {:<6} grid, {} x {} px, {} stored",
             matrix.zoom_level,
             matrix.matrix_width,
@@ -82,7 +88,7 @@ fn print_coverage(gpkg: &GeoPackage, coverage: &Coverage<'_>) -> Result<()> {
             matrix.tile_width,
             matrix.tile_height,
             coverage.tile_count_at(matrix.zoom_level)?
-        );
+        )?;
     }
 
     // A description of one payload. The encoding is a property of the file,
@@ -102,7 +108,7 @@ fn print_coverage(gpkg: &GeoPackage, coverage: &Coverage<'_>) -> Result<()> {
                 ),
                 Err(error) => format!("unusable: {error}"),
             };
-            println!("  payloads: {described} (first tile)");
+            writeln!(out, "  payloads: {described} (first tile)")?;
         }
     }
     Ok(())
@@ -113,7 +119,8 @@ pub fn get(
     path: &Path,
     coverage_name: &str,
     coord: TileCoord,
-    out: Option<&Path>,
+    out_path: Option<&Path>,
+    out: &mut impl Write,
 ) -> Result<ExitCode> {
     let gpkg = GeoPackage::open_read_only_lenient(path)?;
     let coverage = gpkg.coverage(coverage_name)?;
@@ -126,9 +133,9 @@ pub fn get(
         return Ok(ExitCode::FAILURE);
     };
 
-    match out {
-        Some(out) => {
-            std::fs::write(out, &bytes)?;
+    match out_path {
+        Some(out_path) => {
+            std::fs::write(out_path, &bytes)?;
             let described = match coverage.check_payload(&bytes) {
                 Ok(payload) => format!(
                     "{} {:?} {}x{}",
@@ -139,28 +146,29 @@ pub fn get(
                 ),
                 Err(error) => format!("unusable payload: {error}"),
             };
-            println!(
+            writeln!(
+                out,
                 "wrote {} bytes to {} ({described})",
                 bytes.len(),
-                out.display()
-            );
+                out_path.display()
+            )?;
             // The statistics are the only numbers about the contents of a tile
             // that this crate can report, because it does not decode samples.
             if let Some(stats) = coverage.tile_ancillary(coord)?
                 && let (Some(min), Some(max)) = (stats.min, stats.max)
             {
-                println!(
+                writeln!(
+                    out,
                     "  recorded range {} to {} (values {} to {})",
                     min,
                     max,
                     coverage.value(&stats, min),
                     coverage.value(&stats, max)
-                );
+                )?;
             }
         }
         None => {
-            use std::io::Write;
-            std::io::stdout().write_all(&bytes)?;
+            out.write_all(&bytes)?;
         }
     }
     Ok(ExitCode::SUCCESS)
