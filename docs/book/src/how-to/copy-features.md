@@ -144,7 +144,7 @@ the whole layer.
 
 If you have opened your own transaction on `GeoPackage::connection`, these
 commits only stage the rows, and you must issue the durable commit yourself. See
-[Transactions, and who commits](../explanation/transactions.md).
+[Transactions](../explanation/transactions.md).
 
 ## Then
 

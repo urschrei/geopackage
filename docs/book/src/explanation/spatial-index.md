@@ -43,15 +43,15 @@ same failure in
 triggers from more than one generation, is the worst case. You get one when
 two tools have edited a file in turn.
 
-This library does not trust a Legacy or Stale index. `has_spatial_index`
-reports both as unusable, so a bounding-box query falls back to a correct full
-scan instead of returning whatever the suspect index says.
+This library does not use a Legacy or Stale index. `has_spatial_index`
+reports both as unusable, so a bounding-box query falls back to a full scan,
+which returns the correct rows.
 
-## Why repair is never automatic, when extent recording is
+## Why repair is not automatic
 
 This library writes during a read in one place: reading a layer's extent
 records the measurement when the recorded bounds are unusable. It does not do
-the same for an index, and the difference is deliberate.
+the same for an index.
 
 The two operations differ in cost, and in what happens without them.
 Rebuilding an index reads every geometry in the layer and rewrites the tree.
@@ -60,8 +60,8 @@ who asked about an index's state has not consented to it. Without a usable
 index, queries fall back to a scan and still return the correct rows, more
 slowly.
 
-An extent is the opposite on both counts. Measuring it is comparatively cheap,
-and every reader that opens the file believes a wrong one indefinitely. See
+An extent differs on both counts. Measuring it is comparatively cheap, and
+GDAL and QGIS use an incorrect one without checking it. See
 [The layer extent](extent.md) for that side of the comparison.
 
 There is a second reason to keep repair explicit. Repairing a legacy trigger

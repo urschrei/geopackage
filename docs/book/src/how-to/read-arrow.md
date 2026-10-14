@@ -164,7 +164,7 @@ not record a specific type.
   concurrent writer can change the table between batches. If you need one
   snapshot of the whole layer, open your own transaction on
   `GeoPackage::connection`. See
-  [Transactions, and who commits](../explanation/transactions.md).
+  [Transactions](../explanation/transactions.md).
 - API reference:
   [`Layer::read_arrow`](https://docs.rs/geopackage/latest/geopackage/struct.Layer.html#method.read_arrow),
   [`Layer::read_arrow_in`](https://docs.rs/geopackage/latest/geopackage/struct.Layer.html#method.read_arrow_in),
