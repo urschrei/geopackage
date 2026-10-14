@@ -27,6 +27,8 @@ While the version is below 1.0 the API may change in any release.
 
 ### Fixed
 
+- `gpkg copy` copies attribute tables. It omitted them without a report,
+  although its documentation said that it copied them.
 - `gpkg` no longer panics when its output pipe closes, as in
   `gpkg info f | head`. It stops without a message and exits with status
   141, the status a shell reports for a process that SIGPIPE stops.

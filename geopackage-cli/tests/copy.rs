@@ -322,3 +322,43 @@ fn a_layer_larger_than_a_chunk_and_a_transaction_crosses_whole() {
     assert_eq!(source.len(), copied.len());
     assert!(source == copied, "the copy differs from its source");
 }
+
+#[test]
+fn attribute_tables_cross_with_their_rows() {
+    let (_dir, dst, output) = copy_of("attributes_spread.gpkg");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout(&output).contains("spread: "), "{}", stdout(&output));
+
+    let src = fixture("attributes_spread.gpkg");
+    let read = |path: &Path| -> Vec<String> {
+        let conn = rusqlite::Connection::open(path).unwrap();
+        let data_type: String = conn
+            .query_row(
+                "SELECT data_type FROM gpkg_contents WHERE table_name = 'spread'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut rows = vec![data_type];
+        rows.extend(
+            conn.prepare("SELECT quote(fid), quote(b), quote(i), quote(fl), quote(txt), quote(bl), quote(dt), quote(dtm) FROM spread ORDER BY fid")
+                .unwrap()
+                .query_map([], |row| {
+                    (0..8)
+                        .map(|i| row.get::<_, String>(i))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                        .map(|cells| cells.join("|"))
+                })
+                .unwrap()
+                .map(std::result::Result::unwrap),
+        );
+        rows
+    };
+    let source = read(&src);
+    assert!(source.len() > 1, "the fixture should have rows");
+    assert_eq!(source, read(&dst));
+}
