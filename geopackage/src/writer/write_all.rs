@@ -35,7 +35,8 @@ pub(crate) struct GeomTarget {
 
 /// A running union of written XY envelopes, seeded from the existing
 /// `gpkg_contents` bounding box. Bounds are stored as
-/// `[min_x, max_x, min_y, max_y]` (the shape [`encode_gpb`] returns).
+/// `[min_x, max_x, min_y, max_y]` (the shape
+/// [`encode_gpb`](geopackage_core::geometry::encode_gpb) returns).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BboxFold {
     pub(crate) min_x: f64,
@@ -201,9 +202,9 @@ impl<'a> Layer<'a> {
     ///
     /// When the layer has a spatial index and the write is at least
     /// [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD) rows, it takes
-    /// the bulk path instead. That path maintains the index in one operation at
-    /// the end, rather than row by row through the triggers. Use
-    /// [`Self::write_all_with`] to tune or force that choice.
+    /// the bulk path instead. That path brings the index up to date at the end,
+    /// rather than row by row through the triggers. [`Self::write_all_with`]
+    /// describes how, and lets you tune or force that choice.
     pub fn write_all<G, I>(&self, features: I, batch_size: usize) -> Result<Vec<i64>>
     where
         G: GeometryTrait<T = f64>,
@@ -215,15 +216,17 @@ impl<'a> Layer<'a> {
     /// Like [`Self::write_all`], with an explicit [`BulkIndexOptions`] that
     /// chooses between a bulk and a triggered index build.
     ///
-    /// The write takes the bulk path when the layer has a spatial index, the
-    /// write reaches `options.bulk_threshold` rows, and it is large enough
-    /// relative to the rows already indexed to be worth rebuilding the index
-    /// rather than appending to it. The size check uses the iterator's
-    /// `size_hint` where possible, and otherwise buffers up to
+    /// The write takes the bulk path when the layer has a spatial index and the
+    /// write reaches `options.bulk_threshold` rows. The size check uses the
+    /// iterator's `size_hint` where possible, and otherwise buffers up to
     /// `bulk_threshold` rows, so an iterator that does not know its own length
     /// can still take the bulk path. [`BulkIndexOptions::always_bulk`] drops
     /// the size condition, and [`BulkIndexOptions::never_bulk`] disables the
     /// bulk path.
+    ///
+    /// The bulk path rebuilds the index when the write adds at least a tenth
+    /// as many entries as the index already holds, and otherwise adds the new
+    /// entries to it.
     pub fn write_all_with<G, I>(
         &self,
         features: I,
@@ -371,8 +374,10 @@ impl<'a> Layer<'a> {
     /// triggers. There is no per-row index maintenance, but the writer commit
     /// still maintains the `gpkg_contents` bbox and `last_change`.
     ///
-    /// On any failure after the triggers are dropped, the index is restored to a
-    /// consistent, trigger-maintained state before the error is returned.
+    /// On any failure, dropping the writer rolls its transaction back, so the
+    /// triggers and the index are as they were before the call. Inside a
+    /// transaction the caller opened, nothing is rolled back, and the partial
+    /// work stays staged for the caller to discard.
     #[hotpath::measure(label = "write_all_bulk")]
     fn write_all_bulk<R, I>(
         &self,
@@ -420,7 +425,7 @@ impl<'a> Layer<'a> {
             // set only if this write accounts for every indexable row in the
             // table. An empty table before the write is the cheap, sufficient
             // proof; otherwise `fill_index` re-derives the set with its own
-            // `ST_*` scan.
+            // scan of the table.
             let table_was_empty = bulk::table_row_count(conn, table)? == 0;
             let indexed = rtree_entry_count(conn, &rtree)?;
 

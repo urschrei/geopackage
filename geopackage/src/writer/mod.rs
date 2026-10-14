@@ -137,6 +137,9 @@
 //! error at any point rolls the whole thing back to the state before the call,
 //! so the rows can never be committed against an index that was not brought up
 //! to date with them.
+//! The exception is a call inside a transaction you opened. A failed call then
+//! leaves its partial work, dropped triggers included, staged in your
+//! transaction for you to roll back (see [`crate::transaction`]).
 //!
 //! This was not always so. The rebuild used to run in its own transaction
 //! because it built the index in an `ATTACH`ed scratch database, and `ATTACH`
@@ -145,7 +148,19 @@
 //! the `ATTACH`, and with it the window. [`Layer::spatial_index_status`] and
 //! [`Layer::repair_spatial_index`] still exist and still recover a
 //! [`crate::SpatialIndexStatus::Stale`] index, since a file can arrive from
-//! anywhere, but this path no longer produces one.
+//! anywhere, but this path produces one only if you commit your own
+//! transaction after a failed call inside it.
+//!
+//! [`Layer::write_all`]: crate::Layer::write_all
+//! [`Layer::writer`]: crate::Layer::writer
+//! [`Layer::write_all_with`]: crate::Layer::write_all_with
+//! [`Layer::recompute_extent`]: crate::Layer::recompute_extent
+//! [`Layer::spatial_index_status`]: crate::Layer::spatial_index_status
+//! [`Layer::repair_spatial_index`]: crate::Layer::repair_spatial_index
+//! [`Value`]: crate::Value
+//! [`BulkIndexOptions`]: crate::BulkIndexOptions
+//! [`ZmFlag`]: geopackage_core::ZmFlag
+//! [`Error::ZmViolation`]: crate::Error::ZmViolation
 mod constraints;
 mod feature_writer;
 mod row;

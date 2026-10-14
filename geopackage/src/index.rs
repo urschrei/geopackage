@@ -20,7 +20,7 @@
 //! verbatim from spec Annex F.3: the `rtree_<table>_<column>` virtual table,
 //! the GeoPackage 1.4 trigger set, and the population statement. This module
 //! runs that SQL on the live connection and maintains the `gpkg_extensions`
-//! registration row (spec Annex F.3 requirements 75/76).
+//! registration row (spec Annex F.3, Requirements 75 and 76).
 //!
 //! A new index always gets the 1.4 trigger set (`update5`/`update6`/`update7`),
 //! which is UPSERT-safe. Older generations are never repaired automatically.
@@ -42,8 +42,9 @@
 //! using the registered `ST_*` functions and skipping empty or NULL geometries
 //! exactly as the triggers do. At or above the threshold, [`crate::bulk`]
 //! builds the index directly: it accumulates the envelopes, builds the tree in
-//! memory and writes the shadow tables, with a gate that falls back
-//! automatically to the triggered path.
+//! memory and writes the shadow tables. An opt-in check
+//! ([`crate::BulkVerification`]) falls back automatically to the triggered path
+//! if the result fails it.
 
 use geopackage_core::ident::quote;
 use geopackage_core::triggers::{self, TriggerGeneration};
@@ -73,12 +74,14 @@ pub enum SpatialIndexStatus {
     /// `UPSERT`. [`Layer::repair_spatial_index`] upgrades it to the 1.4 set.
     Legacy,
     /// A desynchronised index: the virtual table exists but its triggers are
-    /// missing (or triggers exist with no table). This crate's own writes
-    /// cannot produce it. A bulk [`Layer::write_all`] drops the triggers,
-    /// inserts the rows, rebuilds the index and reinstalls the triggers in one
-    /// transaction, so an interrupted call rolls back to the state before it.
-    /// The state can come from a file another tool wrote, or from SQL run
-    /// directly against the connection.
+    /// missing (or triggers exist with no table). A bulk [`Layer::write_all`]
+    /// drops the triggers, inserts the rows, rebuilds the index and reinstalls
+    /// the triggers in one transaction, so an interrupted call rolls back to
+    /// the state before it. The state can come from a file another tool wrote,
+    /// or from SQL run directly against the connection. It can also come from
+    /// committing a transaction you opened after a bulk `write_all` inside it
+    /// failed, because the failed call leaves its partial work staged there
+    /// for you to discard.
     ///
     /// The index is **not** silently trusted. [`Layer::has_spatial_index`]
     /// reports `false` for it, so [`Layer::features_in`] falls back to a correct
@@ -149,9 +152,9 @@ impl Layer<'_> {
     /// Classifies this layer's RTree spatial index (see
     /// [`SpatialIndexStatus`]).
     ///
-    /// A layer with no geometry column is [`SpatialIndexStatus::Absent`]. Use
-    /// this to detect an interrupted bulk build. If the result is
-    /// [`SpatialIndexStatus::Stale`], call [`Self::repair_spatial_index`].
+    /// A layer with no geometry column is [`SpatialIndexStatus::Absent`]. If
+    /// the result is [`SpatialIndexStatus::Stale`], call
+    /// [`Self::repair_spatial_index`].
     pub fn spatial_index_status(&self) -> Result<SpatialIndexStatus> {
         let Some(geom) = self.geometry_column() else {
             return Ok(SpatialIndexStatus::Absent);
@@ -187,7 +190,7 @@ impl Layer<'_> {
     /// A table below [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD)
     /// rows is populated through the per-row triggered path: a single
     /// `INSERT INTO rtree SELECT` driven by the registered `ST_*` functions.
-    /// Above it, the bulk build is used. Use
+    /// At or above it, the bulk build is used. Use
     /// [`Self::create_spatial_index_with`] to override the threshold.
     ///
     /// # Errors
@@ -303,8 +306,8 @@ impl Layer<'_> {
         Ok(())
     }
 
-    /// Repairs a legacy, inconsistent, or desynchronised RTree spatial index:
-    /// installs the GeoPackage 1.4 trigger set and rebuilds the index content.
+    /// Repairs a legacy or desynchronised RTree spatial index: installs the
+    /// GeoPackage 1.4 trigger set and rebuilds the index content.
     ///
     /// The pre-1.4 `update1` trigger corrupts an index under `UPSERT`. Version
     /// 1.4 renamed the fixed triggers, so the repaired state can be detected by
@@ -321,10 +324,9 @@ impl Layer<'_> {
     ///   table. This is a no-op.
     /// - [`SpatialIndexStatus::Legacy`]: a pre-1.4 or mixed trigger set. Drops
     ///   every RTree trigger, installs the 1.4 set and rebuilds the content.
-    /// - [`SpatialIndexStatus::Stale`]: a virtual table with missing triggers
-    ///   (the state an interrupted bulk build or crash mid-[`Self::write_all`]
-    ///   leaves), or orphaned triggers with no table. Runs the same rebuild,
-    ///   which makes the index consistent and 1.4-current again.
+    /// - [`SpatialIndexStatus::Stale`]: a virtual table with missing triggers,
+    ///   or orphaned triggers with no table. Runs the same rebuild, which makes
+    ///   the index consistent and 1.4-current again.
     /// - [`SpatialIndexStatus::Absent`]: there is nothing to repair, so this
     ///   returns [`Error::NoSpatialIndex`]. Use [`Self::create_spatial_index`].
     ///
@@ -524,10 +526,6 @@ impl Layer<'_> {
     }
 }
 
-/// Registers the `gpkg_rtree_index` extension for `table`/`column`, creating
-/// `gpkg_extensions` on first use. The `extension_name`, `definition`, and
-/// `scope` values are the spec-prescribed constants from
-/// [`geopackage_core::triggers`] (Annex F.3, requirements 75/76).
 /// Creates the RTree virtual table, installs the GeoPackage 1.4 trigger set,
 /// populates it from the table's existing rows, and registers the extension.
 ///
@@ -554,6 +552,10 @@ pub(crate) fn create_index_in_transaction(
     register_extension_row(conn, table, column)
 }
 
+/// Registers the `gpkg_rtree_index` extension for `table`/`column`, creating
+/// `gpkg_extensions` on first use. The `extension_name`, `definition`, and
+/// `scope` values are the spec-prescribed constants from
+/// [`geopackage_core::triggers`] (Annex F.3, Requirements 75 and 76).
 fn register_extension_row(conn: &Connection, table: &str, column: &str) -> Result<()> {
     crate::extensions::register(
         conn,
@@ -757,9 +759,9 @@ mod tests {
         );
     }
 
-    /// Dropping the triggers while leaving the virtual table produces the file
-    /// state an interrupted bulk build (or a crash mid-`write_all`) leaves. The
-    /// rows are committed, and the rtree table is present but no longer
+    /// Dropping the triggers while leaving the virtual table produces a `Stale`
+    /// index, a state a file written by another tool can arrive in. The rows
+    /// are committed, and the rtree table is present but no longer
     /// maintained. The status detector must flag it `Stale`, the read gate must
     /// reject it, and `repair_spatial_index` must rebuild it to `Current`.
     #[test]

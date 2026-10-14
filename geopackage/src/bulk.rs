@@ -26,34 +26,37 @@
 //!
 //! # The gate
 //!
-//! Every bulk build must pass a **gate** before it is trusted (see [`gate`]).
-//! The written index must contain exactly the accumulated `(fid, envelope)`
-//! set, checked by row count and a per-row containment check. It must also pass
-//! a structural check ([`StructuralCheck`]): `rtreecheck()` on the index by
-//! default, or optionally a whole-database `PRAGMA integrity_check`. If either
-//! check fails, [`fill_index`] falls back to the triggered population
-//! statement, so a failed gate never yields a corrupt or stale index, only a
-//! slower build.
+//! A bulk build can be checked by a **gate** before it is trusted (see
+//! [`gate`]). [`BulkVerification`] sets how much it checks, and the default,
+//! [`BulkVerification::None`], checks nothing. [`BulkVerification::Contents`]
+//! requires the written index to contain exactly the accumulated
+//! `(fid, envelope)` set, checked by row count and a per-row containment check.
+//! [`BulkVerification::Structure`] adds `rtreecheck()` on the index, and
+//! [`BulkVerification::Database`] adds a whole-database
+//! `PRAGMA integrity_check`. If a check fails, [`fill_index`] falls back to the
+//! triggered population statement, so a failed gate never yields a corrupt or
+//! stale index, only a slower build. With no check, nothing can fail and
+//! nothing falls back.
 //!
-//! **The gate is about 45% of the build.** Profiled over 1M points, it takes
-//! ~745 ms of a ~1593 ms build. Roughly half of that is the bijection scan,
-//! which reads every entry back out of the index, and half is `rtreecheck`,
-//! which walks the whole tree. GDAL's builder runs no equivalent. Without the
-//! gate this crate would be comfortably faster than GDAL, rather than level
-//! with it (see `roadmap/benchmarks/2026-07-24-gdal-like-for-like.md`).
+//! **The `Structure` check is about 45% of the build.** Profiled over 1M
+//! points, it takes ~745 ms of a ~1593 ms build. Roughly half of that is the
+//! bijection scan, which reads every entry back out of the index, and half is
+//! `rtreecheck`, which walks the whole tree. GDAL's builder runs no equivalent.
+//! With the check, this crate is level with GDAL. Without it, those figures put
+//! it comfortably ahead (see
+//! `roadmap/benchmarks/2026-07-24-gdal-like-for-like.md`).
 //!
-//! The cost is deliberate and stays for now. This module writes the tree by
-//! hand into an on-disk format that SQLite doesn't document as an interface, so
-//! the result is checked against SQLite's own checker and against the input
-//! before anything relies on it. Whether to remove the gate or turn it off by
-//! default is a question for 1.0, once the packer has enough history to justify
-//! that trust. It shouldn't change while the format handling is this new. Until
-//! then, roughly half of a bulk index build is spent on checking, and it is
-//! kept for confidence, not speed.
+//! Through 0.5 that check ran on every bulk build. This module writes the tree
+//! by hand into an on-disk format that SQLite doesn't document as an interface,
+//! so the result was checked against SQLite's own checker and against the input
+//! before anything relied on it. The packer now has enough history for the
+//! check to be opt-in, as [`BulkVerification`] explains. Turn it on if you are
+//! writing files that matter or bisecting a suspected index problem.
 //!
-//! The entry set itself comes either from an `ST_*` scan of the table or, when
-//! the caller can prove it accounts for every indexable row, from envelopes
-//! computed while encoding the geometries (see [`fill_index`]'s `precomputed`).
+//! The entry set itself comes either from a scan of the table
+//! ([`accumulate_envelopes`]) or, when the caller can prove it accounts for
+//! every indexable row, from envelopes computed while encoding the geometries
+//! (see [`fill_index`]'s `precomputed`).
 
 use geopackage_core::geometry;
 use geopackage_core::ident::quote;
@@ -70,8 +73,8 @@ use crate::transaction::WriteTransaction;
 /// [`crate::Layer::create_spatial_index`] and [`crate::Layer::write_all`] choose
 /// the bulk shadow-table build over the per-row triggered build.
 ///
-/// Below this, the fixed cost of building and writing the tree, plus the gate,
-/// outweighs the saving. Above it, the bulk build wins. Override it with
+/// Below this, the fixed cost of building and writing the tree outweighs the
+/// saving. Above it, the bulk build wins. Override it with
 /// [`BulkIndexOptions`].
 pub const DEFAULT_BULK_THRESHOLD: usize = 10_000;
 
@@ -200,7 +203,7 @@ impl BulkIndexOptions {
         Self::with_threshold(usize::MAX)
     }
 
-    /// Sets the structural check the gate runs after the copy.
+    /// Sets how much of the written index the gate checks.
     #[must_use]
     pub fn with_verification(mut self, verification: BulkVerification) -> Self {
         self.verification = verification;
@@ -430,12 +433,14 @@ fn envelope_of(blob: &[u8]) -> std::result::Result<Option<[f64; 4]>, geopackage_
 ///
 /// Each envelope comes from parsing the blob once in Rust (see
 /// [`envelope_of`]). The previous version asked SQLite for `ST_IsEmpty` plus
-/// the four `ST_Min/Max` functions per row. That was six user-function
+/// the four `ST_Min/Max` functions per row. That was five user-function
 /// dispatches, each re-fetching the blob and re-parsing the GPB header, and
 /// each `ST_*` call re-traversed the body of a blob without an envelope.
 /// Reading the blob once reduces that to a single parse per row, for the same
-/// set. This scan runs only on the standalone `create_spatial_index` path. The
-/// bulk `write_all` path passes `precomputed` envelopes and never reaches it.
+/// set. This scan runs on the standalone `create_spatial_index` path, and on
+/// the bulk `write_all` path when the table already held rows before the
+/// write. Otherwise that path passes `precomputed` envelopes and never reaches
+/// it.
 fn accumulate_envelopes(
     conn: &Connection,
     table: &str,
@@ -475,13 +480,16 @@ fn accumulate_envelopes(
     Ok(out)
 }
 
-/// Gates a freshly copied RTree against the accumulated `(fid, envelope)`
-/// set.
+/// Gates a freshly written RTree against the accumulated `(fid, envelope)`
+/// set, checking as much as `verification` asks for.
 ///
-/// Passes only when the index contains exactly one row per accumulated entry
-/// (checked by row count and a bijection on `id`), each stored bound
-/// conservatively contains the true envelope, and `PRAGMA integrity_check`
-/// reports `ok`. The RTree stores `f32` bounds, with minima rounded down and
+/// [`BulkVerification::None`] passes without reading anything. Every other
+/// level passes only when the index contains exactly one row per accumulated
+/// entry (checked by row count and a bijection on `id`) and each stored bound
+/// conservatively contains the true envelope.
+/// [`BulkVerification::Structure`] also requires `rtreecheck` to report `ok`,
+/// and [`BulkVerification::Database`] also requires `PRAGMA integrity_check`
+/// to report `ok`. The RTree stores `f32` bounds, with minima rounded down and
 /// maxima rounded up, so containment, not equality, is the correct relation.
 fn gate(
     conn: &Connection,
@@ -571,9 +579,10 @@ fn gate(
     Ok(true)
 }
 
-/// Builds (or rebuilds) the RTree `rtree` for `table`/`geom` via the bulk
-/// shadow-table copy, gated with automatic fallback to the triggered
-/// population.
+/// Builds (or rebuilds) the RTree `rtree` for `table`/`geom` by packing the
+/// tree in memory and writing its shadow tables directly. If
+/// `options.verification` asks for a check, a build that fails it falls back
+/// automatically to the triggered population.
 ///
 /// On entry the virtual table may or may not exist, and the RTree triggers
 /// must **not** be installed. For a rebuild, the caller drops them first. This
@@ -582,13 +591,12 @@ fn gate(
 /// set and any `gpkg_extensions` row, so the whole operation commits atomically.
 ///
 /// `precomputed` supplies the `(fid, envelope)` entry set directly instead of
-/// deriving it from an `ST_*` scan of the table. Pass `Some` only when the
-/// caller can prove it has an entry for every indexable row. The bulk
-/// `write_all` path passes the envelopes it computed while encoding, and only
-/// when the table was empty before the write. An incomplete set would build an
-/// index that is missing rows. The gate cannot detect this, because it checks
-/// the index against the same set. `None` scans the table, which is always
-/// sound.
+/// deriving it from a scan of the table. Pass `Some` only when the caller can
+/// prove it has an entry for every indexable row. The bulk `write_all` path
+/// passes the envelopes it computed while encoding, and only when the table
+/// was empty before the write. An incomplete set would build an index that is
+/// missing rows. The gate cannot detect this, because it checks the index
+/// against the same set. `None` scans the table, which is always sound.
 ///
 /// `fault` is [`no_fault`] outside tests.
 ///

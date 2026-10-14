@@ -11,7 +11,8 @@
 //! Schemas are declared with a builder rather than a derive macro, so you can
 //! choose a table's shape at run time instead of fixing it at compile time.
 //! Column defaults are raw SQL text and are trusted as the caller gives them.
-//! Every identifier is quoted with [`ident::quote`].
+//! Every identifier is quoted with
+//! [`ident::quote`](geopackage_core::ident::quote).
 
 use geopackage_core::ddl;
 use geopackage_core::extensions::{Extension, GEOM_TYPE_EXTENSION_DEFINITION};

@@ -28,8 +28,9 @@
 //!
 //! # What `rtreecheck` requires
 //!
-//! The gate runs `rtreecheck()` over the result, so the output must pass every
-//! check it makes:
+//! At [`BulkVerification::Structure`](crate::BulkVerification::Structure) and
+//! above, the gate runs `rtreecheck()` over the result, so the output must pass
+//! every check it makes:
 //!
 //! - `4 + ncell * 24 <= node_size`
 //! - `min <= max` on every dimension of every cell
@@ -39,7 +40,8 @@
 //! - the row counts of those two tables equal the number of leaf and internal
 //!   cells respectively
 //!
-//! It does **not** require any minimum node fill, so nodes are packed full.
+//! It does **not** require any minimum node fill, so by default nodes are
+//! packed full ([`DEFAULT_FILL_FACTOR`]).
 
 use crate::Result;
 use crate::bulk::DEFAULT_FILL_FACTOR;
