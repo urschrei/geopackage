@@ -89,3 +89,20 @@ fn a_missing_file_fails_rather_than_printing_nothing() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn a_closed_stdout_ends_the_command_quietly() {
+    // Close the read end before the command starts, so its first write fails,
+    // as it does in `gpkg info f | head` once `head` exits.
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let output = Command::new(env!("CARGO_BIN_EXE_gpkg"))
+        .arg("info")
+        .arg(fixture("gdal_multilayer_1_4.gpkg"))
+        .stdout(writer)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.is_empty(), "{stderr}");
+    assert_eq!(output.status.code(), Some(141));
+}

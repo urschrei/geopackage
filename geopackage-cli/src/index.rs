@@ -9,6 +9,7 @@
 //! rather than acting blindly, so the tool says what it is about to do and
 //! skips a layer that does not need it.
 
+use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -17,13 +18,13 @@ use geopackage::{GeoPackage, Layer, SpatialIndexStatus};
 use crate::error::Result;
 
 /// `gpkg index`: build an index on a layer that has none.
-pub fn build(path: &Path, layer_name: &str) -> Result<ExitCode> {
+pub fn build(path: &Path, layer_name: &str, out: &mut impl Write) -> Result<ExitCode> {
     let gpkg = GeoPackage::open_lenient(path)?;
     let layer = gpkg.layer(layer_name)?;
 
     match layer.spatial_index_status()? {
         SpatialIndexStatus::Current => {
-            println!("{layer_name}: already indexed, nothing to do");
+            writeln!(out, "{layer_name}: already indexed, nothing to do")?;
             Ok(ExitCode::SUCCESS)
         }
         // Present but wrong. Building over it is not the right verb, and
@@ -35,7 +36,11 @@ pub fn build(path: &Path, layer_name: &str) -> Result<ExitCode> {
         }
         SpatialIndexStatus::Absent => {
             layer.create_spatial_index()?;
-            println!("{layer_name}: index built over {} rows", layer.count()?);
+            writeln!(
+                out,
+                "{layer_name}: index built over {} rows",
+                layer.count()?
+            )?;
             Ok(ExitCode::SUCCESS)
         }
         // `SpatialIndexStatus` is `#[non_exhaustive]`: a status added later
@@ -49,7 +54,7 @@ pub fn build(path: &Path, layer_name: &str) -> Result<ExitCode> {
 
 /// `gpkg repair`: repair the index of every layer that needs it, or of one
 /// named layer.
-pub fn repair(path: &Path, layer_name: Option<&str>) -> Result<ExitCode> {
+pub fn repair(path: &Path, layer_name: Option<&str>, out: &mut impl Write) -> Result<ExitCode> {
     let gpkg = GeoPackage::open_lenient(path)?;
 
     let layers = match layer_name {
@@ -59,19 +64,19 @@ pub fn repair(path: &Path, layer_name: Option<&str>) -> Result<ExitCode> {
 
     let mut repaired = 0usize;
     for layer in &layers {
-        if repair_one(layer)? {
+        if repair_one(layer, out)? {
             repaired += 1;
         }
     }
 
     if repaired == 0 {
-        println!("nothing to repair");
+        writeln!(out, "nothing to repair")?;
     }
     Ok(ExitCode::SUCCESS)
 }
 
 /// Repair one layer, reporting whether anything was done.
-fn repair_one(layer: &Layer<'_>) -> Result<bool> {
+fn repair_one(layer: &Layer<'_>, out: &mut impl Write) -> Result<bool> {
     // An attribute layer has no geometry and so no index to repair.
     if layer.geometry_column().is_none() {
         return Ok(false);
@@ -82,7 +87,10 @@ fn repair_one(layer: &Layer<'_>) -> Result<bool> {
         SpatialIndexStatus::Legacy | SpatialIndexStatus::Stale => {
             let status = layer.spatial_index_status()?;
             layer.repair_spatial_index()?;
-            println!("{name}: {status} index repaired to the 1.4 trigger set");
+            writeln!(
+                out,
+                "{name}: {status} index repaired to the 1.4 trigger set"
+            )?;
             Ok(true)
         }
         // Left alone deliberately. An absent index is a choice, not a defect

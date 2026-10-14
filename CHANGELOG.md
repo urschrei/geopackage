@@ -19,6 +19,12 @@ While the version is below 1.0 the API may change in any release.
 - Dev-dependency `hegeltest` is now 0.49, and the optional `hotpath`
   profiler is now 0.25.
 
+### Fixed
+
+- `gpkg` no longer panics when its output pipe closes, as in
+  `gpkg info f | head`. It stops without a message and exits with status
+  141, the status a shell reports for a process that SIGPIPE stops.
+
 ## [0.10.2] - 2026-10-14
 
 ### Changed

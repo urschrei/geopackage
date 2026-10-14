@@ -20,6 +20,7 @@
 //! the body by reading the header only, so a curve passes through a copy
 //! without ever being parsed.
 
+use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -36,7 +37,7 @@ use crate::error::Result;
 /// roll back the whole layer.
 const BATCH: usize = 10_000;
 
-pub fn run(src_path: &Path, dst_path: &Path) -> Result<ExitCode> {
+pub fn run(src_path: &Path, dst_path: &Path, out: &mut impl Write) -> Result<ExitCode> {
     if dst_path.exists() {
         eprintln!("gpkg: {} already exists", dst_path.display());
         return Ok(ExitCode::FAILURE);
@@ -46,20 +47,25 @@ pub fn run(src_path: &Path, dst_path: &Path) -> Result<ExitCode> {
     let dst = GeoPackage::create(dst_path)?;
 
     for warning in src.open_warnings() {
-        println!("source warning: {warning}");
+        writeln!(out, "source warning: {warning}")?;
     }
 
     let layers = src.layers()?;
     for layer in &layers {
-        copy_layer(&src, &dst, layer)?;
+        copy_layer(&src, &dst, layer, out)?;
     }
 
-    report_what_was_left(&src, &dst, &layers)?;
+    report_what_was_left(&src, &dst, &layers, out)?;
     dst.close()?;
     Ok(ExitCode::SUCCESS)
 }
 
-fn copy_layer(src: &GeoPackage, dst: &GeoPackage, layer: &Layer<'_>) -> Result<()> {
+fn copy_layer(
+    src: &GeoPackage,
+    dst: &GeoPackage,
+    layer: &Layer<'_>,
+    out: &mut impl Write,
+) -> Result<()> {
     let name = layer.table_name();
 
     // Every column except the geometry and the primary key, in the source's
@@ -98,11 +104,12 @@ fn copy_layer(src: &GeoPackage, dst: &GeoPackage, layer: &Layer<'_>) -> Result<(
         builder = builder.column(spec);
     }
     if !untyped.is_empty() {
-        println!(
+        writeln!(
+            out,
             "{name}: {} column(s) had a type outside the spec vocabulary, carried as BLOB: {}",
             untyped.len(),
             untyped.join(", ")
-        );
+        )?;
     }
 
     let indexed = match layer.geometry_column() {
@@ -174,13 +181,18 @@ fn copy_layer(src: &GeoPackage, dst: &GeoPackage, layer: &Layer<'_>) -> Result<(
     writer.commit()?;
 
     let index_note = if indexed { ", indexed" } else { "" };
-    println!("{name}: {copied} rows{index_note}");
+    writeln!(out, "{name}: {copied} rows{index_note}")?;
     Ok(())
 }
 
 /// Names anything in the source that this command did not copy, so that a
 /// partial copy is never mistaken for the whole file.
-fn report_what_was_left(src: &GeoPackage, dst: &GeoPackage, copied: &[Layer<'_>]) -> Result<()> {
+fn report_what_was_left(
+    src: &GeoPackage,
+    dst: &GeoPackage,
+    copied: &[Layer<'_>],
+    out: &mut impl Write,
+) -> Result<()> {
     let mut left = Vec::new();
 
     let contents = src.contents()?;
@@ -224,11 +236,12 @@ fn report_what_was_left(src: &GeoPackage, dst: &GeoPackage, copied: &[Layer<'_>]
     if left.is_empty() {
         return Ok(());
     }
-    println!(
+    writeln!(
+        out,
         "\nnot copied ({} layers were): {}",
         copied.len(),
         left.join("; ")
-    );
-    println!("`gpkg copy` copies feature and attribute layers only.");
+    )?;
+    writeln!(out, "`gpkg copy` copies feature and attribute layers only.")?;
     Ok(())
 }
