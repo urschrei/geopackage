@@ -8,7 +8,7 @@ use crate::{BoundingBox, Error, Layer, Result};
 use super::aggregate::AggregateState;
 use super::aggregate::BatchFiller;
 use super::options::{ArrowReadOptions, DEFAULT_BATCH_SIZE, DEFAULT_MAX_BATCH_BYTES};
-use super::parallel::{ParallelBatches, database_path, dense_key_span};
+use super::parallel::{ParallelBatches, WorkerPlan, database_path, key_span};
 use super::sequential::{SequentialBatches, SpatialFilter};
 use super::{ArrowBatches, BatchSource};
 
@@ -75,12 +75,9 @@ impl Layer<'_> {
     /// - **The database is a file.** Workers read through their own
     ///   connections, and a `:memory:` database is private to the connection
     ///   that created it.
-    /// - **The primary key is dense**, with no gaps between its smallest and
-    ///   largest value. Workers are given key ranges before any row is read, so
-    ///   a range has to imply a known row count. GDAL's driver has the same
-    ///   requirement in a stricter form: the key must start at 1.
-    /// - **There are at least two batches of rows.** Below that, opening
-    ///   connections and starting threads costs more than it saves.
+    /// - **The primary key spans at least two batches**: its largest and
+    ///   smallest values differ by at least `2 * batch_size - 1`. Below that,
+    ///   opening connections and starting threads costs more than it saves.
     /// - **The layer reads every column.** A layer from
     ///   [`Self::with_columns`] or [`Self::without_geometry`] reads on one
     ///   thread, because the workers rebuild the layer from its table name and
@@ -90,7 +87,9 @@ impl Layer<'_> {
     /// therefore read one table safely without agreeing on a snapshot, because
     /// there is no writer to race.
     ///
-    /// Batches arrive in primary-key order regardless of thread count.
+    /// Batches arrive in primary-key order regardless of thread count. On
+    /// threads, each batch holds the rows of `batch_size` consecutive key
+    /// values, so a batch has fewer rows where the key has gaps.
     ///
     /// Dropping the reader before it is drained stops the workers. The drop
     /// waits for each worker to finish its current batch, so it can block for
@@ -288,12 +287,12 @@ impl Layer<'_> {
         let table = quote(self.table_name())?;
         // The caller's `WHERE` clause keeps [`Layer::select`]'s contract: its
         // placeholders are `?1` to `?N` and its params bind in slice order. The
-        // key, limit and rtree bounds are numbered explicitly after `N`, so
+        // key, limit and upper key bound are numbered explicitly after `N`, so
         // with no clause the text degenerates to the unfiltered one (`?1` key,
-        // `?2` limit, `?3` to `?6` bounds) and every path binds the same way:
-        // user params first, then key, limit and bounds.
+        // `?2` limit, `?3` upper bound) and every path binds the same way:
+        // user params first, then key, limit and upper bound.
         let base = sql_filter.map_or(0, |(_, params)| params.len());
-        let (key_slot, limit_slot) = (base + 1, base + 2);
+        let (key_slot, limit_slot, upper_slot) = (base + 1, base + 2, base + 3);
         let user_params: Vec<rusqlite::types::Value> = sql_filter
             .map(|(_, params)| params.iter().map(crate::value::value_ref_to_sql).collect())
             .unwrap_or_default();
@@ -310,7 +309,7 @@ impl Layer<'_> {
         // candidate set also gives the read one consistent answer: rows
         // inserted after this point are not returned, exactly as a snapshot
         // would.
-        let (spatial_sql, segments) = match filter {
+        let segments = match filter {
             Some(bbox) if self.has_spatial_index()? => {
                 let geom = self
                     .geometry_column()
@@ -337,16 +336,15 @@ impl Layer<'_> {
                     )?
                     .collect::<rusqlite::Result<_>>()?;
                 ids.sort_unstable();
-                (
-                    format!(" AND {key} <= ?{}", base + 3),
-                    Some(segment_runs(&ids)),
-                )
+                Some(segment_runs(&ids))
             }
             // No index, or no filter: a full scan. When a filter is set the
             // exact re-test still runs over every row, which is what
             // `features_in` falls back to as well.
-            _ => (String::new(), None),
+            _ => None,
         };
+        // The upper key bound is the current segment's last key on a segmented
+        // read, a parallel worker's window end, and otherwise `i64::MAX`.
         let geometry_index = self.geometry_column().and_then(|geom| {
             schema
                 .fields()
@@ -369,7 +367,8 @@ impl Layer<'_> {
             _ => None,
         };
         let rows_sql = format!(
-            "SELECT {row_columns} FROM {table} WHERE {user_and}{key} >= ?{key_slot}{spatial_sql} \
+            "SELECT {row_columns} FROM {table} \
+             WHERE {user_and}{key} >= ?{key_slot} AND {key} <= ?{upper_slot} \
              ORDER BY {key} LIMIT ?{limit_slot}"
         );
         let sql = rows_sql.clone();
@@ -453,7 +452,7 @@ impl Layer<'_> {
                 datetime,
                 batch_size: options.batch_size.max(1),
                 max_batch_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
-                last_batch_rows: 0,
+                upper_key: i64::MAX,
                 // A segmented read starts at its first segment; an empty
                 // candidate set has nothing to read at all, and issues no
                 // query to find that out.
@@ -481,24 +480,27 @@ impl Layer<'_> {
         let Some(key) = self.primary_key_column() else {
             return Ok(None);
         };
-        let Some(span) = dense_key_span(self.gpkg().connection(), self.table_name(), key)? else {
+        let Some((first, last)) = key_span(self.gpkg().connection(), self.table_name(), key)?
+        else {
             return Ok(None);
         };
         let batch_size = options.batch_size.max(1);
-        // Below two batches there is nothing to overlap, and opening connections
-        // and starting threads would cost more than it saves.
-        let rows = span.1.saturating_sub(span.0).saturating_add(1);
-        if rows < i64::try_from(batch_size.saturating_mul(2)).unwrap_or(i64::MAX) {
+        // Below two windows there is nothing to overlap, and opening
+        // connections and starting threads would cost more than it saves.
+        let keys = last.abs_diff(first).saturating_add(1);
+        if keys < (batch_size as u64).saturating_mul(2) {
             return Ok(None);
         }
-        Ok(Some(ParallelBatches::spawn(
+        Ok(Some(ParallelBatches::spawn(&WorkerPlan {
             path,
-            self.table_name().to_owned(),
-            self.conversion_options(),
-            span,
+            table: self.table_name().to_owned(),
+            key: key.to_owned(),
+            conversion: self.conversion_options(),
+            first,
+            last,
             batch_size,
-            options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
-            options.resolved_threads(),
-        )))
+            max_batch_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
+            threads: options.resolved_threads(),
+        })))
     }
 }

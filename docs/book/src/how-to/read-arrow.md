@@ -103,9 +103,10 @@ two chain onto any options value.
 - `batch_size` is rows per batch, 65,536 by default.
 - `threads` defaults to `min(4, available parallelism)`. Set it to `1` to keep
   the read on your own thread. The read uses threads only when the database is
-  a file, the primary key is dense, there are at least two batches of rows,
-  and the layer reads every column (no `with_columns` or `without_geometry`).
-  Otherwise it runs single-threaded rather than failing.
+  a file, the primary key spans at least two batches of values, and the layer
+  reads every column (no `with_columns` or `without_geometry`). Otherwise it
+  runs single-threaded rather than failing. On threads, a batch holds fewer
+  rows where the key has gaps.
 - `max_batch_bytes` limits the geometry bytes in one batch, and defaults to
   `min(INT32_MAX, RAM / 4)`. The geometry column's Arrow offsets are 32-bit, so
   2 GB is a hard ceiling. A batch that would cross the limit is emitted with

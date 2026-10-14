@@ -30,12 +30,12 @@ pub(crate) struct SequentialBatches<'a> {
     pub(crate) datetime: DateTimeParsing,
     /// Ceiling on the geometry bytes one batch may contain.
     pub(crate) max_batch_bytes: usize,
-    /// Rows in the batch just produced. The parallel path reads it to tell a
-    /// batch cut short by the byte ceiling from one that filled its window.
-    pub(crate) last_batch_rows: usize,
     pub(crate) batch_size: usize,
     /// Rows with a key at or above this are still to be read.
     pub(crate) next_key: i64,
+    /// Rows with a key above this are not read. `i64::MAX` except in a
+    /// parallel worker's window ([`Self::read_window`]).
+    pub(crate) upper_key: i64,
     pub(crate) exhausted: bool,
     /// The candidate key ranges from the one-time rtree scan, walked in
     /// order. `None` for an unfiltered read or the indexless full scan.
@@ -74,23 +74,15 @@ impl Drop for SequentialBatches<'_> {
 }
 
 impl SequentialBatches<'_> {
-    /// Reads up to `limit` rows starting at `key`, ignoring where the reader
-    /// had got to.
+    /// Restarts the reader on the rows with keys from `first` to `last`
+    /// inclusive, ignoring where it had got to. Iterate it to read them.
     ///
-    /// The parallel path uses this. Its workers each read whole batches at
-    /// offsets assigned to them, instead of walking the layer in sequence.
-    /// `limit` is what remains of the worker's window, because the byte
-    /// ceiling can cut a batch short and the rest of the window still has to
-    /// be read.
-    #[hotpath::measure(label = "arrow::read_batch_at")]
-    pub(crate) fn read_batch_at(&mut self, key: i64, limit: usize) -> Result<Option<RecordBatch>> {
-        self.next_key = key;
+    /// The parallel path uses this. Each worker reads the key windows assigned
+    /// to it, instead of walking the layer in sequence.
+    pub(crate) fn read_window(&mut self, first: i64, last: i64) {
+        self.next_key = first;
+        self.upper_key = last;
         self.exhausted = false;
-        let full = self.batch_size;
-        self.batch_size = limit.max(1);
-        let batch = self.next_batch();
-        self.batch_size = full;
-        batch
     }
 
     /// Reads one batch, or `None` once the layer is exhausted.
@@ -108,7 +100,8 @@ impl SequentialBatches<'_> {
             &self.aggregate_sql,
             rusqlite::params![
                 self.next_key,
-                i64::try_from(self.batch_size).unwrap_or(i64::MAX)
+                i64::try_from(self.batch_size).unwrap_or(i64::MAX),
+                self.upper_key
             ],
             |row| row.get::<_, i64>(0),
         );
@@ -140,7 +133,6 @@ impl SequentialBatches<'_> {
         // The aggregate counts every row it was given, including any it left
         // for the next batch, so the appended count is what the builders hold.
         let rows_appended = filled.rows;
-        self.last_batch_rows = rows_appended;
         self.advance(filled.last_key, rows_appended, filled.truncated);
 
         let arrays: Vec<ArrayRef> = filled
@@ -172,6 +164,11 @@ impl SequentialBatches<'_> {
             return;
         }
         match last_key.and_then(|key| key.checked_add(1)) {
+            // A full batch that ends the window leaves nothing to read, so the
+            // empty query that would find this is skipped.
+            Some(next) if self.segments.is_none() && next > self.upper_key => {
+                self.exhausted = true;
+            }
             Some(next) => self.next_key = next,
             // The key space is exhausted at i64::MAX; there can be no next
             // row in this segment, nor a later segment to hold one.
@@ -248,21 +245,22 @@ impl SequentialBatches<'_> {
             let mut stmt = self.conn.prepare_cached(&self.sql)?;
             // Binding is positional, so the order here is the placeholder
             // numbering: the caller's params take `?1` to `?N`, then the key,
-            // the limit, and the current segment's upper bound where the read
-            // is segmented, as the query text numbered them.
+            // the limit, and the upper key bound, as the query text numbered
+            // them.
             let mut params: Vec<rusqlite::types::Value> = self.user_params.clone();
             params.push(rusqlite::types::Value::Integer(self.next_key));
             params.push(rusqlite::types::Value::Integer(
                 i64::try_from(self.batch_size).unwrap_or(i64::MAX),
             ));
-            if let Some(segments) = &self.segments {
+            let upper = match &self.segments {
                 // `next_batch_page` is only reached while a segment remains,
                 // since exhausting the last one sets `exhausted`; an i64::MAX
                 // bound on a missing segment would read past the candidates,
                 // and the exact re-test would still drop every extra row.
-                let (_, hi) = segments.get(self.segment).copied().unwrap_or((0, i64::MAX));
-                params.push(rusqlite::types::Value::Integer(hi));
-            }
+                Some(segments) => segments.get(self.segment).map_or(i64::MAX, |(_, hi)| *hi),
+                None => self.upper_key,
+            };
+            params.push(rusqlite::types::Value::Integer(upper));
             let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
             // Where the fields start: at 0 when the key is one of them, at 1
             // when it had to be selected separately.
@@ -338,7 +336,6 @@ impl SequentialBatches<'_> {
                 Page::AllFiltered
             });
         }
-        self.last_batch_rows = rows_read;
         self.advance(last_key, candidates, truncated);
 
         let arrays: Vec<ArrayRef> = builders.into_iter().map(ColumnBuilder::finish).collect();
