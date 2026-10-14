@@ -58,8 +58,8 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # encoding is a Binary field carrying extension metadata, so `geoarrow-array`
 # would add a dependency without adding capability. Revisit if native GeoArrow
 # coordinate encodings land.
-arrow-array = "59"
-arrow-schema = "59"
+arrow-array = "60"
+arrow-schema = "60"
 # `geopackage-cli` only. `derive` for the command tree; `wrap_help` is left off
 # because it pulls a terminal-width dependency to reflow help text, which a
 # handful of subcommands do not need.
