@@ -2,11 +2,11 @@
 //!
 //! # What a C caller sees
 //!
-//! A C caller sees three opaque pointer types, each with one destructor. One
-//! rule connects them: you cannot close a container while anything taken from
-//! it is still alive. The attempt returns `GPKG_STATUS_HANDLE_IN_USE`, changes
-//! nothing, and leaves the container open, so you can free the children and try
-//! again.
+//! A C caller sees six opaque pointer types, which the crate documentation
+//! lists with the functions that create and free them. One rule connects them:
+//! you cannot close a container while any handle that borrows it is still
+//! alive. The attempt returns `GPKG_STATUS_HANDLE_IN_USE`, changes nothing,
+//! and leaves the container open, so you can free the children and try again.
 //!
 //! ```c
 //! gpkg_error_t error = {GPKG_STATUS_OK, NULL};
@@ -93,7 +93,9 @@ pub struct Container {
     /// Boxed so its address is stable. Never replaced, never moved out of, and
     /// never lent mutably, which is invariant 1 above.
     gpkg: Box<GeoPackage>,
-    /// Live child handles. Non-zero blocks [`Self::close`].
+    /// Live child handles. While it is non-zero, [`crate::gpkg_close`] refuses:
+    /// it checks [`Self::outstanding_children`] before [`Self::close`]
+    /// consumes anything.
     ///
     /// A `Cell`, not an `AtomicUsize`: the container and its children share
     /// one connection, and the ABI requires them to be used from one thread at
@@ -168,12 +170,12 @@ impl Container {
     /// which claims more than the borrow can support on its own. What supports
     /// it is the module's invariants. The layer is only reachable through a
     /// [`LayerHandle`], and dropping that handle is what decrements the counter
-    /// that keeps `self` alive.
+    /// that stops `self` being closed.
     fn adopt(&self, layer: Layer<'_>) -> LayerHandle {
         // SAFETY: `Layer<'a>` borrows the `GeoPackage` inside `self.gpkg`,
         // which is boxed and never moved or replaced (invariant 1), and this
         // container cannot be closed while the returned handle is alive
-        // (invariant 2, enforced by `close` checking `children`). So the
+        // (invariant 2, enforced by `gpkg_close` checking `children`). So the
         // erased-to-`'static` borrow never outlives what it points at. The
         // transmute changes only the lifetime parameter; `Layer` has no other
         // generic parameter and the same layout either way.
@@ -227,8 +229,9 @@ impl Container {
 
     /// Takes one count against this container, released when the token drops.
     ///
-    /// Used by anything that erases a borrow of this container: layer handles,
-    /// and the Arrow streams in [`crate::stream`].
+    /// Used by anything that borrows this container: layer handles, tiles
+    /// handles, writers, tile cursors, and the Arrow streams in
+    /// [`crate::stream`].
     pub fn token(&self) -> ChildToken {
         self.children.set(self.children.get() + 1);
         ChildToken {
@@ -265,10 +268,11 @@ impl Container {
 
 /// One count against a container's child tally, released on drop.
 ///
-/// A layer handle owns one. So does an Arrow stream, which borrows the same
-/// container and needs the same protection: while a token is alive, the
-/// container cannot close, so an erased `'static` borrow cannot outlive
-/// what it points at.
+/// Every child handle owns one: a layer handle, a tiles handle, a writer and
+/// a tile cursor. So does an Arrow stream, which borrows the same container
+/// and needs the same protection: while a token is alive, the container
+/// cannot close, so an erased `'static` borrow cannot outlive what it points
+/// at.
 pub struct ChildToken {
     /// The container counted against. Raw rather than a reference, because a
     /// reference would reintroduce the borrow this exists to erase.
@@ -291,7 +295,7 @@ impl Drop for ChildToken {
 pub struct LayerHandle {
     /// The erased borrow. See [`Container::adopt`] for why it is sound.
     layer: Layer<'static>,
-    /// What keeps the container alive while this handle exists. Dropped with
+    /// What stops the container being closed while this handle exists. Dropped with
     /// the handle, which is what later permits a close.
     _token: ChildToken,
 }
@@ -346,7 +350,7 @@ pub struct WriterHandle {
     /// parameter rather than a borrow of the layer handle. See
     /// [`LayerHandle::writer`].
     writer: FeatureWriter<'static>,
-    /// What keeps the container alive while this handle exists.
+    /// What stops the container being closed while this handle exists.
     _token: ChildToken,
 }
 
@@ -374,7 +378,7 @@ impl WriterHandle {
 pub struct TilesHandle {
     /// The erased borrow. See [`Container::tiles`] for why it is sound.
     pyramid: TilePyramid<'static>,
-    /// What keeps the container alive while this handle exists. Dropped with
+    /// What stops the container being closed while this handle exists. Dropped with
     /// the handle, which is what later permits a close.
     _token: ChildToken,
 }
@@ -460,7 +464,7 @@ pub struct TileCursorHandle {
     /// The prepared statement the stream walks. Boxed so its address is
     /// stable while the stream borrows it. Never touched again directly.
     _cursor: Box<TileCursor<'static>>,
-    /// What keeps the container alive while this handle exists.
+    /// What stops the container being closed while this handle exists.
     _token: ChildToken,
 }
 

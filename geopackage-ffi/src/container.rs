@@ -221,9 +221,9 @@ pub unsafe extern "C" fn gpkg_create(path: *const c_char, error: *mut gpkg_error
 /// Closes a GeoPackage and releases its handle.
 ///
 /// Fails with `GPKG_STATUS_HANDLE_IN_USE` while any child taken from it is
-/// still alive: a layer handle, a tile pyramid handle, a writer or an Arrow
-/// stream. In that case **the handle remains valid and open** and nothing has
-/// been released. Free those children and call again.
+/// still alive: a layer handle, a tile pyramid handle, a tile cursor, a writer
+/// or an Arrow stream. In that case **the handle remains valid and open** and
+/// nothing has been released. Free those children and call again.
 ///
 /// On any other outcome the handle is destroyed and you must not use it again.
 /// This includes a reported failure, because the underlying file is released
@@ -265,9 +265,9 @@ pub unsafe extern "C" fn gpkg_close(gpkg: *mut gpkg_t, error: *mut gpkg_error_t)
         // so the message names every destructor rather than guessing.
         let message = format!(
             "cannot close: {outstanding} handle(s) taken from this GeoPackage are still \
-             alive; free them first with gpkg_layer_free, gpkg_tiles_free or \
-             gpkg_writer_free, and release any Arrow stream through its own release \
-             callback"
+             alive; free them first with gpkg_layer_free, gpkg_tiles_free, \
+             gpkg_tile_cursor_free or gpkg_writer_free, and release any Arrow stream \
+             through its own release callback"
         );
         // SAFETY: forwarded to the caller's guarantee on `error`.
         unsafe { set_error(error, Status::HandleInUse, &message) };

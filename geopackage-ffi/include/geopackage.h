@@ -277,8 +277,8 @@ typedef struct {
 
 /**
  * An opaque handle to a layer of an open GeoPackage. Create one with
- * `gpkg_layer_open` or `gpkg_attributes_open`, and destroy it with
- * `gpkg_layer_free`.
+ * `gpkg_layer_open`, `gpkg_attributes_open` or their `_with_columns`
+ * variants, and destroy it with `gpkg_layer_free`.
  */
 typedef gpkg_layer_t gpkg_layer_t;
 
@@ -507,9 +507,9 @@ gpkg_t *gpkg_create(const char *path, gpkg_error_t *error);
  * Closes a GeoPackage and releases its handle.
  *
  * Fails with `GPKG_STATUS_HANDLE_IN_USE` while any child taken from it is
- * still alive: a layer handle, a tile pyramid handle, a writer or an Arrow
- * stream. In that case **the handle remains valid and open** and nothing has
- * been released. Free those children and call again.
+ * still alive: a layer handle, a tile pyramid handle, a tile cursor, a writer
+ * or an Arrow stream. In that case **the handle remains valid and open** and
+ * nothing has been released. Free those children and call again.
  *
  * On any other outcome the handle is destroyed and you must not use it again.
  * This includes a reported failure, because the underlying file is released
@@ -767,7 +767,7 @@ gpkg_status gpkg_srs(const gpkg_t *gpkg,
 void gpkg_error_clear(gpkg_error_t *error);
 
 /**
- * Returns the number of `gpkg_extensions` rows in the file.
+ * Writes the number of `gpkg_extensions` rows in the file through `out`.
  *
  * A file with no `gpkg_extensions` table registers no extensions, and the
  * count is zero. `gpkg_extension_at` reads the same list, ordered by
@@ -792,8 +792,9 @@ gpkg_status gpkg_extensions_count(const gpkg_t *gpkg, size_t *out, gpkg_error_t 
  * file or the whole table, matching what NULL means in those catalogue
  * columns.
  * `out_scope` is the row's declared scope, `read-write` or `write-only`.
- * `out_support` is this library's support level for the extension, using
- * the levels listed in the module documentation.
+ * `out_support` is this library's support level for the extension: one of
+ * `implemented`, `known, not read or written`, `removed from the standard in
+ * 2016`, or `unrecognised`.
  *
  * An index at or beyond the count returns `GPKG_STATUS_NOT_FOUND`, not a read
  * error. On any failure, nothing is written.
@@ -923,10 +924,11 @@ gpkg_layer_t *gpkg_attributes_open_with_columns(const gpkg_t *gpkg,
  *
  * # Safety
  *
- * `layer` must be NULL, or a handle from `gpkg_layer_open` or
- * `gpkg_attributes_open` that has not already been freed. The container it
- * came from must still be alive, which is guaranteed by `gpkg_close` failing
- * while this handle exists.
+ * `layer` must be NULL, or a handle from `gpkg_layer_open`,
+ * `gpkg_attributes_open`, `gpkg_layer_open_with_columns` or
+ * `gpkg_attributes_open_with_columns` that has not already been freed. The
+ * container it came from must still be alive, which is guaranteed by
+ * `gpkg_close` failing while this handle exists.
  */
 void gpkg_layer_free(gpkg_layer_t *layer);
 
@@ -955,7 +957,7 @@ char *gpkg_layer_name(const gpkg_layer_t *layer, gpkg_error_t *error);
 gpkg_status gpkg_layer_count(const gpkg_layer_t *layer, uint64_t *out, gpkg_error_t *error);
 
 /**
- * Returns the number of feature layers the file declares.
+ * Writes the number of feature layers the file declares through `out`.
  *
  * Only feature layers are counted. A table that `gpkg_contents` declares as
  * `attributes` or `tiles` is not counted, and neither is a `features` row
@@ -996,8 +998,8 @@ char *gpkg_layer_name_at(const gpkg_t *gpkg, size_t index, gpkg_error_t *error);
 char *gpkg_layer_kind(const gpkg_layer_t *layer, gpkg_error_t *error);
 
 /**
- * Returns the number of columns in the layer's table, including the geometry
- * and primary key columns.
+ * Writes the number of columns in the layer's table through `out`, including
+ * the geometry and primary key columns.
  *
  * # Safety
  *
@@ -1126,7 +1128,8 @@ gpkg_status gpkg_layer_extent(const gpkg_layer_t *layer,
 char *gpkg_layer_spatial_index_status(const gpkg_layer_t *layer, gpkg_error_t *error);
 
 /**
- * Returns whether a bounding-box query on this layer uses the spatial index.
+ * Writes through `out` whether a bounding-box query on this layer uses the
+ * spatial index.
  *
  * Reports false for a `stale` or absent index. A desynchronised index is not
  * trusted, so the query falls back to a full scan, which is still correct.
@@ -1579,12 +1582,12 @@ gpkg_status gpkg_tiles_zoom_level_count(const gpkg_tiles_t *tiles,
  * Returns one zoom level's matrix, by position in the declared ladder.
  *
  * Levels are addressed by position rather than by zoom number, so you can walk
- * them without guessing which exist. `index` runs from zero to
- * `gpkg_tiles_zoom_level_count`, in ascending zoom order. `zoom_level`
- * receives the level's actual zoom number, which `gpkg_tiles_count_at`,
- * `gpkg_tiles_get` and `gpkg_tiles_put` use to address tiles. `matrix_width`
- * and `matrix_height` give the grid in tiles, and `tile_width` and
- * `tile_height` give one tile in pixels.
+ * them without guessing which exist. `index` runs from zero to one less than
+ * the count `gpkg_tiles_zoom_level_count` reports, in ascending zoom order.
+ * `zoom_level` receives the level's actual zoom number, which
+ * `gpkg_tiles_count_at`, `gpkg_tiles_get` and `gpkg_tiles_put` use to address
+ * tiles. `matrix_width` and `matrix_height` give the grid in tiles, and
+ * `tile_width` and `tile_height` give one tile in pixels.
  *
  * Any out-parameter may be NULL, in which case it is not written. An index
  * beyond the last level returns `GPKG_STATUS_NOT_FOUND`.
@@ -1760,16 +1763,16 @@ void gpkg_bytes_free(uint8_t *data, size_t len);
 /**
  * Reads the bytes at a tile address into a buffer you own.
  *
- * This is the safer of the two readers, and the faster one if you read many
- * tiles. No allocation crosses the boundary, so there is no ownership to get
- * wrong and no per-tile allocation. It is backed by the library's own
- * `get_tile_into`, which reuses the buffer it is given.
+ * This is the safer of the two readers. No allocation crosses the boundary,
+ * so there is no ownership to get wrong. Each call still allocates a scratch
+ * buffer on the Rust side, fills it with the library's own `get_tile_into`,
+ * and copies the bytes from it into `buffer`.
  *
  * When a tile is there, `out_len` always receives its length, whether or not
  * it fitted. If `capacity` is too small, the call returns
- * `GPKG_STATUS_INVALID_ARGUMENT`, nothing is written, and `out_len` says how
- * much room the tile needs. Usually you call once with whatever buffer you
- * have, and again if it was too small.
+ * `GPKG_STATUS_INVALID_ARGUMENT`, nothing is copied into `buffer`, and
+ * `out_len` says how much room the tile needs. Usually you call once with
+ * whatever buffer you have, and again if it was too small.
  *
  * ```c
  * unsigned char buffer[64 * 1024];
@@ -1939,8 +1942,9 @@ void gpkg_tile_cursor_free(gpkg_tile_cursor_t *cursor);
  * file. `gpkg_add_epsg_srs` adds one. Zoom levels run from `min_zoom` to
  * `max_zoom` inclusive, and each halves the tile span of the one before. At
  * `min_zoom` the grid is `base_columns` by `base_rows` tiles, and each tile
- * is `tile_width` by `tile_height` pixels. Zero for any of those four takes
- * the default: a 1 by 1 base grid of 256-pixel tiles.
+ * is `tile_width` by `tile_height` pixels. Zero for both values of a pair
+ * takes that pair's default: a 1 by 1 base grid, or 256-pixel tiles. Zero for
+ * only one value of a pair fails with `GPKG_STATUS_INVALID_ARGUMENT`.
  *
  * The returned handle is the same kind `gpkg_tiles_open` returns. Fill it
  * with `gpkg_tiles_put` and free it with `gpkg_tiles_free`. Creating the

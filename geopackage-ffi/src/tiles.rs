@@ -393,12 +393,12 @@ pub unsafe extern "C" fn gpkg_tiles_zoom_level_count(
 /// Returns one zoom level's matrix, by position in the declared ladder.
 ///
 /// Levels are addressed by position rather than by zoom number, so you can walk
-/// them without guessing which exist. `index` runs from zero to
-/// `gpkg_tiles_zoom_level_count`, in ascending zoom order. `zoom_level`
-/// receives the level's actual zoom number, which `gpkg_tiles_count_at`,
-/// `gpkg_tiles_get` and `gpkg_tiles_put` use to address tiles. `matrix_width`
-/// and `matrix_height` give the grid in tiles, and `tile_width` and
-/// `tile_height` give one tile in pixels.
+/// them without guessing which exist. `index` runs from zero to one less than
+/// the count `gpkg_tiles_zoom_level_count` reports, in ascending zoom order.
+/// `zoom_level` receives the level's actual zoom number, which
+/// `gpkg_tiles_count_at`, `gpkg_tiles_get` and `gpkg_tiles_put` use to address
+/// tiles. `matrix_width` and `matrix_height` give the grid in tiles, and
+/// `tile_width` and `tile_height` give one tile in pixels.
 ///
 /// Any out-parameter may be NULL, in which case it is not written. An index
 /// beyond the last level returns `GPKG_STATUS_NOT_FOUND`.
@@ -790,16 +790,16 @@ unsafe fn report(result: geopackage::Result<()>, error: *mut gpkg_error_t) -> St
 
 /// Reads the bytes at a tile address into a buffer you own.
 ///
-/// This is the safer of the two readers, and the faster one if you read many
-/// tiles. No allocation crosses the boundary, so there is no ownership to get
-/// wrong and no per-tile allocation. It is backed by the library's own
-/// `get_tile_into`, which reuses the buffer it is given.
+/// This is the safer of the two readers. No allocation crosses the boundary,
+/// so there is no ownership to get wrong. Each call still allocates a scratch
+/// buffer on the Rust side, fills it with the library's own `get_tile_into`,
+/// and copies the bytes from it into `buffer`.
 ///
 /// When a tile is there, `out_len` always receives its length, whether or not
 /// it fitted. If `capacity` is too small, the call returns
-/// `GPKG_STATUS_INVALID_ARGUMENT`, nothing is written, and `out_len` says how
-/// much room the tile needs. Usually you call once with whatever buffer you
-/// have, and again if it was too small.
+/// `GPKG_STATUS_INVALID_ARGUMENT`, nothing is copied into `buffer`, and
+/// `out_len` says how much room the tile needs. Usually you call once with
+/// whatever buffer you have, and again if it was too small.
 ///
 /// ```c
 /// unsigned char buffer[64 * 1024];
@@ -1133,8 +1133,9 @@ pub unsafe extern "C" fn gpkg_tile_cursor_free(cursor: *mut gpkg_tile_cursor_t) 
 /// file. `gpkg_add_epsg_srs` adds one. Zoom levels run from `min_zoom` to
 /// `max_zoom` inclusive, and each halves the tile span of the one before. At
 /// `min_zoom` the grid is `base_columns` by `base_rows` tiles, and each tile
-/// is `tile_width` by `tile_height` pixels. Zero for any of those four takes
-/// the default: a 1 by 1 base grid of 256-pixel tiles.
+/// is `tile_width` by `tile_height` pixels. Zero for both values of a pair
+/// takes that pair's default: a 1 by 1 base grid, or 256-pixel tiles. Zero for
+/// only one value of a pair fails with `GPKG_STATUS_INVALID_ARGUMENT`.
 ///
 /// The returned handle is the same kind `gpkg_tiles_open` returns. Fill it
 /// with `gpkg_tiles_put` and free it with `gpkg_tiles_free`. Creating the
