@@ -457,3 +457,72 @@ fn count_matches_iteration_without_materialising_it() {
         layer.count().unwrap()
     );
 }
+
+#[test]
+fn reads_follow_storage_order_wherever_the_geometry_is() {
+    // The geometry is stored between two value columns, so the select list
+    // puts it between them too.
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+    gpkg.connection()
+        .execute_batch(
+            "CREATE TABLE sites (fid INTEGER PRIMARY KEY, name TEXT, geom POINT, lanes INTEGER);\
+             CREATE TABLE gpkg_geometry_columns (\
+               table_name TEXT NOT NULL, column_name TEXT NOT NULL, \
+               geometry_type_name TEXT NOT NULL, srs_id INTEGER NOT NULL, \
+               z TINYINT NOT NULL, m TINYINT NOT NULL);\
+             INSERT INTO gpkg_contents (table_name, data_type, srs_id) \
+               VALUES ('sites', 'features', 4326);\
+             INSERT INTO gpkg_geometry_columns VALUES ('sites', 'geom', 'POINT', 4326, 0, 0);",
+        )
+        .unwrap();
+    for (fid, x, name, lanes) in [(1i64, 1.0f64, "a", 2i64), (2, 50.0, "b", 4)] {
+        gpkg.connection()
+            .execute(
+                "INSERT INTO sites VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![fid, name, gpb_point(x, x), lanes],
+            )
+            .unwrap();
+    }
+    let layer = gpkg.layer("sites").unwrap();
+    let check = |feature: &geopackage::Feature, name: &str, lanes: i64, x: f64| {
+        assert_eq!(feature.value("name"), Some(ValueRef::Text(name)));
+        assert_eq!(feature.value("lanes"), Some(ValueRef::Integer(lanes)));
+        let point = feature.geometry().unwrap().unwrap().to_geo().unwrap();
+        assert_eq!(point, geo_types::Point::new(x, x).into());
+    };
+
+    let all: Vec<_> = layer.features().unwrap().map(Result::unwrap).collect();
+    check(&all[0], "a", 2, 1.0);
+    check(&all[1], "b", 4, 50.0);
+
+    let boxed: Vec<_> = layer
+        .features_in(BoundingBox::new(0.0, 0.0, 2.0, 2.0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(boxed.len(), 1);
+    check(&boxed[0], "a", 2, 1.0);
+
+    // A projection that keeps only the column stored after the geometry.
+    let projected = gpkg
+        .layer("sites")
+        .unwrap()
+        .with_columns(&["lanes", "geom"])
+        .unwrap();
+    let row = projected.features().unwrap().next().unwrap().unwrap();
+    assert_eq!(row.value("lanes"), Some(ValueRef::Integer(2)));
+    assert_eq!(row.value("name"), None);
+    assert!(row.geometry().unwrap().is_some());
+
+    // Without the geometry, a box query still selects it to filter with.
+    let bare = gpkg.layer("sites").unwrap().without_geometry();
+    let rows: Vec<_> = bare
+        .features_in(BoundingBox::new(40.0, 40.0, 60.0, 60.0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].value("name"), Some(ValueRef::Text("b")));
+    assert_eq!(rows[0].value("lanes"), Some(ValueRef::Integer(4)));
+}

@@ -733,27 +733,51 @@ impl<'a> Layer<'a> {
         }
     }
 
-    /// Builds the select list: `fid` at index 0, the value columns at
-    /// `1..=value_columns.len()`, and (for a feature layer) the geometry blob
-    /// last. Returns the joined SQL and the geometry column's index.
+    /// Builds the select list: `fid` at index 0, then the value columns and
+    /// (for a feature layer) the geometry blob in the order the table stores
+    /// them. Returns the joined SQL and the geometry column's index. Value
+    /// column `i` is at index `i + 1`, or `i + 2` from the geometry onwards
+    /// (see [`value_index`]).
+    ///
+    /// SQLite reads overflow pages without its page cache. Columns selected
+    /// out of storage order read the overflow page they share more than once.
     fn column_exprs(
         &self,
         prefix: Option<&str>,
         select_geometry: bool,
     ) -> Result<(String, Option<usize>)> {
-        let mut exprs = Vec::with_capacity(self.read_value_columns().len() + 2);
+        let values = self.read_value_columns();
+        let geometry = self.geometry_column.as_ref().filter(|_| select_geometry);
+        let before = geometry.map_or(0, |geom| self.values_before(&geom.column_name));
+        let mut exprs = Vec::with_capacity(values.len() + 2);
         exprs.push(self.fid_expr(prefix)?);
-        for column in self.read_value_columns() {
+        for (i, column) in values.iter().enumerate() {
+            if i == before
+                && let Some(geom) = geometry
+            {
+                exprs.push(qualified(&geom.column_name, prefix)?);
+            }
             exprs.push(qualified(&column.name, prefix)?);
         }
-        let geom_idx = match &self.geometry_column {
-            Some(geom) if select_geometry => {
-                exprs.push(qualified(&geom.column_name, prefix)?);
-                Some(exprs.len() - 1)
-            }
-            _ => None,
+        if before == values.len()
+            && let Some(geom) = geometry
+        {
+            exprs.push(qualified(&geom.column_name, prefix)?);
+        }
+        Ok((exprs.join(", "), geometry.map(|_| before + 1)))
+    }
+
+    /// Returns how many of the read value columns the table stores before
+    /// `column`.
+    fn values_before(&self, column: &str) -> usize {
+        let Some(position) = self.schema.columns.iter().position(|c| c.name == column) else {
+            return self.read_value_columns().len();
         };
-        Ok((exprs.join(", "), geom_idx))
+        let stored_before = self.schema.columns.get(..position).unwrap_or_default();
+        self.read_value_columns()
+            .iter()
+            .filter(|value| stored_before.iter().any(|c| c.name == value.name))
+            .count()
     }
 
     fn base_select(&self, select_geometry: bool) -> Result<(String, Option<usize>)> {
@@ -1020,7 +1044,7 @@ impl RowContext {
 
         for (i, column) in self.value_columns.iter().enumerate() {
             let value = value_ref_from_sql(
-                row.get_ref(i + 1)?,
+                row.get_ref(value_index(i, geom_idx))?,
                 column.column_type.as_ref(),
                 &column.name,
                 self.options,
@@ -1078,6 +1102,13 @@ impl RowContext {
         }
         Ok(())
     }
+}
+
+/// Returns the index of value column `i` in a row selected by
+/// [`Layer::column_exprs`]: after the fid, and after the geometry if the
+/// geometry is selected before it.
+fn value_index(i: usize, geom_idx: Option<usize>) -> usize {
+    i + 1 + usize::from(geom_idx.is_some_and(|g| i + 1 >= g))
 }
 
 /// Returns `true` if the row's true `f64` geometry envelope, read straight
