@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use geopackage::core::gpb::body_offset;
+use geopackage::core::types::{ColumnType, GeometryType};
+use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, TableSchemaBuilder, ValueRef};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -225,4 +227,98 @@ fn an_existing_destination_is_refused_rather_than_overwritten() {
     );
     // Untouched.
     assert_eq!(std::fs::read(&dst).unwrap(), b"not a geopackage");
+}
+
+/// A little-endian LINESTRING body with `n` vertices.
+fn linestring(n: u32) -> Vec<u8> {
+    let mut bytes = vec![1u8];
+    bytes.extend_from_slice(&2u32.to_le_bytes());
+    bytes.extend_from_slice(&n.to_le_bytes());
+    for i in 0..n {
+        bytes.extend_from_slice(&f64::from(i).to_le_bytes());
+        bytes.extend_from_slice(&f64::from(i % 90).to_le_bytes());
+    }
+    bytes
+}
+
+/// A little-endian POINT body.
+fn point(x: f64, y: f64) -> Vec<u8> {
+    let mut bytes = vec![1u8];
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&x.to_le_bytes());
+    bytes.extend_from_slice(&y.to_le_bytes());
+    bytes
+}
+
+/// Every row of `table` as (fid, label, WKB body), in fid order.
+fn rows_of(path: &Path, table: &str) -> Vec<(i64, Option<String>, Option<Vec<u8>>)> {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.prepare(&format!(
+        "SELECT fid, label, geom FROM \"{table}\" ORDER BY fid"
+    ))
+    .unwrap()
+    .query_map([], |row| {
+        let blob: Option<Vec<u8>> = row.get(2)?;
+        let body = blob.map(|mut blob| blob.split_off(body_offset(&blob).unwrap()));
+        Ok((row.get(0)?, row.get(1)?, body))
+    })
+    .unwrap()
+    .map(std::result::Result::unwrap)
+    .collect()
+}
+
+#[test]
+fn a_layer_larger_than_a_chunk_and_a_transaction_crosses_whole() {
+    // More rows than one write transaction holds, NULL geometries among them,
+    // gaps in the fids, and geometries large enough to fill a chunk by bytes
+    // before it fills by rows.
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src.gpkg");
+    let dst = dir.path().join("dst.gpkg");
+    {
+        let gpkg = GeoPackage::create(&src).unwrap();
+        gpkg.add_epsg_srs(4326).unwrap();
+        gpkg.create_layer(
+            &TableSchemaBuilder::new("many")
+                .column(ColumnSpec::new("label", ColumnType::Text(None)))
+                .geometry(GeometrySpec::new(GeometryType::Geometry, 4326)),
+        )
+        .unwrap();
+        let layer = gpkg.layer("many").unwrap();
+        let mut writer = layer.writer().unwrap();
+        for i in 0..25_000_i32 {
+            let fid = i64::from(i) * 3 + 1;
+            let label = format!("row {i}");
+            let values = [ValueRef::Text(&label)];
+            if i % 7 == 0 {
+                writer.insert_row(Some(fid), &values).unwrap();
+            } else {
+                let body = point(f64::from(i % 360) - 180.0, f64::from(i % 180) - 90.0);
+                writer.insert_wkb(Some(fid), &body, &values).unwrap();
+            }
+        }
+        let long = linestring(300_000);
+        for i in 0..4 {
+            writer
+                .insert_wkb(Some(100_000 + i), &long, &[ValueRef::Null])
+                .unwrap();
+        }
+        writer.commit().unwrap();
+    }
+
+    let output = gpkg(&["copy", src.to_str().unwrap(), dst.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout(&output).contains("many: 25004 rows"),
+        "{}",
+        stdout(&output)
+    );
+    // Not `assert_eq!`: a failure would print every row, 20 MB of it.
+    let (source, copied) = (rows_of(&src, "many"), rows_of(&dst, "many"));
+    assert_eq!(source.len(), copied.len());
+    assert!(source == copied, "the copy differs from its source");
 }
