@@ -665,7 +665,9 @@ impl GeoPackage {
         options: OpenOptions,
     ) -> Result<Self> {
         let options = options.with_default_busy_timeout();
-        let conn = Connection::open_with_flags(path, flags)?;
+        // A `Connection` is not `Sync`, so SQLite's per-connection mutex
+        // protects nothing. Without NO_MUTEX it locks around each column read.
+        let conn = Connection::open_with_flags(path, flags | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
         // A read-only connection cannot change its journal mode.
         let apply_journal = flags.contains(OpenFlags::SQLITE_OPEN_READ_WRITE);
         Self::from_connection_configured(conn, options, apply_journal)
