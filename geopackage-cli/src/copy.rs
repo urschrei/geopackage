@@ -7,6 +7,8 @@
 //!
 //! **Not** tiles, and not the extension tables (`gpkg_metadata`, `gpkg_schema`,
 //! the Related Tables mapping tables). Those are out of scope for this command.
+//! A mapping table that the source registers in `gpkg_contents` as
+//! `attributes` is copied as an ordinary attribute table, without its relation.
 //! If the source contains anything that is not copied, the command reports it
 //! at the end, so you don't mistake the output for the whole file.
 //!
@@ -91,7 +93,13 @@ pub fn run(src_path: &Path, dst_path: &Path, out: &mut impl Write) -> Result<Exi
         writeln!(out, "source warning: {warning}")?;
     }
 
-    let layers = src.layers()?;
+    let mut layers = src.layers()?;
+    // `layers` lists feature layers only.
+    for entry in src.contents()? {
+        if entry.data_type == ContentsDataType::Attributes {
+            layers.push(src.attributes(&entry.table_name)?);
+        }
+    }
     for layer in &layers {
         copy_layer(&src, src_path, &dst, layer, out)?;
     }
