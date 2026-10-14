@@ -18,7 +18,7 @@
 //! [`Coverage::check_payload`] checks that the coverage permits the payload.
 //! [`Coverage::value`] converts a sample you have decoded into a value.
 //!
-//! # Why a coverage is not a [`TilePyramid`](crate::TilePyramid)
+//! # Why a coverage is not a [`TilePyramid`]
 //!
 //! Each tile of a coverage needs an ancillary row, and a reader needs a value
 //! with a scale, an offset and a null, not bytes for an image decoder.

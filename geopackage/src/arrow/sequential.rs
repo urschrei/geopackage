@@ -196,8 +196,8 @@ impl SequentialBatches<'_> {
     }
 
     /// The direct path, which steps through the rows and fetches each value.
-    /// It is the fallback for a table too wide for the aggregate's argument
-    /// list.
+    /// Every filtered read (a bounding box or a `WHERE` clause) takes it, as
+    /// does a table too wide for the aggregate's argument list.
     #[hotpath::measure(label = "arrow::next_batch_direct")]
     fn next_batch_direct(&mut self) -> Result<Option<RecordBatch>> {
         // Looped rather than recursive: under a selective filter many pages in

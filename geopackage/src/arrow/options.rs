@@ -68,7 +68,7 @@ pub struct ArrowReadOptions {
     /// Rows per [`RecordBatch`](arrow_array::RecordBatch). Defaults to [`DEFAULT_BATCH_SIZE`].
     pub batch_size: usize,
     /// Ceiling on the geometry bytes one [`RecordBatch`](arrow_array::RecordBatch) may contain. Defaults
-    /// to [`DEFAULT_MAX_BATCH_BYTES`]. A batch that would cross it is emitted
+    /// to [`default_max_batch_bytes`]. A batch that would cross it is emitted
     /// short, and the rows that did not fit begin the next one.
     pub max_batch_bytes: usize,
     /// How many threads may read at once. `0` chooses

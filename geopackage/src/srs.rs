@@ -250,8 +250,12 @@ impl GeoPackage {
         Ok(true)
     }
 
-    /// Inserts the vendored definition for an EPSG code (see
-    /// [`geopackage_core::srs`] for the vendored subset).
+    /// Inserts the definition for an EPSG code.
+    ///
+    /// A code in the vendored WKT1 subset (see [`geopackage_core::srs`]) uses
+    /// that definition. Any other code in the EPSG registry is written as WKT2
+    /// in the `gpkg_crs_wkt_1_1` extension column, with `definition` set to
+    /// `undefined`.
     ///
     /// The row's `srs_id` is the EPSG code itself, per convention. Returns
     /// `true` if inserted, `false` if the file already has a row for that id.

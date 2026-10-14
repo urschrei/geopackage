@@ -16,7 +16,8 @@ use crate::{Error, Result};
 /// One Arrow array under construction, with the append logic for the SQLite
 /// storage classes that can legitimately reach it.
 ///
-/// The variants mirror the types [`Layer::arrow_schema`] can produce. Geometry
+/// The variants mirror the types
+/// [`Layer::arrow_schema`](crate::Layer::arrow_schema) can produce. Geometry
 /// is its own variant because its bytes need the GPB header removed first.
 pub(crate) enum ColumnBuilder {
     Boolean(BooleanBuilder),

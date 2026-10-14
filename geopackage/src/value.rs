@@ -398,9 +398,9 @@ pub(crate) fn value_ref_to_sql(value: &ValueRef<'_>) -> rusqlite::types::Value {
 ///
 /// The scalar write path keeps the caller's values for the whole insert, so
 /// text and blob cells can be bound straight out of them. Going through
-/// [`value_to_sql`] instead would deep-copy every string and blob in the row,
-/// once per row written. Only `DATE` and `DATETIME` are owned here, because
-/// they are formatted rather than copied.
+/// [`value_ref_to_sql`] instead would deep-copy every string and blob in the
+/// row, once per row written. Only `DATE` and `DATETIME` are owned here,
+/// because they are formatted rather than copied.
 pub(crate) fn value_ref_to_bind(value: ValueRef<'_>) -> rusqlite::types::ToSqlOutput<'_> {
     use rusqlite::types::{ToSqlOutput, Value as Sql};
     match value {

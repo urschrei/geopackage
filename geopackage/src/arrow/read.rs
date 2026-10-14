@@ -79,7 +79,7 @@ impl Layer<'_> {
     ///   largest value. Workers are given key ranges before any row is read, so
     ///   a range has to imply a known row count. GDAL's driver has the same
     ///   requirement in a stricter form: the key must start at 1.
-    /// - **There is more than one batch of rows.** Below that, opening
+    /// - **There are at least two batches of rows.** Below that, opening
     ///   connections and starting threads costs more than it saves.
     ///
     /// Workers open their connections **read-only**. Several connections can
@@ -303,9 +303,10 @@ impl Layer<'_> {
         // range bound; an earlier shape re-evaluated an `IN (SELECT ... FROM
         // rtree)` subquery on every page, which re-scanned the index once per
         // batch and measured as most of the filtered read's overhead
-        // (benchmarks/2026-08-02-threaded-filtered-read.md). A fixed candidate
-        // set also gives the read one consistent answer: rows inserted after
-        // this point are not returned, exactly as a snapshot would.
+        // (roadmap/benchmarks/2026-08-02-threaded-filtered-read.md). A fixed
+        // candidate set also gives the read one consistent answer: rows
+        // inserted after this point are not returned, exactly as a snapshot
+        // would.
         let (spatial_sql, segments) = match filter {
             Some(bbox) if self.has_spatial_index()? => {
                 let geom = self

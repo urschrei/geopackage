@@ -11,14 +11,14 @@
 //! # References form a graph
 //!
 //! A reference may name a parent record through `md_parent_id`, so the
-//! attachments form a directed graph rather than a list. [`GeoPackage::
-//! metadata_references`] returns the edges as stored. To walk upwards, use
-//! [`GeoPackage::metadata_ancestors`]. It is a separate call because it can
-//! fail in ways enumeration cannot. Requirement 102 forbids only a record
-//! being its own parent, so a file can contain a longer cycle, and this crate
-//! has to cope with one rather than rule it out. The walk is bounded and
-//! reports a cycle as a typed error, a cost that not every enumeration should
-//! pay.
+//! attachments form a directed graph rather than a list.
+//! [`GeoPackage::metadata_references`] returns the edges as stored. To walk
+//! upwards, use [`GeoPackage::metadata_ancestors`]. It is a separate call
+//! because it can fail in ways enumeration cannot. Requirement 102 forbids
+//! only a record being its own parent, so a file can contain a longer cycle,
+//! and this crate has to cope with one rather than rule it out. The walk is
+//! bounded and reports a cycle as a typed error, a cost that not every
+//! enumeration should pay.
 
 use geopackage_core::datetime::DateTime;
 use geopackage_core::ddl;
