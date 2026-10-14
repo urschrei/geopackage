@@ -121,7 +121,7 @@ write performance competitive with GDAL's GPKG driver.
       `StructuralCheck::FullDatabase`. Removing it from the default also exposed
       that the read benchmark was measuring a connection warmed by
       `integrity_check` rather than the query; see
-      [benchmarks/2026-07-24-bulk-build.md](benchmarks/2026-07-24-bulk-build.md).)*
+      [benchmarks/2026-07-24-bulk-build.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-24-bulk-build.md).)*
 - [x] Bulk-build atomicity: `ATTACH`/`DETACH` require autocommit, so the scratch
       build and detach sit outside the copy transaction. For `write_all` the row
       inserts commit before the index rebuild, so a crash between them can leave
@@ -215,7 +215,7 @@ write performance competitive with GDAL's GPKG driver.
       (uniform) to 1.76 s (clustered) of it, since that table is keyed by
       feature id. Buffering and inserting in key order costs 16 bytes per entry
       and removes both the cost and the distribution sensitivity. See
-      [benchmarks/2026-07-24-gdal-like-for-like.md](benchmarks/2026-07-24-gdal-like-for-like.md)
+      [benchmarks/2026-07-24-gdal-like-for-like.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-24-gdal-like-for-like.md)
       and `scripts/compare_gdal_index.sh`.)*
 
 - [x] (issue #20) Build the RTree without the module: pack `%_node`/`%_rowid`/

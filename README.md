@@ -119,11 +119,8 @@ a round trip through GDAL byte for byte. See the [changelog](CHANGELOG.md) and
 [`roadmap/08-testing-conformance.md`](roadmap/08-testing-conformance.md) for
 details.
 
-[The current benchmark write-up](roadmap/benchmarks/2026-08-15-fly-baseline.md)
-covers three multi-gigabyte datasets, with method and caveats.
-[`scripts/bench_datasets.sh`](scripts/bench_datasets.sh) runs the benchmarks,
-and [`scripts/bench_fly.sh`](scripts/bench_fly.sh) runs them on a dedicated
-Fly.io machine. Earlier write-ups in that directory used an older method.
+[The benchmarks](roadmap/benchmarks/README.md) compare reads, writes, index
+builds, queries and `gpkg copy` with GDAL on three datasets of 2 to 3 GB.
 
 ## License
 

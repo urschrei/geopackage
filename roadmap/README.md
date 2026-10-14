@@ -135,7 +135,7 @@ released it. Its plan and decisions are in [10-coverage.md](10-coverage.md).
   third smaller for the same query latency. Tree construction is 5% of our build
   time, so porting GDAL's R*-tree bulk loader cannot be where the difference
   lives. See
-  [benchmarks/2026-07-24-gdal-like-for-like.md](benchmarks/2026-07-24-gdal-like-for-like.md).
+  [benchmarks/2026-07-24-gdal-like-for-like.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-24-gdal-like-for-like.md).
 - **Resolved**: the `wkb` 0.9.2 untrusted-count OOM (#3) is fixed in `wkb`
   0.9.3, which the workspace requires from 0.11.0.
 - **The repository is still private** until the georust move (#18), so the

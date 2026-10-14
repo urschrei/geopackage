@@ -162,8 +162,8 @@ had required autocommit and so forced the index rebuild out of the caller's
 transaction. Current GDAL no longer uses the scratch-database technique either;
 it vendors a library that builds the tree in memory and writes the shadow
 tables, the same category as this. See
-[benchmarks/2026-07-24-packed-nodes.md](benchmarks/2026-07-24-packed-nodes.md)
-and [benchmarks/2026-07-24-gdal-like-for-like.md](benchmarks/2026-07-24-gdal-like-for-like.md).
+[benchmarks/2026-07-24-packed-nodes.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-24-packed-nodes.md)
+and [benchmarks/2026-07-24-gdal-like-for-like.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-24-gdal-like-for-like.md).
 
 **Cost of the gate.** The gate is roughly 45% of a bulk build, and GDAL runs no
 equivalent. It is kept because the tree is written by hand into a format SQLite

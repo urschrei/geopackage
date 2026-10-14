@@ -42,7 +42,7 @@ native and Arrow types, and Arrow types being a moving target. The DATETIME
 mapping below is exactly that kind of mismatch.
 
 The slides do not say what the "tricks" are, so the driver was read directly:
-[benchmarks/2026-07-25-gdal-arrow-techniques.md](benchmarks/2026-07-25-gdal-arrow-techniques.md).
+[benchmarks/2026-07-25-gdal-arrow-techniques.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-25-gdal-arrow-techniques.md).
 It settles several questions below, and confirms from their source what we had
 assumed about GPB bodies being usable as WKB without a parse.
 
@@ -175,7 +175,7 @@ assumed about GPB bodies being usable as WKB without a parse.
       and the scalar path gained 22.6% unindexed and 16.0% on the bulk path from
       the same change). Criterion 3's write side is met without a spatial index
       at 0.93x and missed by 4% with one. See
-      [benchmarks/2026-07-25-gdal-arrow-write.md](benchmarks/2026-07-25-gdal-arrow-write.md).)*
+      [benchmarks/2026-07-25-gdal-arrow-write.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-25-gdal-arrow-write.md).)*
 - [ ] Parallel `write_arrow`, within what SQLite allows: **one writer, always.**
       SQLite takes a single write lock per database, so this means moving CPU
       work off the writing thread, not concurrent inserts. Candidates are
@@ -190,7 +190,7 @@ assumed about GPB bodies being usable as WKB without a parse.
       same rows, the same work, and the thread count recorded for both sides. M2
       had to withdraw a GDAL-parity claim once because the figure it rested on
       also included GDAL reading a source file
-      ([benchmarks/2026-07-24-gdal-like-for-like.md](benchmarks/2026-07-24-gdal-like-for-like.md)),
+      ([benchmarks/2026-07-24-gdal-like-for-like.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-24-gdal-like-for-like.md)),
       and a threaded comparison has more ways to go wrong than that one did.
 
 ### `geopackage-ffi` (C ABI)
@@ -247,7 +247,7 @@ from the recorded methodology does not count, which is the M2 lesson.
    *Restated once and trimmed once, both recorded rather than quietly applied.
    Originally "at least 3x `row/cursor`", taken from GDAL's ratio for its own
    driver, which was mis-calibrated: the profile in
-   [benchmarks/2026-07-25-arrow-read-profile.md](benchmarks/2026-07-25-arrow-read-profile.md)
+   [benchmarks/2026-07-25-arrow-read-profile.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-25-arrow-read-profile.md)
    shows 3x is unreachable by any implementation of this path, because even
    eliminating per-value accessor dispatch entirely leaves 2.37x. GDAL's
    headroom is in their row baseline, which allocates a feature object per row;
@@ -282,7 +282,7 @@ from the recorded methodology does not count, which is the M2 lesson.
    with the aggregate function, so not met. Same file, same
    rows, same columns, same batch size, same SQLite version, GDAL driven through
    the OGR C API so nothing else sits in the loop. See
-   [benchmarks/2026-07-25-gdal-arrow-comparison.md](benchmarks/2026-07-25-gdal-arrow-comparison.md).
+   [benchmarks/2026-07-25-gdal-arrow-comparison.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-25-gdal-arrow-comparison.md).
    The aggregate function has since been built, which is what took it from 2.34x
    to 1.39x; array building is now the remaining gap. **Knowingly accepted as
    unmet**, on the ground that single-threaded is no longer the default

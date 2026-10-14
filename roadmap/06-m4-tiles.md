@@ -61,7 +61,7 @@ this lands as **0.6.0**.
    this milestone: what has been verified is that GDAL reads a pyramid we
    wrote, and QGIS reads rasters through GDAL.
 3. [x] Tile read throughput benchmarked (tiles/sec sequential and random),
-   recorded in [benchmarks/2026-07-27-tiles.md](benchmarks/2026-07-27-tiles.md).
+   recorded in [benchmarks/2026-07-27-tiles.md](https://github.com/urschrei/geopackage/blob/v0.11.0/roadmap/benchmarks/2026-07-27-tiles.md).
    GDAL's figure for the same file is recorded beside it and is **not** a
    like-for-like comparison: GDAL returns pixels because it decodes, and this
    crate returns stored bytes because it cannot. Allocation behaviour on these
