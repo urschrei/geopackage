@@ -18,6 +18,10 @@ While the version is below 1.0 the API may change in any release.
   the stream's callbacks. The C ABI is unchanged.
 - Dev-dependency `hegeltest` is now 0.49, and the optional `hotpath`
   profiler is now 0.25.
+- `gpkg copy` writes its output with `synchronous = OFF`, as GDAL does for a
+  new GeoPackage, and does not sync the file when it completes. It no longer
+  waits for a sync at each commit. Run `sync` after the command if the output
+  must be on disk when it returns.
 
 ### Fixed
 
