@@ -18,6 +18,11 @@ While the version is below 1.0 the API may change in any release.
   the stream's callbacks. The C ABI is unchanged.
 - Dev-dependency `hegeltest` is now 0.49, and the optional `hotpath`
   profiler is now 0.25.
+- The workspace requires `wkb` 0.9.3. Its reader bounds the memory it reserves
+  for a geometry's members by the bytes left in the blob, and stops at 128
+  levels of nested collections. A malformed geometry no longer causes a
+  multi-gigabyte allocation or a stack overflow, so the warning against
+  reading untrusted files is removed ([#3]).
 - `gpkg copy` writes its output with `synchronous = OFF`, as GDAL does for a
   new GeoPackage, and does not sync the file when it completes. It no longer
   waits for a sync at each commit. Run `sync` after the command if the output

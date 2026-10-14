@@ -136,10 +136,8 @@ released it. Its plan and decisions are in [10-coverage.md](10-coverage.md).
   time, so porting GDAL's R*-tree bulk loader cannot be where the difference
   lives. See
   [benchmarks/2026-07-24-gdal-like-for-like.md](benchmarks/2026-07-24-gdal-like-for-like.md).
-- **Shipped known limitation**: the `wkb` 0.9.2 untrusted-count OOM (#3) was
-  scoped "before v0.1" but no upstream fix has been released, so releases ship
-  with it, documented in the README and both crates' docs. The dependency bump
-  follows upstream.
+- **Resolved**: the `wkb` 0.9.2 untrusted-count OOM (#3) is fixed in `wkb`
+  0.9.3, which the workspace requires from the release after 0.10.2.
 - **The repository is still private** until the georust move (#18), so the
   `repository` link in the crates.io metadata 404s for readers.
 - Smaller open items: a dedicated concurrent-reader test, a QGIS re-check,

@@ -473,14 +473,6 @@
 //! Debian and Ubuntu; macOS includes them), and SQLite must be built with the
 //! RTree module. Opening a file checks this, and returns
 //! [`Error::RtreeUnavailable`] if the module is missing.
-//!
-//! # Untrusted input
-//!
-//! Geometry is parsed by the `wkb` crate. Its 0.9.2 reader allocates based on
-//! element counts read from the blob without checking them against the blob's
-//! length, so a malformed geometry can trigger a multi-gigabyte allocation.
-//! Until this is fixed upstream in [georust/wkb](https://github.com/georust/wkb),
-//! don't read geometries from untrusted files.
 
 // `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
 // workspace lints table (root Cargo.toml). This crate never uses `unsafe`; the

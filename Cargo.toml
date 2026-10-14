@@ -27,7 +27,7 @@ thiserror = "2"
 # each crate's `bundled` feature opts into the vendored amalgamation instead.
 rusqlite = { version = "0.40", features = ["functions", "limits"] }
 tempfile = "3"
-wkb = "0.9"
+wkb = "0.9.3"
 geo-traits = "0.3"
 geo-types = "0.7"
 # Calendar arithmetic and validation for the DATE/DATETIME types (issue #24).
