@@ -10,6 +10,11 @@ updates:
         patterns: ["arrow-*"]
       cargo-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # From 0.24, `hotpath::measure` emits `#[export_name]`, which the
+      # workspace's `forbid(unsafe_code)` rejects in the profiling build.
+      - dependency-name: hotpath
+        versions: [">=0.24"]
 
   - package-ecosystem: github-actions
     directory: "/"
