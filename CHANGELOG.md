@@ -16,7 +16,8 @@ While the version is below 1.0 the API may change in any release.
 - `geopackage-ffi` builds its exported Arrow stream itself, in the layout the
   Arrow specification defines, because Arrow 60 no longer lets a producer set
   the stream's callbacks. The C ABI is unchanged.
-- Dev-dependency `hegeltest` is now 0.49.
+- Dev-dependency `hegeltest` is now 0.49, and the optional `hotpath`
+  profiler is now 0.25.
 
 ## [0.10.2] - 2026-10-14
 
