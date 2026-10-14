@@ -36,8 +36,8 @@ Data Interface as the bulk data plane.
 Released: v0.1.0, v0.1.1, v0.1.2 (2026-07-24), v0.2.0 (2026-07-25), v0.3.0,
 v0.4.0, v0.5.0 (2026-07-26), v0.6.0 (2026-07-29), v0.7.0 and v0.7.1
 (2026-08-02), v0.8.0 (2026-08-06), v0.9.0 (2026-08-10), v0.9.1 (2026-08-15),
-v0.10.0 (2026-09-21), v0.10.1 (2026-10-13), v0.10.2 (2026-10-14). Workspace
-version is 0.10.2.
+v0.10.0 (2026-09-21), v0.10.1 (2026-10-13), v0.10.2 (2026-10-14), v0.11.0
+(2026-10-14). Workspace version is 0.11.0.
 No release is planned for the rest of M5: its phases are an order of work, not a
 publication schedule.
 
@@ -137,7 +137,7 @@ released it. Its plan and decisions are in [10-coverage.md](10-coverage.md).
   lives. See
   [benchmarks/2026-07-24-gdal-like-for-like.md](benchmarks/2026-07-24-gdal-like-for-like.md).
 - **Resolved**: the `wkb` 0.9.2 untrusted-count OOM (#3) is fixed in `wkb`
-  0.9.3, which the workspace requires from the release after 0.10.2.
+  0.9.3, which the workspace requires from 0.11.0.
 - **The repository is still private** until the georust move (#18), so the
   `repository` link in the crates.io metadata 404s for readers.
 - Smaller open items: a dedicated concurrent-reader test, a QGIS re-check,
