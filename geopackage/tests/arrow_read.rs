@@ -188,6 +188,37 @@ fn gaps_in_the_key_are_read_through() {
     assert_eq!(fids, expected);
 }
 
+/// Batches hold exactly `batch_size` rows, in key order, and the last holds
+/// the rest. With `reverse_unordered_selects` on, SQLite scans an unordered
+/// query backwards, so the read must not rely on the scan order.
+#[test]
+fn batches_are_full_and_in_key_order_whatever_the_scan_order() {
+    let (_dir, gpkg) = layer_with_rows(250);
+    for reverse in [false, true] {
+        gpkg.connection()
+            .pragma_update(None, "reverse_unordered_selects", reverse)
+            .unwrap();
+        let batches = read_all(
+            &gpkg,
+            ArrowReadOptions::with_batch_size(100).with_threads(1),
+        );
+        let sizes: Vec<usize> = batches.iter().map(RecordBatch::num_rows).collect();
+        assert_eq!(sizes, [100, 100, 50], "reverse: {reverse}");
+        let fids: Vec<i64> = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column_by_name("fid")
+                    .unwrap()
+                    .as_primitive::<Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(fids, (1..=250).collect::<Vec<i64>>(), "reverse: {reverse}");
+    }
+}
+
 #[test]
 fn nulls_survive() {
     let dir = tempfile::tempdir().unwrap();

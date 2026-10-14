@@ -69,7 +69,10 @@ pub(crate) struct BatchFiller {
     pub(crate) field_offset: usize,
     pub(crate) geometry_index: Option<usize>,
     pub(crate) datetime: DateTimeParsing,
+    /// Rows to pre-size the builders for.
     pub(crate) capacity: usize,
+    /// Rows in a full batch. The aggregate stops the scan when it has them.
+    pub(crate) limit: usize,
     /// Ceiling on the geometry bytes one batch may contain.
     pub(crate) max_bytes: usize,
     pub(crate) output: Arc<Mutex<Option<FilledBatch>>>,
@@ -94,6 +97,20 @@ pub(crate) struct FilledBatch {
     /// instead of being appended, and `last_key` stops advancing, so the
     /// pagination cursor resumes at the first row that didn't fit.
     pub(crate) truncated: bool,
+    /// Set when the aggregate stopped the scan, because the batch was full or
+    /// at its byte ceiling, so that rows may remain after it.
+    pub(crate) stopped: bool,
+}
+
+/// Marks the batch as stopped and returns the error that ends SQLite's scan.
+///
+/// The query has no `LIMIT`, because a `LIMIT` on the rows needs a subquery,
+/// and SQLite copies every text and blob value out of a subquery before the
+/// aggregate reads it. An error from the step function stops the scan at once,
+/// and SQLite still runs the finaliser, which passes the batch on.
+fn stop(acc: &mut FilledBatch) -> rusqlite::Error {
+    acc.stopped = true;
+    rusqlite::Error::UserFunctionError("geopackage: batch full".into())
 }
 
 impl Aggregate<FilledBatch, i64> for BatchFiller {
@@ -112,18 +129,12 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
             last_key: None,
             bytes: 0,
             truncated: false,
+            stopped: false,
         })
     }
 
     #[hotpath::measure(label = "arrow::BatchFiller::step")]
     fn step(&self, ctx: &mut Context<'_>, acc: &mut FilledBatch) -> rusqlite::Result<()> {
-        // SQLite has already been asked for this row, so the cheapest correct
-        // response once the ceiling is reached is to drop it and let the next
-        // batch fetch it again. The waste is bounded by one batch, and it only
-        // arises on layers whose geometries are large enough to hit the limit.
-        if acc.truncated {
-            return Ok(());
-        }
         let geometry_bytes = self.geometry_index.map_or(0, |index| {
             match ctx.get_raw(index + self.field_offset) {
                 // The GPB header is stripped before the body is appended, so
@@ -138,7 +149,7 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
         // instead of stalling the read.
         if acc.rows > 0 && acc.bytes.saturating_add(geometry_bytes) > self.max_bytes {
             acc.truncated = true;
-            return Ok(());
+            return Err(stop(acc));
         }
         if let ValueRef::Integer(key) = ctx.get_raw(self.key_argument) {
             acc.last_key = Some(key);
@@ -158,6 +169,9 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
         }
         acc.rows += 1;
         acc.bytes = acc.bytes.saturating_add(geometry_bytes);
+        if acc.rows >= self.limit {
+            return Err(stop(acc));
+        }
         Ok(())
     }
 

@@ -276,12 +276,12 @@ impl Layer<'_> {
             selected.push_str(&quote(field.name())?);
         }
         // When the key is not one of the fields it is selected ahead of them, so
-        // the reader can paginate, under an alias the aggregate can name.
+        // the reader can paginate.
         let (row_columns, aggregate_arguments) = match key_field {
             Some(_) => (selected.clone(), selected),
             None => (
                 format!("{key} AS \"{KEY_ALIAS}\",{selected}"),
-                format!("\"{KEY_ALIAS}\",{selected}"),
+                format!("{key},{selected}"),
             ),
         };
         let table = quote(self.table_name())?;
@@ -410,8 +410,14 @@ impl Layer<'_> {
         // until a measurement shows the aggregate paying on filtered reads,
         // so both filters take one path. Declining rather than failing is what
         // the threaded path does for each of its own conditions.
+        //
+        // The aggregate also relies on SQLite scanning the key range in
+        // ascending order, which `PRAGMA reverse_unordered_selects` reverses.
+        let reversed: bool =
+            conn.query_row("PRAGMA reverse_unordered_selects", [], |row| row.get(0))?;
         let aggregate = if filter.is_none()
             && sql_filter.is_none()
+            && !reversed
             && arg_count <= conn.limit(Limit::SQLITE_LIMIT_FUNCTION_ARG)?
         {
             Some(AggregateState::register(
@@ -429,6 +435,7 @@ impl Layer<'_> {
                     geometry_index,
                     datetime,
                     capacity: options.batch_size.clamp(1, DEFAULT_BATCH_SIZE),
+                    limit: options.batch_size.max(1),
                     max_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
                     output: Arc::new(Mutex::new(None)),
                     failure: Arc::new(Mutex::new(None)),
@@ -438,16 +445,16 @@ impl Layer<'_> {
             None
         };
 
-        // The batch has to be bounded by the inner query. An aggregate collapses
-        // its input to a single result row, so a LIMIT beside it would bound the
-        // aggregate's own output at one row and scan the whole table underneath.
-        // GDAL avoids this by slicing with `BETWEEN` on a dense key instead;
-        // wrapping the paginated query keeps this path working on any key.
+        // No `LIMIT` and no `ORDER BY`: the aggregate stops the scan itself when
+        // the batch is full (see `aggregate::stop`), and a range on the integer
+        // primary key is scanned in key order. A `LIMIT` would need a subquery,
+        // and SQLite copies every text and blob value out of one.
         let aggregate_sql = aggregate
             .as_ref()
             .map(|state| {
                 format!(
-                    "SELECT {}({aggregate_arguments}) FROM ({rows_sql})",
+                    "SELECT {}({aggregate_arguments}) FROM {table} \
+                     WHERE {key} >= ?1 AND {key} <= ?2",
                     state.name
                 )
             })
