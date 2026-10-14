@@ -139,3 +139,41 @@ fn curve_type_body_is_a_typed_error_not_a_panic() {
         .query_row("SELECT ST_MinX(?1)", [&blob], |r| r.get::<_, f64>(0));
     assert!(err.is_err(), "curve type must be a typed SQL error");
 }
+
+/// `ST_EnvIntersects` for one value against the box from (0, 0) to (10, 10).
+fn env_intersects(gpkg: &GeoPackage, value: rusqlite::types::Value) -> bool {
+    gpkg.connection()
+        .query_row(
+            "SELECT ST_EnvIntersects(?1, 0.0, 0.0, 10.0, 10.0)",
+            [value],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+#[test]
+fn env_intersects_tests_the_envelope_against_the_box() {
+    use rusqlite::types::Value;
+    let (_dir, gpkg) = gpkg();
+    let line = |points: Vec<(f64, f64)>| {
+        let geom: Geometry<f64> = LineString::from(points).into();
+        Value::Blob(envelopeless_gpb(&geom, true))
+    };
+    // Inside, crossing, touching the boundary, and outside.
+    assert!(env_intersects(&gpkg, line(vec![(1.0, 1.0), (2.0, 2.0)])));
+    assert!(env_intersects(&gpkg, line(vec![(-5.0, 5.0), (15.0, 5.0)])));
+    assert!(env_intersects(
+        &gpkg,
+        line(vec![(10.0, 10.0), (20.0, 20.0)])
+    ));
+    assert!(!env_intersects(&gpkg, line(vec![(11.0, 0.0), (20.0, 5.0)])));
+    // An envelope that meets the box when the line does not.
+    assert!(env_intersects(
+        &gpkg,
+        line(vec![(-1.0, 12.0), (12.0, -1.0)])
+    ));
+    // NULL, empty and non-BLOB values never match.
+    assert!(!env_intersects(&gpkg, Value::Null));
+    assert!(!env_intersects(&gpkg, line(Vec::new())));
+    assert!(!env_intersects(&gpkg, Value::Text("POINT (1 1)".into())));
+}

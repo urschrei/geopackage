@@ -76,7 +76,7 @@ impl BoundingBox {
     /// Returns `true` if this box intersects an envelope
     /// `[min_x, max_x, min_y, max_y]`,
     /// inclusive at the boundary (touching boxes intersect).
-    fn intersects_envelope(&self, env: [f64; 4]) -> bool {
+    pub(crate) fn intersects_envelope(&self, env: [f64; 4]) -> bool {
         env[0] <= self.max_x && env[1] >= self.min_x && env[2] <= self.max_y && env[3] >= self.min_y
     }
 }
@@ -528,31 +528,17 @@ impl<'a> Layer<'a> {
     #[hotpath::measure(label = "Layer::features_in")]
     pub fn features_in(&self, bbox: BoundingBox) -> Result<Features> {
         let (sql, geom_idx, uses_rtree) = self.features_in_plan()?;
-        let params = if uses_rtree {
-            use rusqlite::types::Value as Sql;
-            // SQLite's RTree coerces bound f64 constraints to f32, and at
-            // sub-normal magnitudes that coercion is not conservative: a
-            // truly-intersecting candidate can be excluded before the f64
-            // re-test runs. Widen each bound one f32 ULP outward before
-            // binding; the exact f64 re-filter below restores precision.
-            vec![
-                Sql::Real(widen_up(bbox.max_x)),
-                Sql::Real(widen_down(bbox.min_x)),
-                Sql::Real(widen_up(bbox.max_y)),
-                Sql::Real(widen_down(bbox.min_y)),
-            ]
-        } else {
-            Vec::new()
-        };
-        self.execute(&sql, params, geom_idx, Some(bbox))
+        self.execute(&sql, box_params(bbox, uses_rtree), geom_idx, Some(bbox))
     }
 
     /// Returns the SQL [`Self::features_in`] runs: an RTree join when a usable
-    /// spatial index is present, otherwise the full-scan `features` query.
+    /// spatial index is present, otherwise a full scan that tests each row
+    /// with `ST_EnvIntersects`.
     ///
     /// Use it for diagnostics. Running `EXPLAIN QUERY PLAN` on it confirms
-    /// whether the RTree virtual table is used. The RTree form has `?1`–`?4`
-    /// placeholders for the query box.
+    /// whether the RTree virtual table is used. Both forms have `?1`–`?4`
+    /// placeholders for the query box: max x, min x, max y and min y for the
+    /// RTree form, and min x, min y, max x and max y for the full scan.
     pub fn features_in_sql(&self) -> Result<String> {
         Ok(self.features_in_plan()?.0)
     }
@@ -616,18 +602,7 @@ impl<'a> Layer<'a> {
     /// [`Error::NoGeometryColumn`] if the layer has no geometry column.
     pub fn cursor_in(&self, bbox: BoundingBox) -> Result<FeatureCursor<'_>> {
         let (sql, geom_idx, uses_rtree) = self.features_in_plan()?;
-        let params = if uses_rtree {
-            use rusqlite::types::Value as Sql;
-            vec![
-                Sql::Real(widen_up(bbox.max_x)),
-                Sql::Real(widen_down(bbox.min_x)),
-                Sql::Real(widen_up(bbox.max_y)),
-                Sql::Real(widen_down(bbox.min_y)),
-            ]
-        } else {
-            Vec::new()
-        };
-        self.prepare_cursor(&sql, params, geom_idx, Some(bbox))
+        self.prepare_cursor(&sql, box_params(bbox, uses_rtree), geom_idx, Some(bbox))
     }
 
     /// Opens a streaming `WHERE` query: the same rows as [`Self::select`],
@@ -717,6 +692,12 @@ impl<'a> Layer<'a> {
         } else {
             // As `rtree_select`: needed for the exact filter regardless.
             let (sql, geom_idx) = self.base_select(true)?;
+            // Tested in SQL, so that SQLite does not read the other columns of
+            // a row outside the box.
+            let sql = format!(
+                "{sql} WHERE ST_EnvIntersects({}, ?1, ?2, ?3, ?4)",
+                quote(&geom.column_name)?
+            );
             Ok((sql, geom_idx, false))
         }
     }
@@ -1101,6 +1082,32 @@ impl RowContext {
             });
         }
         Ok(())
+    }
+}
+
+/// Returns the parameters for the box placeholders of
+/// [`Layer::features_in_sql`].
+fn box_params(bbox: BoundingBox, uses_rtree: bool) -> Vec<rusqlite::types::Value> {
+    use rusqlite::types::Value as Sql;
+    if uses_rtree {
+        // SQLite's RTree coerces bound f64 constraints to f32, and at
+        // sub-normal magnitudes that coercion is not conservative: a
+        // truly-intersecting candidate can be excluded before the f64 re-test
+        // runs. Widen each bound one f32 ULP outward before binding; the exact
+        // f64 re-filter restores precision.
+        vec![
+            Sql::Real(widen_up(bbox.max_x)),
+            Sql::Real(widen_down(bbox.min_x)),
+            Sql::Real(widen_up(bbox.max_y)),
+            Sql::Real(widen_down(bbox.min_y)),
+        ]
+    } else {
+        vec![
+            Sql::Real(bbox.min_x),
+            Sql::Real(bbox.min_y),
+            Sql::Real(bbox.max_x),
+            Sql::Real(bbox.max_y),
+        ]
     }
 }
 

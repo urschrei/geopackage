@@ -15,6 +15,12 @@
 //! wrapper, using the header's empty flag, the NaN empty-point convention, and
 //! geometries with zero coordinates.
 //!
+//! `ST_EnvIntersects(geom, minx, miny, maxx, maxy)` has the name and arguments
+//! of GDAL's function. It returns 1 if the geometry's envelope intersects the
+//! box, boundary included, and 0 for a NULL, empty or non-BLOB value. A
+//! bounding-box query on a layer with no spatial index uses it, so that a row
+//! outside the box is rejected before SQLite reads its other columns.
+//!
 //! The non-linear types (`CIRCULARSTRING`, `CURVEPOLYGON`, …) are read by
 //! `geopackage_core::curve`, which walks the WKB bytes itself rather than going
 //! through the `wkb` crate, so a curve geometry is indexed like any other. Only
@@ -56,6 +62,19 @@ pub fn register(conn: &Connection) -> rusqlite::Result<()> {
             })
         })?;
     }
+
+    conn.create_scalar_function("ST_EnvIntersects", 5, flags, |ctx| {
+        let ValueRef::Blob(blob) = ctx.get_raw(0) else {
+            return Ok(false);
+        };
+        let bbox = crate::BoundingBox::new(ctx.get(1)?, ctx.get(2)?, ctx.get(3)?, ctx.get(4)?);
+        match geometry::blob_xy_envelope(blob) {
+            Ok(envelope) => Ok(envelope.is_some_and(|env| bbox.intersects_envelope(env))),
+            Err(error) => Err(rusqlite::Error::UserFunctionError(Box::new(FnError::from(
+                error,
+            )))),
+        }
+    })?;
     Ok(())
 }
 

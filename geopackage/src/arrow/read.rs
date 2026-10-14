@@ -366,9 +366,23 @@ impl Layer<'_> {
             }
             _ => None,
         };
+        // A box with no index to answer it is tested in SQL as well, so that
+        // SQLite does not read the other columns of a row outside it. Its four
+        // values follow the upper bound.
+        let scan_filter = match (filter, &segments, self.geometry_column()) {
+            (Some(_), None, Some(geom)) => format!(
+                " AND ST_EnvIntersects({}, ?{}, ?{}, ?{}, ?{})",
+                quote(&geom.column_name)?,
+                base + 4,
+                base + 5,
+                base + 6,
+                base + 7
+            ),
+            _ => String::new(),
+        };
         let rows_sql = format!(
             "SELECT {row_columns} FROM {table} \
-             WHERE {user_and}{key} >= ?{key_slot} AND {key} <= ?{upper_slot} \
+             WHERE {user_and}{key} >= ?{key_slot} AND {key} <= ?{upper_slot}{scan_filter} \
              ORDER BY {key} LIMIT ?{limit_slot}"
         );
         let sql = rows_sql.clone();

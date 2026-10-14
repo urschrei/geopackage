@@ -245,8 +245,8 @@ impl SequentialBatches<'_> {
             let mut stmt = self.conn.prepare_cached(&self.sql)?;
             // Binding is positional, so the order here is the placeholder
             // numbering: the caller's params take `?1` to `?N`, then the key,
-            // the limit, and the upper key bound, as the query text numbered
-            // them.
+            // the limit, the upper key bound and any box, as the query text
+            // numbered them.
             let mut params: Vec<rusqlite::types::Value> = self.user_params.clone();
             params.push(rusqlite::types::Value::Integer(self.next_key));
             params.push(rusqlite::types::Value::Integer(
@@ -261,6 +261,15 @@ impl SequentialBatches<'_> {
                 None => self.upper_key,
             };
             params.push(rusqlite::types::Value::Integer(upper));
+            // The box of an unindexed scan, which the query text tests with
+            // `ST_EnvIntersects`.
+            if let (Some(filter), None) = (&self.filter, &self.segments) {
+                let bbox = filter.bbox;
+                params.extend(
+                    [bbox.min_x, bbox.min_y, bbox.max_x, bbox.max_y]
+                        .map(rusqlite::types::Value::Real),
+                );
+            }
             let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
             // Where the fields start: at 0 when the key is one of them, at 1
             // when it had to be selected separately.

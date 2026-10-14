@@ -190,7 +190,8 @@ fn rtree_path_uses_vtab_full_scan_does_not() {
     assert!(!plain.has_spatial_index().unwrap());
     let plain_sql = plain.features_in_sql().unwrap();
     assert!(!plain_sql.contains("rtree"));
-    let plain_plan = eqp(&gpkg, &plain_sql, 0);
+    assert!(plain_sql.contains("ST_EnvIntersects"));
+    let plain_plan = eqp(&gpkg, &plain_sql, 4);
     assert!(!plain_plan.iter().any(|d| d.contains("VIRTUAL TABLE")));
     assert!(plain_plan.iter().any(|d| d.contains("SCAN plain")));
 }
