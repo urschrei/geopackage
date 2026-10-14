@@ -1,14 +1,8 @@
 #!/usr/bin/env bash
 #
-# Run the dataset benchmarks on a dedicated-CPU Fly.io machine.
-#
-# scripts/bench_datasets.sh requires an otherwise idle host, and a shared
-# workstation rarely is one: two full runs on 2026-08-15 disagreed with the
-# published table on arms the code had not touched, under load averages of 5
-# to 10. A Fly machine with a `performance` CPU class has dedicated vCPUs and
-# no other tenants, so its figures are reproducible by anyone who rents the
-# same machine type. Sprites and `shared` CPU classes are not suitable: their
-# timing noise is the problem this script exists to remove.
+# Run the benchmarks on a dedicated-CPU Fly.io machine. A `performance` CPU
+# class has dedicated vCPUs, so anyone who rents the same machine type can
+# reproduce the figures. Sprites and `shared` CPU classes are too noisy.
 #
 # Everything durable lives on one volume mounted at /data: the datasets, the
 # Rust toolchain, the source checkouts and their build artifacts, and the run
@@ -23,8 +17,8 @@
 #   fetch                    download and convert the datasets onto the volume
 #   bench [ref] [reps]       build `ref` and run bench_datasets.sh over it
 #   ab <refA> <refB> [iters] interleaved A/B of the admin write arm
-#   copy [ref] [reps]        build `gpkg` at `ref` and compare `gpkg copy`
-#                            against ogr2ogr (compare_gdal_copy.sh)
+#   copy [ref] [reps]        build `gpkg` at `ref` and run
+#                            compare_gdal_copy.sh over it
 #   stop                     destroy the machine; the volume persists
 #   destroy                  destroy the machine, the volume and the app
 #
@@ -33,7 +27,7 @@
 #   FLY_BENCH_ORG     organisation slug   (default personal)
 #   FLY_BENCH_REGION  region              (default ams)
 #   FLY_BENCH_VM      machine size        (default performance-8x)
-#   FLY_BENCH_GDAL    conda-forge GDAL    (default 3.13.3), for `copy`
+#   FLY_BENCH_GDAL    conda-forge GDAL    (default 3.13.3)
 #
 # The machine size and memory are part of the protocol: published figures
 # must name them, and comparisons are only valid within one machine type.
@@ -108,27 +102,31 @@ echo "building dataset_bench at \$(git -C $dir rev-parse --short HEAD)"
 EOF
 }
 
-# `gpkg copy` against two GDALs: the conda-forge release named by
-# FLY_BENCH_GDAL, installed once onto the volume, and Ubuntu's own, which the
-# preamble installs. The tools that time the runs live on the rootfs, so they
-# are installed on each new machine.
+# Install the conda-forge GDAL named by FLY_BENCH_GDAL onto the volume, once,
+# and the tools that time the runs onto this machine's rootfs.
+emit_gdal() {
+    cat <<EOF
+if ! command -v hyperfine >/dev/null || [[ ! -x /usr/bin/time ]] || ! command -v bzip2 >/dev/null; then
+    apt-get update -q
+    apt-get install -q -y hyperfine time bzip2
+fi
+gdal_env=/data/mamba/envs/gdal-$GDAL
+if [[ ! -x \$gdal_env/bin/ogr2ogr ]]; then
+    echo "installing GDAL $GDAL from conda-forge onto the volume"
+    mkdir -p /data/mamba
+    [[ -x /data/mamba/bin/micromamba ]] || curl -fsSL \
+        https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C /data/mamba bin/micromamba
+    /data/mamba/bin/micromamba create -y -q -r /data/mamba -p \$gdal_env -c conda-forge gdal=$GDAL
+fi
+EOF
+}
+
 cmd_copy() {
     local ref="${1:-origin/main}" reps="${2:-5}"
     local job
     job="$(mktemp)"
     cat > "$job" <<EOF
-if ! command -v hyperfine >/dev/null || [[ ! -x /usr/bin/time ]] || ! command -v bzip2 >/dev/null; then
-    apt-get update -q
-    apt-get install -q -y hyperfine time bzip2
-fi
-env_dir=/data/mamba/envs/gdal-$GDAL
-if [[ ! -x \$env_dir/bin/ogr2ogr ]]; then
-    echo "installing GDAL $GDAL from conda-forge onto the volume"
-    mkdir -p /data/mamba
-    [[ -x /data/mamba/bin/micromamba ]] || curl -fsSL \
-        https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C /data/mamba bin/micromamba
-    /data/mamba/bin/micromamba create -y -q -r /data/mamba -p \$env_dir -c conda-forge gdal=$GDAL
-fi
+$(emit_gdal)
 if [[ ! -d /data/src/.git ]]; then
     git clone --quiet $REPO_URL /data/src
 fi
@@ -137,7 +135,7 @@ git -C /data/src checkout --quiet --detach $ref
 echo "building gpkg at \$(git -C /data/src rev-parse --short HEAD)"
 (cd /data/src && cargo build --release --quiet -p geopackage-cli)
 bash /data/src/scripts/compare_gdal_copy.sh /data/benchdata \
-    /data/src/target/release/gpkg $reps \$env_dir/bin/ogr2ogr /usr/bin/ogr2ogr \
+    /data/src/target/release/gpkg $reps \$gdal_env/bin/ogr2ogr \
     2>&1 | tee "/data/logs/copy-\$(git -C /data/src rev-parse --short HEAD).log"
 EOF
     remote_run "$job"
@@ -205,18 +203,18 @@ cmd_bench() {
     local job
     job="$(mktemp)"
     cat > "$job" <<EOF
+$(emit_gdal)
 $(emit_build /data/src "$ref")
-bash /data/src/scripts/bench_datasets.sh run /data/benchdata $reps \
+GDAL_CONFIG=\$gdal_env/bin/gdal-config \
+    bash /data/src/scripts/bench_datasets.sh run /data/benchdata $reps \
     2>&1 | tee "/data/logs/bench-\$(git -C /data/src rev-parse --short HEAD).log"
 EOF
     remote_run "$job"
     rm -f "$job"
 }
 
-# Interleaved A/B of the admin write arm, the arm whose 2026-08-15 local
-# figures disagreed with the published table. Alternating A B A B on one
-# machine cancels drift that repeated runs of a single binary cannot, which
-# is what separates a host effect from a code change.
+# Interleaved A/B of the admin write arm. Alternating A B A B on one machine
+# cancels drift that repeated runs of a single binary cannot.
 cmd_ab() {
     local ref_a="$1" ref_b="$2" iters="${3:-5}"
     local job
