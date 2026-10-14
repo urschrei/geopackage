@@ -828,6 +828,11 @@ fn apply_open_options(
     if let Some(synchronous) = options.synchronous {
         conn.pragma_update(None, "synchronous", synchronous.code())?;
     }
+    if let Some(bytes) = options.mmap_size {
+        // The pragma returns the size it set, so it is a query, not a plain
+        // pragma_update. SQLite clamps the value to its compile-time ceiling.
+        conn.query_row(&format!("PRAGMA mmap_size = {bytes}"), [], |_| Ok(()))?;
+    }
     if apply_journal && let Some(mode) = options.journal_mode {
         // journal_mode returns the resulting mode as a row, so it is a query,
         // not a plain pragma_update; the keyword comes from a typed enum.

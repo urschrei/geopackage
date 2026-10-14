@@ -410,6 +410,29 @@ fn a_wide_gap_in_the_key_is_skipped() {
     assert_eq!(fids_via(&gpkg, options), fids);
 }
 
+/// A memory-mapped read on threads returns every row once, in key order.
+#[test]
+fn a_mapped_file_reads_on_threads() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("m.gpkg");
+    let gpkg = GeoPackage::create(&path).unwrap();
+    let builder =
+        TableSchemaBuilder::new("pts").geometry(GeometrySpec::new(GeometryType::Point, 4326));
+    let layer = gpkg.create_layer(&builder).unwrap();
+    let features: Vec<NewFeature<Point<f64>>> = (1..=500)
+        .map(|i| NewFeature::new(Point::new(i as f64, 0.0), Vec::new()).with_fid(i))
+        .collect();
+    layer.write_all(features, 0).unwrap();
+    drop(gpkg);
+
+    let mapped = geopackage::OpenOptions::new()
+        .mmap_size(1 << 24)
+        .open_read_only(&path)
+        .unwrap();
+    let options = ArrowReadOptions::with_batch_size(32).with_threads(4);
+    assert_eq!(fids_via(&mapped, options), (1..=500).collect::<Vec<i64>>());
+}
+
 /// An in-memory database cannot be opened by a second connection, so the
 /// threaded entry point reads it on the calling thread instead of failing.
 #[test]

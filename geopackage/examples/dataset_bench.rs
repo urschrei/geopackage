@@ -32,11 +32,23 @@
 //!
 //! `index` and `write` use `synchronous = OFF`, as GDAL does for a file it
 //! creates. `scripts/gdal_dataset_bench.c` has the same subcommands for GDAL.
+//!
+//! Set `DATASET_BENCH_MMAP` to a byte count to open the files it reads with
+//! [`OpenOptions::mmap_size`].
 
 use std::time::Instant;
 
 use geopackage::arrow::ArrowReadOptions;
-use geopackage::{BoundingBox, GeoPackage, OpenOptions, Synchronous, TableSchemaBuilder};
+use geopackage::{BoundingBox, OpenOptions, Synchronous, TableSchemaBuilder};
+
+/// Returns the options for opening a file to read: a memory map of
+/// `DATASET_BENCH_MMAP` bytes when that variable is set.
+fn read_options() -> Result<OpenOptions, Box<dyn std::error::Error>> {
+    Ok(match std::env::var("DATASET_BENCH_MMAP") {
+        Ok(bytes) => OpenOptions::new().mmap_size(bytes.parse()?),
+        Err(_) => OpenOptions::new(),
+    })
+}
 
 /// Print the elapsed time of one repetition, given the total and the count.
 fn report(elapsed: std::time::Duration, reps: usize) {
@@ -47,7 +59,7 @@ fn report(elapsed: std::time::Duration, reps: usize) {
 }
 
 fn info(path: &str, layer_name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let gpkg = GeoPackage::open(path)?;
+    let gpkg = read_options()?.open(path)?;
     let layer = gpkg.layer(layer_name)?;
 
     // Counted with SQL rather than by iterating: the row count is a property of
@@ -93,7 +105,7 @@ fn scan(
     mode: &str,
     reps: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let gpkg = GeoPackage::open(path)?;
+    let gpkg = read_options()?.open(path)?;
     let layer = gpkg.layer(layer_name)?;
     let mut cursor = layer.cursor()?;
 
@@ -145,7 +157,7 @@ fn arrow(
     reps: usize,
     threads: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let gpkg = GeoPackage::open(path)?;
+    let gpkg = read_options()?.open(path)?;
     let layer = gpkg.layer(layer_name)?;
     let options = ArrowReadOptions::default().with_threads(threads);
 
@@ -174,9 +186,7 @@ fn arrow(
 }
 
 fn index(path: &str, layer_name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let gpkg = OpenOptions::new()
-        .synchronous(Synchronous::Off)
-        .open(path)?;
+    let gpkg = read_options()?.synchronous(Synchronous::Off).open(path)?;
     let layer = gpkg.layer(layer_name)?;
     if layer.has_spatial_index()? {
         return Err("layer already has a spatial index; hand this a fresh copy".into());
@@ -197,7 +207,7 @@ fn bbox(
     bounds: BoundingBox,
     reps: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let gpkg = GeoPackage::open(path)?;
+    let gpkg = read_options()?.open(path)?;
     let layer = gpkg.layer(layer_name)?;
     let indexed = layer.has_spatial_index()?;
     let mut cursor = layer.cursor_in(bounds)?;
@@ -228,7 +238,7 @@ fn write(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Untimed: pull the whole source into memory as batches, so the timed
     // section is the write path and nothing else.
-    let src = GeoPackage::open(source)?;
+    let src = read_options()?.open(source)?;
     let layer = src.layer(source_layer)?;
     let schema = layer.arrow_schema()?;
     let batches: Vec<_> = layer
@@ -268,7 +278,7 @@ fn write(
 
 fn noop(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let start = Instant::now();
-    let gpkg = GeoPackage::open(path)?;
+    let gpkg = read_options()?.open(path)?;
     drop(gpkg);
     report(start.elapsed(), 1);
     Ok(())

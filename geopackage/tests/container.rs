@@ -133,3 +133,23 @@ fn opened_connections_get_a_busy_timeout() {
     let adopted = GeoPackage::from_connection(conn).unwrap();
     expect_ms(&adopted, 1234, "a caller's connection should be left alone");
 }
+
+/// The memory map is off unless asked for, and the option sets its size.
+#[test]
+fn mmap_size_is_opt_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.gpkg");
+    drop(GeoPackage::create(&path).unwrap());
+    let map_size = |gpkg: &GeoPackage| -> i64 {
+        gpkg.connection()
+            .query_row("PRAGMA mmap_size", [], |r| r.get(0))
+            .unwrap()
+    };
+
+    assert_eq!(map_size(&GeoPackage::open(&path).unwrap()), 0);
+    let mapped = OpenOptions::new()
+        .mmap_size(1 << 20)
+        .open_read_only(&path)
+        .unwrap();
+    assert_eq!(map_size(&mapped), 1 << 20);
+}
