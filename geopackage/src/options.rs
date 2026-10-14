@@ -115,6 +115,7 @@ pub struct OpenOptions {
     pub(crate) journal_mode: Option<JournalMode>,
     pub(crate) synchronous: Option<Synchronous>,
     pub(crate) busy_timeout: Option<Duration>,
+    pub(crate) mmap_size: Option<u64>,
     pub(crate) allow_unsupported_extension_writes: bool,
     pub(crate) enforce_column_constraints: bool,
     pub(crate) lenient: bool,
@@ -179,6 +180,34 @@ impl OpenOptions {
     #[must_use]
     pub fn busy_timeout(mut self, timeout: Duration) -> Self {
         self.busy_timeout = Some(timeout);
+        self
+    }
+
+    /// Reads the file through a memory map of up to `bytes` bytes
+    /// (`PRAGMA mmap_size`). `0` turns the map off, which is the default.
+    ///
+    /// Without a map, SQLite reads each page with a system call that copies it
+    /// into its own cache. With one, it reads pages from the map, and makes no
+    /// read calls for the mapped part of the file. That makes reads of rows
+    /// larger than a page faster, because SQLite reads their overflow pages
+    /// one call each. Reads of small rows can be slower. Measure it on your
+    /// own files before you turn it on.
+    ///
+    /// SQLite limits the map to its compile-time `SQLITE_MAX_MMAP_SIZE`:
+    /// 2,147,418,112 bytes in a default build, which includes the `bundled`
+    /// feature. A larger file is mapped only up to that size, and the rest is
+    /// read as before.
+    ///
+    /// SQLite documents the costs of a memory map. Among them, an I/O error on
+    /// a mapped page stops the process with a signal (`SIGBUS` on Unix)
+    /// instead of returning an error, so use it only for files on reliable
+    /// local storage.
+    ///
+    /// A threaded [`crate::Layer::read_arrow`] gives its worker connections
+    /// the same map size.
+    #[must_use]
+    pub fn mmap_size(mut self, bytes: u64) -> Self {
+        self.mmap_size = Some(bytes);
         self
     }
 

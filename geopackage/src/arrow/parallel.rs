@@ -81,6 +81,9 @@ pub(crate) struct WorkerPlan {
     pub(crate) batch_size: usize,
     pub(crate) max_batch_bytes: usize,
     pub(crate) threads: usize,
+    /// The reading connection's map size, which each worker's connection
+    /// takes too.
+    pub(crate) mmap_size: u64,
 }
 
 impl ParallelBatches {
@@ -206,7 +209,10 @@ fn run_worker(
     let send_error = |error: Error| {
         drop(tx.send(Err(ArrowError::ExternalError(Box::new(error)))));
     };
-    let gpkg = match crate::GeoPackage::open_read_only(&plan.path) {
+    let gpkg = match crate::OpenOptions::new()
+        .mmap_size(plan.mmap_size)
+        .open_read_only(&plan.path)
+    {
         Ok(gpkg) => gpkg,
         Err(error) => return send_error(error),
     };

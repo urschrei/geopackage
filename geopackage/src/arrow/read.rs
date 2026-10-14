@@ -505,6 +505,10 @@ impl Layer<'_> {
         if keys < (batch_size as u64).saturating_mul(2) {
             return Ok(None);
         }
+        let mmap_size: i64 = self
+            .gpkg()
+            .connection()
+            .query_row("PRAGMA mmap_size", [], |row| row.get(0))?;
         Ok(Some(ParallelBatches::spawn(&WorkerPlan {
             path,
             table: self.table_name().to_owned(),
@@ -515,6 +519,7 @@ impl Layer<'_> {
             batch_size,
             max_batch_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
             threads: options.resolved_threads(),
+            mmap_size: u64::try_from(mmap_size).unwrap_or(0),
         })))
     }
 }
