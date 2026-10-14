@@ -8,6 +8,16 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `arrow-array` and `arrow-schema` are now version 60 (were
+  59). Arrow types appear in the `arrow` feature's API, so callers must use
+  Arrow 60 too.
+- `geopackage-ffi` builds its exported Arrow stream itself, in the layout the
+  Arrow specification defines, because Arrow 60 no longer lets a producer set
+  the stream's callbacks. The C ABI is unchanged.
+- Dev-dependency `hegeltest` is now 0.49.
+
 ## [0.10.2] - 2026-10-14
 
 ### Changed

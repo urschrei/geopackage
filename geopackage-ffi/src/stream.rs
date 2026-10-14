@@ -124,11 +124,16 @@
 //! that a caller may pull batches from a thread other than the one holding the
 //! connection, which is exactly what `Connection: !Sync` denies, and no
 //! refcount can enforce the difference. Instead of making that claim, this
-//! module fills in the four `ArrowArrayStream` callbacks itself. The struct's
-//! fields are public, so nothing here relies on arrow-rs internals. What the
+//! module fills in the four `ArrowArrayStream` callbacks itself. What the
 //! module avoids is arrow-rs's `Send` bound, which exists for arrow-rs's own
 //! constructor rather than for the C interface: the C Data Interface makes no
 //! threading claim of its own.
+//!
+//! arrow-rs keeps `FFI_ArrowArrayStream`'s fields private and has no way to
+//! install other callbacks, so the module builds a `RawStream`, the same
+//! struct as the specification lays it out, and writes it through the
+//! caller's `FFI_ArrowArrayStream` pointer. The exported signatures, and so
+//! the C header, still name `FFI_ArrowArrayStream`.
 //!
 //! So the stream follows this crate's ordinary rule: use it from one thread at
 //! a time, together with its container and the container's other handles.
@@ -155,6 +160,24 @@ use crate::handle::{ChildToken, Container, LayerHandle};
 use crate::util::borrow_str;
 use crate::value::{borrow_values, gpkg_value_t};
 
+/// The C stream interface's `struct ArrowArrayStream`, field for field as the
+/// Arrow specification defines it.
+///
+/// `FFI_ArrowArrayStream` has the same layout, but its fields are private.
+/// The assertions below check that the two agree in size and alignment. Field
+/// order is fixed by the specification, which both follow.
+#[repr(C)]
+struct RawStream {
+    get_schema: Option<unsafe extern "C" fn(*mut RawStream, *mut FFI_ArrowSchema) -> c_int>,
+    get_next: Option<unsafe extern "C" fn(*mut RawStream, *mut FFI_ArrowArray) -> c_int>,
+    get_last_error: Option<unsafe extern "C" fn(*mut RawStream) -> *const c_char>,
+    release: Option<unsafe extern "C" fn(*mut RawStream)>,
+    private_data: *mut c_void,
+}
+
+const _: () = assert!(size_of::<RawStream>() == size_of::<FFI_ArrowArrayStream>());
+const _: () = assert!(align_of::<RawStream>() == align_of::<FFI_ArrowArrayStream>());
+
 /// What a stream owns for as long as C holds it.
 ///
 /// `batches` has had its borrow of the container erased. `_token` makes that
@@ -172,7 +195,7 @@ struct StreamState {
 /// # Safety
 ///
 /// `stream` must be a stream this module produced, not already released.
-unsafe extern "C" fn release(stream: *mut FFI_ArrowArrayStream) {
+unsafe extern "C" fn release(stream: *mut RawStream) {
     if stream.is_null() {
         return;
     }
@@ -198,7 +221,7 @@ unsafe extern "C" fn release(stream: *mut FFI_ArrowArrayStream) {
 /// # Safety
 ///
 /// `stream` must be a stream this module produced.
-unsafe fn state<'a>(stream: *mut FFI_ArrowArrayStream) -> Option<&'a mut StreamState> {
+unsafe fn state<'a>(stream: *mut RawStream) -> Option<&'a mut StreamState> {
     if stream.is_null() {
         return None;
     }
@@ -217,10 +240,7 @@ unsafe fn state<'a>(stream: *mut FFI_ArrowArrayStream) -> Option<&'a mut StreamS
 /// # Safety
 ///
 /// `stream` must be a stream this module produced and `out` must be writable.
-unsafe extern "C" fn get_schema(
-    stream: *mut FFI_ArrowArrayStream,
-    out: *mut FFI_ArrowSchema,
-) -> c_int {
+unsafe extern "C" fn get_schema(stream: *mut RawStream, out: *mut FFI_ArrowSchema) -> c_int {
     // SAFETY: forwarded to this callback's contract.
     let Some(state) = (unsafe { state(stream) }) else {
         return EINVAL;
@@ -245,10 +265,7 @@ unsafe extern "C" fn get_schema(
 /// # Safety
 ///
 /// As [`get_schema`].
-unsafe extern "C" fn get_next(
-    stream: *mut FFI_ArrowArrayStream,
-    out: *mut FFI_ArrowArray,
-) -> c_int {
+unsafe extern "C" fn get_next(stream: *mut RawStream, out: *mut FFI_ArrowArray) -> c_int {
     // SAFETY: forwarded to this callback's contract.
     let Some(state) = (unsafe { state(stream) }) else {
         return EINVAL;
@@ -281,7 +298,7 @@ unsafe extern "C" fn get_next(
 /// # Safety
 ///
 /// As [`get_schema`].
-unsafe extern "C" fn get_last_error(stream: *mut FFI_ArrowArrayStream) -> *const c_char {
+unsafe extern "C" fn get_last_error(stream: *mut RawStream) -> *const c_char {
     // SAFETY: forwarded to this callback's contract.
     let Some(state) = (unsafe { state(stream) }) else {
         return std::ptr::null();
@@ -300,13 +317,13 @@ const EIO: c_int = 5;
 
 /// Builds a stream over `batches`, holding `token` to keep the container
 /// alive.
-fn export_batches(batches: ArrowBatches<'static>, token: ChildToken) -> FFI_ArrowArrayStream {
+fn export_batches(batches: ArrowBatches<'static>, token: ChildToken) -> RawStream {
     let state = Box::new(StreamState {
         batches,
         last_error: None,
         _token: token,
     });
-    FFI_ArrowArrayStream {
+    RawStream {
         get_schema: Some(get_schema),
         get_next: Some(get_next),
         get_last_error: Some(get_last_error),
@@ -566,9 +583,10 @@ unsafe fn read_arrow_inner(
     let token = handle.token();
 
     // SAFETY: the caller guarantees `out` points at writable storage for an
-    // `ArrowArrayStream`. Written unaligned because C makes no alignment
-    // promise about a struct it declared on its own stack.
-    unsafe { std::ptr::write_unaligned(out, export_batches(erased, token)) };
+    // `ArrowArrayStream`, which is what `RawStream` is. Written unaligned
+    // because C makes no alignment promise about a struct it declared on its
+    // own stack.
+    unsafe { std::ptr::write_unaligned(out.cast::<RawStream>(), export_batches(erased, token)) };
     Status::Ok
 }
 
