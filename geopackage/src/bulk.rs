@@ -42,9 +42,6 @@
 //! points, it takes ~745 ms of a ~1593 ms build. Roughly half of that is the
 //! bijection scan, which reads every entry back out of the index, and half is
 //! `rtreecheck`, which walks the whole tree. GDAL's builder runs no equivalent.
-//! With the check, this crate is level with GDAL. Without it, those figures put
-//! it comfortably ahead (see
-//! `roadmap/benchmarks/2026-07-24-gdal-like-for-like.md`).
 //!
 //! Through 0.5 that check ran on every bulk build. This module writes the tree
 //! by hand into an on-disk format that SQLite doesn't document as an interface,

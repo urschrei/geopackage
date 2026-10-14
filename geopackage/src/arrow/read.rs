@@ -306,8 +306,7 @@ impl Layer<'_> {
         // candidate ids become key segments the pages walk with an ordinary
         // range bound; an earlier shape re-evaluated an `IN (SELECT ... FROM
         // rtree)` subquery on every page, which re-scanned the index once per
-        // batch and measured as most of the filtered read's overhead
-        // (roadmap/benchmarks/2026-08-02-threaded-filtered-read.md). A fixed
+        // batch and measured as most of the filtered read's overhead. A fixed
         // candidate set also gives the read one consistent answer: rows
         // inserted after this point are not returned, exactly as a snapshot
         // would.

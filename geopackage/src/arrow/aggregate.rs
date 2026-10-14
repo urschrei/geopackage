@@ -53,8 +53,7 @@ impl AggregateState {
 ///
 /// Filling a batch inside a SQL aggregate keeps the fetch loop inside SQLite,
 /// instead of returning to this crate once per row. Measured over every value
-/// of every row, this costs a tenth as much as the row loop (see
-/// `roadmap/benchmarks/2026-07-25-gdal-arrow-comparison.md`). GDAL's GeoPackage
+/// of every row, this costs a tenth as much as the row loop. GDAL's GeoPackage
 /// driver uses the same technique.
 ///
 /// The builders live in the accumulator, not here, so appending a row needs no

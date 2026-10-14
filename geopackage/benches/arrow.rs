@@ -30,7 +30,7 @@
 //! The two floors are what make the result actionable rather than a bare ratio:
 //! they say how much of the time any Arrow-side work could ever remove, which is
 //! what decides whether GDAL's aggregate-function technique is worth reaching
-//! for (roadmap benchmarks/2026-07-25-gdal-arrow-techniques.md).
+//! for.
 //!
 //! All measurements read every row and every column of the same layer, from the
 //! same file, on one thread.
