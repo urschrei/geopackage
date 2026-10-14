@@ -8,8 +8,23 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-10-14
+
 ### Changed
 
+- `geopackage-ffi`: the C threading rule is stricter. A `gpkg_t` and every
+  handle taken from it must be used from one thread at a time, freeing
+  included, and may move between threads only together. 0.10.1 let each handle
+  move between threads on its own. That rule allowed data races: every handle
+  shares its container's SQLite connection, which is not thread-safe, and
+  freeing a handle updates a non-atomic count on the container. The code did
+  not change. C code that uses a layer, writer, tile cursor or Arrow stream on
+  one thread while its container or another handle from the same container is
+  in use on a second thread must change. A `gpkg_findings_t` holds no
+  reference to its container and is exempt.
+- Rewrote the module and item documentation of all four crates and the C
+  header comments to be shorter and plainer, and rewrote the book's
+  introduction for a reader new to GeoPackage.
 - `geopackage-ffi`: a tiled gridded coverage tile that breaks the coverage
   profile now reports `GPKG_STATUS_CONSTRAINT` instead of `GPKG_STATUS_OTHER`.
 
@@ -1227,7 +1242,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/urschrei/geopackage/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/urschrei/geopackage/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/urschrei/geopackage/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/urschrei/geopackage/compare/v0.9.0...v0.9.1
