@@ -98,11 +98,7 @@ impl SequentialBatches<'_> {
     fn next_batch_aggregate(&mut self) -> Result<Option<RecordBatch>> {
         let queried = self.conn.query_row(
             &self.aggregate_sql,
-            rusqlite::params![
-                self.next_key,
-                i64::try_from(self.batch_size).unwrap_or(i64::MAX),
-                self.upper_key
-            ],
+            rusqlite::params![self.next_key, self.upper_key],
             |row| row.get::<_, i64>(0),
         );
         // A failed append stops the scan and stores the real reason; the error
@@ -114,26 +110,31 @@ impl SequentialBatches<'_> {
             self.exhausted = true;
             return Err(error);
         }
-        let rows_read = queried?;
-
         let filled = self
             .aggregate
             .as_ref()
             .and_then(|state| state.output.lock().ok().and_then(|mut slot| slot.take()));
-        let Some(filled) = filled else {
+        // The aggregate ends the scan with an error when it stops a batch;
+        // any other error is the query's own.
+        if let Err(error) = queried
+            && !filled.as_ref().is_some_and(|batch| batch.stopped)
+        {
+            self.exhausted = true;
+            return Err(error.into());
+        }
+        let Some(filled) = filled.filter(|batch| batch.rows > 0) else {
             self.exhausted = true;
             return Ok(None);
         };
 
-        let rows_read = usize::try_from(rows_read).unwrap_or(0);
-        if rows_read == 0 {
-            self.exhausted = true;
-            return Ok(None);
-        }
-        // The aggregate counts every row it was given, including any it left
-        // for the next batch, so the appended count is what the builders hold.
-        let rows_appended = filled.rows;
-        self.advance(filled.last_key, rows_appended, filled.truncated);
+        // A stopped batch may have rows after it. One that ran to the end of
+        // the key range has none, which `advance` sees as a short batch.
+        let rows = if filled.stopped {
+            self.batch_size.max(filled.rows)
+        } else {
+            filled.rows
+        };
+        self.advance(filled.last_key, rows, filled.truncated);
 
         let arrays: Vec<ArrayRef> = filled
             .builders

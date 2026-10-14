@@ -30,6 +30,11 @@ While the version is below 1.0 the API may change in any release.
   longer counts the rows first. Workers read windows of `batch_size`
   consecutive keys, so a batch has fewer rows where the key has gaps. A read
   of the buildings dataset takes 1.4 s instead of 2.8 s.
+- `read_arrow` fills each batch with `SELECT agg(...) FROM t WHERE key
+  BETWEEN a AND b` instead of wrapping a `LIMIT` query in a subquery, which
+  SQLite copied every text and blob value out of. A single-threaded read of
+  the rivers dataset takes 5.3 s instead of 7.4 s, and a threaded one 1.7 s
+  instead of 2.2 s.
 - A bounding-box query on a layer with no spatial index tests each row's
   envelope in SQL, with `ST_EnvIntersects`, so SQLite reads only the geometry
   of a row outside the box. `features_in_sql` returns the new query, which
