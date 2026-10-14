@@ -1,13 +1,6 @@
-//! Measurement tool for the published figures in the README: the read, write,
-//! index-build and query paths timed over real third-party GeoPackages rather
-//! than over generated fixtures. Driven by `scripts/bench_datasets.sh`.
-//!
-//! The generated-fixture benches in `geopackage/benches` answer "did this
-//! change make the code faster", which wants a fixed, controlled shape. This
-//! answers a different question: what a caller should expect from a file they
-//! actually have. Real data differs from the fixtures in the ways that matter
-//! for these paths, chiefly vertex counts per geometry and how unevenly the
-//! features are spread, so it is measured rather than extrapolated.
+//! Times the read, write, index-build and query paths over published
+//! GeoPackages, for the figures in `roadmap/benchmarks`. Driven by
+//! `scripts/bench_datasets.sh`.
 //!
 //! Every subcommand takes an explicit layer name and prints `<key>=<value>`
 //! lines, including `elapsed_ms` measured inside the process.
@@ -29,18 +22,21 @@
 //! - `index <file> <layer>`: build the spatial index, the timed operation. The
 //!   layer must not already have one, so the script hands this a fresh copy.
 //! - `bbox <file> <layer> <minx> <miny> <maxx> <maxy> [reps]`: a bounding-box
-//!   query, counting the features it returns.
+//!   query, building a `geo_types::Geometry` for each feature it returns.
 //! - `write <src> <srclayer> <dst> [index:yes|no]`: read the source's batches
 //!   into memory (untimed), then time writing them into a fresh file. The read
 //!   is outside the measurement deliberately: timing both would produce a
 //!   figure that says nothing about either.
 //! - `noop <file>`: open and close, the startup floor to subtract from an
 //!   externally timed run.
+//!
+//! `index` and `write` use `synchronous = OFF`, as GDAL does for a file it
+//! creates. `scripts/gdal_dataset_bench.c` has the same subcommands for GDAL.
 
 use std::time::Instant;
 
 use geopackage::arrow::ArrowReadOptions;
-use geopackage::{BoundingBox, GeoPackage, TableSchemaBuilder};
+use geopackage::{BoundingBox, GeoPackage, OpenOptions, Synchronous, TableSchemaBuilder};
 
 /// Print the elapsed time of one repetition, given the total and the count.
 fn report(elapsed: std::time::Duration, reps: usize) {
@@ -178,7 +174,9 @@ fn arrow(
 }
 
 fn index(path: &str, layer_name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let gpkg = GeoPackage::open(path)?;
+    let gpkg = OpenOptions::new()
+        .synchronous(Synchronous::Off)
+        .open(path)?;
     let layer = gpkg.layer(layer_name)?;
     if layer.has_spatial_index()? {
         return Err("layer already has a spatial index; hand this a fresh copy".into());
@@ -209,7 +207,8 @@ fn bbox(
     for _ in 0..reps {
         hits = 0;
         for feature in cursor.features()? {
-            std::hint::black_box(feature?.fid());
+            let geometry = feature?.geometry()?.and_then(|g| g.to_geo());
+            std::hint::black_box(&geometry);
             hits += 1;
         }
     }
@@ -237,7 +236,9 @@ fn write(
         .collect::<Result<Vec<_>, _>>()?;
     let batch_count = batches.len();
 
-    let dst = GeoPackage::create(target)?;
+    let dst = OpenOptions::new()
+        .synchronous(Synchronous::Off)
+        .create(target)?;
     let created = dst.create_layer(
         &TableSchemaBuilder::new(source_layer)
             .from_arrow_schema(&schema)?

@@ -1,59 +1,36 @@
 #!/usr/bin/env bash
 #
-# Time the read, write, index-build and query paths over real third-party
-# GeoPackages, for the figures published in the README.
+# Time the read, write, index-build and query paths of this crate and of GDAL
+# over three published GeoPackages.
 #
-# The criterion benches in geopackage/benches answer "did this change make the
-# code faster", which wants a fixed, generated shape held constant across runs.
-# This answers a different question: what a caller should expect from a file
-# they actually have. Real data differs from the fixtures in the two ways these
-# paths are most sensitive to, vertex count per geometry and how unevenly the
-# features are spread, so it is measured rather than extrapolated from the
-# point fixtures.
-#
-# Three datasets, chosen to sit in different places on both axes rather than to
-# be large:
-#
-#   buildings  Microsoft Building Footprints, California. 11.5M four- or
-#              five-vertex polygons: many rows, almost no geometry each.
-#   rivers     HydroRIVERS v1.0, global. 8.5M linestrings with sixteen
-#              attributes: the mixed case, and the one closest to ordinary
-#              vector data.
+#   buildings  Microsoft Building Footprints, California. 11.5M polygons of
+#              four or five vertices.
+#   rivers     HydroRIVERS v1.0, global. 8.5M linestrings with 16 attributes.
 #   admin      GADM 4.1, global administrative areas. 356k multipolygons with
-#              54 attributes, averaging ~7 kB of geometry each: few rows, and
-#              nearly all of the bytes are coordinates.
+#              54 attributes and about 7 kB of geometry each.
 #
-# Method:
+# The fetch step converts each source to an unindexed GeoPackage with ogr2ogr.
 #
-#   1. Each dataset is converted once to an unindexed GeoPackage, so the
-#      index-build arm starts from the same state for every dataset and the
-#      read arms are not reading index pages.
-#   2. Reads are repeated and the median reported, not the mean, so one
-#      scheduling hiccup on a shared machine does not move the answer.
-#   3. The index build gets a fresh copy per repetition: building over an
-#      existing index is a different operation, and a copied file is not warm
-#      in the same way a just-built one is.
-#   4. The bounding-box query runs against the index this crate just built,
-#      and again with no index at all, so the figure has its own baseline
-#      rather than being quoted alone.
-#   5. The write arm reads the source into memory untimed, then times the
-#      write. Timing a read and a write together produces a figure that says
-#      nothing about either; that mistake was made once in this repo already
-#      (see roadmap/benchmarks/2026-07-24-gdal-like-for-like.md). It runs twice,
-#      with and without the index being built during the write, since those are
-#      separate figures and the README quotes both.
-#   6. Peak resident set size is reported for the columnar read, the index build
-#      and the write: three arms whose working set depends on the data rather
-#      than being a constant. These are extra invocations, so the timings do not
-#      pay for the measurement, and they are repeated and taken as a median for
-#      the same reason as the timings. The threaded columnar read's peak varies
-#      by nearly a factor of two run to run, depending on how many batches its
-#      reader threads hold at once, so a single run of it means little.
+# The two sides are geopackage/examples/dataset_bench.rs and
+# scripts/gdal_dataset_bench.c, which have the same subcommands. The script
+# compiles the C program against the GDAL that `$GDAL_CONFIG` (default
+# `gdal-config`) names. Each tool times the operation inside its process.
 #
-# What this does not control: the OS page cache. Every arm here is warm, which
-# is the right choice for a repeated measurement but means these are not
-# cold-start figures. The host is an ordinary desktop, so `uptime` is reported
-# at both ends and the medians are what should be quoted.
+# Method, per dataset and operation:
+#
+#   1. `reps` runs of each side, alternating which side runs first, and the
+#      median of each side.
+#   2. The index build gets a fresh copy of the dataset for each run. The
+#      indexed query then runs against the index that the same side built.
+#   3. The write reads the source into memory as Arrow batches (not timed),
+#      then times the write of those batches into a new file.
+#   4. Writes on both sides use synchronous = OFF.
+#   5. Peak resident memory for the columnar read, the index build and the
+#      write, as the median of `reps` extra runs. Needs /usr/bin/time.
+#   6. Each side's row and hit counts, so that a side that read less is
+#      visible.
+#
+# The page cache is warm for every run.
 #
 # Usage:
 #   scripts/bench_datasets.sh fetch [dir]         download and convert (~5 GB)
@@ -64,13 +41,13 @@ set -euo pipefail
 MODE="${1:-run}"
 DIR="${2:-${GEOPACKAGE_BENCH_DIR:-$PWD/benchdata}}"
 REPS="${3:-3}"
+GDAL_CONFIG="${GDAL_CONFIG:-gdal-config}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BENCH="$ROOT/target/release/examples/dataset_bench"
+OURS="$ROOT/target/release/examples/dataset_bench"
 
 # name | layer | gpkg | query box (minx miny maxx maxy)
-# The boxes are real places, sized to return a fraction of a per cent of the
-# layer: San Francisco, the Amazon basin, and western Europe respectively.
+# The boxes are San Francisco, part of the Amazon basin, and western Europe.
 DATASETS=(
     "buildings|buildings|ca_buildings.gpkg|-122.52 37.70 -122.35 37.83"
     "rivers|rivers|hydrorivers.gpkg|-70 -10 -60 0"
@@ -127,149 +104,154 @@ print(f'{xs[len(xs)//2]:.1f}')
 " "$@"
 }
 
-# The elapsed_ms line from one dataset_bench invocation.
-timed() {
-    "$BENCH" "$@" | sed -n 's/^elapsed_ms=//p'
+# Peak resident set size from a /usr/bin/time report, in MiB. macOS `time -l`
+# reports bytes, GNU `time -v` KiB.
+rss_mib() {
+    awk '/maximum resident set size/ { printf "%.0f", $1 / 1048576; exit }
+         /Maximum resident set size/ { printf "%.0f", $6 / 1024; exit }' "$1"
 }
 
-# A named key from one dataset_bench invocation.
-field() {
-    local key="$1"; shift
-    "$BENCH" "$@" | sed -n "s/^$key=//p"
-}
-
-# Peak resident set size of one dataset_bench invocation, in MB.
-#
-# The process is wrapped rather than instrumented: what a caller cares about is
-# what the whole process uses, and this needs no memory-profiling dependency in
-# the example. It is a separate invocation from the timed ones, so the timings
-# are not paying for the measurement.
-#
-# Reported for the arms whose working set is a question rather than a constant:
-# the columnar read keeps whole batches (the reason the `admin` read figure
-# moves with host memory), the index build stores an entry per row, and the
-# write keeps the batches it is writing. The scalar read keeps one row at a
-# time by construction, so it is not measured here.
-#
-# This needs repeating as much as the timings do, and for the same reason. The
-# threaded columnar read was measured over five runs of one dataset at 642, 900,
-# 1046, 1066, 1089 and 1190 MB: peak depends on how many batches the reader
-# threads happen to hold at once, so a single run can be off by a factor of two.
-# The caller repeats it and takes a median.
-#
-# macOS `time -l` reports bytes, GNU `time -v` kilobytes; both are normalised.
-peak_rss_mb() {
-    local err rss
-    err="$(mktemp)"
-    /usr/bin/time -l "$BENCH" "$@" >/dev/null 2>"$err" || true
-    rss="$(awk '/maximum resident set size/ {print $1; exit}' "$err")"
-    if [[ -z "$rss" ]]; then
-        /usr/bin/time -v "$BENCH" "$@" >/dev/null 2>"$err" || true
-        rss="$(awk '/Maximum resident set size/ {print $6; exit}' "$err")"
-        [[ -n "$rss" ]] && rss=$((rss * 1024))
-    fi
-    rm -f "$err"
-    if [[ -n "$rss" ]]; then
-        awk -v b="$rss" 'BEGIN { printf "%.0f", b / 1048576 }'
+# Run one side's tool. Print its elapsed_ms, or its peak RSS in MiB when
+# MEASURE is `rss`. Keep the full output in $WORK/last-<side>.txt.
+run_tool() {
+    local side="$1"; shift
+    local bin="$OURS" out="$WORK/last-$side.txt"
+    [[ $side == gdal ]] && bin="$GDAL"
+    if [[ ${MEASURE:-time} == rss ]]; then
+        local flag=-v
+        [[ $(uname -s) == Darwin ]] && flag=-l
+        /usr/bin/time "$flag" "$bin" "$@" >"$out" 2>"$WORK/rss.txt"
+        rss_mib "$WORK/rss.txt"
     else
-        echo "n/a"
+        "$bin" "$@" >"$out"
+        sed -n 's/^elapsed_ms=//p' "$out"
     fi
 }
+
+# The operations. Each takes the side first.
+
+op_scan() {
+    if [[ $1 == ours ]]; then run_tool ours scan "$src" "$layer" geo 1
+    else run_tool gdal scan "$src" "$layer"; fi
+}
+
+# The second argument is the thread count: 0 is each side's default.
+op_arrow() {
+    if [[ $1 == ours ]]; then run_tool ours arrow "$src" "$layer" 1 "$2"
+    elif [[ $2 == 0 ]]; then run_tool gdal arrow "$src" "$layer"
+    else OGR_GPKG_NUM_THREADS="$2" run_tool gdal arrow "$src" "$layer"; fi
+}
+
+op_index() {
+    cp "$src" "$WORK/indexed-$1.gpkg"
+    run_tool "$1" index "$WORK/indexed-$1.gpkg" "$layer"
+}
+
+# The second argument is the file to query.
+op_bbox() {
+    local file="$2"
+    [[ $file == indexed ]] && file="$WORK/indexed-$1.gpkg"
+    # shellcheck disable=SC2086
+    if [[ $1 == ours ]]; then run_tool ours bbox "$file" "$layer" $box 1
+    else run_tool gdal bbox "$file" "$layer" $box; fi
+}
+
+# The second argument is yes or no: build the index during the write.
+op_write() {
+    rm -f "$WORK/written-$1.gpkg"
+    run_tool "$1" write "$src" "$layer" "$WORK/written-$1.gpkg" "$2"
+    rm -f "$WORK/written-$1.gpkg"
+}
+
+# Run one operation `reps` times on each side, alternating which side runs
+# first. Print the median of each side, then each side's counts from its last
+# run.
+measure() {
+    local label="$1"; shift
+    local ours=() gdal=() rep
+    for rep in $(seq 1 "$REPS"); do
+        if (( rep % 2 )); then
+            ours+=("$("$@" ours)"); gdal+=("$("$@" gdal)")
+        else
+            gdal+=("$("$@" gdal)"); ours+=("$("$@" ours)")
+        fi
+    done
+    printf '  %-26s %12s %12s\n' "$label" "$(median "${ours[@]}")" "$(median "${gdal[@]}")"
+    local counts
+    for side in ours gdal; do
+        counts="$(grep -E '^(rows|hits|geometries)=' "$WORK/last-$side.txt" | tr '\n' ' ' || true)"
+        [[ -n $counts ]] && printf '    %s: %s\n' "$side" "$counts"
+    done
+    return 0
+}
+
+# `measure` passes the side last, so each operation is wrapped to put the side
+# first.
+scan() { op_scan "$1"; }
+arrow_default() { op_arrow "$1" 0; }
+arrow_single() { op_arrow "$1" 1; }
+index() { op_index "$1"; }
+bbox_unindexed() { op_bbox "$1" "$src"; }
+bbox_indexed() { op_bbox "$1" indexed; }
+write_plain() { op_write "$1" no; }
+write_indexed() { op_write "$1" yes; }
 
 run() {
-    [[ -x "$BENCH" ]] || {
-        echo "building the measurement tool"
-        cargo build --release --quiet --manifest-path "$ROOT/Cargo.toml" \
-            --features arrow --example dataset_bench
-    }
+    command -v "$GDAL_CONFIG" >/dev/null || { echo "$GDAL_CONFIG not found" >&2; exit 1; }
+    [[ -x /usr/bin/time ]] || { echo "/usr/bin/time not found" >&2; exit 1; }
 
     WORK="$(mktemp -d)"
     trap 'rm -rf "$WORK"' EXIT
 
+    echo "building both tools"
+    cargo build --release --quiet --manifest-path "$ROOT/Cargo.toml" \
+        -p geopackage --features arrow,bundled --example dataset_bench
+    local prefix
+    prefix="$("$GDAL_CONFIG" --prefix)"
+    GDAL="$WORK/gdal_dataset_bench"
+    # shellcheck disable=SC2046
+    cc -O2 -o "$GDAL" "$ROOT/scripts/gdal_dataset_bench.c" \
+        $("$GDAL_CONFIG" --cflags) $("$GDAL_CONFIG" --libs) -Wl,-rpath,"$prefix/lib"
+    # As activating a conda environment would set them.
+    if [[ $prefix != /usr && -d $prefix/share/proj ]]; then
+        export PROJ_DATA="$prefix/share/proj" GDAL_DATA="$prefix/share/gdal"
+    fi
+
+    echo
     echo "environment"
-    echo "  $(uname -sr), $(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo 'unknown cpu')"
+    echo "  $(uname -sr), $(nproc 2>/dev/null || sysctl -n hw.ncpu) CPUs"
+    echo "  GDAL $("$GDAL_CONFIG" --version) at $prefix"
     echo "  reps=$REPS"
     echo "  host load at start:$(uptime | sed 's/.*load averages*://')"
 
     for entry in "${DATASETS[@]}"; do
         IFS='|' read -r name layer file box <<<"$entry"
-        local_path="$DIR/$file"
-        [[ -f "$local_path" ]] || { echo "missing $local_path; run the fetch step" >&2; exit 1; }
+        src="$DIR/$file"
+        [[ -f "$src" ]] || { echo "missing $src; run the fetch step" >&2; exit 1; }
 
         echo
         echo "=== $name ($file, layer $layer)"
-        "$BENCH" info "$local_path" "$layer" | sed 's/^/  /'
+        "$OURS" info "$src" "$layer" | sed 's/^/  /'
+        printf '  %-26s %12s %12s\n' "milliseconds" "ours" "gdal"
 
-        # Reads, over the unindexed original.
-        samples=()
-        for _ in $(seq 1 "$REPS"); do samples+=("$(timed scan "$local_path" "$layer" geom 1)"); done
-        echo "  scan_ms=$(median "${samples[@]}")"
-
-        samples=()
-        for _ in $(seq 1 "$REPS"); do samples+=("$(timed arrow "$local_path" "$layer" 1 0)"); done
-        echo "  arrow_ms=$(median "${samples[@]}")"
-
-        samples=()
-        for _ in $(seq 1 "$REPS"); do samples+=("$(timed arrow "$local_path" "$layer" 1 1)"); done
-        echo "  arrow_1thread_ms=$(median "${samples[@]}")"
-
-        # The box query with no index, the baseline the index is measured
-        # against. Read from the unindexed original.
-        # shellcheck disable=SC2086
-        echo "  bbox_scan_ms=$(timed bbox "$local_path" "$layer" $box 1)"
-
-        # Index build: a fresh copy per repetition.
-        samples=()
-        for _ in $(seq 1 "$REPS"); do
-            cp "$local_path" "$WORK/indexed.gpkg"
-            samples+=("$(timed index "$WORK/indexed.gpkg" "$layer")")
+        measure scan scan
+        measure arrow arrow_default
+        measure arrow_1_thread arrow_single
+        measure bbox_unindexed bbox_unindexed
+        measure index_build index
+        measure bbox_indexed bbox_indexed
+        for side in ours gdal; do
+            echo "    $side indexed bytes: $(stat -c%s "$WORK/indexed-$side.gpkg" 2>/dev/null || stat -f%z "$WORK/indexed-$side.gpkg")"
         done
-        echo "  index_build_ms=$(median "${samples[@]}")"
+        rm -f "$WORK"/indexed-*.gpkg
+        measure write write_plain
+        measure write_with_index write_indexed
 
-        # The same box against the index just built.
-        samples=()
-        # shellcheck disable=SC2086
-        for _ in $(seq 1 "$REPS"); do samples+=("$(timed bbox "$WORK/indexed.gpkg" "$layer" $box 5)"); done
-        # shellcheck disable=SC2086
-        echo "  bbox_index_ms=$(median "${samples[@]}")"
-        # shellcheck disable=SC2086
-        echo "  bbox_hits=$(field hits bbox "$WORK/indexed.gpkg" "$layer" $box 1)"
-        echo "  indexed_bytes=$(stat -f%z "$WORK/indexed.gpkg" 2>/dev/null || stat -c%s "$WORK/indexed.gpkg")"
-        rm -f "$WORK/indexed.gpkg"
-
-        # Write: source read into memory untimed, the write timed. Both arms,
-        # because they answer different questions and the README quotes both:
-        # what the write costs, and what building the index during it adds. The
-        # indexed arm creates the index empty before the write, which is what
-        # lets the bulk path fill it in one pass instead of through the
-        # triggers.
-        rm -f "$WORK/written.gpkg"
-        echo "  write_ms=$(timed write "$local_path" "$layer" "$WORK/written.gpkg" no)"
-        rm -f "$WORK/written.gpkg"
-        echo "  write_with_index_ms=$(timed write "$local_path" "$layer" "$WORK/written.gpkg" yes)"
-        rm -f "$WORK/written.gpkg"
-
-        # Peak memory, on the arms whose working set is a question. Last, so a
-        # failure here does not cost the timings, and repeated like them,
-        # because peak RSS varies as much run to run as elapsed time does.
-        samples=()
-        for _ in $(seq 1 "$REPS"); do samples+=("$(peak_rss_mb arrow "$local_path" "$layer" 1 0)"); done
-        echo "  arrow_peak_mb=$(median "${samples[@]}")"
-
-        samples=()
-        for _ in $(seq 1 "$REPS"); do
-            cp "$local_path" "$WORK/rss.gpkg"
-            samples+=("$(peak_rss_mb index "$WORK/rss.gpkg" "$layer")")
-            rm -f "$WORK/rss.gpkg"
-        done
-        echo "  index_peak_mb=$(median "${samples[@]}")"
-
-        samples=()
-        for _ in $(seq 1 "$REPS"); do
-            samples+=("$(peak_rss_mb write "$local_path" "$layer" "$WORK/written.gpkg" no)")
-            rm -f "$WORK/written.gpkg"
-        done
-        echo "  write_peak_mb=$(median "${samples[@]}")"
+        printf '  %-26s %12s %12s\n' "peak MiB" "ours" "gdal"
+        MEASURE=rss measure arrow_peak arrow_default
+        MEASURE=rss measure index_peak index
+        rm -f "$WORK"/indexed-*.gpkg
+        MEASURE=rss measure write_peak write_plain
     done
 
     echo
