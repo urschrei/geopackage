@@ -8,6 +8,16 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Changed
+
+- `geopackage-ffi`: a tiled gridded coverage tile that breaks the coverage
+  profile now reports `GPKG_STATUS_CONSTRAINT` instead of `GPKG_STATUS_OTHER`.
+
+### Fixed
+
+- Corrected documentation, in the crates, the C header and the book, that
+  disagreed with the code.
+
 ## [0.10.1] - 2026-10-13
 
 ### Changed

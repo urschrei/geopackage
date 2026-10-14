@@ -81,6 +81,10 @@ impl Layer<'_> {
     ///   requirement in a stricter form: the key must start at 1.
     /// - **There are at least two batches of rows.** Below that, opening
     ///   connections and starting threads costs more than it saves.
+    /// - **The layer reads every column.** A layer from
+    ///   [`Self::with_columns`] or [`Self::without_geometry`] reads on one
+    ///   thread, because the workers rebuild the layer from its table name and
+    ///   would read every column.
     ///
     /// Workers open their connections **read-only**. Several connections can
     /// therefore read one table safely without agreeing on a snapshot, because
