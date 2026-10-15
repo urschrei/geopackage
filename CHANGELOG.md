@@ -14,6 +14,8 @@ While the version is below 1.0 the API may change in any release.
   tile's. SQLite stores NaN as NULL, so neither table can store one.
 - `GeometryError::InteriorRingsWithoutExterior`, for a polygon with interior
   rings and an empty exterior ring.
+- `DateTime::format_strict` returns the strict 1.4 text of an instant,
+  normalised to UTC and floored to the millisecond.
 
 ### Changed
 
@@ -38,6 +40,25 @@ While the version is below 1.0 the API may change in any release.
 - `create_coverage` and `CoverageWriter::put_with_ancillary` reject a NaN
   in the ancillary row. A NaN scale or offset was an SQLite error, and a NaN
   `data_null` or statistic read back as `None`.
+- A `DATETIME` is written in the strict 1.4 form, normalised to UTC and
+  floored to the millisecond, by `write_all`, `FeatureWriter` and
+  `write_arrow`. A value with sub-millisecond digits or a UTC offset used to
+  be written in a form the default strict read rejects. A value whose offset
+  moves it outside years 0 to 9999 is `Error::InvalidDateTimeValue`.
+- `write_arrow` checks each batch's column types against the layer's before
+  writing its rows: a column takes the Arrow type a read gives it, a narrower
+  or unsigned integer, `Float32`, `LargeUtf8`, `LargeBinary`, or a timestamp
+  in any unit. It used to write any type into any column. Unsigned integers
+  and second and nanosecond timestamps, which `from_arrow_schema` already
+  mapped, are now written; a `UInt64` above `i64::MAX` is an error.
+- The Arrow reads use the layer's `StorageStrictness`, as the row path does,
+  and read a geometry cell that is not a BLOB as a null geometry instead of
+  failing the batch.
+- `read_arrow_in` and `read_arrow_in_where` select no row for a box with a
+  NaN edge or inverted edges, as `features_in` does. `read_arrow_in` returns
+  its rows in key order; its docs no longer say `features_in`'s order.
+- A NaN written to a `REAL` column is stored as NULL and a negative zero as
+  zero, as SQLite stores them; the write docs now say so.
 - Dev-dependency `hegeltest` is now 0.49.11 in both `geopackage` and
   `geopackage-core`, and `hegel.toml` runs 2000 cases per property test.
 
@@ -59,6 +80,11 @@ While the version is below 1.0 the API may change in any release.
   finite, such as an empty point, which the XY range already left out.
 - `gpb::body_offset` reported a 4 to 7 byte blob with a bad magic as
   `BadMagic`, where `parse_header` reports it as `Truncated`.
+- `DateTime::micros_since_epoch` and `from_micros_since_epoch` failed for an
+  instant after 9999-12-30T22:00Z, so an Arrow read of such a `DATETIME`
+  failed.
+- `tile_at` and `tile_range` could miss tiles where several tiles thinner
+  than the coordinates' resolution share one rounded edge.
 
 ## [0.11.2] - 2026-10-15
 
