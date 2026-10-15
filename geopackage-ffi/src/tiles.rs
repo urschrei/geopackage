@@ -634,10 +634,9 @@ pub unsafe extern "C" fn gpkg_tiles_get(
 ///
 /// A zoom level the pyramid does not declare returns `GPKG_STATUS_NOT_FOUND`,
 /// and a format the table may not hold returns `GPKG_STATUS_UNSUPPORTED`. A
-/// column or row outside the level's grid, or a payload whose header disagrees
-/// with the declared tile size, returns `GPKG_STATUS_OTHER`, and the message
-/// says which. These come from the tile checks, which have no status category
-/// of their own.
+/// column or row outside the level's grid, or bytes that are not a readable
+/// image, return `GPKG_STATUS_INVALID_ARGUMENT`. A payload whose header
+/// disagrees with the declared tile size returns `GPKG_STATUS_CONSTRAINT`.
 ///
 /// # Safety
 ///
