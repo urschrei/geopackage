@@ -51,7 +51,9 @@ pub struct Srs {
     /// The `definition_12_063` column: a WKT2 definition, per the
     /// `gpkg_crs_wkt` extension.
     ///
-    /// `None` if the file doesn't register the extension. If both this and
+    /// `None` if the file doesn't register the extension, or if the column
+    /// holds `undefined`. [`GeoPackage::add_srs`] can fill this in for an
+    /// EPSG row. If both this and
     /// [`Srs::definition`] are populated, this one takes priority, as the note
     /// under Requirement 117 says. Some CRSs have no WKT1 form at all. For
     /// them, [`Srs::definition`] is the literal `undefined` and the definition
@@ -198,6 +200,13 @@ impl GeoPackage {
     /// for a CRS that has no WKT1 form. Adding the columns and inserting the
     /// row share one transaction, so a failure leaves the file as it was
     /// instead of half-extended.
+    ///
+    /// When the file has the columns, an EPSG row needs no WKT2 of its own.
+    /// A row whose `organization` is `EPSG` in any case, with a positive
+    /// `organization_coordsys_id` and no [`Srs::definition_wkt2`], gets the
+    /// EPSG registry's WKT2 for that code. Adding the columns gives the rows
+    /// already in the file the same, so the table does not depend on the
+    /// order of the calls.
     pub fn add_srs(&self, srs: &Srs) -> Result<bool> {
         if self.srs(srs.srs_id)?.is_some() {
             return Ok(false);
@@ -230,6 +239,7 @@ impl GeoPackage {
             params.push(Box::new(
                 srs.definition_wkt2
                     .clone()
+                    .or_else(|| registry_wkt2(&srs.organization, srs.organization_coordsys_id))
                     .unwrap_or_else(|| "undefined".to_owned()),
             ));
         }
@@ -335,6 +345,15 @@ fn enable_crs_wkt_extension(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Returns the EPSG registry's WKT2 for a row of the given organisation and
+/// code, if the row is an EPSG row and the registry knows the code.
+fn registry_wkt2(organization: &str, code: i32) -> Option<String> {
+    if !organization.eq_ignore_ascii_case("EPSG") || code <= 0 {
+        return None;
+    }
+    epsg_utils::epsg_to_wkt2(code).ok().map(ToOwned::to_owned)
+}
+
 /// Populates `definition_12_063` for rows already in the table whose EPSG
 /// code the registry knows.
 ///
@@ -354,7 +373,7 @@ fn backfill_wkt2(conn: &Connection) -> Result<()> {
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     for (srs_id, code) in rows {
-        if let Ok(wkt2) = epsg_utils::epsg_to_wkt2(code) {
+        if let Some(wkt2) = registry_wkt2("EPSG", code) {
             conn.execute(
                 "UPDATE gpkg_spatial_ref_sys SET definition_12_063 = ?1 WHERE srs_id = ?2",
                 rusqlite::params![wkt2, srs_id],
