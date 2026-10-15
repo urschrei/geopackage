@@ -14,6 +14,8 @@
     reason = "the ancillary columns are asserted against the literals GDAL wrote and the scale/offset arithmetic against values chosen to be exact in binary, so exact equality is the property under test rather than an approximation of one"
 )]
 
+use std::collections::BTreeMap;
+
 use geopackage::core::coverage::{CoverageDatatype, SampleType, TiffCompression};
 use geopackage::core::tiles::{TileCoord, TileMatrix, TileMatrixSet, ZoomLadder};
 use geopackage::{
@@ -549,40 +551,553 @@ fn deflate_is_read_but_not_written() {
     ));
 }
 
-/// For any sequence of writes and deletes, the two tables agree: each tile has
-/// exactly one ancillary row, and no row points to a tile that does not exist
-/// (Requirements 10 and 12).
+// --- write sequences ----------------------------------------------------------
+//
+// Two properties over drawn sequences of writer sessions. Each session opens a
+// `CoverageWriter`, applies drawn puts and deletes, and then commits or drops
+// the writer. Each put has at most one defect, and each defect is one of the
+// errors that `CoverageWriter::put_with_ancillary` documents, so the expected
+// outcome of every put is known before it runs.
+
+/// The shape of a drawn coverage: one zoom level, level 0, of `columns` by
+/// `rows` tiles of `side` pixels.
+#[derive(Debug, Clone, Copy)]
+struct Grid {
+    datatype: CoverageDatatype,
+    columns: u16,
+    rows: u16,
+    side: u16,
+}
+
+/// Draws a grid. The grid is small so that drawn addresses often repeat, which
+/// makes rewrites and deletes of existing tiles common.
+fn draw_grid(tc: &hegel::TestCase) -> Grid {
+    Grid {
+        datatype: tc.draw(generators::sampled_from(vec![
+            CoverageDatatype::Integer,
+            CoverageDatatype::Float,
+        ])),
+        columns: tc.draw(generators::integers::<u16>().min_value(1).max_value(4)),
+        rows: tc.draw(generators::integers::<u16>().min_value(1).max_value(4)),
+        side: tc.draw(generators::integers::<u16>().min_value(1)),
+    }
+}
+
+/// A coverage of the drawn grid in SQLite's in-memory database, at one ground
+/// unit per pixel.
+///
+/// In memory for the reason that `in_memory` in `tiles_property.rs` gives:
+/// each case builds a container, and nothing these properties check depends
+/// on a file.
+fn in_memory_coverage(grid: Grid) -> GeoPackage {
+    let gpkg = GeoPackage::create(std::path::Path::new(":memory:")).unwrap();
+    gpkg.add_epsg_srs(3857).unwrap();
+    let set = TileMatrixSet::new(
+        3857,
+        0.0,
+        0.0,
+        f64::from(u32::from(grid.columns) * u32::from(grid.side)),
+        f64::from(u32::from(grid.rows) * u32::from(grid.side)),
+    );
+    gpkg.create_coverage(
+        &CoverageBuilder::new("dem", set, grid.datatype).matrix(TileMatrix::new(
+            0,
+            i64::from(grid.columns),
+            i64::from(grid.rows),
+            i64::from(grid.side),
+            i64::from(grid.side),
+            1.0,
+            1.0,
+        )),
+    )
+    .unwrap();
+    gpkg
+}
+
+/// A 16-bit greyscale PNG header of the given size: the signature and a
+/// complete `IHDR` chunk, with a zero CRC that no reader checks.
+fn png16(width: u16, height: u16) -> Vec<u8> {
+    let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    bytes.extend_from_slice(&13_u32.to_be_bytes());
+    bytes.extend_from_slice(b"IHDR");
+    bytes.extend_from_slice(&u32::from(width).to_be_bytes());
+    bytes.extend_from_slice(&u32::from(height).to_be_bytes());
+    bytes.extend_from_slice(&[16, 0, 0, 0, 0]);
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    bytes
+}
+
+/// Draws a payload of the given size that a coverage of `datatype` accepts:
+/// every sample type and baseline compression that the profile permits.
+fn draw_valid_payload(
+    tc: &hegel::TestCase,
+    datatype: CoverageDatatype,
+    width: u16,
+    height: u16,
+) -> Vec<u8> {
+    let compression = tc.draw(generators::sampled_from(vec![1_u16, 5]));
+    match datatype {
+        CoverageDatatype::Float => tiff(width.into(), height.into(), 3, 32, compression),
+        _ => {
+            if tc.draw(generators::booleans()) {
+                png16(width, height)
+            } else {
+                let sample_format = tc.draw(generators::sampled_from(vec![1_u16, 2]));
+                let bits = tc.draw(generators::sampled_from(vec![8_u16, 16, 32]));
+                tiff(
+                    width.into(),
+                    height.into(),
+                    sample_format,
+                    bits,
+                    compression,
+                )
+            }
+        }
+    }
+}
+
+/// Draws an index outside `0..len`, on either side of the range.
+fn draw_outside(tc: &hegel::TestCase, len: u16) -> i64 {
+    if tc.draw(generators::booleans()) {
+        tc.draw(generators::integers::<i64>().max_value(-1))
+    } else {
+        tc.draw(generators::integers::<i64>().min_value(i64::from(len)))
+    }
+}
+
+/// Draws an address inside the grid.
+fn draw_inside(tc: &hegel::TestCase, grid: Grid) -> TileCoord {
+    TileCoord::new(
+        0,
+        tc.draw(
+            generators::integers::<i64>()
+                .min_value(0)
+                .max_value(i64::from(grid.columns) - 1),
+        ),
+        tc.draw(
+            generators::integers::<i64>()
+                .min_value(0)
+                .max_value(i64::from(grid.rows) - 1),
+        ),
+    )
+}
+
+/// Draws any `f64` but NaN, which a put rejects (see `Defect::NanAncillary`).
+/// The infinities and negative zero are included.
+fn draw_non_nan_f64(tc: &hegel::TestCase) -> f64 {
+    tc.draw(generators::floats::<f64>().allow_nan(false))
+}
+
+/// Draws an ancillary row with no NaN. On an `integer` coverage the scale and
+/// offset are any other `f64`. On a `float` coverage they are the defaults
+/// (Requirement 11), unless `scaled` is set, in which case at least one
+/// differs from them.
+fn draw_ancillary(tc: &hegel::TestCase, datatype: CoverageDatatype, scaled: bool) -> TileAncillary {
+    let mut ancillary = if datatype == CoverageDatatype::Integer || scaled {
+        let (scale, offset) = (draw_non_nan_f64(tc), draw_non_nan_f64(tc));
+        if scaled {
+            tc.assume(
+                scale.to_bits() != 1.0_f64.to_bits() || offset.to_bits() != 0.0_f64.to_bits(),
+            );
+        }
+        TileAncillary::new(scale, offset)
+    } else {
+        TileAncillary::defaults()
+    };
+    if tc.draw(generators::booleans()) {
+        ancillary = ancillary.with_statistics(
+            draw_non_nan_f64(tc),
+            draw_non_nan_f64(tc),
+            draw_non_nan_f64(tc),
+            draw_non_nan_f64(tc),
+        );
+    }
+    ancillary
+}
+
+/// What is wrong with a drawn put, if anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Defect {
+    None,
+    UnknownZoomLevel,
+    OutsideGrid,
+    WrongDatatype,
+    WrongSize,
+    Deflate,
+    /// A valid payload that ends before the last header field the profile
+    /// check reads.
+    Truncated,
+    /// Bytes that start as neither a TIFF nor a PNG.
+    NotAnImage,
+    /// A scale or offset other than the defaults, on a `float` coverage.
+    ScaledFloat,
+    /// A NaN in the ancillary row: in any of its six values on an `integer`
+    /// coverage, and in a statistic on a `float` coverage, where a NaN scale
+    /// or offset is `ScaledFloat`.
+    NanAncillary(&'static str),
+}
+
+/// One drawn writer operation.
+#[derive(Debug)]
+enum Op {
+    Put {
+        coord: TileCoord,
+        data: Vec<u8>,
+        ancillary: TileAncillary,
+        defect: Defect,
+    },
+    Delete {
+        coord: TileCoord,
+    },
+}
+
+fn draw_put(tc: &hegel::TestCase, grid: Grid) -> Op {
+    let mut defects = vec![
+        Defect::UnknownZoomLevel,
+        Defect::OutsideGrid,
+        Defect::WrongDatatype,
+        Defect::WrongSize,
+        Defect::Deflate,
+        Defect::Truncated,
+        Defect::NotAnImage,
+    ];
+    let nan_fields = match grid.datatype {
+        CoverageDatatype::Float => {
+            defects.push(Defect::ScaledFloat);
+            vec!["min", "max", "mean", "std_dev"]
+        }
+        _ => vec!["scale", "offset", "min", "max", "mean", "std_dev"],
+    };
+    defects.extend(nan_fields.into_iter().map(Defect::NanAncillary));
+    // Half the puts are valid, so that the model stores, rewrites and deletes
+    // tiles often. The other half divide between the defects.
+    let defect = if tc.draw(generators::booleans()) {
+        Defect::None
+    } else {
+        tc.draw(generators::sampled_from(defects))
+    };
+    tc.event(format!("put with defect {defect:?}"));
+
+    let coord = match defect {
+        Defect::UnknownZoomLevel => {
+            let zoom_level = tc.draw(generators::integers::<i64>());
+            tc.assume(zoom_level != 0);
+            TileCoord::new(zoom_level, 0, 0)
+        }
+        Defect::OutsideGrid => {
+            let inside = draw_inside(tc, grid);
+            match tc.draw(generators::integers::<u8>().min_value(0).max_value(2)) {
+                0 => TileCoord::new(0, draw_outside(tc, grid.columns), inside.row),
+                1 => TileCoord::new(0, inside.column, draw_outside(tc, grid.rows)),
+                _ => TileCoord::new(
+                    0,
+                    draw_outside(tc, grid.columns),
+                    draw_outside(tc, grid.rows),
+                ),
+            }
+        }
+        _ => draw_inside(tc, grid),
+    };
+
+    let side = grid.side;
+    let data = match defect {
+        Defect::WrongDatatype => {
+            let other = match grid.datatype {
+                CoverageDatatype::Float => CoverageDatatype::Integer,
+                _ => CoverageDatatype::Float,
+            };
+            draw_valid_payload(tc, other, side, side)
+        }
+        Defect::WrongSize => {
+            let width = tc.draw(generators::integers::<u16>().min_value(1));
+            let height = tc.draw(generators::integers::<u16>().min_value(1));
+            tc.assume((width, height) != (side, side));
+            draw_valid_payload(tc, grid.datatype, width, height)
+        }
+        Defect::Deflate => {
+            let compression = tc.draw(generators::sampled_from(vec![8_u16, 0x80B2]));
+            match grid.datatype {
+                CoverageDatatype::Float => tiff(side.into(), side.into(), 3, 32, compression),
+                _ => tiff(side.into(), side.into(), 1, 16, compression),
+            }
+        }
+        Defect::Truncated => {
+            let mut full = draw_valid_payload(tc, grid.datatype, side, side);
+            // `coverage_png` reads through the colour type, byte 25.
+            // `coverage_tiff` reads the whole first IFD, which ends where the
+            // payloads that `tiff` builds end.
+            let read = if full.starts_with(b"\x89PNG") {
+                26
+            } else {
+                full.len()
+            };
+            let len = tc.draw(
+                generators::integers::<usize>()
+                    .min_value(0)
+                    .max_value(read - 1),
+            );
+            full.truncate(len);
+            full
+        }
+        Defect::NotAnImage => {
+            let first = tc.draw(generators::integers::<u8>());
+            tc.assume(![b'I', b'M', 0x89].contains(&first));
+            let mut bytes = vec![first];
+            bytes.extend(tc.draw(generators::vecs(generators::integers::<u8>()).max_size(64)));
+            bytes
+        }
+        _ => draw_valid_payload(tc, grid.datatype, side, side),
+    };
+
+    let mut ancillary = draw_ancillary(tc, grid.datatype, defect == Defect::ScaledFloat);
+    if let Defect::NanAncillary(field) = defect {
+        let nan = Some(f64::NAN);
+        match field {
+            "scale" => ancillary.scale = f64::NAN,
+            "offset" => ancillary.offset = f64::NAN,
+            "min" => ancillary.min = nan,
+            "max" => ancillary.max = nan,
+            "mean" => ancillary.mean = nan,
+            _ => ancillary.std_dev = nan,
+        }
+    }
+    Op::Put {
+        coord,
+        data,
+        ancillary,
+        defect,
+    }
+}
+
+fn draw_op(tc: &hegel::TestCase, grid: Grid) -> Op {
+    if tc.draw(generators::booleans()) {
+        draw_put(tc, grid)
+    } else {
+        // Usually an address in the grid, so that the delete can find a tile.
+        let coord = if tc.draw(generators::weighted_booleans(0.9)) {
+            draw_inside(tc, grid)
+        } else {
+            TileCoord::new(
+                tc.draw(generators::integers::<i64>()),
+                tc.draw(generators::integers::<i64>()),
+                tc.draw(generators::integers::<i64>()),
+            )
+        };
+        Op::Delete { coord }
+    }
+}
+
+/// Returns `true` if `result` is the documented outcome of a put with `defect`.
+fn put_outcome_is_documented(grid: Grid, defect: Defect, result: &geopackage::Result<()>) -> bool {
+    let datatype_requirement = match grid.datatype {
+        CoverageDatatype::Float => 14,
+        _ => 13,
+    };
+    match defect {
+        Defect::None => result.is_ok(),
+        Defect::UnknownZoomLevel => matches!(result, Err(Error::UnknownZoomLevel { .. })),
+        Defect::OutsideGrid => matches!(
+            result,
+            Err(Error::Tile(TileError::CoordOutsideMatrix { .. }))
+        ),
+        Defect::WrongDatatype => matches!(
+            result,
+            Err(Error::Tile(TileError::CoverageProfileViolation { requirement, .. }))
+                if *requirement == datatype_requirement
+        ),
+        Defect::WrongSize => matches!(
+            result,
+            Err(Error::Tile(TileError::PayloadSizeMismatch { .. }))
+        ),
+        Defect::Deflate => matches!(result, Err(Error::UnwritableCoveragePayload { .. })),
+        Defect::Truncated | Defect::NotAnImage => matches!(
+            result,
+            Err(Error::Tile(TileError::UnreadablePayload { .. }))
+        ),
+        Defect::ScaledFloat => matches!(result, Err(Error::FloatCoverageScaled { .. })),
+        Defect::NanAncillary(expected) => matches!(
+            result,
+            Err(Error::NanTileAncillary { field, .. }) if *field == expected
+        ),
+    }
+}
+
+/// What a session step reports to the property that runs it.
+enum Step<'a> {
+    Put {
+        coord: TileCoord,
+        ancillary: &'a TileAncillary,
+        defect: Defect,
+        result: &'a geopackage::Result<()>,
+    },
+    Delete {
+        coord: TileCoord,
+        result: &'a geopackage::Result<bool>,
+    },
+    /// The writer committed.
+    Committed,
+    /// The writer was dropped without a commit.
+    RolledBack,
+}
+
+/// Runs between one and four drawn writer sessions against `coverage`, and
+/// calls `check` after each operation and at the end of each session.
+fn run_write_sessions(
+    tc: &hegel::TestCase,
+    grid: Grid,
+    coverage: &Coverage<'_>,
+    mut check: impl FnMut(Step<'_>),
+) {
+    let sessions = tc.draw(generators::integers::<usize>().min_value(1).max_value(4));
+    for _ in 0..sessions {
+        let mut writer = coverage.writer().unwrap();
+        let ops = tc.draw(generators::integers::<usize>().min_value(0).max_value(8));
+        for _ in 0..ops {
+            let op = draw_op(tc, grid);
+            match &op {
+                Op::Put {
+                    coord,
+                    data,
+                    ancillary,
+                    defect,
+                } => {
+                    let result = writer.put_with_ancillary(*coord, data, ancillary);
+                    check(Step::Put {
+                        coord: *coord,
+                        ancillary,
+                        defect: *defect,
+                        result: &result,
+                    });
+                }
+                Op::Delete { coord } => {
+                    let result = writer.delete(*coord);
+                    check(Step::Delete {
+                        coord: *coord,
+                        result: &result,
+                    });
+                }
+            }
+        }
+        if tc.draw(generators::booleans()) {
+            writer.commit().unwrap();
+            check(Step::Committed);
+        } else {
+            drop(writer);
+            check(Step::RolledBack);
+        }
+    }
+}
+
+/// For any sequence of writes, deletes, commits and rollbacks, the two tables
+/// agree: each tile has exactly one ancillary row, and no row points to a tile
+/// that does not exist (Requirements 10 and 12).
 ///
 /// The table definition has no `ON DELETE CASCADE`, so the writer must keep
 /// this invariant. The test checks it after each step, not only at the end, so
 /// a failing sequence shrinks to the step that broke it.
 #[hegel::test]
 fn the_two_tables_stay_in_step_through_write_ops(tc: hegel::TestCase) {
-    let (_dir, gpkg, name) = new_coverage(CoverageDatatype::Float);
-    let coverage = gpkg.coverage(&name).unwrap();
-    let payload = float_tile(256);
-
-    let ops = tc.draw(generators::integers::<usize>().min_value(0).max_value(12));
-    for _ in 0..ops {
-        // With one zoom level of one tile, every operation would use the same
-        // address. The test therefore uses a 2x2 address space that is larger
-        // than the matrix. The writer rejects a write outside the matrix, and
-        // the test covers that case too.
-        let column = tc.draw(generators::integers::<i64>().min_value(0).max_value(1));
-        let row = tc.draw(generators::integers::<i64>().min_value(0).max_value(1));
-        let coord = TileCoord::new(0, column, row);
-        // Both results are valid: the grid of this coverage is one tile, so
-        // three of the four addresses are outside it and the writer rejects
-        // them. The invariant below also checks that a rejected write leaves
-        // nothing.
-        if tc.draw(generators::booleans()) {
-            let _outcome = coverage.put_tile(coord, &payload);
-        } else {
-            let _outcome = coverage.delete_tile(coord);
-        }
-        let (tiles, rows) = pairing(&gpkg, &name);
+    let grid = draw_grid(&tc);
+    let gpkg = in_memory_coverage(grid);
+    let coverage = gpkg.coverage("dem").unwrap();
+    run_write_sessions(&tc, grid, &coverage, |_| {
+        let (tiles, rows) = pairing(&gpkg, "dem");
         assert_eq!(rows, tiles, "the ancillary rows diverged from the tiles");
-    }
+    });
+}
+
+/// An ancillary row compared by the bits of its values, so that the
+/// comparison is exact.
+type AncillaryBits = (u64, u64, Option<u64>, Option<u64>, Option<u64>, Option<u64>);
+
+/// Returns the bits of each value, with a negative zero as zero: SQLite stores
+/// it as zero, as the `TileAncillary` docs state.
+fn ancillary_bits(ancillary: &TileAncillary) -> AncillaryBits {
+    let bits = |value: f64| if value == 0.0 { 0 } else { value.to_bits() };
+    (
+        bits(ancillary.scale),
+        bits(ancillary.offset),
+        ancillary.min.map(bits),
+        ancillary.max.map(bits),
+        ancillary.mean.map(bits),
+        ancillary.std_dev.map(bits),
+    )
+}
+
+/// The tiles in the coverage, each with its ancillary row read back through
+/// [`Coverage::tile_ancillary`].
+fn stored(coverage: &Coverage<'_>) -> BTreeMap<(i64, i64, i64), Option<AncillaryBits>> {
+    let addresses: Vec<(i64, i64, i64)> = coverage
+        .gpkg()
+        .connection()
+        .prepare("SELECT zoom_level, tile_column, tile_row FROM dem")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    addresses
+        .into_iter()
+        .map(|(zoom_level, column, row)| {
+            let ancillary = coverage
+                .tile_ancillary(TileCoord::new(zoom_level, column, row))
+                .unwrap();
+            (
+                (zoom_level, column, row),
+                ancillary.as_ref().map(ancillary_bits),
+            )
+        })
+        .collect()
+}
+
+/// Every put has the outcome its defect documents, every delete reports
+/// whether a tile was there, and after each session the coverage holds exactly
+/// the tiles and ancillary rows of the committed sessions.
+///
+/// The oracle is a map of the puts that should succeed, kept apart from the
+/// coverage: a session's changes enter it on commit and are discarded on
+/// rollback.
+#[hegel::test]
+fn writer_sessions_match_a_model(tc: hegel::TestCase) {
+    let grid = draw_grid(&tc);
+    let gpkg = in_memory_coverage(grid);
+    let coverage = gpkg.coverage("dem").unwrap();
+
+    let mut committed: BTreeMap<(i64, i64, i64), Option<AncillaryBits>> = BTreeMap::new();
+    let mut pending = committed.clone();
+    run_write_sessions(&tc, grid, &coverage, |step| match step {
+        Step::Put {
+            coord,
+            ancillary,
+            defect,
+            result,
+        } => {
+            assert!(
+                put_outcome_is_documented(grid, defect, result),
+                "a put with defect {defect:?} returned {result:?}"
+            );
+            if defect == Defect::None {
+                pending.insert(
+                    (coord.zoom_level, coord.column, coord.row),
+                    Some(ancillary_bits(ancillary)),
+                );
+            }
+        }
+        Step::Delete { coord, result } => {
+            let existed = pending
+                .remove(&(coord.zoom_level, coord.column, coord.row))
+                .is_some();
+            assert_eq!(result.as_ref().ok(), Some(&existed), "delete at {coord:?}");
+        }
+        Step::Committed => {
+            committed = pending.clone();
+            assert_eq!(stored(&coverage), committed, "after a commit");
+        }
+        Step::RolledBack => {
+            pending = committed.clone();
+            assert_eq!(stored(&coverage), committed, "after a rollback");
+        }
+    });
 }
 
 // --- the PNG encoding ---------------------------------------------------------
