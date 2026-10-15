@@ -348,8 +348,9 @@ impl<'a> Layer<'a> {
 
     /// Sets the [`ConversionOptions`] for value conversion (e.g. lenient
     /// `DATETIME` parsing, or rejecting values their declared type does not
-    /// permit). Applies to [`Self::features`], [`Self::features_in`] and
-    /// [`Self::select`]. Defaults to [`ConversionOptions::default`].
+    /// permit). Applies to [`Self::features`], [`Self::features_in`],
+    /// [`Self::select`], and the Arrow reads (`read_arrow` and its filtered
+    /// forms, feature `arrow`). Defaults to [`ConversionOptions::default`].
     #[must_use]
     pub fn with_conversion_options(mut self, options: ConversionOptions) -> Self {
         self.options = options;

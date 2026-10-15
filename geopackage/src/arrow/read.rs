@@ -389,7 +389,7 @@ impl Layer<'_> {
         );
         let sql = rows_sql.clone();
         let conn = self.gpkg().connection();
-        let datetime = self.conversion_options().datetime;
+        let conversion = self.conversion_options();
         let names: Vec<String> = schema
             .fields()
             .iter()
@@ -438,7 +438,7 @@ impl Layer<'_> {
                         .and_then(|index| schema.fields().get(index))
                         .is_some_and(|field| *field.data_type() == DataType::Int64),
                     geometry_index,
-                    datetime,
+                    conversion,
                     capacity: options.batch_size.clamp(1, DEFAULT_BATCH_SIZE),
                     limit: options.batch_size.max(1),
                     max_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
@@ -480,7 +480,7 @@ impl Layer<'_> {
                 key_field,
                 geometry_index,
                 names,
-                datetime,
+                conversion,
                 batch_size: options.batch_size.max(1),
                 max_batch_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
                 upper_key: i64::MAX,

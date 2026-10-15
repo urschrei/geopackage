@@ -5,7 +5,6 @@ use arrow_schema::{ArrowError, SchemaRef};
 use rusqlite::Connection;
 use rusqlite::types::ValueRef;
 
-use crate::value::DateTimeParsing;
 use crate::{BoundingBox, Result};
 
 use super::aggregate::AggregateState;
@@ -27,7 +26,7 @@ pub(crate) struct SequentialBatches<'a> {
     /// Index of the geometry field, whose values need the GPB header stripped.
     pub(crate) geometry_index: Option<usize>,
     pub(crate) names: Vec<String>,
-    pub(crate) datetime: DateTimeParsing,
+    pub(crate) conversion: crate::ConversionOptions,
     /// Ceiling on the geometry bytes one batch may contain.
     pub(crate) max_batch_bytes: usize,
     pub(crate) batch_size: usize,
@@ -318,7 +317,7 @@ impl SequentialBatches<'_> {
                         &self.names,
                         index,
                         row.get_ref(index + offset)?,
-                        self.datetime,
+                        self.conversion,
                     )?;
                 }
                 rows_read += 1;

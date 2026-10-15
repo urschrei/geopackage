@@ -329,6 +329,68 @@ fn nulls_survive() {
     assert!(geom.is_null(1));
 }
 
+/// A geometry cell holding text is no geometry on this path, as on the row
+/// path, and the rest of the row still reads.
+#[test]
+fn a_geometry_that_is_not_a_blob_is_null() {
+    let (_dir, gpkg) = layer_with_rows(2);
+    // The RTree triggers reject a geometry that is not a BLOB, so the value
+    // goes into a layer without an index, as a file from another tool may.
+    gpkg.layer("pts").unwrap().drop_spatial_index().unwrap();
+    gpkg.connection()
+        .execute("UPDATE pts SET geom = 'POINT(1 2)' WHERE fid = 1", [])
+        .unwrap();
+    let batches = read_all(&gpkg, ArrowReadOptions::default());
+    let geom = batches[0]
+        .column_by_name("geom")
+        .unwrap()
+        .as_binary::<i32>();
+    assert!(geom.is_null(0));
+    assert!(!geom.is_null(1));
+    let rows = gpkg.layer("pts").unwrap().features().unwrap();
+    let first = rows.into_iter().next().unwrap().unwrap();
+    assert_eq!(first.geometry_bytes(), None, "the row path agrees");
+}
+
+/// Strict storage rejects a BOOLEAN integer other than 0 or 1 on this path
+/// as on the row path; lenient storage reads it as true.
+#[test]
+fn strict_storage_applies_to_arrow_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("b.gpkg")).unwrap();
+    let layer = gpkg
+        .create_layer(
+            &TableSchemaBuilder::new("pts")
+                .column(ColumnSpec::new("flag", ColumnType::Boolean))
+                .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+        )
+        .unwrap();
+    gpkg.connection()
+        .execute("INSERT INTO pts (fid, flag) VALUES (1, 2)", [])
+        .unwrap();
+
+    let lenient: Vec<_> = layer
+        .read_arrow(ArrowReadOptions::default())
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        lenient[0]
+            .column_by_name("flag")
+            .unwrap()
+            .as_boolean()
+            .value(0)
+    );
+
+    let strict = layer.with_conversion_options(geopackage::ConversionOptions::strict());
+    let first = strict
+        .read_arrow(ArrowReadOptions::default())
+        .unwrap()
+        .next();
+    assert!(matches!(first, Some(Err(_))), "{first:?}");
+    drop(strict.features().unwrap().next().unwrap().unwrap_err());
+}
+
 #[test]
 fn an_empty_layer_yields_no_batches() {
     let (_dir, gpkg) = layer_with_rows(0);
