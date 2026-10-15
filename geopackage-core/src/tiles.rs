@@ -623,7 +623,7 @@ impl TileMatrixSet {
     }
 
     /// Returns the tile containing a position, or `None` for a position
-    /// outside the extent.
+    /// outside the extent or with a NaN coordinate.
     ///
     /// Every edge is inclusive. A position on `max_x` belongs to the last
     /// column rather than to one past it, and a position on `min_y` belongs to
@@ -638,7 +638,9 @@ impl TileMatrixSet {
         if matrix.matrix_width <= 0 || matrix.matrix_height <= 0 {
             return None;
         }
-        if x < self.min_x || x > self.max_x || y < self.min_y || y > self.max_y {
+        // `contains` is false for NaN, which a pair of `<` tests would let
+        // through.
+        if !(self.min_x..=self.max_x).contains(&x) || !(self.min_y..=self.max_y).contains(&y) {
             return None;
         }
         let column = ((x - self.min_x) / matrix.tile_span_x()).floor() as i64;
@@ -650,7 +652,8 @@ impl TileMatrixSet {
     }
 
     /// Returns the tiles a bounding box touches at one zoom level, clamped to
-    /// the grid, or `None` when the box misses the extent entirely.
+    /// the grid, or `None` when the box misses the extent entirely or contains
+    /// no point: a minimum above its maximum, or a NaN edge.
     ///
     /// Like [`Self::tile_at`], this is inclusive at the boundary, so a box
     /// touching an edge selects the tile it touches.
@@ -662,7 +665,12 @@ impl TileMatrixSet {
         max_x: f64,
         max_y: f64,
     ) -> Option<TileRange> {
-        if min_x > max_x || min_y > max_y {
+        if [min_x, min_y, max_x, max_y]
+            .iter()
+            .any(|edge| edge.is_nan())
+            || min_x > max_x
+            || min_y > max_y
+        {
             return None;
         }
         if max_x < self.min_x || min_x > self.max_x || max_y < self.min_y || min_y > self.max_y {
@@ -1351,6 +1359,20 @@ mod tests {
         );
         assert_eq!(set.tile_range(&zoom1, 300.0, 300.0, 400.0, 400.0), None);
         assert_eq!(set.tile_range(&zoom1, 100.0, 100.0, 0.0, 0.0), None);
+    }
+
+    #[test]
+    fn a_nan_position_or_edge_selects_no_tile() {
+        let (set, matrices) = square_pyramid();
+        let zoom1 = matrices[1];
+        assert_eq!(set.tile_at(&zoom1, f64::NAN, 1.0), None);
+        assert_eq!(set.tile_at(&zoom1, 1.0, f64::NAN), None);
+        for edge in 0..4 {
+            let mut bbox = [0.0, 0.0, 256.0, 256.0];
+            bbox[edge] = f64::NAN;
+            let [min_x, min_y, max_x, max_y] = bbox;
+            assert_eq!(set.tile_range(&zoom1, min_x, min_y, max_x, max_y), None);
+        }
     }
 
     #[test]
