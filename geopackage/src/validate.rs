@@ -522,11 +522,11 @@ impl GeoPackage {
     #[hotpath::measure(label = "GeoPackage::validate")]
     pub fn validate(&self) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
-        self.validate_container(&mut findings)?;
+        let missing = self.validate_container(&mut findings)?;
         self.validate_extensions(&mut findings)?;
-        self.validate_spatial_indexes(&mut findings)?;
-        self.validate_tile_pyramids(&mut findings)?;
-        self.validate_coverages(&mut findings)?;
+        self.validate_spatial_indexes(&missing, &mut findings)?;
+        self.validate_tile_pyramids(&missing, &mut findings)?;
+        self.validate_coverages(&missing, &mut findings)?;
         self.validate_metadata(&mut findings)?;
         self.validate_relations(&mut findings)?;
         // Most severe first, and stable within a severity so a diff of the
@@ -535,7 +535,10 @@ impl GeoPackage {
         Ok(findings)
     }
 
-    fn validate_container(&self, findings: &mut Vec<Finding>) -> Result<()> {
+    /// Checks the version stamp and the catalogue. Returns the `gpkg_contents`
+    /// names that resolve to no table, which the later passes skip: the
+    /// finding here is the whole defect.
+    fn validate_container(&self, findings: &mut Vec<Finding>) -> Result<Vec<String>> {
         let conn = self.connection();
         let application_id =
             u32::try_from(conn.query_row("PRAGMA application_id", [], |row| row.get::<_, i64>(0))?)
@@ -553,6 +556,7 @@ impl GeoPackage {
             });
         }
 
+        let mut missing = Vec::new();
         for entry in self.contents()? {
             if table_exists(conn, &entry.table_name)? {
                 continue;
@@ -572,12 +576,15 @@ impl GeoPackage {
                     declared: entry.table_name,
                     actual,
                 }),
-                None => findings.push(Finding::MissingContentsTable {
-                    table_name: entry.table_name,
-                }),
+                None => {
+                    missing.push(entry.table_name.clone());
+                    findings.push(Finding::MissingContentsTable {
+                        table_name: entry.table_name,
+                    });
+                }
             }
         }
-        Ok(())
+        Ok(missing)
     }
 
     fn validate_extensions(&self, findings: &mut Vec<Finding>) -> Result<()> {
@@ -601,8 +608,16 @@ impl GeoPackage {
         Ok(())
     }
 
-    fn validate_spatial_indexes(&self, findings: &mut Vec<Finding>) -> Result<()> {
-        for layer in self.layers()? {
+    fn validate_spatial_indexes(
+        &self,
+        missing: &[String],
+        findings: &mut Vec<Finding>,
+    ) -> Result<()> {
+        for name in self.layer_names()? {
+            if missing.contains(&name) {
+                continue;
+            }
+            let layer = self.layer(&name)?;
             let table_name = layer.table_name().to_owned();
             match layer.spatial_index_status()? {
                 SpatialIndexStatus::Absent => {
@@ -622,8 +637,16 @@ impl GeoPackage {
         Ok(())
     }
 
-    fn validate_tile_pyramids(&self, findings: &mut Vec<Finding>) -> Result<()> {
-        for pyramid in self.tile_pyramids()? {
+    fn validate_tile_pyramids(
+        &self,
+        missing: &[String],
+        findings: &mut Vec<Finding>,
+    ) -> Result<()> {
+        for name in self.tile_pyramid_names()? {
+            if missing.contains(&name) {
+                continue;
+            }
+            let pyramid = self.tiles(&name)?;
             if let Err(error) = pyramid.validate() {
                 findings.push(Finding::TilePyramidInconsistent {
                     table_name: pyramid.table_name().to_owned(),
@@ -642,9 +665,10 @@ impl GeoPackage {
     /// payloads, and the profile needs the header, not a prefix of the blob
     /// (the IFD of a TIFF can follow its image data). It does not sample the
     /// tiles, because the result would then report on tiles it did not check.
-    fn validate_coverages(&self, findings: &mut Vec<Finding>) -> Result<()> {
+    fn validate_coverages(&self, missing: &[String], findings: &mut Vec<Finding>) -> Result<()> {
         for entry in self.contents()? {
-            if entry.data_type != ContentsDataType::Coverage {
+            if entry.data_type != ContentsDataType::Coverage || missing.contains(&entry.table_name)
+            {
                 continue;
             }
             let coverage = match self.coverage(&entry.table_name) {
@@ -836,11 +860,9 @@ impl GeoPackage {
     }
 
     fn validate_metadata(&self, findings: &mut Vec<Finding>) -> Result<()> {
-        let records = self.metadata()?;
-        if records.is_empty() {
-            return Ok(());
-        }
-        let known: Vec<i64> = records.iter().map(|record| record.id).collect();
+        // No early return when there are no records: a reference to a
+        // deleted record still dangles.
+        let known: Vec<i64> = self.metadata()?.iter().map(|record| record.id).collect();
         for reference in self.metadata_references()? {
             for id in std::iter::once(reference.md_file_id).chain(reference.md_parent_id) {
                 if !known.contains(&id) {

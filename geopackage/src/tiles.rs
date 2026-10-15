@@ -503,19 +503,27 @@ impl GeoPackage {
 
     /// Returns every tile pyramid in the file, by `gpkg_contents` name.
     pub fn tile_pyramids(&self) -> Result<Vec<TilePyramid<'_>>> {
+        self.tile_pyramid_names()?
+            .iter()
+            .map(|name| self.tiles(name))
+            .collect()
+    }
+
+    /// Returns the `gpkg_contents` name of every tile pyramid, without
+    /// opening the pyramids.
+    pub(crate) fn tile_pyramid_names(&self) -> Result<Vec<String>> {
         if !table_exists(self.connection(), "gpkg_tile_matrix_set")? {
             return Ok(Vec::new());
         }
-        let names: Vec<String> = {
-            let mut stmt = self.connection().prepare(
-                "SELECT c.table_name FROM gpkg_contents c \
-                 JOIN gpkg_tile_matrix_set s ON s.table_name = c.table_name COLLATE NOCASE \
-                 WHERE c.data_type = 'tiles' ORDER BY c.table_name",
-            )?;
-            stmt.query_map([], |r| r.get(0))?
-                .collect::<rusqlite::Result<_>>()?
-        };
-        names.iter().map(|name| self.tiles(name)).collect()
+        let mut stmt = self.connection().prepare(
+            "SELECT c.table_name FROM gpkg_contents c \
+             JOIN gpkg_tile_matrix_set s ON s.table_name = c.table_name COLLATE NOCASE \
+             WHERE c.data_type = 'tiles' ORDER BY c.table_name",
+        )?;
+        let names = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(names)
     }
 }
 
