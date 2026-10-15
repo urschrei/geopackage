@@ -604,30 +604,57 @@ impl TileMatrixSet {
 
     /// Returns the ground extent of one tile.
     ///
+    /// Each edge is calculated once from its index, so two adjacent tiles
+    /// share an edge exactly. The outer edges of the grid are the edges of the
+    /// extent.
+    ///
     /// The column and row are not bounds-checked. A column or row outside the
     /// grid still has a calculable box, and a caller walking outwards from a
     /// tile may need it. Use [`TileMatrix::check_contains`] to check them.
     pub fn tile_bounds(&self, matrix: &TileMatrix, column: i64, row: i64) -> TileBounds {
-        let span_x = matrix.tile_span_x();
-        let span_y = matrix.tile_span_y();
-        let min_x = self.min_x + column as f64 * span_x;
-        // Rows count south from the top edge, so the row index is subtracted
-        // from max_y rather than added to min_y.
-        let max_y = self.max_y - row as f64 * span_y;
         TileBounds {
-            min_x,
-            min_y: max_y - span_y,
-            max_x: min_x + span_x,
-            max_y,
+            min_x: self.column_edge(matrix, column),
+            min_y: self.row_edge(matrix, row.saturating_add(1)),
+            max_x: self.column_edge(matrix, column.saturating_add(1)),
+            max_y: self.row_edge(matrix, row),
+        }
+    }
+
+    /// Returns the x of the west edge of `column`, which is the east edge of
+    /// the column before it.
+    fn column_edge(&self, matrix: &TileMatrix, column: i64) -> f64 {
+        if column == 0 {
+            self.min_x
+        } else if column == matrix.matrix_width {
+            self.max_x
+        } else {
+            self.min_x + column as f64 * matrix.tile_span_x()
+        }
+    }
+
+    /// Returns the y of the north edge of `row`, which is the south edge of
+    /// the row before it. Rows count south from the top edge, so the row
+    /// index is subtracted from `max_y`.
+    fn row_edge(&self, matrix: &TileMatrix, row: i64) -> f64 {
+        if row == 0 {
+            self.max_y
+        } else if row == matrix.matrix_height {
+            self.min_y
+        } else {
+            self.max_y - row as f64 * matrix.tile_span_y()
         }
     }
 
     /// Returns the tile containing a position, or `None` for a position
     /// outside the extent or with a NaN coordinate.
     ///
-    /// Every edge is inclusive. A position on `max_x` belongs to the last
-    /// column rather than to one past it, and a position on `min_y` belongs to
-    /// the last row.
+    /// Every edge is inclusive. A position on an edge that two tiles share
+    /// belongs to the tile east or south of it. A position on `max_x` belongs
+    /// to the last column rather than to one past it, and a position on `min_y`
+    /// belongs to the last row.
+    ///
+    /// For a grid that spans the extent (Requirement 45), the bounds that
+    /// [`Self::tile_bounds`] returns for the tile contain the position.
     ///
     /// Also returns `None` for a grid with no columns or no rows, which
     /// contains no tile for any position. Requirements 47 and 48 do not permit
@@ -643,20 +670,42 @@ impl TileMatrixSet {
         if !(self.min_x..=self.max_x).contains(&x) || !(self.min_y..=self.max_y).contains(&y) {
             return None;
         }
-        let column = ((x - self.min_x) / matrix.tile_span_x()).floor() as i64;
-        let row = ((self.max_y - y) / matrix.tile_span_y()).floor() as i64;
-        Some((
-            column.clamp(0, matrix.matrix_width.saturating_sub(1)),
-            row.clamp(0, matrix.matrix_height.saturating_sub(1)),
-        ))
+        let last_column = matrix.matrix_width - 1;
+        let last_row = matrix.matrix_height - 1;
+        let mut column =
+            (((x - self.min_x) / matrix.tile_span_x()).floor() as i64).clamp(0, last_column);
+        let mut row = (((self.max_y - y) / matrix.tile_span_y()).floor() as i64).clamp(0, last_row);
+        // The division and the edges of `tile_bounds` round differently, so
+        // near an edge the division can select the neighbouring tile. Move to
+        // the tile whose edges contain the position. For a grid that spans the
+        // extent this takes at most one step, and the limit stops a grid read
+        // from another writer's file, which nothing has checked, from looping.
+        for _ in 0..2 {
+            if column > 0 && x < self.column_edge(matrix, column) {
+                column -= 1;
+            } else if column < last_column && x >= self.column_edge(matrix, column + 1) {
+                column += 1;
+            }
+            if row > 0 && y > self.row_edge(matrix, row) {
+                row -= 1;
+            } else if row < last_row && y <= self.row_edge(matrix, row + 1) {
+                row += 1;
+            }
+        }
+        Some((column, row))
     }
 
     /// Returns the tiles a bounding box touches at one zoom level, clamped to
     /// the grid, or `None` when the box misses the extent entirely or contains
     /// no point: a minimum above its maximum, or a NaN edge.
     ///
-    /// Like [`Self::tile_at`], this is inclusive at the boundary, so a box
-    /// touching an edge selects the tile it touches.
+    /// The range is every tile whose [`Self::tile_bounds`] share a point with
+    /// the box, edges included. A box whose west or north edge lies on an edge
+    /// that two tiles share therefore selects the tile on each side of it.
+    #[expect(
+        clippy::float_cmp,
+        reason = "a box edge selects the tile beyond a shared edge only if it lies exactly on that edge"
+    )]
     pub fn tile_range(
         &self,
         matrix: &TileMatrix,
@@ -682,8 +731,17 @@ impl TileMatrixSet {
         let (south, north) = (min_y.max(self.min_y), max_y.min(self.max_y));
         // North-west corner gives the low indices on both axes, because rows
         // count southwards; south-east gives the high ones.
-        let (min_column, min_row) = self.tile_at(matrix, west, north)?;
+        let (mut min_column, mut min_row) = self.tile_at(matrix, west, north)?;
         let (max_column, max_row) = self.tile_at(matrix, east, south)?;
+        // `tile_at` assigns a shared edge to the tile east or south of it. On
+        // the west and north sides of the box, the tile on the other side of
+        // that edge touches the box too.
+        if min_column > 0 && west == self.column_edge(matrix, min_column) {
+            min_column -= 1;
+        }
+        if min_row > 0 && north == self.row_edge(matrix, min_row) {
+            min_row -= 1;
+        }
         Some(TileRange {
             min_column,
             max_column,
@@ -1359,6 +1417,62 @@ mod tests {
         );
         assert_eq!(set.tile_range(&zoom1, 300.0, 300.0, 400.0, 400.0), None);
         assert_eq!(set.tile_range(&zoom1, 100.0, 100.0, 0.0, 0.0), None);
+    }
+
+    /// Three columns of a third over `[-1, 0]`: the last column's east edge
+    /// is `max_x`, which `-1 + 2/3 + 1/3` does not reach.
+    #[test]
+    fn the_outer_tile_edges_are_the_extent() {
+        let set = TileMatrixSet::new(0, -1.0, 0.0, 0.0, 1.0);
+        let matrices = set
+            .ladder(ZoomLadder::new(0, 0).base_grid(3, 3).tile_size(1, 1))
+            .unwrap();
+        let matrix = matrices[0];
+        let last = set.tile_bounds(&matrix, 2, 2);
+        assert_eq!((last.max_x, last.min_y), (set.max_x, set.min_y));
+        for index in 0..2 {
+            assert_eq!(
+                set.tile_bounds(&matrix, index, 0).max_x,
+                set.tile_bounds(&matrix, index + 1, 0).min_x,
+                "adjacent columns share their edge"
+            );
+            assert_eq!(
+                set.tile_bounds(&matrix, 0, index).min_y,
+                set.tile_bounds(&matrix, 0, index + 1).max_y,
+                "adjacent rows share their edge"
+            );
+        }
+        assert_eq!(set.tile_at(&matrix, -1e-17, 0.5), Some((2, 1)));
+    }
+
+    #[test]
+    fn a_box_selects_both_tiles_of_a_shared_edge_it_lies_on() {
+        let (set, matrices) = square_pyramid();
+        let zoom1 = matrices[1];
+        // Zoom 1 has edges at 128 on both axes.
+        let on_edge =
+            |min_x, min_y, max_x, max_y| set.tile_range(&zoom1, min_x, min_y, max_x, max_y);
+        let both = Some(TileRange {
+            min_column: 0,
+            max_column: 1,
+            min_row: 0,
+            max_row: 1,
+        });
+        assert_eq!(
+            on_edge(128.0, 128.0, 128.0, 128.0),
+            both,
+            "a point on the corner"
+        );
+        assert_eq!(
+            on_edge(128.0, 128.0, 200.0, 200.0),
+            both,
+            "west and south edges"
+        );
+        assert_eq!(
+            on_edge(50.0, 50.0, 128.0, 128.0),
+            both,
+            "east and north edges"
+        );
     }
 
     #[test]
