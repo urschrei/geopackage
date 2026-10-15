@@ -95,6 +95,10 @@ tempfile.workspace = true
 # The C round-trip test re-reads what the C program wrote and validates it
 # from Rust, rather than taking the C program word for it.
 geopackage.workspace = true
+
+# The build script of `hegeltest` builds a cdylib, which miri cannot. The
+# miri job runs only `tests/boundary.rs`, which does not use it.
+[target.'cfg(not(miri))'.dev-dependencies]
 hegeltest = "0.49.11"
 
 # `cargo cbuild` / `cargo cinstall` packaging: a pkg-config file and a versioned
