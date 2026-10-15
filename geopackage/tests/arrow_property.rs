@@ -26,8 +26,8 @@ use geopackage::core::geometry::encode_gpb;
 use geopackage::core::gpb::body_offset;
 use geopackage::core::types::{ColumnType, GeometryType};
 use geopackage::{
-    ColumnSpec, ConversionOptions, DateTimeParsing, GeoPackage, GeometrySpec, StorageStrictness,
-    TableSchemaBuilder, ValueRef,
+    BoundingBox, ColumnSpec, ConversionOptions, DateTimeParsing, GeoPackage, GeometrySpec,
+    NewFeature, StorageStrictness, TableSchemaBuilder, Value, ValueRef,
 };
 use hegel::generators;
 use rusqlite::types::Value as Sql;
@@ -812,4 +812,444 @@ fn a_layer_from_an_arrow_schema_accepts_that_schema(tc: hegel::TestCase) {
         .unwrap()
         .write_arrow(vec![Ok(batch)], 0);
     assert!(result.is_ok(), "{data_type}: {result:?}");
+}
+
+// --- read variants ------------------------------------------------------------
+
+/// A points layer `p` with a text, an integer and a float column, and drawn
+/// rows: feature ids with gaps, points in `[-50, 50]`, and nulls. The spatial
+/// index is drawn too. Returns the number of rows.
+fn draw_point_layer(tc: &hegel::TestCase, gpkg: &GeoPackage) -> usize {
+    let layer = gpkg
+        .create_layer(
+            &TableSchemaBuilder::new("p")
+                .column(ColumnSpec::new("name", ColumnType::Text(None)))
+                .column(ColumnSpec::new("n", ColumnType::Integer))
+                .column(ColumnSpec::new("x", ColumnType::Double))
+                .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+                .spatial_index(tc.draw(generators::booleans())),
+        )
+        .unwrap();
+    let count = tc.draw(generators::integers::<usize>().min_value(0).max_value(60));
+    let mut fid = 0;
+    let rows: Vec<NewFeature<Point<f64>>> = (0..count)
+        .map(|_| {
+            fid += tc.draw(generators::integers::<i64>().min_value(1).max_value(4));
+            let maybe = |tc: &hegel::TestCase, value: Value| {
+                if tc.draw(generators::weighted_booleans(0.1)) {
+                    Value::Null
+                } else {
+                    value
+                }
+            };
+            let values = vec![
+                maybe(
+                    tc,
+                    Value::Text(
+                        tc.draw(generators::sampled_from(vec!["a", "ab", "b", ""]))
+                            .into(),
+                    ),
+                ),
+                maybe(
+                    tc,
+                    Value::Integer(
+                        tc.draw(generators::integers::<i64>().min_value(-5).max_value(5)),
+                    ),
+                ),
+                maybe(
+                    tc,
+                    Value::Float(
+                        tc.draw(generators::floats::<f64>().min_value(-1e3).max_value(1e3)),
+                    ),
+                ),
+            ];
+            let point = Point::new(
+                tc.draw(generators::floats::<f64>().min_value(-50.0).max_value(50.0)),
+                tc.draw(generators::floats::<f64>().min_value(-50.0).max_value(50.0)),
+            );
+            if tc.draw(generators::weighted_booleans(0.1)) {
+                NewFeature::attributes(values).with_fid(fid)
+            } else {
+                NewFeature::new(point, values).with_fid(fid)
+            }
+        })
+        .collect();
+    layer.write_all(rows, 0).unwrap();
+    count
+}
+
+/// The rows of a stream of batches, failing on an error.
+fn arrow_rows(batches: geopackage::arrow::ArrowBatches<'_>) -> Vec<Vec<Cell>> {
+    batches
+        .flat_map(|batch| batch_rows(&batch.unwrap()))
+        .collect()
+}
+
+/// Rows from the row path, as the cells of `schema`: the key, the geometry's
+/// WKB body, and each value by the documented mapping.
+fn feature_rows(features: geopackage::Features, schema: &arrow_schema::Schema) -> Vec<Vec<Cell>> {
+    features
+        .map(|feature| {
+            let feature = feature.unwrap();
+            schema
+                .fields()
+                .iter()
+                .map(|field| match field.name().as_str() {
+                    "fid" => Cell::Int(feature.fid()),
+                    "geom" => match feature.geometry_bytes() {
+                        Some(blob) => Cell::Bytes(blob[body_offset(blob).unwrap()..].to_vec()),
+                        None => Cell::Null,
+                    },
+                    name => expected_cell(feature.value(name).unwrap(), field.data_type()).unwrap(),
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// A threaded read of a file returns the rows a single-threaded read does,
+/// in key order. Where the key spans at least two batches, so that threads
+/// are used, each batch spans fewer than `batch_size` key values; otherwise
+/// each holds at most `batch_size` rows, as the threading documentation
+/// states.
+///
+/// Each case creates a file and opens worker connections, which costs far
+/// more per case on Windows CI (issue #44), so this property runs 200 cases
+/// rather than the suite's 2000.
+#[hegel::test(test_cases = 200)]
+fn a_threaded_read_matches_a_single_threaded_one(tc: hegel::TestCase) {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("p.gpkg")).unwrap();
+    draw_point_layer(&tc, &gpkg);
+    let layer = gpkg.layer("p").unwrap();
+    let batch_size = tc.draw(generators::integers::<usize>().min_value(1).max_value(8));
+    let threads = tc.draw(generators::integers::<usize>().min_value(2).max_value(4));
+    let options = ArrowReadOptions::with_batch_size(batch_size);
+
+    let single = arrow_rows(layer.read_arrow(options.with_threads(1)).unwrap());
+    // Threads are used only when the key spans at least two batches.
+    let all_keys: Vec<i64> = single
+        .iter()
+        .filter_map(|row| match row[0] {
+            Cell::Int(key) => Some(key),
+            _ => None,
+        })
+        .collect();
+    let threaded_read = match (all_keys.first(), all_keys.last()) {
+        (Some(first), Some(last)) => last - first >= 2 * batch_size as i64 - 1,
+        _ => false,
+    };
+    tc.event(if threaded_read {
+        "threaded"
+    } else {
+        "single-threaded"
+    });
+    let mut threaded = Vec::new();
+    for batch in layer.read_arrow(options.with_threads(threads)).unwrap() {
+        let rows = batch_rows(&batch.unwrap());
+        let keys: Vec<i64> = rows
+            .iter()
+            .filter_map(|row| match row[0] {
+                Cell::Int(key) => Some(key),
+                _ => None,
+            })
+            .collect();
+        match (keys.first(), keys.last()) {
+            (Some(first), Some(last)) if threaded_read => assert!(
+                last - first < batch_size as i64,
+                "{keys:?} in one batch of {batch_size}"
+            ),
+            _ => assert!(
+                keys.len() <= batch_size,
+                "{keys:?} in one batch of {batch_size}"
+            ),
+        }
+        threaded.extend(rows);
+    }
+    assert_eq!(threaded, single);
+}
+
+/// A single-threaded read yields batches of at most `batch_size` rows, and
+/// geometry bytes over `max_batch_bytes` only in a batch of one row, and
+/// loses nothing: together they are the row path's rows in key order.
+#[hegel::test]
+fn batches_respect_their_size_and_byte_ceiling(tc: hegel::TestCase) {
+    let gpkg = GeoPackage::create(Path::new(":memory:")).unwrap();
+    draw_point_layer(&tc, &gpkg);
+    let layer = gpkg.layer("p").unwrap();
+    let batch_size = tc.draw(generators::integers::<usize>().min_value(1).max_value(8));
+    let max_bytes = tc.draw(generators::integers::<usize>().min_value(1).max_value(120));
+    let options = ArrowReadOptions::with_batch_size(batch_size)
+        .with_max_batch_bytes(max_bytes)
+        .with_threads(1);
+    let schema = layer.arrow_schema().unwrap();
+    let geometry = schema.index_of("geom").unwrap();
+
+    let mut all = Vec::new();
+    for batch in layer.read_arrow(options).unwrap() {
+        let batch = batch.unwrap();
+        assert!(
+            (1..=batch_size).contains(&batch.num_rows()),
+            "{} rows",
+            batch.num_rows()
+        );
+        let bytes = batch.column(geometry).as_binary::<i32>().values().len();
+        assert!(
+            bytes <= max_bytes || batch.num_rows() == 1,
+            "{bytes} bytes over {max_bytes} in {} rows",
+            batch.num_rows()
+        );
+        all.extend(batch_rows(&batch));
+    }
+    assert_eq!(all, feature_rows(layer.features().unwrap(), &schema));
+}
+
+/// Draws a query box over `[-60, 60]`, usually ordered, sometimes with a
+/// NaN edge.
+fn draw_box(tc: &hegel::TestCase) -> BoundingBox {
+    let edge = |tc: &hegel::TestCase| {
+        if tc.draw(generators::weighted_booleans(0.05)) {
+            f64::NAN
+        } else {
+            tc.draw(generators::floats::<f64>().min_value(-60.0).max_value(60.0))
+        }
+    };
+    let axis = |tc: &hegel::TestCase| {
+        let (a, b) = (edge(tc), edge(tc));
+        if b < a && tc.draw(generators::weighted_booleans(0.9)) {
+            (b, a)
+        } else {
+            (a, b)
+        }
+    };
+    let (min_x, max_x) = axis(tc);
+    let (min_y, max_y) = axis(tc);
+    BoundingBox::new(min_x, min_y, max_x, max_y)
+}
+
+/// Draws a `WHERE` clause over the layer's columns, with its parameters.
+fn draw_clause(tc: &hegel::TestCase) -> (&'static str, Vec<ValueRef<'static>>) {
+    let int = |tc: &hegel::TestCase| {
+        ValueRef::Integer(tc.draw(generators::integers::<i64>().min_value(-6).max_value(6)))
+    };
+    match tc.draw(generators::integers::<u8>().min_value(0).max_value(4)) {
+        0 => ("n > ?1", vec![int(tc)]),
+        1 => (
+            "name LIKE ?1",
+            vec![ValueRef::Text(
+                tc.draw(generators::sampled_from(vec!["a%", "%b", ""])),
+            )],
+        ),
+        2 => ("x IS NULL OR geom IS NULL", vec![]),
+        3 => (
+            "fid % ?1 = 0",
+            vec![ValueRef::Integer(tc.draw(
+                generators::integers::<i64>().min_value(1).max_value(4),
+            ))],
+        ),
+        _ => ("n BETWEEN ?1 AND ?2", vec![int(tc), int(tc)]),
+    }
+}
+
+/// The rows sorted by their key, the first cell.
+fn by_key(mut rows: Vec<Vec<Cell>>) -> Vec<Vec<Cell>> {
+    rows.sort_by_key(|row| match row[0] {
+        Cell::Int(key) => key,
+        _ => i64::MIN,
+    });
+    rows
+}
+
+/// `read_arrow_in` returns the rows `features_in` returns, cell for cell, in
+/// key order, with or without a spatial index. `features_in` promises no
+/// order, so its rows are sorted first.
+#[hegel::test]
+fn read_arrow_in_matches_features_in(tc: hegel::TestCase) {
+    let gpkg = GeoPackage::create(Path::new(":memory:")).unwrap();
+    draw_point_layer(&tc, &gpkg);
+    let layer = gpkg.layer("p").unwrap();
+    let schema = layer.arrow_schema().unwrap();
+    let bbox = draw_box(&tc);
+    let batch_size = tc.draw(generators::integers::<usize>().min_value(1).max_value(8));
+    let arrow = arrow_rows(
+        layer
+            .read_arrow_in(bbox, ArrowReadOptions::with_batch_size(batch_size))
+            .unwrap(),
+    );
+    assert_eq!(
+        arrow,
+        by_key(feature_rows(layer.features_in(bbox).unwrap(), &schema)),
+        "{bbox:?}"
+    );
+}
+
+/// `read_arrow_where` returns the rows `select` returns for the same clause
+/// and parameters.
+#[hegel::test]
+fn read_arrow_where_matches_select(tc: hegel::TestCase) {
+    let gpkg = GeoPackage::create(Path::new(":memory:")).unwrap();
+    draw_point_layer(&tc, &gpkg);
+    let layer = gpkg.layer("p").unwrap();
+    let schema = layer.arrow_schema().unwrap();
+    let (clause, params) = draw_clause(&tc);
+    let batch_size = tc.draw(generators::integers::<usize>().min_value(1).max_value(8));
+    let arrow = arrow_rows(
+        layer
+            .read_arrow_where(
+                clause,
+                &params,
+                ArrowReadOptions::with_batch_size(batch_size),
+            )
+            .unwrap(),
+    );
+    assert_eq!(
+        arrow,
+        feature_rows(layer.select(clause, &params).unwrap(), &schema),
+        "{clause}"
+    );
+}
+
+/// `read_arrow_in_where` returns the rows of `features_in` that `select`
+/// also returns, in key order.
+#[hegel::test]
+fn read_arrow_in_where_is_the_intersection(tc: hegel::TestCase) {
+    let gpkg = GeoPackage::create(Path::new(":memory:")).unwrap();
+    draw_point_layer(&tc, &gpkg);
+    let layer = gpkg.layer("p").unwrap();
+    let schema = layer.arrow_schema().unwrap();
+    let bbox = draw_box(&tc);
+    let (clause, params) = draw_clause(&tc);
+    let selected = feature_rows(layer.select(clause, &params).unwrap(), &schema);
+    let expected: Vec<Vec<Cell>> = by_key(feature_rows(layer.features_in(bbox).unwrap(), &schema))
+        .into_iter()
+        .filter(|row| selected.contains(row))
+        .collect();
+    let arrow = arrow_rows(
+        layer
+            .read_arrow_in_where(bbox, clause, &params, ArrowReadOptions::with_batch_size(3))
+            .unwrap(),
+    );
+    assert_eq!(arrow, expected, "{bbox:?} {clause}");
+}
+
+/// A projected layer reads exactly the projected columns of a full read: the
+/// key always, the geometry only if kept, and the named value columns in
+/// table order.
+#[hegel::test]
+fn a_projected_read_is_the_projection_of_a_full_read(tc: hegel::TestCase) {
+    let gpkg = GeoPackage::create(Path::new(":memory:")).unwrap();
+    draw_point_layer(&tc, &gpkg);
+    let full_layer = gpkg.layer("p").unwrap();
+    let full_schema = full_layer.arrow_schema().unwrap();
+    let full = arrow_rows(
+        full_layer
+            .read_arrow(ArrowReadOptions::default().with_threads(1))
+            .unwrap(),
+    );
+
+    let names: Vec<&str> = ["name", "n", "x"]
+        .into_iter()
+        .filter(|_| tc.draw(generators::booleans()))
+        .collect();
+    let mut layer = gpkg.layer("p").unwrap().with_columns(&names).unwrap();
+    if tc.draw(generators::booleans()) {
+        layer = layer.without_geometry();
+    }
+    let schema = layer.arrow_schema().unwrap();
+    let kept: Vec<usize> = schema
+        .fields()
+        .iter()
+        .map(|field| full_schema.index_of(field.name()).unwrap())
+        .collect();
+    let expected: Vec<Vec<Cell>> = full
+        .iter()
+        .map(|row| kept.iter().map(|&i| row[i].clone()).collect())
+        .collect();
+    let projected = arrow_rows(
+        layer
+            .read_arrow(ArrowReadOptions::default().with_threads(1))
+            .unwrap(),
+    );
+    assert_eq!(projected, expected, "{names:?}");
+}
+
+/// `write_arrow` and `write_all` store the same rows the same way: the two
+/// tables are equal value for value and storage class for storage class.
+#[hegel::test]
+fn write_arrow_stores_what_write_all_stores(tc: hegel::TestCase) {
+    let gpkg = GeoPackage::create(Path::new(":memory:")).unwrap();
+    let types = typed_layer(&tc, &gpkg, "a");
+    let mut builder =
+        TableSchemaBuilder::new("b").geometry(GeometrySpec::new(GeometryType::Geometry, 4326));
+    for (i, ty) in types.iter().enumerate() {
+        builder = builder.column(ColumnSpec::new(format!("c{i}"), ty.clone()));
+    }
+    gpkg.create_layer(&builder).unwrap();
+    let layer = gpkg.layer("a").unwrap();
+    let schema = layer.arrow_schema().unwrap();
+    let rows = draw_arrow_rows(&tc, &schema, &types);
+    layer
+        .write_arrow(batches_of(&tc, &schema, &rows).into_iter().map(Ok), 0)
+        .unwrap();
+
+    let other = gpkg.layer("b").unwrap();
+    let mut writer = other.writer().unwrap();
+    for row in &rows {
+        let mut fid = None;
+        let mut wkb = None;
+        let mut values = Vec::new();
+        for (field, cell) in schema.fields().iter().zip(row) {
+            match (field.name().as_str(), cell) {
+                ("fid", Cell::Int(id)) => fid = Some(*id),
+                ("geom", Cell::Bytes(body)) => wkb = Some(body.clone()),
+                ("geom", _) => {}
+                (_, cell) => values.push(value_of(cell)),
+            }
+        }
+        let refs: Vec<ValueRef<'_>> = values.iter().map(ValueRef::from).collect();
+        match wkb {
+            Some(body) => drop(writer.insert_wkb(fid, &body, &refs).unwrap()),
+            None => drop(writer.insert_row(fid, &refs).unwrap()),
+        }
+    }
+    writer.commit().unwrap();
+
+    let dump = |table: &str| -> Vec<Vec<String>> {
+        let columns: String = schema
+            .fields()
+            .iter()
+            .map(|f| format!("typeof({0}), quote({0})", f.name()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        gpkg.connection()
+            .prepare(&format!("SELECT {columns} FROM {table} ORDER BY fid"))
+            .unwrap()
+            .query_map([], |row| {
+                (0..schema.fields().len() * 2)
+                    .map(|i| {
+                        row.get::<_, rusqlite::types::Value>(i)
+                            .map(|v| format!("{v:?}"))
+                    })
+                    .collect()
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    };
+    assert_eq!(dump("a"), dump("b"), "{types:?}");
+}
+
+/// The row-path value for a drawn Arrow cell of a typed column.
+fn value_of(cell: &Cell) -> Value {
+    use geopackage::core::datetime::{Date, DateTime};
+    match cell {
+        Cell::Null => Value::Null,
+        Cell::Bool(b) => Value::Boolean(*b),
+        Cell::Int(i) => Value::Integer(*i),
+        Cell::Float(bits) => Value::Float(f64::from_bits(*bits)),
+        Cell::Text(s) => Value::Text(s.clone()),
+        Cell::Bytes(b) => Value::Blob(b.clone()),
+        Cell::Days(d) => Value::Date(Date::from_days_since_epoch(*d).unwrap()),
+        Cell::Micros(m) => Value::DateTime(DateTime::from_micros_since_epoch(*m).unwrap()),
+    }
 }
