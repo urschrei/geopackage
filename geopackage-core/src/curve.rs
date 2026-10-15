@@ -91,8 +91,9 @@ pub fn xy_envelope(wkb_body: &[u8]) -> Result<Option<[f64; 4]>, GeometryError> {
 pub struct BodyScan {
     /// The envelope to write into a GPB header, on the same rule
     /// [`crate::geometry::write_envelope`] follows: [`gpb::Envelope::Xyz`] when
-    /// the body has a Z, otherwise [`gpb::Envelope::Xy`], and
-    /// [`gpb::Envelope::None`] when it is empty. An M never widens it.
+    /// the body has a Z and a coordinate whose X, Y and Z are all finite,
+    /// otherwise [`gpb::Envelope::Xy`], and [`gpb::Envelope::None`] when it is
+    /// empty. An M never widens it.
     pub envelope: gpb::Envelope,
     /// The same bounds as `envelope` in the flat form the rtree uses, or
     /// `None` when the body is empty.
