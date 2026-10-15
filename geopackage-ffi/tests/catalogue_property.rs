@@ -386,3 +386,35 @@ fn findings_report_what_validate_returns(tc: hegel::TestCase) {
     // SAFETY: a findings handle, freed once.
     unsafe { gpkg_findings_free(handle) };
 }
+
+/// `gpkg_add_epsg_srs` succeeds or fails as the Rust API does for the same
+/// codes, and leaves the same rows.
+#[hegel::test]
+fn gpkg_add_epsg_srs_agrees_with_the_rust_api(tc: hegel::TestCase) {
+    let (gpkg, mut error) = open();
+    let twin = GeoPackage::create(std::path::Path::new(":memory:")).unwrap();
+    let calls = tc.draw(generators::integers::<usize>().min_value(1).max_value(4));
+    for _ in 0..calls {
+        let code = if tc.draw(generators::booleans()) {
+            tc.draw(generators::sampled_from(vec![
+                4326, 3857, 27700, 32630, 4979, 999_999,
+            ]))
+        } else {
+            tc.draw(generators::integers::<i32>())
+        };
+        // SAFETY: a live container and a writable error slot.
+        let status = check(
+            unsafe { geopackage_ffi::gpkg_add_epsg_srs(gpkg, code, &raw mut error) },
+            &mut error,
+        );
+        let expected = twin
+            .add_epsg_srs(code)
+            .map_or_else(|e| Status::from(&e), |_| Status::Ok);
+        tc.event(format!("{status:?}"));
+        assert_eq!(status, expected, "EPSG:{code}");
+    }
+    // SAFETY: a live container handle.
+    let rows = unsafe { (*gpkg).gpkg() }.srs_list().unwrap();
+    assert_eq!(rows, twin.srs_list().unwrap());
+    close(gpkg, &mut error);
+}

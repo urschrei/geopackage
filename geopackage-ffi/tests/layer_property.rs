@@ -372,3 +372,223 @@ fn layer_reads_agree_with_the_rust_api(tc: hegel::TestCase) {
     let status = unsafe { gpkg_close(gpkg, &raw mut error) };
     assert_eq!(check(status, &mut error), Status::Ok);
 }
+
+/// A column name argument, as drawn.
+#[derive(Debug)]
+enum Column {
+    Name(CString),
+    NotUtf8,
+    Null,
+}
+
+/// Opening a layer with a projection of any column names agrees with the
+/// Rust API: a NULL or non-UTF-8 name is `BAD_ARGUMENT`, any other outcome is
+/// the Rust outcome, and an open projected layer reports what the projected
+/// Rust layer reports.
+#[hegel::test]
+fn projected_opens_agree_with_the_rust_api(tc: hegel::TestCase) {
+    let mut error = sentinel();
+    let path = CString::new(":memory:").unwrap();
+    // SAFETY: a NUL-terminated path and a writable error slot.
+    let gpkg: *mut gpkg_t = unsafe { gpkg_create(path.as_ptr(), &raw mut error) };
+    assert!(!gpkg.is_null());
+    // SAFETY: a live container handle; `gpkg_t` is the container.
+    let rust: &GeoPackage = unsafe { (*gpkg).gpkg() };
+    build(&tc, rust);
+    let tables: Vec<String> = rust
+        .contents()
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.table_name)
+        .collect();
+    // Mostly a table in the file, opened as the kind it is.
+    let (query, attributes) = if !tables.is_empty() && tc.draw(generators::weighted_booleans(0.85))
+    {
+        let table = tc.draw(generators::sampled_from(tables.clone()));
+        let spatial = rust.layer(&table).is_ok();
+        (CString::new(table).unwrap(), !spatial)
+    } else {
+        (draw_query(&tc, &tables), tc.draw(generators::booleans()))
+    };
+    let count = tc.draw(generators::integers::<usize>().min_value(0).max_value(4));
+    // The queried table's own columns, if it has any, and some others.
+    let own: Vec<String> = query
+        .to_str()
+        .ok()
+        .and_then(|name| rust.layer(name).or_else(|_| rust.attributes(name)).ok())
+        .map(|layer| {
+            layer
+                .schema()
+                .columns
+                .iter()
+                .map(|column| column.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut candidates: Vec<String> = own.clone();
+    candidates.extend(own);
+    candidates.extend(["geom", "fid", "absent", "Ünïcödé"].map(str::to_owned));
+    let columns: Vec<Column> = (0..count)
+        .map(
+            |_| match tc.draw(generators::integers::<u8>().min_value(0).max_value(29)) {
+                0 => Column::NotUtf8,
+                1 => Column::Null,
+                _ => Column::Name(
+                    CString::new(tc.draw(generators::sampled_from(candidates.clone()))).unwrap(),
+                ),
+            },
+        )
+        .collect();
+    let not_utf8 = CString::new([b'c', 0xFF]).unwrap();
+    let pointers: Vec<*const c_char> = columns
+        .iter()
+        .map(|column| match column {
+            Column::Name(name) => name.as_ptr(),
+            Column::NotUtf8 => not_utf8.as_ptr(),
+            Column::Null => std::ptr::null(),
+        })
+        .collect();
+    let layer = if attributes {
+        // SAFETY: a live container, a NUL-terminated name, and `pointers`
+        // readable for its length, each NULL or NUL-terminated.
+        unsafe {
+            geopackage_ffi::gpkg_attributes_open_with_columns(
+                gpkg,
+                query.as_ptr(),
+                pointers.as_ptr(),
+                pointers.len(),
+                &raw mut error,
+            )
+        }
+    } else {
+        // SAFETY: as above.
+        unsafe {
+            geopackage_ffi::gpkg_layer_open_with_columns(
+                gpkg,
+                query.as_ptr(),
+                pointers.as_ptr(),
+                pointers.len(),
+                &raw mut error,
+            )
+        }
+    };
+    let expected = match query.to_str() {
+        Err(_not_utf8) => Err(Status::BadArgument),
+        Ok(name) => {
+            let opened = if attributes {
+                rust.attributes(name)
+            } else {
+                rust.layer(name)
+            };
+            // Every argument is checked before the layer is looked up.
+            match (
+                opened,
+                columns.iter().any(|c| !matches!(c, Column::Name(_))),
+            ) {
+                (_, true) => Err(Status::BadArgument),
+                (Err(e), false) => Err(Status::from(&e)),
+                (Ok(layer), false) => {
+                    let names: Vec<&str> = columns
+                        .iter()
+                        .filter_map(|c| match c {
+                            Column::Name(name) => name.to_str().ok(),
+                            _ => None,
+                        })
+                        .collect();
+                    layer.with_columns(&names).map_err(|e| Status::from(&e))
+                }
+            }
+        }
+    };
+    if layer.is_null() {
+        let status = check(error.code, &mut error);
+        tc.event(format!("open {status:?}"));
+        assert_eq!(Err(status), expected.map(|_| ()), "{query:?} {columns:?}");
+    } else {
+        check(Status::Ok, &mut error);
+        tc.event("open Ok");
+        let rust_layer = expected.unwrap();
+        assert_eq!(
+            report_c(layer, &mut error),
+            report_rust(&rust_layer),
+            "{query:?} {columns:?}"
+        );
+        // SAFETY: a live layer handle, freed once.
+        unsafe { gpkg_layer_free(layer) };
+    }
+    // SAFETY: a live container with no children.
+    let status = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(check(status, &mut error), Status::Ok);
+}
+
+/// `gpkg_layer_repair_spatial_index` does what its documentation says for
+/// each index state: a stale or legacy index becomes current and consistent,
+/// and a current or absent one is left as it is; the call succeeds either way.
+#[hegel::test]
+fn repair_follows_the_documented_rules(tc: hegel::TestCase) {
+    let mut error = sentinel();
+    let path = CString::new(":memory:").unwrap();
+    // SAFETY: a NUL-terminated path and a writable error slot.
+    let gpkg: *mut gpkg_t = unsafe { gpkg_create(path.as_ptr(), &raw mut error) };
+    assert!(!gpkg.is_null());
+    // SAFETY: a live container handle.
+    let rust: &GeoPackage = unsafe { (*gpkg).gpkg() };
+    let layer = rust
+        .create_layer(
+            &TableSchemaBuilder::new("pts")
+                .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+                .spatial_index(true),
+        )
+        .unwrap();
+    let mut writer = layer.writer().unwrap();
+    let rows = tc.draw(generators::integers::<usize>().min_value(0).max_value(5));
+    for i in 0..rows {
+        let x = f64::from(u32::try_from(i).unwrap());
+        writer.insert_wkb(None, &point(x, x), &[]).unwrap();
+    }
+    writer.commit().unwrap();
+    let sql = |statement: &str| rust.connection().execute_batch(statement).unwrap();
+    let triggers = |pattern: &str| -> Vec<String> {
+        rust.connection()
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE ?1")
+            .unwrap()
+            .query_map([pattern], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    };
+    match tc.draw(generators::integers::<u8>().min_value(0).max_value(4)) {
+        0 => {}
+        1 => layer.drop_spatial_index().unwrap(),
+        2 => {
+            for trigger in triggers("rtree_pts_geom_%") {
+                sql(&format!("DROP TRIGGER \"{trigger}\""));
+            }
+        }
+        3 => sql("DROP TABLE rtree_pts_geom"),
+        _ => sql("CREATE TRIGGER rtree_pts_geom_update1 AFTER UPDATE ON pts BEGIN SELECT 1; END"),
+    }
+    let before = layer.spatial_index_status().unwrap();
+    tc.event(before.as_str());
+    let name = CString::new("pts").unwrap();
+    // SAFETY: a live container and a NUL-terminated name.
+    let handle = unsafe { gpkg_layer_open(gpkg, name.as_ptr(), &raw mut error) };
+    assert!(!handle.is_null());
+    // SAFETY: a live layer handle.
+    let status = unsafe { geopackage_ffi::gpkg_layer_repair_spatial_index(handle, &raw mut error) };
+    assert_eq!(check(status, &mut error), Status::Ok, "{before:?}");
+    let after = layer.spatial_index_status().unwrap();
+    match before {
+        geopackage::SpatialIndexStatus::Stale | geopackage::SpatialIndexStatus::Legacy => {
+            assert_eq!(after, geopackage::SpatialIndexStatus::Current);
+            assert!(layer.audit_spatial_index().unwrap().is_consistent());
+        }
+        _ => assert_eq!(after, before),
+    }
+    // SAFETY: a live layer handle, freed once.
+    unsafe { gpkg_layer_free(handle) };
+    drop(layer);
+    // SAFETY: a live container with no children.
+    let status = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(check(status, &mut error), Status::Ok);
+}
