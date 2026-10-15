@@ -11,7 +11,7 @@
     reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"
 )]
 
-use geo_types::Point;
+use geo_types::{Coord, Geometry, LineString, MultiPoint, Point, Polygon};
 use geopackage::core::gpb::{Envelope, encode_header};
 use geopackage::core::triggers::{self, TriggerGeneration};
 use geopackage::core::types::{ColumnType, GeometryType};
@@ -508,46 +508,215 @@ fn create_on_attribute_layer_errors() {
     );
 }
 
-/// Draw a coordinate that is exactly representable in `f32`, widened to `f64`.
+// --- property tests -----------------------------------------------------------
+//
+// The drawn geometries are points, line strings, polygons and multi-points,
+// each sometimes empty, and NULL. Two coordinate generators feed them.
+// `f32`-exact coordinates make the index's `f32` bounds equal the `ST_*`
+// envelope, so those properties compare with `==`. Coordinates from the whole
+// `f64` domain make the documented relation containment, and the bulk and
+// triggered builds must still agree bit for bit, because the bulk build rounds
+// each bound as the RTree module does.
+
+/// Draws any finite `f32`, subnormals included, widened to `f64`.
 ///
 /// The RTree stores 32-bit bounds (minima rounded down, maxima rounded up), so
 /// only for `f32`-exact coordinates does the stored bound equal the `ST_*`
 /// envelope exactly, which is what lets these property tests compare the index
 /// to the scan with `==` rather than a containment tolerance.
-fn draw_coord(tc: &hegel::TestCase) -> f64 {
+fn draw_f32_coord(tc: &hegel::TestCase) -> f64 {
     f64::from(
         tc.draw(
             generators::floats::<f32>()
-                .min_value(-1000.0)
-                .max_value(1000.0),
+                .allow_nan(false)
+                .allow_infinity(false),
         ),
     )
 }
 
-/// Upsert a point at `fid` via raw `ON CONFLICT` SQL (the case the pre-1.4
-/// `update1` trigger corrupted; the 1.4 set must keep the index correct).
-fn upsert_point(conn: &Connection, fid: i64, x: f64, y: f64) {
-    conn.execute(
-        "INSERT INTO pts (fid, geom) VALUES (?1, ?2) \
-         ON CONFLICT(fid) DO UPDATE SET geom = excluded.geom",
-        rusqlite::params![fid, gpb_point(4326, x, y)],
-    )
-    .unwrap();
+/// Draws any `f64`: NaN, the infinities, subnormals and magnitudes beyond the
+/// `f32` range included.
+fn draw_any_coord(tc: &hegel::TestCase) -> f64 {
+    tc.draw(generators::floats::<f64>())
 }
 
-/// Upsert a NULL geometry at `fid` (exercises the empty/NULL trigger guards).
-fn upsert_null(conn: &Connection, fid: i64) {
-    conn.execute(
-        "INSERT INTO pts (fid, geom) VALUES (?1, NULL) \
-         ON CONFLICT(fid) DO UPDATE SET geom = NULL",
-        [fid],
-    )
-    .unwrap();
+type DrawCoord = fn(&hegel::TestCase) -> f64;
+
+/// Draws a geometry, or `None` for a NULL one. Line strings, polygon rings and
+/// multi-points have up to five coordinates, and none is an empty geometry, as
+/// is a point with NaN coordinates.
+fn draw_geometry(tc: &hegel::TestCase, coord: DrawCoord) -> Option<Geometry<f64>> {
+    let coords = |tc: &hegel::TestCase| -> Vec<Coord<f64>> {
+        let count = tc.draw(generators::integers::<usize>().min_value(0).max_value(5));
+        (0..count)
+            .map(|_| Coord {
+                x: coord(tc),
+                y: coord(tc),
+            })
+            .collect()
+    };
+    let geometry: Geometry<f64> =
+        match tc.draw(generators::integers::<u8>().min_value(0).max_value(5)) {
+            0 => return None,
+            1 => Point::new(coord(tc), coord(tc)).into(),
+            2 => Point::new(f64::NAN, f64::NAN).into(),
+            3 => LineString::new(coords(tc)).into(),
+            4 => Polygon::new(LineString::new(coords(tc)), vec![]).into(),
+            _ => MultiPoint::new(coords(tc).into_iter().map(Point::from).collect()).into(),
+        };
+    Some(geometry)
 }
 
-/// The RTree contents provably match a full-scan
-/// rebuild after an arbitrary insert/update/delete/upsert sequence, with the
-/// initial index built through both the triggered and the bulk path.
+/// A GeoPackage in SQLite's in-memory database with a `pts(fid, name, geom)`
+/// layer of any geometry type and no spatial index, holding `features`.
+///
+/// In memory for the reason [`in_memory_with_points`] gives.
+fn in_memory_with_features(features: &[(i64, Option<Geometry<f64>>)]) -> GeoPackage {
+    let gpkg = GeoPackage::create(Path::new(":memory:")).unwrap();
+    let builder = TableSchemaBuilder::new("pts")
+        .column(ColumnSpec::new("name", ColumnType::Text(None)))
+        .geometry(GeometrySpec::new(GeometryType::Geometry, 4326))
+        .spatial_index(false);
+    let layer = gpkg.create_layer(&builder).unwrap();
+    let mut writer = layer.writer().unwrap();
+    for (fid, geometry) in features {
+        match geometry {
+            Some(geometry) => writer.insert(Some(*fid), geometry, &[ValueRef::Null]),
+            None => writer.insert_row(Some(*fid), &[ValueRef::Null]),
+        }
+        .unwrap();
+    }
+    writer.commit().unwrap();
+    gpkg
+}
+
+/// Draws up to `max` features with fids from 1, with geometries from `coord`.
+fn draw_features(
+    tc: &hegel::TestCase,
+    coord: DrawCoord,
+    max: usize,
+) -> Vec<(i64, Option<Geometry<f64>>)> {
+    let count = tc.draw(generators::integers::<usize>().min_value(0).max_value(max));
+    (1..=(count as i64))
+        .map(|fid| (fid, draw_geometry(tc, coord)))
+        .collect()
+}
+
+/// A GPB blob of a drawn geometry, or NULL, for the SQL write operations.
+fn gpb(geometry: Option<&Geometry<f64>>) -> Option<Vec<u8>> {
+    geometry.map(|geometry| {
+        geopackage::core::geometry::encode_gpb(geometry, 4326)
+            .unwrap()
+            .0
+    })
+}
+
+/// Applies one drawn write to `pts`, through the writer or through SQL, over
+/// a small fid space so that writes often meet existing rows.
+///
+/// A write that SQLite rejects as a constraint violation, such as an insert or
+/// a change of fid onto a fid that is in use, is part of the domain: the index
+/// must still match the table afterwards. Any other error fails the test.
+fn apply_drawn_write(tc: &hegel::TestCase, gpkg: &GeoPackage, coord: DrawCoord) {
+    let layer = gpkg.layer("pts").unwrap();
+    let conn = gpkg.connection();
+    let fid = tc.draw(generators::integers::<i64>().min_value(1).max_value(8));
+    let op = tc.draw(generators::integers::<u8>().min_value(0).max_value(8));
+    tc.event(format!("write {op}"));
+    let result: geopackage::Result<()> = match op {
+        // An upsert through SQL: the case the pre-1.4 `update1` trigger
+        // corrupted.
+        0 => conn
+            .execute(
+                "INSERT INTO pts (fid, geom) VALUES (?1, ?2) \
+                 ON CONFLICT(fid) DO UPDATE SET geom = excluded.geom",
+                rusqlite::params![fid, gpb(draw_geometry(tc, coord).as_ref())],
+            )
+            .map(drop)
+            .map_err(Error::from),
+        // A geometry update through SQL.
+        1 => conn
+            .execute(
+                "UPDATE pts SET geom = ?2 WHERE fid = ?1",
+                rusqlite::params![fid, gpb(draw_geometry(tc, coord).as_ref())],
+            )
+            .map(drop)
+            .map_err(Error::from),
+        // A change of primary key, which the update triggers must follow.
+        2 => {
+            let to = tc.draw(generators::integers::<i64>().min_value(1).max_value(8));
+            conn.execute("UPDATE pts SET fid = ?2 WHERE fid = ?1", [fid, to])
+                .map(drop)
+                .map_err(Error::from)
+        }
+        // An update of the other columns only, which leaves the geometry as
+        // it was.
+        3 => conn
+            .execute("UPDATE pts SET name = 'x' WHERE fid = ?1", [fid])
+            .map(drop)
+            .map_err(Error::from),
+        4 => conn
+            .execute("DELETE FROM pts WHERE fid = ?1", [fid])
+            .map(drop)
+            .map_err(Error::from),
+        // The writer, which encodes the geometry itself.
+        5 => {
+            let mut writer = layer.writer().unwrap();
+            let inserted = match draw_geometry(tc, coord) {
+                Some(geometry) => writer.insert(Some(fid), &geometry, &[ValueRef::Null]),
+                None => writer.insert_row(Some(fid), &[ValueRef::Null]),
+            };
+            inserted.and_then(|_| writer.commit())
+        }
+        6 => {
+            let mut writer = layer.writer().unwrap();
+            match draw_geometry(tc, coord) {
+                Some(geometry) => writer.update(fid, &geometry, &[ValueRef::Null]).unwrap(),
+                None => writer.update_row(fid, &[ValueRef::Null]).unwrap(),
+            };
+            writer.commit()
+        }
+        7 => {
+            let mut writer = layer.writer().unwrap();
+            writer.delete(fid).unwrap();
+            writer.commit()
+        }
+        _ => {
+            let mut writer = layer.writer().unwrap();
+            writer
+                .update_columns(fid, &[("name", ValueRef::Text("y"))])
+                .unwrap();
+            writer.commit()
+        }
+    };
+    if let Err(error) = result {
+        let constraint = matches!(
+            &error,
+            Error::Sqlite(rusqlite::Error::SqliteFailure(failure, _))
+                if failure.code == rusqlite::ErrorCode::ConstraintViolation
+        );
+        assert!(constraint, "write {op} at fid {fid} failed: {error:?}");
+    }
+}
+
+/// Builds the index through a drawn path, the triggered build or the bulk
+/// build.
+fn create_index_by_a_drawn_path(tc: &hegel::TestCase, gpkg: &GeoPackage) {
+    let options = if tc.draw(generators::booleans()) {
+        BulkIndexOptions::always_bulk()
+    } else {
+        BulkIndexOptions::never_bulk()
+    };
+    gpkg.layer("pts")
+        .unwrap()
+        .create_spatial_index_with(options)
+        .unwrap();
+}
+
+/// The RTree contents provably match a full-scan rebuild after an arbitrary
+/// sequence of writes through the writer and through SQL, with the initial
+/// index built through either the triggered or the bulk path, for
+/// `f32`-exact coordinates.
 ///
 /// The oracle is independent of the index: `envelope_scan` recomputes the
 /// expected contents directly from the current table rows via the `ST_*`
@@ -555,50 +724,20 @@ fn upsert_null(conn: &Connection, fid: i64) {
 /// trigger set by construction.
 #[hegel::test]
 fn rtree_tracks_full_scan_through_write_ops(tc: hegel::TestCase) {
-    let gpkg = in_memory_with_points(&[]);
-    let layer = gpkg.layer("pts").unwrap();
+    let gpkg = in_memory_with_features(&draw_features(&tc, draw_f32_coord, 10));
+    create_index_by_a_drawn_path(&tc, &gpkg);
     let conn = gpkg.connection();
-
-    // Seed some rows, then build the initial index through the drawn path.
-    let seed = tc.draw(generators::integers::<usize>().min_value(0).max_value(10));
-    for fid in 1..=(seed as i64) {
-        upsert_point(conn, fid, draw_coord(&tc), draw_coord(&tc));
-    }
-    let options = if tc.draw(generators::booleans()) {
-        BulkIndexOptions::always_bulk()
-    } else {
-        BulkIndexOptions::never_bulk()
-    };
-    layer.create_spatial_index_with(options).unwrap();
     assert_eq!(
         rtree_rows(conn),
         envelope_scan(conn),
         "index diverged from the scan right after the initial build"
     );
 
-    // Apply an arbitrary op sequence over a small fid space (so upserts,
-    // updates, and deletes collide with existing rows), checking the invariant
-    // after every step.
+    // Checks the invariant after every step, so that a failing sequence
+    // shrinks to the step that broke it.
     let n_ops = tc.draw(generators::integers::<usize>().min_value(0).max_value(40));
     for step in 0..n_ops {
-        let fid = tc.draw(generators::integers::<i64>().min_value(1).max_value(8));
-        match tc.draw(generators::integers::<u8>().min_value(0).max_value(3)) {
-            0 => upsert_point(conn, fid, draw_coord(&tc), draw_coord(&tc)),
-            1 => upsert_null(conn, fid),
-            2 => {
-                let (x, y) = (draw_coord(&tc), draw_coord(&tc));
-                let mut writer = layer.writer().unwrap();
-                writer
-                    .update(fid, &Point::new(x, y), &[ValueRef::Null])
-                    .unwrap();
-                writer.commit().unwrap();
-            }
-            _ => {
-                let mut writer = layer.writer().unwrap();
-                writer.delete(fid).unwrap();
-                writer.commit().unwrap();
-            }
-        }
+        apply_drawn_write(&tc, &gpkg, draw_f32_coord);
         assert_eq!(
             rtree_rows(conn),
             envelope_scan(conn),
@@ -607,8 +746,140 @@ fn rtree_tracks_full_scan_through_write_ops(tc: hegel::TestCase) {
     }
 }
 
-/// The bulk and triggered build paths produce byte-identical index contents,
-/// and both equal the full-scan rebuild, for an arbitrary feature set.
+/// Returns `true` if an index entry `(id, minx, maxx, miny, maxy)` covers a
+/// scanned envelope of the same row, by the rule `SpatialIndexAudit::not_covering`
+/// documents: each bound is on the outer side of the envelope's, except that a
+/// value beyond the `f32` range may have an infinite bound on its own side, and
+/// a value in the `f32` subnormal range may have a bound up to one `f32` step
+/// inward.
+fn entry_covers(entry: (i64, f64, f64, f64, f64), envelope: (i64, f64, f64, f64, f64)) -> bool {
+    let f32_max = f64::from(f32::MAX);
+    let subnormal = |value: f64| value.abs() < f64::from(f32::MIN_POSITIVE);
+    let step = f64::from(f32::from_bits(1));
+    let low = |stored: f64, value: f64| {
+        stored <= value
+            || (value > f32_max && stored == f64::INFINITY)
+            || (subnormal(value) && stored - value <= step)
+    };
+    let high = |stored: f64, value: f64| {
+        stored >= value
+            || (value < -f32_max && stored == f64::NEG_INFINITY)
+            || (subnormal(value) && value - stored <= step)
+    };
+    entry.0 == envelope.0
+        && low(entry.1, envelope.1)
+        && high(entry.2, envelope.2)
+        && low(entry.3, envelope.3)
+        && high(entry.4, envelope.4)
+}
+
+/// For coordinates from the whole `f64` domain, the index has one entry for
+/// each row that the scan finds, and each entry covers that row's envelope:
+/// the RTree rounds minima down and maxima up to `f32`.
+#[hegel::test]
+fn rtree_contains_every_envelope_through_write_ops(tc: hegel::TestCase) {
+    let gpkg = in_memory_with_features(&draw_features(&tc, draw_any_coord, 10));
+    create_index_by_a_drawn_path(&tc, &gpkg);
+    let conn = gpkg.connection();
+
+    let n_ops = tc.draw(generators::integers::<usize>().min_value(0).max_value(40));
+    for step in 0..=n_ops {
+        if step > 0 {
+            apply_drawn_write(&tc, &gpkg, draw_any_coord);
+        }
+        let entries = rtree_rows(conn);
+        let envelopes = envelope_scan(conn);
+        assert_eq!(entries.len(), envelopes.len(), "after op {step}");
+        for (entry, envelope) in entries.into_iter().zip(envelopes) {
+            assert!(
+                entry_covers(entry, envelope),
+                "entry {entry:?} does not cover {envelope:?} after op {step}"
+            );
+        }
+    }
+}
+
+/// `audit_spatial_index` reports an index that the triggers maintained as
+/// consistent, after any sequence of writes over coordinates from the whole
+/// `f64` domain, with the initial index from either build path.
+#[hegel::test]
+fn the_audit_accepts_a_maintained_index(tc: hegel::TestCase) {
+    let gpkg = in_memory_with_features(&draw_features(&tc, draw_any_coord, 10));
+    create_index_by_a_drawn_path(&tc, &gpkg);
+    let n_ops = tc.draw(generators::integers::<usize>().min_value(0).max_value(20));
+    for _ in 0..n_ops {
+        apply_drawn_write(&tc, &gpkg, draw_any_coord);
+    }
+    let audit = gpkg.layer("pts").unwrap().audit_spatial_index().unwrap();
+    assert!(audit.is_consistent(), "{audit:?}");
+}
+
+/// `audit_spatial_index` finds a drawn corruption of a correct index: a
+/// deleted entry is missing, an entry for a row with no indexable geometry is
+/// extra, and an entry moved off its geometry does not cover it.
+#[hegel::test]
+fn the_audit_finds_a_corrupted_entry(tc: hegel::TestCase) {
+    let gpkg = in_memory_with_features(&draw_features(&tc, draw_f32_coord, 10));
+    create_index_by_a_drawn_path(&tc, &gpkg);
+    let conn = gpkg.connection();
+    let entries = rtree_rows(conn);
+    let corruption = tc.draw(generators::integers::<u8>().min_value(0).max_value(2));
+    match corruption {
+        0 | 2 => {
+            tc.assume(!entries.is_empty());
+            let (id, ..) = tc.draw(generators::sampled_from(entries));
+            if corruption == 0 {
+                conn.execute("DELETE FROM rtree_pts_geom WHERE id = ?1", [id])
+                    .unwrap();
+            } else {
+                // Moves the entry to a box that excludes every finite
+                // envelope point on the x axis, below the smallest `f32`.
+                conn.execute(
+                    "UPDATE rtree_pts_geom SET minx = -3.4e38, maxx = -3.4e38 WHERE id = ?1",
+                    [id],
+                )
+                .unwrap();
+                let envelope = envelope_scan(conn)
+                    .into_iter()
+                    .find(|row| row.0 == id)
+                    .unwrap();
+                tc.assume(envelope.1 > -3.4e38);
+            }
+        }
+        _ => {
+            let id = tc.draw(
+                generators::integers::<i64>()
+                    .min_value(1_000)
+                    .max_value(2_000),
+            );
+            conn.execute("INSERT INTO rtree_pts_geom VALUES (?1, 0, 0, 0, 0)", [id])
+                .unwrap();
+        }
+    }
+    let audit = gpkg.layer("pts").unwrap().audit_spatial_index().unwrap();
+    let found = match corruption {
+        0 => audit.missing,
+        1 => audit.extra,
+        _ => audit.not_covering,
+    };
+    assert_eq!(found, 1, "corruption {corruption}: {audit:?}");
+    assert!(!audit.is_consistent());
+}
+
+/// The index entries by the bits of each bound, so that two indexes compare
+/// exactly, NaN and the sign of zero included.
+fn rtree_bits(conn: &Connection) -> Vec<(i64, [u64; 4])> {
+    rtree_rows(conn)
+        .into_iter()
+        .map(|(id, min_x, max_x, min_y, max_y)| {
+            (id, [min_x, max_x, min_y, max_y].map(f64::to_bits))
+        })
+        .collect()
+}
+
+/// The bulk and triggered build paths produce bit-identical index contents for
+/// an arbitrary feature set, coordinates from the whole `f64` domain included,
+/// because the bulk build rounds each bound as the RTree module does.
 #[hegel::test]
 fn bulk_and_triggered_builds_agree(tc: hegel::TestCase) {
     // Above the 51-entry node capacity, so the generated trees span the
@@ -616,55 +887,47 @@ fn bulk_and_triggered_builds_agree(tc: hegel::TestCase) {
     // At or below 51 the packed and triggered builders are structurally
     // indistinguishable, which made the earlier cap of 30 a much weaker claim
     // than it appeared.
-    let n = tc.draw(generators::integers::<usize>().min_value(0).max_value(140));
-    let points: Vec<(i64, f64, f64)> = (1..=(n as i64))
-        .map(|fid| (fid, draw_coord(&tc), draw_coord(&tc)))
-        .collect();
+    let features = if tc.draw(generators::booleans()) {
+        draw_features(&tc, draw_any_coord, 140)
+    } else {
+        draw_features(&tc, draw_f32_coord, 140)
+    };
 
-    let triggered = in_memory_with_points(&points);
+    let triggered = in_memory_with_features(&features);
     triggered
         .layer("pts")
         .unwrap()
         .create_spatial_index_with(BulkIndexOptions::never_bulk())
         .unwrap();
 
-    let bulk = in_memory_with_points(&points);
+    let bulk = in_memory_with_features(&features);
     bulk.layer("pts")
         .unwrap()
         .create_spatial_index_with(BulkIndexOptions::always_bulk())
         .unwrap();
 
-    // The two build paths agree with each other and with the scan.
     assert_eq!(
-        rtree_rows(bulk.connection()),
-        rtree_rows(triggered.connection()),
+        rtree_bits(bulk.connection()),
+        rtree_bits(triggered.connection()),
         "bulk and triggered index contents differ"
-    );
-    assert_eq!(
-        rtree_rows(bulk.connection()),
-        envelope_scan(bulk.connection()),
-        "bulk index does not match the scan"
     );
 }
 
 /// The bulk `write_all` path reuses the envelopes computed while encoding each
 /// geometry instead of re-deriving them with an `ST_*` scan. That reused set
 /// must yield exactly the index a triggered build produces, for an arbitrary
-/// feature set.
+/// feature set, coordinates from the whole `f64` domain included.
 #[hegel::test]
 fn write_all_bulk_envelopes_match_triggered_build(tc: hegel::TestCase) {
-    // Above the 51-entry node capacity, so the generated trees span the
-    // single-root-leaf case and multi-node cases with a real internal level.
-    // At or below 51 the packed and triggered builders are structurally
-    // indistinguishable, which made the earlier cap of 30 a much weaker claim
-    // than it appeared.
-    let n = tc.draw(generators::integers::<usize>().min_value(0).max_value(140));
-    let points: Vec<(i64, f64, f64)> = (1..=(n as i64))
-        .map(|fid| (fid, draw_coord(&tc), draw_coord(&tc)))
-        .collect();
+    // Above the 51-entry node capacity, as in `bulk_and_triggered_builds_agree`.
+    let features = if tc.draw(generators::booleans()) {
+        draw_features(&tc, draw_any_coord, 140)
+    } else {
+        draw_features(&tc, draw_f32_coord, 140)
+    };
 
     // Reference: rows written first, then a triggered index built over them.
-    let triggered = in_memory_with_points(&points);
+    let triggered = in_memory_with_features(&features);
     triggered
         .layer("pts")
         .unwrap()
@@ -673,29 +936,29 @@ fn write_all_bulk_envelopes_match_triggered_build(tc: hegel::TestCase) {
 
     // Under test: an empty indexed layer loaded with `write_all`, which takes
     // the bulk path and feeds it the encode-time envelopes.
-    let gpkg = in_memory_with_points(&[]);
+    let gpkg = in_memory_with_features(&[]);
     let layer = gpkg.layer("pts").unwrap();
     layer.create_spatial_index().unwrap();
-    let features: Vec<_> = points
+    let rows: Vec<NewFeature<Geometry<f64>>> = features
         .iter()
-        .map(|&(fid, x, y)| NewFeature::new(Point::new(x, y), vec![Value::Null]).with_fid(fid))
+        .map(|(fid, geometry)| {
+            let row = match geometry {
+                Some(geometry) => NewFeature::new(geometry.clone(), vec![Value::Null]),
+                None => NewFeature::attributes(vec![Value::Null]),
+            };
+            row.with_fid(*fid)
+        })
         .collect();
     layer
-        .write_all_with(features, 0, BulkIndexOptions::always_bulk())
+        .write_all_with(rows, 0, BulkIndexOptions::always_bulk())
         .unwrap();
 
     assert_eq!(
-        rtree_rows(gpkg.connection()),
-        rtree_rows(triggered.connection()),
+        rtree_bits(gpkg.connection()),
+        rtree_bits(triggered.connection()),
         "write_all bulk index differs from the triggered build"
     );
-    assert_eq!(
-        rtree_rows(gpkg.connection()),
-        envelope_scan(gpkg.connection()),
-        "write_all bulk index does not match the scan"
-    );
 }
-
 /// Rows already in the table before a bulk `write_all` mean the encode-time
 /// envelopes do not account for every indexable row, so the build must fall
 /// back to deriving the entry set by scanning. Pre-existing NULL-geometry rows
