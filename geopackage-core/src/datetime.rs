@@ -119,8 +119,11 @@ impl Date {
         let epoch = JiffDate::new(1970, 1, 1)
             .ok()
             .ok_or(DateTimeError::OutOfRange("year"))?;
-        let date = epoch
-            .checked_add(jiff::Span::new().days(days))
+        // `try_days`, because `days` panics for a count beyond jiff's span
+        // range.
+        let date = jiff::Span::new()
+            .try_days(days)
+            .and_then(|span| epoch.checked_add(span))
             .ok()
             .ok_or(DateTimeError::OutOfRange("day"))?;
         Self::new(
@@ -220,8 +223,9 @@ impl DateTime {
     /// zone designator, which only lenient parsing produces, is read as UTC,
     /// as the spec defines for `DATETIME` columns.
     ///
-    /// Sub-microsecond precision is truncated. The strict spec form is
-    /// millisecond precision, so truncation affects only lenient input with
+    /// Sub-microsecond digits are dropped, so the count is the microsecond at
+    /// or before the instant, before the epoch as after it. The strict spec
+    /// form is millisecond precision, so this affects only lenient input with
     /// more than six fractional digits.
     ///
     /// # Errors
@@ -253,7 +257,14 @@ impl DateTime {
             .ok()
             .ok_or(DateTimeError::OutOfRange("datetime"))?
             .timestamp()
-            .as_microsecond();
+            .as_nanosecond()
+            // Floor, not `as_microsecond`'s truncation towards zero, which
+            // would move an instant before the epoch later, across a day
+            // boundary at 1969-12-31T23:59:59.9999995Z.
+            .div_euclid(1_000);
+        let stamp = i64::try_from(stamp)
+            .ok()
+            .ok_or(DateTimeError::OutOfRange("datetime"))?;
         // The offset says how far ahead of UTC the written time is, so removing
         // it is what normalises the instant.
         let offset = i64::from(self.offset_minutes.unwrap_or(0)) * 60 * 1_000_000;
@@ -358,7 +369,8 @@ impl DateTime {
 
     /// Parses common ISO 8601 datetime variants found in real files:
     /// `T` or space separator, optional `.` + 1–9 fractional-second digits,
-    /// and an optional `Z` or `±HH:MM` / `±HHMM` offset.
+    /// and an optional `Z` or `±HH:MM` / `±HHMM` / `±HH` offset of at most
+    /// 23:59.
     ///
     /// # Examples
     ///
@@ -513,6 +525,26 @@ fn parse_digits(b: &[u8]) -> Result<u32, DateTimeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_day_count_beyond_jiffs_span_range_is_out_of_range() {
+        for days in [7_304_485, -7_304_485, i32::MAX, i32::MIN] {
+            assert!(matches!(
+                Date::from_days_since_epoch(days),
+                Err(DateTimeError::OutOfRange(_))
+            ));
+        }
+    }
+
+    /// Dropping the sub-microsecond digits keeps an instant before the epoch
+    /// in its own day.
+    #[test]
+    fn micros_floor_before_the_epoch() {
+        let dt = DateTime::parse_lenient("1969-12-31T23:59:59.9999995Z").unwrap();
+        assert_eq!(dt.micros_since_epoch(), Ok(-1));
+        let back = DateTime::from_micros_since_epoch(-1).unwrap();
+        assert_eq!(back.date, Date::new(1969, 12, 31).unwrap());
+    }
 
     #[test]
     fn date_parse_and_display() {
