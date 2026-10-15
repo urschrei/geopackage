@@ -483,11 +483,11 @@ fn accumulate_envelopes(
 /// [`BulkVerification::None`] passes without reading anything. Every other
 /// level passes only when the index contains exactly one row per accumulated
 /// entry (checked by row count and a bijection on `id`) and each stored bound
-/// conservatively contains the true envelope.
+/// covers the true envelope, as [`crate::packed::entry_covers`] defines it.
 /// [`BulkVerification::Structure`] also requires `rtreecheck` to report `ok`,
 /// and [`BulkVerification::Database`] also requires `PRAGMA integrity_check`
 /// to report `ok`. The RTree stores `f32` bounds, with minima rounded down and
-/// maxima rounded up, so containment, not equality, is the correct relation.
+/// maxima rounded up, so covering, not equality, is the correct relation.
 fn gate(
     conn: &Connection,
     rtree: &str,
@@ -546,7 +546,10 @@ fn gate(
             return Ok(false);
         }
         hits += 1;
-        if !(s_min_x <= min_x && s_max_x >= max_x && s_min_y <= min_y && s_max_y >= max_y) {
+        if !crate::packed::entry_covers(
+            [s_min_x, s_max_x, s_min_y, s_max_y],
+            [min_x, max_x, min_y, max_y],
+        ) {
             return Ok(false);
         }
     }
