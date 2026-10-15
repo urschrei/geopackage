@@ -229,6 +229,7 @@ impl SequentialBatches<'_> {
                     field.data_type(),
                     Some(index) == self.geometry_index,
                     capacity,
+                    None,
                 )
             })
             .collect::<Result<_>>()?;

@@ -94,21 +94,34 @@ The tunables are `glibc.malloc.mmap_threshold=4294967295` and
 `glibc.malloc.trim_threshold=4294967295`. A memory map adds about 1 s of user
 time and is not a way round the page-cache mutex.
 
-Next steps:
+Done since:
 
-- Pre-size the builders (avenue 2), now to reduce the page faults as well as
-  the copies. Measure page faults and system time, not only instructions.
-- Decide what to do about the bundled SQLite flags: set `LIBSQLITE3_FLAGS` in
-  the workspace's `.cargo/config.toml` (affects the benchmark, the tests and
-  the CLI built from this repository, not dependants), document the flags
-  for dependants that use `bundled`, and raise the shared page cache with
-  rusqlite.
+- `.cargo/config.toml` sets `LIBSQLITE3_FLAGS` for the workspace, and the
+  crate documentation of `bundled` gives the setting to dependants. A test
+  in `tests/container.rs` checks that the flags reach the bundled build.
+- Avenue 2, below. Full `rivers`, interleaved, medians of 3, with the flags on
+  both sides:
+
+  | threads | before | after | GDAL | page faults | sys s |
+  |---|---|---|---|---|---|
+  | 1 | 5471 | 5149 | 4809 | 129k to 18k | 0.87 to 0.68 |
+  | 4 | 1557 | 1391 | 1301 | 201k to 57k | 1.26 to 0.76 |
+  | 8 | 906 | 857 | 857 | 219k to 102k | 1.35 to 0.96 |
+
+  User-space instructions fell by 0.1 to 0.4 % only (`quick`). The `admin`
+  subset fits in one batch, so it has no previous batch to size from, and its
+  64,500 page faults did not change.
+
+Remaining: the malloc tunables still reach 4966, 1302 and 742 ms, so about
+3 to 13 % is left in page faults, from the fixed-width buffers and the first
+batch of each reader. The rusqlite issue about
+`SQLITE_ENABLE_MEMORY_MANAGEMENT` is not raised yet.
 
 `dataset_bench arrow <file> <layer> 1 <threads>` and
 `OGR_GPKG_NUM_THREADS=<n> gdal_dataset_bench arrow <file> <layer>` take a
 thread count. `DATASET_BENCH_MMAP=<bytes>` sets the memory map.
 
-### 2. Pre-size the builders from the previous batch
+### 2. Pre-size the builders from the previous batch (done 2026-10-15)
 
 `ColumnBuilder::new` (`arrow/builder.rs`) starts text and blob buffers at 16
 bytes per value and geometry at 64. A `rivers` line string is several hundred

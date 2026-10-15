@@ -34,9 +34,15 @@ impl ColumnBuilder {
     /// Creates the builder for one field of the schema, sized for `capacity`
     /// rows.
     ///
-    /// The byte estimates for the variable-width types only set the first
-    /// allocation. A longer value grows the buffer as usual.
-    pub(crate) fn new(data_type: &DataType, is_geometry: bool, capacity: usize) -> Result<Self> {
+    /// `value_bytes` sets the first allocation for the values of a text, blob
+    /// or geometry column. `None` uses a fixed estimate per row. A longer
+    /// value grows the buffer as usual.
+    pub(crate) fn new(
+        data_type: &DataType,
+        is_geometry: bool,
+        capacity: usize,
+        value_bytes: Option<usize>,
+    ) -> Result<Self> {
         /// Assumed bytes per WKB geometry, enough for a point or a short line.
         const GEOMETRY_BYTES: usize = 64;
         /// Assumed bytes per text or blob value.
@@ -45,21 +51,16 @@ impl ColumnBuilder {
         if is_geometry {
             return Ok(Self::Geometry(BinaryBuilder::with_capacity(
                 capacity,
-                capacity * GEOMETRY_BYTES,
+                value_bytes.unwrap_or(capacity * GEOMETRY_BYTES),
             )));
         }
+        let value_bytes = value_bytes.unwrap_or(capacity * VALUE_BYTES);
         Ok(match data_type {
             DataType::Boolean => Self::Boolean(BooleanBuilder::with_capacity(capacity)),
             DataType::Int64 => Self::Int64(Int64Builder::with_capacity(capacity)),
             DataType::Float64 => Self::Float64(Float64Builder::with_capacity(capacity)),
-            DataType::Utf8 => Self::Utf8(StringBuilder::with_capacity(
-                capacity,
-                capacity * VALUE_BYTES,
-            )),
-            DataType::Binary => Self::Binary(BinaryBuilder::with_capacity(
-                capacity,
-                capacity * VALUE_BYTES,
-            )),
+            DataType::Utf8 => Self::Utf8(StringBuilder::with_capacity(capacity, value_bytes)),
+            DataType::Binary => Self::Binary(BinaryBuilder::with_capacity(capacity, value_bytes)),
             DataType::Date32 => Self::Date32(Date32Builder::with_capacity(capacity)),
             DataType::Timestamp(_, _) => {
                 Self::Timestamp(TimestampMicrosecondBuilder::with_capacity(capacity))
@@ -164,6 +165,20 @@ impl ColumnBuilder {
             Self::Binary(builder) | Self::Geometry(builder) => builder.append_null(),
             Self::Date32(builder) => builder.append_null(),
             Self::Timestamp(builder) => builder.append_null(),
+        }
+    }
+
+    /// Returns the bytes of the values appended so far, for a text, blob or
+    /// geometry column, and `None` for the other types.
+    pub(crate) fn value_bytes(&self) -> Option<usize> {
+        match self {
+            Self::Utf8(builder) => Some(builder.values_slice().len()),
+            Self::Binary(builder) | Self::Geometry(builder) => Some(builder.values_slice().len()),
+            Self::Boolean(_)
+            | Self::Int64(_)
+            | Self::Float64(_)
+            | Self::Date32(_)
+            | Self::Timestamp(_) => None,
         }
     }
 

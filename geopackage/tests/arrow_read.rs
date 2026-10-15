@@ -163,6 +163,67 @@ fn a_batch_size_that_divides_exactly_does_not_yield_an_empty_batch() {
     assert_eq!(batches[1].num_rows(), 100);
 }
 
+/// Each batch's buffers are sized from the batch before it. Values that are
+/// longer than those of the batch before must still arrive whole.
+#[test]
+fn values_longer_than_the_previous_batch_arrive_whole() {
+    use geo_types::{Coord, LineString};
+
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+    let builder = TableSchemaBuilder::new("pts")
+        .column(ColumnSpec::new("name", ColumnType::Text(None)))
+        .column(ColumnSpec::new("data", ColumnType::Blob(None)))
+        .geometry(GeometrySpec::new(GeometryType::LineString, 4326));
+    let layer = gpkg.create_layer(&builder).unwrap();
+    // Row `i` has values of length `i * i`, so each batch's values are longer
+    // than the previous batch's.
+    let features: Vec<_> = (1..=40usize)
+        .map(|i| {
+            let line = LineString::from(
+                (0..i * i)
+                    .map(|v| Coord {
+                        x: v as f64,
+                        y: i as f64,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            NewFeature::new(
+                line,
+                vec![Value::Text("x".repeat(i * i)), Value::Blob(vec![7; i * i])],
+            )
+            .with_fid(i as i64)
+        })
+        .collect();
+    layer.write_all(features, 0).unwrap();
+
+    for threads in [1, 2] {
+        let batches = read_all(
+            &gpkg,
+            ArrowReadOptions::with_batch_size(10).with_threads(threads),
+        );
+        let mut rows = 0;
+        for batch in &batches {
+            let fid = batch
+                .column_by_name("fid")
+                .unwrap()
+                .as_primitive::<Int64Type>();
+            let name = batch.column_by_name("name").unwrap().as_string::<i32>();
+            let data = batch.column_by_name("data").unwrap().as_binary::<i32>();
+            let geom = batch.column_by_name("geom").unwrap().as_binary::<i32>();
+            for row in 0..batch.num_rows() {
+                let n = usize::try_from(fid.value(row) * fid.value(row)).unwrap();
+                assert_eq!(name.value(row), "x".repeat(n));
+                assert_eq!(data.value(row), vec![7; n].as_slice());
+                // WKB line string: byte order, type, count, then the points.
+                assert_eq!(geom.value(row).len(), 9 + 16 * n);
+            }
+            rows += batch.num_rows();
+        }
+        assert_eq!(rows, 40, "threads = {threads}");
+    }
+}
+
 #[test]
 fn gaps_in_the_key_are_read_through() {
     // Pagination is keyset-based, so deleted rows must not stop the walk. A

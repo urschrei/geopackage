@@ -27,6 +27,11 @@ While the version is below 1.0 the API may change in any release.
   instead of 1.23 s. The crate documentation of the `bundled` feature gives
   the same setting for dependants. A `cargo install` from crates.io does not
   read this file.
+- `read_arrow` sizes the text, blob and geometry buffers of each batch from
+  the bytes per row of the batch before it, instead of from a fixed estimate,
+  so that a buffer does not grow and copy itself while the batch is filled. A
+  read of the rivers dataset has 18,000 page faults instead of 129,000, and
+  takes 5.1 s instead of 5.5 s on one thread and 1.39 s instead of 1.56 s on 4.
 - `GeoPackage::open` and `open_read_only` open the connection with
   `SQLITE_OPEN_NO_MUTEX`, as `create` already did. SQLite no longer locks a
   mutex around each column read: a scalar read of the rivers dataset takes
