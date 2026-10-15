@@ -382,8 +382,11 @@ pub enum Error {
         table_name: String,
     },
     /// A table was requested with a name beginning `gpkg_`, which the spec
-    /// reserves for its own tables (Requirement 25).
-    #[error("table name {table_name:?} is reserved: user table names must not begin with 'gpkg_'")]
+    /// reserves for its own tables (Requirement 25), or `sqlite_`, which
+    /// SQLite reserves. Both are matched in any case.
+    #[error(
+        "table name {table_name:?} is reserved: user table names must not begin with 'gpkg_' or 'sqlite_'"
+    )]
     ReservedTablePrefix {
         /// The rejected table name.
         table_name: String,
