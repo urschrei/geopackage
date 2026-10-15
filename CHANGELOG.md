@@ -17,6 +17,8 @@ While the version is below 1.0 the API may change in any release.
 - `DateTime::format_strict` returns the strict 1.4 text of an instant,
   normalised to UTC and floored to the millisecond.
 - `Error::NoSuchRow`, for a `ROWID` a table does not have.
+- `Finding::StaleSpatialIndex`, for a spatial index whose virtual table or
+  whose triggers are missing. `Layer::repair_spatial_index` repairs it.
 
 ### Changed
 
@@ -66,6 +68,13 @@ While the version is below 1.0 the API may change in any release.
   is not conformant, because it reads back as another name; `Other` holding a
   class name is. `add_relation` follows it. `MetadataScope::is_listed` also
   judges the written name.
+- `Extension::support` judges the name a value writes: a `GeometryType` of a
+  core type is `Unrecognised`, and `Other` holding a known name has that
+  extension's support.
+- `create_attributes_table`, coverage tile writes, `add_relation` and
+  `add_mapping` return `Error::UnsupportedExtension` when an extension the
+  crate does not know applies to the table, as the feature and tile writes
+  already did. The `blocking_extension` docs list the writes that check.
 - `add_relation` checks its mapping table's name as every other creation path
   does: an empty or NUL name is `InvalidIdentifier`, and a `gpkg_` or
   `sqlite_` prefix is `ReservedTablePrefix`.
@@ -97,6 +106,14 @@ While the version is below 1.0 the API may change in any release.
   failed.
 - `tile_at` and `tile_range` could miss tiles where several tiles thinner
   than the coordinates' resolution share one rounded edge.
+- `validate` failed with an error for a `gpkg_contents` row of a feature
+  table or a coverage whose table is absent, instead of reporting
+  `MissingContentsTable`.
+- `validate` failed with an error for a spatial index whose virtual table is
+  absent, and reported nothing for one whose triggers are absent. It reports
+  both as `StaleSpatialIndex`.
+- `validate` reported no dangling metadata reference once every metadata
+  record was deleted.
 
 ## [0.11.2] - 2026-10-15
 
