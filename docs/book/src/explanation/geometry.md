@@ -129,7 +129,12 @@ involve a coordinate transformation, which this library never performs.
 The computed box is the minimum bounding box, with no outward margin. Slack is
 added later, in the index, where it can be reasoned about. RTree columns are
 32-bit floats, so each bound is rounded outward when it is narrowed. A stored
-cell therefore always contains the `f64` box it was derived from.
+cell therefore contains the `f64` box it was derived from, with two exceptions
+in SQLite's RTree module. A coordinate beyond the `f32` range becomes an
+infinite bound on its own side, so a point at y = 1e39 has a cell from +inf to
++inf. A coordinate in the `f32` subnormal range becomes the nearest `f32`,
+which can be inward by less than one `f32` step. `features_in` widens its query
+box by one `f32` step outward, so it still selects both.
 Annex F.3 of the spec also tells clients to expand query windows to absorb
 exactly that rounding.
 

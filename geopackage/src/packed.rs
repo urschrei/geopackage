@@ -56,9 +56,14 @@ const NODE_HEADER: usize = 4;
 const RND_TOWARDS: f64 = 1.0 - 1.0 / 8_388_608.0;
 const RND_AWAY: f64 = 1.0 + 1.0 / 8_388_608.0;
 
-/// Returns the largest `f32` that is `<= d`, matching the RTree module's
-/// `rtreeValueDown`. Minimum bounds are rounded this way so the stored box
-/// never excludes a value it should contain.
+/// Returns the minimum bound the RTree module's `rtreeValueDown` stores for
+/// `d`: `d as f32` if that is not above `d`, and otherwise `d` scaled towards
+/// zero by one part in 2^23 and converted, which is up to two `f32` steps
+/// below `d`.
+///
+/// For `d` above the `f32` range the result is +inf, and for `d` in the `f32`
+/// subnormal range it can be the nearest `f32` above `d`, because the scaling
+/// is smaller than a subnormal step. See [`entry_covers`].
 fn coord_down(d: f64) -> f32 {
     let f = d as f32;
     if f64::from(f) > d {
@@ -68,8 +73,9 @@ fn coord_down(d: f64) -> f32 {
     }
 }
 
-/// Returns the smallest `f32` that is `>= d`, matching the RTree module's
-/// `rtreeValueUp`.
+/// Returns the maximum bound the RTree module's `rtreeValueUp` stores for
+/// `d`, the mirror of [`coord_down`]. For `d` below the `f32` range the result
+/// is -inf, and in the subnormal range it can be the nearest `f32` below `d`.
 fn coord_up(d: f64) -> f32 {
     let f = d as f32;
     if f64::from(f) < d {
@@ -77,6 +83,24 @@ fn coord_up(d: f64) -> f32 {
     } else {
         f
     }
+}
+
+/// Returns `true` if a stored entry `[min_x, max_x, min_y, max_y]` covers an
+/// envelope in the same order.
+///
+/// Each stored bound must be on the outer side of the envelope's, or be the
+/// bound the RTree module itself stores for that value ([`coord_down`],
+/// [`coord_up`]). The module rounds outward to `f32` with two exceptions: a
+/// value beyond the `f32` range has an infinite bound on its own side, and a
+/// value in the `f32` subnormal range has the nearest `f32`, which can be
+/// inward by less than one `f32` step. A query that widens its box by one `f32`
+/// step outward, as `features_in` does, still selects both.
+pub(crate) fn entry_covers(stored: [f64; 4], envelope: [f64; 4]) -> bool {
+    let low = |stored: f64, value: f64| stored <= value.max(f64::from(coord_down(value)));
+    let high = |stored: f64, value: f64| stored >= value.min(f64::from(coord_up(value)));
+    let [s_min_x, s_max_x, s_min_y, s_max_y] = stored;
+    let [min_x, max_x, min_y, max_y] = envelope;
+    low(s_min_x, min_x) && high(s_max_x, max_x) && low(s_min_y, min_y) && high(s_max_y, max_y)
 }
 
 /// One cell: an id (rowid for a leaf, child node number for an internal node)
@@ -588,8 +612,30 @@ mod tests {
         );
     }
 
-    /// Minimum bounds round down and maxima round up, so a stored box always
-    /// contains the true `f64` envelope.
+    /// The bounds the module stores for a value beyond the `f32` range and for
+    /// a subnormal value cover it; a bound moved inward does not.
+    #[test]
+    fn entry_covers_accepts_what_the_module_stores() {
+        let at = |value: f64| [value, value, value, value];
+        let stored = |value: f64| {
+            [
+                f64::from(coord_down(value)),
+                f64::from(coord_up(value)),
+                f64::from(coord_down(value)),
+                f64::from(coord_up(value)),
+            ]
+        };
+        for value in [1e39, -1e39, 2.938_737_261_932_717e-39, 0.1, -7.25] {
+            assert!(entry_covers(stored(value), at(value)), "{value}");
+        }
+        assert_eq!(f64::from(coord_down(1e39)), f64::INFINITY);
+        let mut inward = stored(0.1);
+        inward[0] = 0.2;
+        assert!(!entry_covers(inward, at(0.1)));
+    }
+
+    /// Minimum bounds round down and maxima round up, so for a value in the
+    /// normal `f32` range a stored box contains the true `f64` envelope.
     #[test]
     fn bounds_are_rounded_outward() {
         // A value with no exact f32 representation.

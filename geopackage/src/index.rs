@@ -132,7 +132,11 @@ pub struct SpatialIndexAudit {
     pub extra: usize,
     /// Entries that do not cover their geometry's true envelope. A query can
     /// miss these rows too. The RTree's `f32` storage does not explain them,
-    /// because it rounds outward and so can only make an entry too large.
+    /// because it rounds outward and so can only make an entry too large,
+    /// with two exceptions that this count accepts. SQLite's RTree module
+    /// stores a coordinate beyond the `f32` range as an infinite bound on its
+    /// own side, and a coordinate in the `f32` subnormal range as the nearest
+    /// `f32`, which can be inward by less than one `f32` step.
     pub not_covering: usize,
 }
 
@@ -470,23 +474,36 @@ impl Layer<'_> {
         let key = quote(pk)?;
 
         // One pass over the indexable rows: how many there are, how many have
-        // no entry, and how many have one that fails to cover them. The RTree
-        // stores `f32` rounded outward, so a covering entry can be larger than
-        // the geometry but never smaller.
-        let (indexable, missing, not_covering): (i64, i64, i64) = conn.query_row(
-            &format!(
-                "SELECT count(*),                  sum(CASE WHEN r.id IS NULL THEN 1 ELSE 0 END),                  sum(CASE WHEN r.id IS NOT NULL AND (                    r.minx > ST_MinX(f.{column}) OR r.maxx < ST_MaxX(f.{column}) OR                    r.miny > ST_MinY(f.{column}) OR r.maxy < ST_MaxY(f.{column})                  ) THEN 1 ELSE 0 END)                  FROM {table} f LEFT JOIN {rtree} r ON r.id = f.{key}                  WHERE f.{column} IS NOT NULL AND NOT ST_IsEmpty(f.{column})"
-            ),
-            [],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    // sum() over no rows is NULL rather than 0.
-                    row.get::<_, Option<i64>>(1)?.unwrap_or(0),
-                    row.get::<_, Option<i64>>(2)?.unwrap_or(0),
-                ))
-            },
-        )?;
+        // no entry, and how many have one that fails to cover them, by the
+        // rule of `packed::entry_covers`. That rule follows the RTree module's
+        // own rounding, which SQL cannot express, so the rows come back here.
+        let mut indexable = 0_usize;
+        let mut missing = 0_usize;
+        let mut not_covering = 0_usize;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT r.id, r.minx, r.maxx, r.miny, r.maxy, \
+             ST_MinX(f.{column}), ST_MaxX(f.{column}), ST_MinY(f.{column}), ST_MaxY(f.{column}) \
+             FROM {table} f LEFT JOIN {rtree} r ON r.id = f.{key} \
+             WHERE f.{column} IS NOT NULL AND NOT ST_IsEmpty(f.{column})"
+        ))?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            indexable += 1;
+            if row.get::<_, Option<i64>>(0)?.is_none() {
+                missing += 1;
+                continue;
+            }
+            let stored: [f64; 4] = [row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?];
+            let envelope: [Option<f64>; 4] = [row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?];
+            // A geometry with no finite coordinate has no envelope to cover.
+            if let [Some(min_x), Some(max_x), Some(min_y), Some(max_y)] = envelope
+                && !crate::packed::entry_covers(stored, [min_x, max_x, min_y, max_y])
+            {
+                not_covering += 1;
+            }
+        }
+        drop(rows);
+        drop(stmt);
 
         let (entries, extra): (i64, i64) = conn.query_row(
             &format!(
@@ -498,11 +515,11 @@ impl Layer<'_> {
 
         let count = |n: i64| usize::try_from(n).unwrap_or(0);
         Ok(SpatialIndexAudit {
-            indexable: count(indexable),
+            indexable,
             entries: count(entries),
-            missing: count(missing),
+            missing,
             extra: count(extra),
-            not_covering: count(not_covering),
+            not_covering,
         })
     }
 
