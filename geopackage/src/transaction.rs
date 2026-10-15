@@ -21,12 +21,16 @@
 //! [`crate::Layer::extent`] has worked this way since it was written. This type
 //! makes that branch reusable.
 //!
-//! Savepoints are the other way to get nesting, and this crate doesn't use
-//! them. `rusqlite::Connection::savepoint` needs `&mut Connection`, but this
-//! crate has only `&Connection` (the read path shares it), so savepoints would
-//! have to be driven as raw `SAVEPOINT`/`RELEASE` text. That is more machinery
-//! for a finer rollback granularity that nobody has asked for. If a need
-//! arises, this is the only type that would have to change.
+//! Savepoints are the other way to get nesting, and this crate does not use
+//! them for that. `rusqlite::Connection::savepoint` needs `&mut Connection`,
+//! but this crate has only `&Connection` (the read path shares it), so
+//! savepoints are driven as raw `SAVEPOINT`/`RELEASE` text.
+//!
+//! [`in_savepoint`] uses one for a smaller unit: a write of several statements
+//! inside a longer transaction. A coverage tile is a tile row and an ancillary
+//! row. If the second insert fails, the savepoint removes the first, so the
+//! transaction stays consistent for a caller who handles the error and
+//! continues.
 //!
 //! # What it costs the caller
 //!
@@ -89,9 +93,38 @@ impl<'conn> WriteTransaction<'conn> {
     }
 }
 
+/// Runs `body` in a savepoint named `name` on `conn`. Rolls back to the
+/// savepoint if `body` fails, so the statements of a failed `body` leave
+/// nothing in the transaction.
+///
+/// # Errors
+///
+/// The error of `body`, or the error of the `SAVEPOINT` or `RELEASE`
+/// statement.
+pub(crate) fn in_savepoint<T, E: From<rusqlite::Error>>(
+    conn: &Connection,
+    name: &str,
+    body: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    conn.execute_batch(&format!("SAVEPOINT {name}"))?;
+    match body() {
+        Ok(value) => {
+            conn.execute_batch(&format!("RELEASE {name}"))?;
+            Ok(value)
+        }
+        Err(error) => {
+            // Some failures, such as SQLITE_FULL, end the whole transaction
+            // and the savepoint with it. The rollback then fails, and the
+            // error of `body` is the one to report.
+            let _rolled_back = conn.execute_batch(&format!("ROLLBACK TO {name}; RELEASE {name}"));
+            Err(error)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::WriteTransaction;
+    use super::{WriteTransaction, in_savepoint};
     use rusqlite::Connection;
 
     #[test]
@@ -148,5 +181,35 @@ mod tests {
             .query_row("SELECT count(*) FROM t", [], |row| row.get(0))
             .unwrap();
         assert_eq!(rows, 0, "an inherited commit made the row durable");
+    }
+
+    /// A failed body leaves nothing, and the statements before the savepoint
+    /// stay in the transaction.
+    #[test]
+    fn a_failed_body_rolls_back_to_the_savepoint() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (v INTEGER NOT NULL)")
+            .unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        conn.execute("INSERT INTO t (v) VALUES (1)", []).unwrap();
+        let result: rusqlite::Result<()> = in_savepoint(&conn, "test_put", || {
+            conn.execute("INSERT INTO t (v) VALUES (2)", [])?;
+            conn.execute("INSERT INTO t (v) VALUES (NULL)", [])?;
+            Ok(())
+        });
+        assert!(result.is_err());
+        in_savepoint(&conn, "test_put", || {
+            conn.execute("INSERT INTO t (v) VALUES (3)", []).map(|_| ())
+        })
+        .unwrap();
+        tx.commit().unwrap();
+        let values: Vec<i64> = conn
+            .prepare("SELECT v FROM t ORDER BY v")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(values, vec![1, 3]);
     }
 }
