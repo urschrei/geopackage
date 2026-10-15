@@ -184,7 +184,7 @@ impl gpkg_datetime_t {
 }
 
 /// Converts one caller-supplied value into the borrowed form the write path
-/// takes.
+/// takes. On failure, returns the status it wrote to `error`.
 ///
 /// The returned `ValueRef` borrows `value`'s text or binary, so it lives only
 /// as long as the caller's memory. For these entry points, that is the
@@ -204,12 +204,12 @@ pub(crate) unsafe fn borrow_value<'a>(
     value: *const gpkg_value_t,
     index: usize,
     error: *mut gpkg_error_t,
-) -> Option<ValueRef<'a>> {
+) -> Result<ValueRef<'a>, Status> {
     if value.is_null() {
         let message = format!("value {index} is NULL");
         // SAFETY: forwarded to the caller's guarantee on `error`.
         unsafe { set_error(error, Status::BadArgument, &message) };
-        return None;
+        return Err(Status::BadArgument);
     }
     // SAFETY: the caller guarantees a readable `gpkg_value_t`.
     let value = unsafe { &*value };
@@ -217,53 +217,55 @@ pub(crate) unsafe fn borrow_value<'a>(
         let message = format!("value {index}: {what}");
         // SAFETY: forwarded to the caller's guarantee on `error`.
         unsafe { set_error(error, Status::InvalidArgument, &message) };
-        None
+        Err(Status::InvalidArgument)
     };
 
     match value.kind {
-        ValueKind::Null => Some(ValueRef::Null),
+        ValueKind::Null => Ok(ValueRef::Null),
         // SAFETY: the caller guarantees the payload matches the kind.
-        ValueKind::Boolean => Some(ValueRef::Boolean(unsafe { value.value.boolean })),
+        ValueKind::Boolean => Ok(ValueRef::Boolean(unsafe { value.value.boolean })),
         // SAFETY: as above.
-        ValueKind::Integer => Some(ValueRef::Integer(unsafe { value.value.integer })),
+        ValueKind::Integer => Ok(ValueRef::Integer(unsafe { value.value.integer })),
         // SAFETY: as above.
-        ValueKind::Float => Some(ValueRef::Float(unsafe { value.value.real })),
+        ValueKind::Float => Ok(ValueRef::Float(unsafe { value.value.real })),
         ValueKind::Text => {
             // SAFETY: the caller guarantees the payload matches the kind.
             let ptr = unsafe { value.value.text };
             // SAFETY: `borrow_str` requires exactly what the caller guarantees
             // of a text payload: NUL-terminated UTF-8.
-            let text = unsafe { borrow_str(ptr, error, "value text") }?;
-            Some(ValueRef::Text(text))
+            let text =
+                unsafe { borrow_str(ptr, error, "value text") }.ok_or(Status::BadArgument)?;
+            Ok(ValueRef::Text(text))
         }
         ValueKind::Blob => {
             // SAFETY: as above.
             let blob = unsafe { value.value.blob };
             if blob.len == 0 {
-                return Some(ValueRef::Blob(&[]));
+                return Ok(ValueRef::Blob(&[]));
             }
             if blob.data.is_null() {
                 return rejected("blob is NULL with a non-zero length".to_owned(), error);
             }
             // SAFETY: the caller guarantees `data` is readable for `len`.
-            Some(ValueRef::Blob(unsafe {
+            Ok(ValueRef::Blob(unsafe {
                 std::slice::from_raw_parts(blob.data, blob.len)
             }))
         }
         // SAFETY: as above.
         ValueKind::Date => match unsafe { value.value.date }.to_date() {
-            Ok(date) => Some(ValueRef::Date(date)),
+            Ok(date) => Ok(ValueRef::Date(date)),
             Err(why) => rejected(why, error),
         },
         // SAFETY: as above.
         ValueKind::DateTime => match unsafe { value.value.datetime }.to_datetime() {
-            Ok(datetime) => Some(ValueRef::DateTime(datetime)),
+            Ok(datetime) => Ok(ValueRef::DateTime(datetime)),
             Err(why) => rejected(why, error),
         },
     }
 }
 
-/// Reads a caller-supplied array of values.
+/// Reads a caller-supplied array of values. On failure, returns the status
+/// it wrote to `error`.
 ///
 /// # Safety
 ///
@@ -274,14 +276,14 @@ pub(crate) unsafe fn borrow_values<'a>(
     values: *const gpkg_value_t,
     len: usize,
     error: *mut gpkg_error_t,
-) -> Option<Vec<ValueRef<'a>>> {
+) -> Result<Vec<ValueRef<'a>>, Status> {
     if len == 0 {
-        return Some(Vec::new());
+        return Ok(Vec::new());
     }
     if values.is_null() {
         // SAFETY: forwarded to the caller's guarantee on `error`.
         unsafe { set_error(error, Status::BadArgument, "values is NULL") };
-        return None;
+        return Err(Status::BadArgument);
     }
     let mut out = Vec::with_capacity(len);
     for index in 0..len {
@@ -291,5 +293,5 @@ pub(crate) unsafe fn borrow_values<'a>(
         // SAFETY: forwarded to this function's own contract.
         out.push(unsafe { borrow_value(value, index, error) }?);
     }
-    Some(out)
+    Ok(out)
 }

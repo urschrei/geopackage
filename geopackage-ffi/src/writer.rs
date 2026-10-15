@@ -280,8 +280,9 @@ pub unsafe extern "C" fn gpkg_writer_insert(
         return Status::BadArgument;
     };
     // SAFETY: forwarded to this function's own contract.
-    let Some(values) = (unsafe { borrow_values(values, values_len, error) }) else {
-        return Status::InvalidArgument;
+    let values = match unsafe { borrow_values(values, values_len, error) } {
+        Ok(values) => values,
+        Err(status) => return status,
     };
 
     let written = match geometry {
@@ -330,8 +331,9 @@ pub unsafe extern "C" fn gpkg_writer_update(
         return Status::BadArgument;
     };
     // SAFETY: forwarded to this function's own contract.
-    let Some(values) = (unsafe { borrow_values(values, values_len, error) }) else {
-        return Status::InvalidArgument;
+    let values = match unsafe { borrow_values(values, values_len, error) } {
+        Ok(values) => values,
+        Err(status) => return status,
     };
 
     let updated = match geometry {
@@ -370,8 +372,9 @@ pub unsafe extern "C" fn gpkg_writer_update_column(
         return Status::BadArgument;
     };
     // SAFETY: forwarded to this function's own contract.
-    let Some(values) = (unsafe { borrow_values(value, 1, error) }) else {
-        return Status::InvalidArgument;
+    let values = match unsafe { borrow_values(value, 1, error) } {
+        Ok(values) => values,
+        Err(status) => return status,
     };
     let Some(cell) = values.first().copied() else {
         return Status::InvalidArgument;

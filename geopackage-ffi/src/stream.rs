@@ -525,8 +525,8 @@ pub unsafe extern "C" fn gpkg_layer_read_arrow_filtered(
     let values = match clause {
         // SAFETY: forwarded to the caller's guarantee on `params`.
         Some(_) => match unsafe { borrow_values(params, params_len, error) } {
-            Some(values) => values,
-            None => return Status::BadArgument,
+            Ok(values) => values,
+            Err(status) => return status,
         },
         None => Vec::new(),
     };
