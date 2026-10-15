@@ -213,19 +213,24 @@ impl GeoPackage {
     /// and files with no `gpkg_geometry_columns` table at all, return an empty
     /// list.
     pub fn layers(&self) -> Result<Vec<Layer<'_>>> {
+        self.layer_names()?.iter().map(|n| self.layer(n)).collect()
+    }
+
+    /// Returns the `gpkg_contents` name of every feature layer, without
+    /// opening the layers.
+    pub(crate) fn layer_names(&self) -> Result<Vec<String>> {
         if !table_exists(self.connection(), "gpkg_geometry_columns")? {
             return Ok(Vec::new());
         }
-        let names: Vec<String> = {
-            let mut stmt = self.connection().prepare(
-                "SELECT DISTINCT c.table_name FROM gpkg_contents c \
-                 JOIN gpkg_geometry_columns g ON g.table_name = c.table_name COLLATE NOCASE \
-                 WHERE c.data_type = 'features' ORDER BY c.table_name",
-            )?;
-            stmt.query_map([], |r| r.get(0))?
-                .collect::<rusqlite::Result<_>>()?
-        };
-        names.iter().map(|n| self.layer(n)).collect()
+        let mut stmt = self.connection().prepare(
+            "SELECT DISTINCT c.table_name FROM gpkg_contents c \
+             JOIN gpkg_geometry_columns g ON g.table_name = c.table_name COLLATE NOCASE \
+             WHERE c.data_type = 'features' ORDER BY c.table_name",
+        )?;
+        let names = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(names)
     }
 
     /// Opens a feature layer by name.
