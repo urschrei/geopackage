@@ -2,12 +2,15 @@
 //! and a property test proving they return identical rows.
 //!
 //! The property is a set equality against an independent oracle: the expected
-//! fids are computed directly from the `f64` coordinates hegel generated
-//! (`env_intersects`), never from either query path, so a bug in one path
-//! cannot hide. Coordinates are arbitrary `f64` values, most of them not
-//! `f32`-exact, so they stress the RTree's `f32` bound rounding and
-//! `features_in`'s candidate re-test against the true `f64` envelope. Hegel
-//! found the `f32` sub-normal edge described at `draw_coord` (issue #12).
+//! fids are computed directly from the coordinates hegel generated
+//! (`envelope_of` and `box_touches`), never from either query path, so a bug in
+//! one path cannot hide. The geometries are points, line strings, polygons and
+//! multi-points in XY, XYZ, XYM and XYZM, with and without a header envelope,
+//! and their coordinates are either dense in a small range or from the whole
+//! `f64` domain, NaN and the infinities included. Most are not `f32`-exact, so
+//! they stress the RTree's `f32` bound rounding and `features_in`'s candidate
+//! re-test against the true `f64` envelope. Hegel found the `f32` sub-normal
+//! edge described at `draw_coord` (issue #12).
 
 #![expect(
     clippy::unwrap_used,
@@ -29,17 +32,31 @@ fn point_blob(x: f64, y: f64) -> Vec<u8> {
     b
 }
 
-/// A GPB linestring blob with no header envelope.
-fn linestring_blob(pts: &[(f64, f64)]) -> Vec<u8> {
-    let mut b = encode_header(4326, &Envelope::None, false, false);
-    b.push(1);
-    b.extend_from_slice(&2u32.to_le_bytes());
-    b.extend_from_slice(&(pts.len() as u32).to_le_bytes());
-    for (x, y) in pts {
-        b.extend_from_slice(&x.to_le_bytes());
-        b.extend_from_slice(&y.to_le_bytes());
+/// The XY envelope `[min_x, max_x, min_y, max_y]` of a set of coordinate
+/// pairs, by the rule `GpbGeometry::xy_envelope` documents: a pair with a
+/// non-finite value does not contribute, and with no finite pair there is no
+/// envelope.
+fn envelope_of(points: &[(f64, f64)]) -> Option<[f64; 4]> {
+    let finite: Vec<&(f64, f64)> = points
+        .iter()
+        .filter(|(x, y)| x.is_finite() && y.is_finite())
+        .collect();
+    if finite.is_empty() {
+        return None;
     }
-    b
+    let mut env = [
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    for (x, y) in finite {
+        env[0] = env[0].min(*x);
+        env[1] = env[1].max(*x);
+        env[2] = env[2].min(*y);
+        env[3] = env[3].max(*y);
+    }
+    Some(env)
 }
 
 /// An arbitrary finite `f64` coordinate in `[-100, 100]`, un-quantised.
@@ -57,63 +74,180 @@ fn draw_coord(tc: &hegel::TestCase) -> f64 {
     )
 }
 
-/// A drawn point or short linestring geometry blob (no header envelope, forcing
-/// traversal on read) and its true `f64` envelope `[min_x, max_x, min_y, max_y]`.
-fn draw_geom(tc: &hegel::TestCase) -> (Vec<u8>, [f64; 4]) {
-    if tc.draw(generators::booleans()) {
-        let (x, y) = (draw_coord(tc), draw_coord(tc));
-        (point_blob(x, y), [x, x, y, y])
-    } else {
-        let n = tc.draw(generators::integers::<usize>().min_value(2).max_value(4));
-        let pts: Vec<(f64, f64)> = (0..n).map(|_| (draw_coord(tc), draw_coord(tc))).collect();
-        let mut env = [
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-        ];
-        for (x, y) in &pts {
-            env[0] = env[0].min(*x);
-            env[1] = env[1].max(*x);
-            env[2] = env[2].min(*y);
-            env[3] = env[3].max(*y);
+/// Any `f64`: NaN, the infinities, subnormals and magnitudes beyond the `f32`
+/// range included.
+fn draw_any_coord(tc: &hegel::TestCase) -> f64 {
+    tc.draw(generators::floats::<f64>())
+}
+
+/// The coordinate dimensions of a WKB body, with the ISO type-code offset and
+/// the number of values per point.
+#[derive(Debug, Clone, Copy)]
+enum Dims {
+    Xy,
+    Xyz,
+    Xym,
+    Xyzm,
+}
+
+impl Dims {
+    fn type_offset(self) -> u32 {
+        match self {
+            Self::Xy => 0,
+            Self::Xyz => 1000,
+            Self::Xym => 2000,
+            Self::Xyzm => 3000,
         }
-        (linestring_blob(&pts), env)
+    }
+
+    fn extra_values(self) -> usize {
+        match self {
+            Self::Xy => 0,
+            Self::Xyz | Self::Xym => 1,
+            Self::Xyzm => 2,
+        }
     }
 }
 
-/// A drawn query box: usually a random box (sized `0..60` per side), and
-/// sometimes a degenerate box sitting exactly on a stored feature's min corner
-/// (the inclusive-boundary + `f32`-rounding case).
-fn draw_bbox(tc: &hegel::TestCase, envelopes: &[(i64, [f64; 4])]) -> BoundingBox {
-    if !envelopes.is_empty() && tc.draw(generators::booleans()) {
-        let i = tc.draw(
-            generators::integers::<usize>()
-                .min_value(0)
-                .max_value(envelopes.len() - 1),
-        );
-        let env = envelopes.get(i).expect("drawn index within bounds").1;
-        BoundingBox::new(env[0], env[2], env[0], env[2])
+/// Writes one point's values: X, Y, then any Z and M, drawn from `coord`.
+fn write_point(
+    tc: &hegel::TestCase,
+    body: &mut Vec<u8>,
+    dims: Dims,
+    coord: fn(&hegel::TestCase) -> f64,
+    points: &mut Vec<(f64, f64)>,
+) {
+    let (x, y) = (coord(tc), coord(tc));
+    points.push((x, y));
+    body.extend_from_slice(&x.to_le_bytes());
+    body.extend_from_slice(&y.to_le_bytes());
+    for _ in 0..dims.extra_values() {
+        body.extend_from_slice(&draw_any_coord(tc).to_le_bytes());
+    }
+}
+
+/// Draws a little-endian ISO WKB body: a point, line string, polygon (one
+/// ring) or multi-point in drawn dimensions, with up to four points where the
+/// type takes a list. Returns the body and its XY coordinate pairs.
+fn draw_wkb(
+    tc: &hegel::TestCase,
+    coord: fn(&hegel::TestCase) -> f64,
+) -> (Vec<u8>, Vec<(f64, f64)>) {
+    let dims = tc.draw(generators::sampled_from(vec![
+        Dims::Xy,
+        Dims::Xyz,
+        Dims::Xym,
+        Dims::Xyzm,
+    ]));
+    let kind = tc.draw(generators::integers::<u32>().min_value(1).max_value(4));
+    let mut body = vec![1];
+    body.extend_from_slice(&(kind + dims.type_offset()).to_le_bytes());
+    let mut points = Vec::new();
+    let count = || tc.draw(generators::integers::<u32>().min_value(0).max_value(4));
+    match kind {
+        1 => write_point(tc, &mut body, dims, coord, &mut points),
+        2 => {
+            let n = count();
+            body.extend_from_slice(&n.to_le_bytes());
+            for _ in 0..n {
+                write_point(tc, &mut body, dims, coord, &mut points);
+            }
+        }
+        3 => {
+            body.extend_from_slice(&1u32.to_le_bytes());
+            let n = count();
+            body.extend_from_slice(&n.to_le_bytes());
+            for _ in 0..n {
+                write_point(tc, &mut body, dims, coord, &mut points);
+            }
+        }
+        _ => {
+            let n = count();
+            body.extend_from_slice(&n.to_le_bytes());
+            for _ in 0..n {
+                body.push(1);
+                body.extend_from_slice(&(1 + dims.type_offset()).to_le_bytes());
+                write_point(tc, &mut body, dims, coord, &mut points);
+            }
+        }
+    }
+    (body, points)
+}
+
+/// A drawn geometry blob and its true XY envelope, or `None` when it has no
+/// finite coordinate pair. The header has the XY envelope, or no envelope,
+/// which makes the reader walk the body; each is drawn half the time.
+fn draw_geom(tc: &hegel::TestCase) -> (Vec<u8>, Option<[f64; 4]>) {
+    let coord: fn(&hegel::TestCase) -> f64 = if tc.draw(generators::weighted_booleans(0.8)) {
+        draw_coord
     } else {
-        let min_x = tc.draw(
-            generators::floats::<f64>()
-                .min_value(-110.0)
-                .max_value(110.0),
-        );
-        let min_y = tc.draw(
-            generators::floats::<f64>()
-                .min_value(-110.0)
-                .max_value(110.0),
-        );
-        let w = tc.draw(generators::floats::<f64>().min_value(0.0).max_value(60.0));
-        let h = tc.draw(generators::floats::<f64>().min_value(0.0).max_value(60.0));
-        BoundingBox::new(min_x, min_y, min_x + w, min_y + h)
-    }
+        draw_any_coord
+    };
+    let (body, points) = draw_wkb(tc, coord);
+    let env = envelope_of(&points);
+    let header = match env {
+        Some(env) if tc.draw(generators::booleans()) => Envelope::Xy(env),
+        _ => Envelope::None,
+    };
+    // A body with no finite pair is empty whether or not the header says so,
+    // so the empty flag is drawn for it.
+    let empty = env.is_none() && tc.draw(generators::booleans());
+    let mut blob = encode_header(4326, &header, empty, false);
+    blob.extend_from_slice(&body);
+    (blob, env)
 }
 
-/// The independent oracle: does envelope `env` intersect `bbox`, inclusive?
-fn env_intersects(env: [f64; 4], bbox: BoundingBox) -> bool {
-    env[0] <= bbox.max_x && env[1] >= bbox.min_x && env[2] <= bbox.max_y && env[3] >= bbox.min_y
+/// Draws a box edge: usually near the dense coordinate range, sometimes an
+/// edge of a stored envelope, and sometimes any `f64`.
+fn draw_box_edge(tc: &hegel::TestCase, edges: &[f64]) -> f64 {
+    if tc.draw(generators::weighted_booleans(0.1)) {
+        return draw_any_coord(tc);
+    }
+    if !edges.is_empty() && tc.draw(generators::booleans()) {
+        return tc.draw(generators::sampled_from(edges.to_vec()));
+    }
+    tc.draw(
+        generators::floats::<f64>()
+            .min_value(-110.0)
+            .max_value(110.0),
+    )
+}
+
+/// Draws a query box. Its two edges on each axis are put in order nine times
+/// in ten, so that a minimum above its maximum also occurs. Sometimes the box
+/// is the degenerate box on a stored envelope's minimum corner (the
+/// inclusive-boundary and `f32`-rounding case).
+fn draw_bbox(tc: &hegel::TestCase, envelopes: &[[f64; 4]]) -> BoundingBox {
+    if !envelopes.is_empty() && tc.draw(generators::weighted_booleans(0.25)) {
+        let env = tc.draw(generators::sampled_from(envelopes.to_vec()));
+        return BoundingBox::new(env[0], env[2], env[0], env[2]);
+    }
+    let xs: Vec<f64> = envelopes.iter().flat_map(|e| [e[0], e[1]]).collect();
+    let ys: Vec<f64> = envelopes.iter().flat_map(|e| [e[2], e[3]]).collect();
+    let axis = |edges: &[f64]| {
+        let (a, b) = (draw_box_edge(tc, edges), draw_box_edge(tc, edges));
+        if b < a && tc.draw(generators::weighted_booleans(0.9)) {
+            (b, a)
+        } else {
+            (a, b)
+        }
+    };
+    let (min_x, max_x) = axis(&xs);
+    let (min_y, max_y) = axis(&ys);
+    BoundingBox::new(min_x, min_y, max_x, max_y)
+}
+
+/// The independent oracle: does envelope `env` share a point with `bbox`, as
+/// the set of points `(x, y)` with `min_x <= x <= max_x` and
+/// `min_y <= y <= max_y`? Inclusive at the boundary; a box with a NaN edge or
+/// a minimum above its maximum contains no point.
+fn box_touches(env: [f64; 4], bbox: BoundingBox) -> bool {
+    bbox.min_x <= bbox.max_x
+        && bbox.min_y <= bbox.max_y
+        && env[0] <= bbox.max_x
+        && env[1] >= bbox.min_x
+        && env[2] <= bbox.max_y
+        && env[3] >= bbox.min_y
 }
 
 /// Build the two layers: `pts` with a 1.4 RTree index, `plain` without one.
@@ -210,8 +344,8 @@ fn features_in_matches_full_scan_filter(tc: hegel::TestCase) {
 
     // The same geometries into both tables (indexed `pts`, plain `plain`),
     // recording each true `f64` envelope for the independent oracle.
-    let n = tc.draw(generators::integers::<usize>().min_value(1).max_value(30));
-    let mut envelopes: Vec<(i64, [f64; 4])> = Vec::with_capacity(n);
+    let n = tc.draw(generators::integers::<usize>().min_value(0).max_value(30));
+    let mut envelopes: Vec<(i64, Option<[f64; 4]>)> = Vec::with_capacity(n);
     let tx = conn.unchecked_transaction().unwrap();
     for fid in 1..=(n as i64) {
         let (blob, env) = draw_geom(&tc);
@@ -228,17 +362,19 @@ fn features_in_matches_full_scan_filter(tc: hegel::TestCase) {
 
     let indexed = gpkg.layer("pts").unwrap();
     let plain = gpkg.layer("plain").unwrap();
-    let bbox = draw_bbox(&tc, &envelopes);
+    let stored: Vec<[f64; 4]> = envelopes.iter().filter_map(|(_, env)| *env).collect();
+    let bbox = draw_bbox(&tc, &stored);
 
-    let reference: Vec<i64> = {
-        let mut r: Vec<i64> = envelopes
-            .iter()
-            .filter(|(_, env)| env_intersects(*env, bbox))
-            .map(|(fid, _)| *fid)
-            .collect();
-        r.sort_unstable();
-        r
-    };
+    let reference: Vec<i64> = envelopes
+        .iter()
+        .filter(|(_, env)| env.is_some_and(|env| box_touches(env, bbox)))
+        .map(|(fid, _)| *fid)
+        .collect();
+    tc.event(if reference.is_empty() {
+        "the box selects no feature"
+    } else {
+        "the box selects a feature"
+    });
 
     let via_rtree = fids(indexed.features_in(bbox).unwrap());
     let via_scan = fids(plain.features_in(bbox).unwrap());
