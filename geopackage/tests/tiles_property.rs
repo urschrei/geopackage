@@ -963,6 +963,16 @@ fn a_box_query_returns_the_tiles_it_covers(tc: hegel::TestCase) {
         south_east.max_x - inset_x,
         north_west.max_y - inset_y,
     );
+    // At a coordinate magnitude where a quarter tile is below the `f64`
+    // resolution, the inset does not move the edges, and the box is not
+    // strictly inside the tiles. `a_box_query_returns_the_tiles_it_touches`
+    // covers such boxes.
+    tc.assume(
+        bbox.min_x > north_west.min_x
+            && bbox.max_x < south_east.max_x
+            && bbox.min_y > south_east.min_y
+            && bbox.max_y < north_west.max_y,
+    );
 
     let expected = in_matrix_order(model.into_iter().filter(|((zoom, c, r), _)| {
         *zoom == matrix.zoom_level
