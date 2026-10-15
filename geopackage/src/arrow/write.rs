@@ -8,7 +8,9 @@ use geopackage_core::types::{ColumnType, GeometryType};
 
 use crate::{Error, Layer, Result};
 
-use super::schema::{EXTENSION_METADATA_KEY, EXTENSION_NAME_KEY, GEOARROW_WKB, epsg_code};
+use super::schema::{
+    EXTENSION_METADATA_KEY, EXTENSION_NAME_KEY, GEOARROW_WKB, data_type_for, epsg_code,
+};
 
 /// Where each of a layer's columns sits in a batch, shared by all its rows.
 struct RowLayout {
@@ -101,6 +103,17 @@ impl Layer<'_> {
     /// you asked to write is worse than rejecting it. A layer column that the
     /// batch doesn't name is left to its default.
     ///
+    /// Each batch column must fit its layer column: the Arrow type a read
+    /// gives that column (see the [module documentation](super)), a narrower
+    /// or unsigned integer, `Float32`, `LargeUtf8` or `LargeBinary`, or a
+    /// timestamp in any unit. This is checked once per batch, before any of
+    /// its rows is written.
+    ///
+    /// Values are stored as the row path stores them: a timestamp as `DATETIME`
+    /// text in the strict 1.4 form, normalised to UTC and floored to the
+    /// millisecond; a NaN as NULL and a negative zero as zero, as SQLite
+    /// stores them.
+    ///
     /// A [`RecordBatchReader`](arrow_array::RecordBatchReader) doesn't say how
     /// many rows it will produce. The bulk index path handles this by buffering
     /// instead of trusting a size hint (issue #17).
@@ -110,8 +123,10 @@ impl Layer<'_> {
     /// # Errors
     ///
     /// [`Error::ArrowValueMismatch`] for a column whose Arrow type does not fit
-    /// the layer's declared type, [`Error`] for the write itself, and any error
-    /// the reader yields.
+    /// the layer's declared type, or a `UInt64` value above `i64::MAX`;
+    /// [`Error::InvalidDateTimeValue`] for a date or timestamp outside years 0
+    /// to 9999; [`Error`] for the write itself; and any error the reader
+    /// yields.
     pub fn write_arrow<R>(&self, batches: R, batch_size: usize) -> Result<Vec<i64>>
     where
         R: IntoIterator<Item = std::result::Result<RecordBatch, ArrowError>>,
@@ -136,10 +151,12 @@ impl Layer<'_> {
         let geometry_column = self.geometry_column().map(|g| g.column_name.clone());
         // The layer's value columns already exclude both the geometry and the
         // primary key, which this path binds through its own arguments.
-        let value_columns: Vec<String> = self
+        // Each value column with the Arrow type a read gives it, which decides
+        // the Arrow types a write accepts for it.
+        let value_columns: Vec<(String, DataType)> = self
             .value_columns()
             .iter()
-            .map(|column| column.name.clone())
+            .map(|column| (column.name.clone(), data_type_for(column)))
             .collect();
         let primary_key = self.primary_key_column().map(str::to_owned);
 
@@ -195,17 +212,25 @@ fn layout_of(
     batch: &RecordBatch,
     primary_key: Option<&str>,
     geometry: Option<&str>,
-    value_columns: &[String],
+    value_columns: &[(String, DataType)],
 ) -> Result<RowLayout> {
     let schema = batch.schema();
     for field in schema.fields() {
-        let known = Some(field.name().as_str()) == primary_key
-            || Some(field.name().as_str()) == geometry
-            || value_columns.iter().any(|name| name == field.name());
-        if !known {
+        if Some(field.name().as_str()) == primary_key || Some(field.name().as_str()) == geometry {
+            continue;
+        }
+        let Some((_, read_type)) = value_columns.iter().find(|(name, _)| name == field.name())
+        else {
             return Err(Error::NoSuchColumn {
                 table_name: String::new(),
                 column_name: field.name().clone(),
+            });
+        };
+        if !writes_into(field.data_type(), read_type) {
+            return Err(Error::ArrowValueMismatch {
+                column: field.name().clone(),
+                expected: type_name(read_type),
+                found: "an Arrow array of a type the column does not take",
             });
         }
     }
@@ -214,8 +239,44 @@ fn layout_of(
     Ok(RowLayout {
         fid: primary_key.and_then(index_of),
         geometry: geometry.and_then(index_of),
-        values: value_columns.iter().map(|name| index_of(name)).collect(),
+        values: value_columns
+            .iter()
+            .map(|(name, _)| index_of(name))
+            .collect(),
     })
+}
+
+/// Returns `true` if a batch column of `data_type` may be written into a
+/// layer column that a read gives `read_type`: the same type, or a narrower
+/// or unsigned integer, a narrower float, the large forms of text and binary,
+/// and a timestamp in any unit or zone.
+fn writes_into(data_type: &DataType, read_type: &DataType) -> bool {
+    use DataType as T;
+    match read_type {
+        T::Int64 => matches!(
+            data_type,
+            T::Int8 | T::Int16 | T::Int32 | T::Int64 | T::UInt8 | T::UInt16 | T::UInt32 | T::UInt64
+        ),
+        T::Float64 => matches!(data_type, T::Float32 | T::Float64),
+        T::Utf8 => matches!(data_type, T::Utf8 | T::LargeUtf8),
+        T::Binary => matches!(data_type, T::Binary | T::LargeBinary),
+        T::Timestamp(..) => matches!(data_type, T::Timestamp(..)),
+        other => data_type == other,
+    }
+}
+
+/// The name of the Arrow type a read gives a column, for an error.
+fn type_name(read_type: &DataType) -> &'static str {
+    match read_type {
+        DataType::Boolean => "Boolean",
+        DataType::Int64 => "Int64 or a narrower integer",
+        DataType::Float64 => "Float64 or Float32",
+        DataType::Utf8 => "Utf8 or LargeUtf8",
+        DataType::Binary => "Binary or LargeBinary",
+        DataType::Date32 => "Date32",
+        DataType::Timestamp(..) => "Timestamp",
+        _ => "the column's Arrow type",
+    }
 }
 
 /// The bytes of a binary cell, borrowed from the array.
@@ -268,7 +329,8 @@ fn bind_value<'a>(
 ) -> Result<rusqlite::types::ToSqlOutput<'a>> {
     use arrow_array::types::{
         Date32Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-        TimestampMicrosecondType, TimestampMillisecondType,
+        TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+        TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     };
     use rusqlite::types::{ToSqlOutput, Value as SqlV, ValueRef};
 
@@ -330,6 +392,39 @@ fn bind_value<'a>(
                 .ok_or_else(|| mismatch("Int64"))?
                 .value(row),
         )),
+        DataType::UInt8 => owned(SqlV::Integer(i64::from(
+            column
+                .as_primitive_opt::<UInt8Type>()
+                .ok_or_else(|| mismatch("UInt8"))?
+                .value(row),
+        ))),
+        DataType::UInt16 => owned(SqlV::Integer(i64::from(
+            column
+                .as_primitive_opt::<UInt16Type>()
+                .ok_or_else(|| mismatch("UInt16"))?
+                .value(row),
+        ))),
+        DataType::UInt32 => owned(SqlV::Integer(i64::from(
+            column
+                .as_primitive_opt::<UInt32Type>()
+                .ok_or_else(|| mismatch("UInt32"))?
+                .value(row),
+        ))),
+        // SQLite's INTEGER is signed, so a value above `i64::MAX` has no
+        // storage.
+        DataType::UInt64 => owned(SqlV::Integer(
+            i64::try_from(
+                column
+                    .as_primitive_opt::<UInt64Type>()
+                    .ok_or_else(|| mismatch("UInt64"))?
+                    .value(row),
+            )
+            .map_err(|_too_large| Error::ArrowValueMismatch {
+                column: name(),
+                expected: "an integer no larger than i64::MAX",
+                found: "a larger UInt64 value",
+            })?,
+        )),
         DataType::Float32 => owned(SqlV::Real(f64::from(
             column
                 .as_primitive_opt::<Float32Type>()
@@ -378,27 +473,44 @@ fn bind_value<'a>(
             .map_err(out_of_range)?
             .to_string(),
         )),
-        DataType::Timestamp(TimeUnit::Microsecond, _) => owned(SqlV::Text(
-            DateTime::from_micros_since_epoch(
-                column
-                    .as_primitive_opt::<TimestampMicrosecondType>()
+        // Stored in the strict 1.4 form, UTC and floored to the millisecond,
+        // whatever the unit: a finer timestamp loses its sub-millisecond
+        // digits, as the column's text form has none.
+        DataType::Timestamp(unit, _) => {
+            let micros = match unit {
+                TimeUnit::Second => column
+                    .as_primitive_opt::<TimestampSecondType>()
                     .ok_or_else(|| mismatch("Timestamp"))?
-                    .value(row),
-            )
-            .map_err(out_of_range)?
-            .to_string(),
-        )),
-        DataType::Timestamp(TimeUnit::Millisecond, _) => owned(SqlV::Text(
-            DateTime::from_micros_since_epoch(
-                column
+                    .value(row)
+                    .checked_mul(1_000_000),
+                TimeUnit::Millisecond => column
                     .as_primitive_opt::<TimestampMillisecondType>()
                     .ok_or_else(|| mismatch("Timestamp"))?
                     .value(row)
-                    .saturating_mul(1_000),
-            )
-            .map_err(out_of_range)?
-            .to_string(),
-        )),
+                    .checked_mul(1_000),
+                TimeUnit::Microsecond => Some(
+                    column
+                        .as_primitive_opt::<TimestampMicrosecondType>()
+                        .ok_or_else(|| mismatch("Timestamp"))?
+                        .value(row),
+                ),
+                TimeUnit::Nanosecond => Some(
+                    column
+                        .as_primitive_opt::<TimestampNanosecondType>()
+                        .ok_or_else(|| mismatch("Timestamp"))?
+                        .value(row)
+                        .div_euclid(1_000),
+                ),
+            };
+            let text = micros
+                .ok_or(geopackage_core::datetime::DateTimeError::OutOfRange(
+                    "datetime",
+                ))
+                .and_then(DateTime::from_micros_since_epoch)
+                .and_then(DateTime::format_strict)
+                .map_err(out_of_range)?;
+            owned(SqlV::Text(text))
+        }
         other => Err(Error::UnsupportedArrowType {
             data_type: other.to_string(),
         }),

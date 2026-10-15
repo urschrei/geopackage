@@ -79,7 +79,7 @@ fn field_for(column: &Column, geometry: Option<&GeometryColumn>) -> Field {
 }
 
 /// Returns the Arrow data type for a non-geometry column.
-fn data_type_for(column: &Column) -> DataType {
+pub(crate) fn data_type_for(column: &Column) -> DataType {
     let Some(declared) = &column.column_type else {
         return affinity_type(&column.declared_type);
     };
