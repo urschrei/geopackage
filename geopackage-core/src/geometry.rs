@@ -382,8 +382,9 @@ pub fn wkb_geometry_type(wkb_body: &[u8]) -> Result<GeometryType, GeometryError>
 /// This crate's writer always emits an envelope, so readers and the `ST_*`
 /// functions get the bounds without traversing the WKB body.
 ///
-/// The envelope is [`Envelope::Xyz`] when the geometry has a Z dimension, even
-/// for a single point, and [`Envelope::Xy`] otherwise. An M dimension never
+/// The envelope is [`Envelope::Xyz`] when the geometry has a Z dimension and a
+/// coordinate whose X, Y and Z are all finite, even for a single point, and
+/// [`Envelope::Xy`] otherwise. The Z range covers those coordinates only. An M dimension never
 /// widens the envelope, because readers and the rtree use only X and Y bounds,
 /// plus Z for 3D. A geometry with no finite coordinate is *empty*. For one,
 /// the function returns [`Envelope::None`] and `true`, so the encoder omits
@@ -613,9 +614,14 @@ impl XyzBounds {
         }
     }
 
+    /// Adds a coordinate. Its Z counts only when X, Y and Z are all finite,
+    /// so a coordinate that the XY bounds skip, such as an empty point, adds
+    /// no Z either.
     pub(crate) fn add(&mut self, x: f64, y: f64, z: Option<f64>) {
         self.xy.add(x, y);
         if let Some(z) = z
+            && x.is_finite()
+            && y.is_finite()
             && z.is_finite()
         {
             self.min_z = self.min_z.min(z);
@@ -630,7 +636,7 @@ impl XyzBounds {
     pub(crate) fn add_branchless(&mut self, x: f64, y: f64, z: Option<f64>) {
         self.xy.add_branchless(x, y);
         if let Some(z) = z {
-            let finite = z.is_finite();
+            let finite = x.is_finite() & y.is_finite() & z.is_finite();
             let z = if finite { z } else { f64::NAN };
             self.min_z = self.min_z.min(z);
             self.max_z = self.max_z.max(z);
@@ -644,7 +650,7 @@ impl XyzBounds {
         self.xy.finish()
     }
 
-    /// Returns the Z range, when any coordinate had a finite Z.
+    /// Returns the Z range, when any coordinate had finite X, Y and Z.
     pub(crate) fn z_bounds(&self) -> Option<(f64, f64)> {
         self.seen_z.then_some((self.min_z, self.max_z))
     }
@@ -836,6 +842,22 @@ mod tests {
     use super::*;
     use crate::gpb::{Envelope, encode_header};
     use geo_traits::GeometryType as GtType;
+
+    /// The Z of a coordinate whose X or Y is not finite does not reach the Z
+    /// range, as the coordinate does not reach the XY bounds.
+    #[test]
+    fn a_skipped_coordinate_adds_no_z() {
+        let mut bounds = XyzBounds::new();
+        bounds.add(1.0, 2.0, Some(3.0));
+        bounds.add(f64::NAN, f64::NAN, Some(100.0));
+        bounds.add(f64::INFINITY, 0.0, Some(-100.0));
+        assert_eq!(bounds.z_bounds(), Some((3.0, 3.0)));
+        let mut branchless = XyzBounds::new();
+        branchless.add_branchless(1.0, 2.0, Some(3.0));
+        branchless.add_branchless(f64::NAN, f64::NAN, Some(100.0));
+        branchless.add_branchless(f64::INFINITY, 0.0, Some(-100.0));
+        assert_eq!(branchless.z_bounds(), Some((3.0, 3.0)));
+    }
 
     #[cfg(feature = "geo-types")]
     #[test]
