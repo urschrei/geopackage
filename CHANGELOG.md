@@ -8,6 +8,8 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-10-15
+
 ### Added
 
 - Each GitHub release has `gpkg` binaries for x86_64 and aarch64 Linux,
@@ -16,6 +18,13 @@ While the version is below 1.0 the API may change in any release.
   `cargo install` from crates.io does not get the flags unless
   `LIBSQLITE3_FLAGS` is set in the environment: without them, `gpkg copy` of
   the benchmark subsets takes 8 to 25 % longer.
+
+### Changed
+
+- The README, the crate documentation and the book install `gpkg` with
+  `cargo binstall geopackage-cli`, and give the `LIBSQLITE3_FLAGS` setting
+  for `cargo install`. `geopackage-cli` states the layout of its release
+  archives in `[package.metadata.binstall]`.
 
 ## [0.11.1] - 2026-10-15
 
@@ -1360,7 +1369,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/urschrei/geopackage/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/urschrei/geopackage/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/urschrei/geopackage/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/urschrei/geopackage/compare/v0.10.1...v0.10.2
