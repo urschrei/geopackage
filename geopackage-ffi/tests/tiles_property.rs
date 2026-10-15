@@ -666,3 +666,104 @@ fn operations_agree_with_the_rust_api(tc: hegel::TestCase) {
     let status = unsafe { gpkg_close(gpkg, &raw mut error) };
     assert_eq!(check(status, &mut error, false), Status::Ok);
 }
+
+/// `gpkg_tiles_create_web_mercator` agrees with the Rust API for any zoom
+/// range, and the pyramid list and names the C API reports are the ones the
+/// Rust API reads.
+#[hegel::test]
+fn web_mercator_creation_and_names_agree_with_the_rust_api(tc: hegel::TestCase) {
+    let (gpkg, mut error) = open_c();
+    let rust = GeoPackage::create(Path::new(":memory:")).unwrap();
+    // The documentation asks for EPSG:3857 to be registered first.
+    if tc.draw(generators::weighted_booleans(0.8)) {
+        // SAFETY: a live container and a writable error slot.
+        let status = unsafe { geopackage_ffi::gpkg_add_epsg_srs(gpkg, 3857, &raw mut error) };
+        assert_eq!(check(status, &mut error, false), Status::Ok);
+        rust.add_epsg_srs(3857).unwrap();
+    }
+    let pyramids = tc.draw(generators::integers::<usize>().min_value(0).max_value(3));
+    for index in 0..pyramids {
+        let name = format!("p{index}");
+        let min_zoom = tc.draw(generators::integers::<i64>().min_value(-1).max_value(3));
+        let max_zoom = min_zoom + tc.draw(generators::integers::<i64>().min_value(-1).max_value(2));
+        let c_name = CString::new(name.clone()).unwrap();
+        // SAFETY: a live container, a NUL-terminated name and a writable
+        // error slot.
+        let tiles = unsafe {
+            geopackage_ffi::gpkg_tiles_create_web_mercator(
+                gpkg,
+                c_name.as_ptr(),
+                min_zoom,
+                max_zoom,
+                &raw mut error,
+            )
+        };
+        let status = if tiles.is_null() {
+            error.code
+        } else {
+            Status::Ok
+        };
+        check(status, &mut error, false);
+        let set = TileMatrixSet::web_mercator_quad();
+        let twin = match set.ladder(ZoomLadder::new(min_zoom, max_zoom)) {
+            Err(_ladder) => Err(Status::InvalidArgument),
+            Ok(matrices) => rust
+                .create_tile_pyramid(&TilePyramidBuilder::new(&name, set).matrices(matrices))
+                .map_err(|e| Status::from(&e)),
+        };
+        tc.event(format!("{status:?}"));
+        match &twin {
+            Ok(pyramid) => {
+                assert_eq!(status, Status::Ok, "{min_zoom}..{max_zoom}");
+                assert_eq!(grid_c(tiles, &mut error), grid_rust(pyramid));
+                // SAFETY: a live tiles handle.
+                let reported = unsafe { geopackage_ffi::gpkg_tiles_name(tiles, &raw mut error) };
+                assert!(!reported.is_null());
+                // SAFETY: a string this library returned.
+                let reported_name = unsafe { CStr::from_ptr(reported) }
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                // SAFETY: freed once.
+                unsafe { geopackage_ffi::gpkg_string_free(reported) };
+                assert_eq!(reported_name, name);
+            }
+            Err(expected) => assert_eq!(status, *expected, "{min_zoom}..{max_zoom}"),
+        }
+        // SAFETY: a tiles handle or NULL, freed once.
+        unsafe { gpkg_tiles_free(tiles) };
+    }
+    let names: Vec<String> = rust
+        .tile_pyramids()
+        .unwrap()
+        .iter()
+        .map(|pyramid| pyramid.table_name().to_owned())
+        .collect();
+    let mut count = usize::MAX;
+    // SAFETY: a live container and a writable out-parameter.
+    let status =
+        unsafe { geopackage_ffi::gpkg_tiles_names_count(gpkg, &raw mut count, &raw mut error) };
+    assert_eq!(check(status, &mut error, false), Status::Ok);
+    assert_eq!(count, names.len());
+    for index in 0..=count {
+        // SAFETY: a live container.
+        let name = unsafe { geopackage_ffi::gpkg_tiles_name_at(gpkg, index, &raw mut error) };
+        match names.get(index) {
+            Some(expected) => {
+                assert!(!name.is_null());
+                check(Status::Ok, &mut error, false);
+                // SAFETY: a string this library returned.
+                assert_eq!(unsafe { CStr::from_ptr(name) }.to_str().unwrap(), expected);
+                // SAFETY: freed once.
+                unsafe { geopackage_ffi::gpkg_string_free(name) };
+            }
+            None => {
+                assert!(name.is_null());
+                assert_eq!(check(error.code, &mut error, false), Status::NotFound);
+            }
+        }
+    }
+    // SAFETY: a live container with no children.
+    let status = unsafe { gpkg_close(gpkg, &raw mut error) };
+    assert_eq!(check(status, &mut error, false), Status::Ok);
+}
