@@ -8,6 +8,42 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- `Error::NanAncillaryValue`, for a NaN in a coverage's ancillary row or a
+  tile's. SQLite stores NaN as NULL, so neither table can store one.
+
+### Changed
+
+- `features_in` selects no feature for a box with a NaN edge or with a
+  minimum above its maximum. An inverted box used to select every envelope
+  wide enough to span it, and on a layer without a spatial index a NaN edge
+  was an SQLite error.
+- `cursor_in` and `TileMatrixSet::tile_range` select the tile on each side of
+  a shared tile edge that a box's west or north edge lies on, as the docs
+  stated. Before, only a box's east and south edges did.
+- `TileMatrixSet::tile_bounds` calculates each tile edge once, so adjacent
+  tiles share their edges exactly and the outer edges are the extent's.
+  `tile_at` returns the tile whose bounds contain the position.
+- Creating a layer, attribute table, tile pyramid or coverage whose name
+  begins `sqlite_`, in any case, is `Error::ReservedTablePrefix`. It used to
+  be an SQLite error.
+- `create_coverage` and `CoverageWriter::put_with_ancillary` reject a NaN
+  in the ancillary row. A NaN scale or offset was an SQLite error, and a NaN
+  `data_null` or statistic read back as `None`.
+- Dev-dependency `hegeltest` is now 0.49.11 in `geopackage`, and
+  `hegel.toml` runs 2000 cases per property test.
+
+### Fixed
+
+- A coverage put that failed after writing its tile left the tile without
+  its ancillary row in the writer's transaction. Each put is now undone as a
+  whole.
+- `audit_spatial_index` reported an index as inconsistent where SQLite's
+  RTree stores a coordinate beyond the `f32` range as an infinite bound, or a
+  subnormal coordinate as the nearest `f32`. A rebuild could not fix it. The
+  bulk index build fell back to the triggered build for the same data.
+
 ## [0.11.2] - 2026-10-15
 
 ### Added
