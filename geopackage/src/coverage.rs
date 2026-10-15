@@ -66,6 +66,10 @@ use crate::{BoundingBox, Error, GeoPackage, Result, table_exists};
 /// an implementation add columns, and tells clients to ignore columns that they
 /// do not recognise. This struct reads a fixed set of columns, so it ignores
 /// other columns.
+///
+/// Each number is stored as an SQLite `REAL`. Creating a coverage rejects
+/// NaN, which SQLite stores as NULL, and SQLite stores a negative zero as
+/// zero, so a `-0.0` reads back as `0.0`.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct CoverageAncillary {
@@ -626,6 +630,10 @@ impl CoverageBuilder {
     }
 
     /// Sets the stored sample that means "no data".
+    ///
+    /// The value cannot be NaN: SQLite stores NaN as NULL, which in this column
+    /// means that there is no such sample, so [`GeoPackage::create_coverage`]
+    /// rejects it.
     #[must_use]
     pub fn data_null(mut self, data_null: f64) -> Self {
         self.data_null = Some(data_null);
@@ -697,9 +705,11 @@ impl GeoPackage {
     ///
     /// # Errors
     ///
-    /// Those of [`GeoPackage::create_tile_pyramid`], and
+    /// Those of [`GeoPackage::create_tile_pyramid`],
     /// [`Error::FloatCoverageScaled`] if a `float` coverage has a scale or
-    /// offset other than the defaults (Requirement 11).
+    /// offset other than the defaults (Requirement 11), and
+    /// [`Error::NanAncillaryValue`] if the scale, offset, precision or
+    /// `data_null` is NaN.
     pub fn create_coverage(&self, builder: &CoverageBuilder) -> Result<Coverage<'_>> {
         let spec = PyramidSpec {
             table_name: &builder.table_name,
@@ -716,6 +726,27 @@ impl GeoPackage {
             builder.scale,
             builder.offset,
             &builder.table_name,
+        )?;
+        check_not_nan(
+            &builder.table_name,
+            &[
+                (
+                    "gpkg_2d_gridded_coverage_ancillary.scale",
+                    Some(builder.scale),
+                ),
+                (
+                    "gpkg_2d_gridded_coverage_ancillary.offset",
+                    Some(builder.offset),
+                ),
+                (
+                    "gpkg_2d_gridded_coverage_ancillary.precision",
+                    builder.precision,
+                ),
+                (
+                    "gpkg_2d_gridded_coverage_ancillary.data_null",
+                    builder.data_null,
+                ),
+            ],
         )?;
 
         let conn = self.connection();
@@ -810,21 +841,14 @@ fn check_float_defaults(
     Ok(())
 }
 
-/// Rejects a NaN in a tile ancillary row, which SQLite would store as NULL.
-fn check_not_nan(ancillary: &TileAncillary, table_name: &str) -> Result<()> {
-    let values = [
-        ("scale", Some(ancillary.scale)),
-        ("offset", Some(ancillary.offset)),
-        ("min", ancillary.min),
-        ("max", ancillary.max),
-        ("mean", ancillary.mean),
-        ("std_dev", ancillary.std_dev),
-    ];
-    for (field, value) in values {
+/// Rejects a NaN in an ancillary row, which SQLite would store as NULL.
+/// `values` pairs each column, qualified by its table, with its value.
+fn check_not_nan(table_name: &str, values: &[(&'static str, Option<f64>)]) -> Result<()> {
+    for &(column, value) in values {
         if value.is_some_and(f64::is_nan) {
-            return Err(Error::NanTileAncillary {
+            return Err(Error::NanAncillaryValue {
                 table_name: table_name.to_owned(),
-                field,
+                column,
             });
         }
     }
@@ -979,7 +1003,7 @@ impl<'conn> CoverageWriter<'conn> {
     ///   but a write does not.
     /// - [`Error::FloatCoverageScaled`] if the ancillary row has a scale or
     ///   offset other than the defaults on a `float` coverage (Requirement 11).
-    /// - [`Error::NanTileAncillary`] if a value in the ancillary row is NaN.
+    /// - [`Error::NanAncillaryValue`] if a value in the ancillary row is NaN.
     pub fn put_with_ancillary(
         &mut self,
         coord: TileCoord,
@@ -1027,7 +1051,23 @@ impl<'conn> CoverageWriter<'conn> {
             ancillary.offset,
             &self.table_name,
         )?;
-        check_not_nan(ancillary, &self.table_name)?;
+        check_not_nan(
+            &self.table_name,
+            &[
+                (
+                    "gpkg_2d_gridded_tile_ancillary.scale",
+                    Some(ancillary.scale),
+                ),
+                (
+                    "gpkg_2d_gridded_tile_ancillary.offset",
+                    Some(ancillary.offset),
+                ),
+                ("gpkg_2d_gridded_tile_ancillary.min", ancillary.min),
+                ("gpkg_2d_gridded_tile_ancillary.max", ancillary.max),
+                ("gpkg_2d_gridded_tile_ancillary.mean", ancillary.mean),
+                ("gpkg_2d_gridded_tile_ancillary.std_dev", ancillary.std_dev),
+            ],
+        )?;
 
         // The tile row and its ancillary row are written together or not at
         // all, so a failed put leaves no tile without its row.

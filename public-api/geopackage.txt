@@ -105,9 +105,9 @@ pub geopackage::Error::MetadataCycle
 pub geopackage::Error::MetadataCycle::id: i64
 pub geopackage::Error::MissingGeometrySpec
 pub geopackage::Error::MissingGeometrySpec::table_name: alloc::string::String
-pub geopackage::Error::NanTileAncillary
-pub geopackage::Error::NanTileAncillary::field: &'static str
-pub geopackage::Error::NanTileAncillary::table_name: alloc::string::String
+pub geopackage::Error::NanAncillaryValue
+pub geopackage::Error::NanAncillaryValue::column: &'static str
+pub geopackage::Error::NanAncillaryValue::table_name: alloc::string::String
 pub geopackage::Error::NoCoverageAncillary
 pub geopackage::Error::NoCoverageAncillary::table_name: alloc::string::String
 pub geopackage::Error::NoGeometryColumn

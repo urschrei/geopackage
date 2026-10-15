@@ -915,9 +915,10 @@ fn put_outcome_is_documented(grid: Grid, defect: Defect, result: &geopackage::Re
             Err(Error::Tile(TileError::UnreadablePayload { .. }))
         ),
         Defect::ScaledFloat => matches!(result, Err(Error::FloatCoverageScaled { .. })),
-        Defect::NanAncillary(expected) => matches!(
+        Defect::NanAncillary(field) => matches!(
             result,
-            Err(Error::NanTileAncillary { field, .. }) if *field == expected
+            Err(Error::NanAncillaryValue { column, .. })
+                if *column == format!("gpkg_2d_gridded_tile_ancillary.{field}")
         ),
     }
 }
@@ -1225,4 +1226,79 @@ fn a_png_coverage_round_trips_through_this_crate() {
         "the per-tile pair and statistics survive the round trip"
     );
     assert_eq!(gpkg.validate().unwrap(), Vec::new());
+}
+
+// --- creation -----------------------------------------------------------------
+
+/// Draws an optional `f64` from the whole domain, NaN included.
+fn draw_any_optional_f64(tc: &hegel::TestCase) -> Option<f64> {
+    tc.draw(generators::optional(generators::floats::<f64>()))
+}
+
+/// Creating a coverage rejects a `float` coverage whose scale or offset is
+/// not the default (Requirement 11) and an ancillary row with a NaN, and
+/// otherwise creates a coverage whose ancillary row reads back as written.
+///
+/// A `float` coverage with a NaN scale or offset breaks both rules, and the
+/// docs do not order the two checks, so either error is accepted there.
+#[hegel::test]
+fn coverage_creation_checks_its_ancillary_row(tc: hegel::TestCase) {
+    let gpkg = GeoPackage::create(std::path::Path::new(":memory:")).unwrap();
+    let datatype = tc.draw(generators::sampled_from(vec![
+        CoverageDatatype::Integer,
+        CoverageDatatype::Float,
+    ]));
+    let (scale, offset) = if tc.draw(generators::booleans()) {
+        (1.0, 0.0)
+    } else {
+        let any = || tc.draw(generators::floats::<f64>());
+        (any(), any())
+    };
+    let (precision, data_null) = (draw_any_optional_f64(&tc), draw_any_optional_f64(&tc));
+    let set = TileMatrixSet::new(0, 0.0, 0.0, 1.0, 1.0);
+    let mut builder = CoverageBuilder::new("dem", set, datatype)
+        .matrix(TileMatrix::new(0, 1, 1, 1, 1, 1.0, 1.0))
+        .scale(scale, offset);
+    if let Some(precision) = precision {
+        builder = builder.precision(precision);
+    }
+    if let Some(data_null) = data_null {
+        builder = builder.data_null(data_null);
+    }
+    let result = gpkg.create_coverage(&builder);
+
+    let scaled_float = datatype == CoverageDatatype::Float && (scale != 1.0 || offset != 0.0);
+    let nan = [
+        ("gpkg_2d_gridded_coverage_ancillary.scale", Some(scale)),
+        ("gpkg_2d_gridded_coverage_ancillary.offset", Some(offset)),
+        ("gpkg_2d_gridded_coverage_ancillary.precision", precision),
+        ("gpkg_2d_gridded_coverage_ancillary.data_null", data_null),
+    ]
+    .into_iter()
+    .find(|(_, value)| value.is_some_and(f64::is_nan))
+    .map(|(column, _)| column);
+    let float_error = matches!(result, Err(Error::FloatCoverageScaled { .. }));
+    let nan_error = matches!(
+        &result,
+        Err(Error::NanAncillaryValue { column, .. }) if Some(*column) == nan
+    );
+    match (scaled_float, nan) {
+        (true, Some(_)) => assert!(float_error || nan_error, "{:?}", result.err()),
+        (true, None) => assert!(float_error, "{:?}", result.err()),
+        (false, Some(_)) => assert!(nan_error, "{:?}", result.err()),
+        (false, None) => {
+            drop(result.unwrap());
+            let coverage = gpkg.coverage("dem").unwrap();
+            let ancillary = coverage.ancillary();
+            assert_eq!(
+                (
+                    ancillary.scale,
+                    ancillary.offset,
+                    ancillary.precision,
+                    ancillary.data_null
+                ),
+                (scale, offset, precision, data_null)
+            );
+        }
+    }
 }
