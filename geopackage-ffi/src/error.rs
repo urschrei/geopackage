@@ -111,6 +111,7 @@ impl From<&Error> for Status {
             Error::NotAGeoPackage { .. } => Self::NotAGeoPackage,
             Error::NoSuchTable { .. }
             | Error::NoSuchColumn { .. }
+            | Error::NoSuchRow { .. }
             | Error::NoSuchLayer { .. }
             | Error::UnknownSrs { .. }
             | Error::NoSuchMetadata { .. }
