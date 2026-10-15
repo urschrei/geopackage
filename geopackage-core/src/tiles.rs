@@ -670,28 +670,16 @@ impl TileMatrixSet {
         if !(self.min_x..=self.max_x).contains(&x) || !(self.min_y..=self.max_y).contains(&y) {
             return None;
         }
-        let last_column = matrix.matrix_width - 1;
-        let last_row = matrix.matrix_height - 1;
-        let mut column =
-            (((x - self.min_x) / matrix.tile_span_x()).floor() as i64).clamp(0, last_column);
-        let mut row = (((self.max_y - y) / matrix.tile_span_y()).floor() as i64).clamp(0, last_row);
-        // The division and the edges of `tile_bounds` round differently, so
-        // near an edge the division can select the neighbouring tile. Move to
-        // the tile whose edges contain the position. For a grid that spans the
-        // extent this takes at most one step, and the limit stops a grid read
-        // from another writer's file, which nothing has checked, from looping.
-        for _ in 0..2 {
-            if column > 0 && x < self.column_edge(matrix, column) {
-                column -= 1;
-            } else if column < last_column && x >= self.column_edge(matrix, column + 1) {
-                column += 1;
-            }
-            if row > 0 && y > self.row_edge(matrix, row) {
-                row -= 1;
-            } else if row < last_row && y <= self.row_edge(matrix, row + 1) {
-                row += 1;
-            }
-        }
+        // A search over the edges of `tile_bounds` rather than a division,
+        // which rounds differently, so the tile always contains the position.
+        // It also finds the right tile where several tiles thinner than the
+        // coordinates' resolution share one edge value. The last column whose
+        // west edge is at or before `x`, and the last row whose north edge is
+        // at or above `y`: on a shared edge, the tile east or south of it.
+        let column = first_index(matrix.matrix_width, |c| self.column_edge(matrix, c + 1) > x)
+            .min(matrix.matrix_width - 1);
+        let row = first_index(matrix.matrix_height, |r| self.row_edge(matrix, r + 1) < y)
+            .min(matrix.matrix_height - 1);
         Some((column, row))
     }
 
@@ -700,12 +688,8 @@ impl TileMatrixSet {
     /// no point: a minimum above its maximum, or a NaN edge.
     ///
     /// The range is every tile whose [`Self::tile_bounds`] share a point with
-    /// the box, edges included. A box whose west or north edge lies on an edge
-    /// that two tiles share therefore selects the tile on each side of it.
-    #[expect(
-        clippy::float_cmp,
-        reason = "a box edge selects the tile beyond a shared edge only if it lies exactly on that edge"
-    )]
+    /// the box, edges included. A box whose edge lies on an edge that two
+    /// tiles share therefore selects the tile on each side of it.
     pub fn tile_range(
         &self,
         matrix: &TileMatrix,
@@ -729,18 +713,20 @@ impl TileMatrixSet {
         // away on a box that covers the world.
         let (west, east) = (min_x.max(self.min_x), max_x.min(self.max_x));
         let (south, north) = (min_y.max(self.min_y), max_y.min(self.max_y));
-        // North-west corner gives the low indices on both axes, because rows
-        // count southwards; south-east gives the high ones.
-        let (mut min_column, mut min_row) = self.tile_at(matrix, west, north)?;
-        let (max_column, max_row) = self.tile_at(matrix, east, south)?;
-        // `tile_at` assigns a shared edge to the tile east or south of it. On
-        // the west and north sides of the box, the tile on the other side of
-        // that edge touches the box too.
-        if min_column > 0 && west == self.column_edge(matrix, min_column) {
-            min_column -= 1;
+        if matrix.matrix_width <= 0 || matrix.matrix_height <= 0 {
+            return None;
         }
-        if min_row > 0 && north == self.row_edge(matrix, min_row) {
-            min_row -= 1;
+        // Searches over the edges of `tile_bounds`, as in `tile_at`. A tile
+        // touches the box when its far edge reaches the box's near edge on
+        // both sides of each axis. Rows count southwards, so the north edge
+        // of the box gives the lowest row.
+        let (width, height) = (matrix.matrix_width, matrix.matrix_height);
+        let min_column = first_index(width, |c| self.column_edge(matrix, c + 1) >= west);
+        let max_column = first_index(width, |c| self.column_edge(matrix, c) > east) - 1;
+        let min_row = first_index(height, |r| self.row_edge(matrix, r + 1) <= north);
+        let max_row = first_index(height, |r| self.row_edge(matrix, r) < south) - 1;
+        if min_column > max_column || min_row > max_row {
+            return None;
         }
         Some(TileRange {
             min_column,
@@ -910,6 +896,24 @@ impl TileMatrixSet {
         }
         Ok(())
     }
+}
+
+/// Returns the first index in `0..count` at which `predicate` holds, or
+/// `count` if it holds nowhere, for a predicate that is false and then true
+/// along the range. The edges of a grid that spans its extent give such
+/// predicates; a grid from another writer's file that does not still ends the
+/// search after `log2(count)` steps.
+fn first_index(count: i64, predicate: impl Fn(i64) -> bool) -> i64 {
+    let (mut low, mut high) = (0, count);
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if predicate(middle) {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    low
 }
 
 impl TileMatrix {
@@ -1443,6 +1447,25 @@ mod tests {
             );
         }
         assert_eq!(set.tile_at(&matrix, -1e-17, 0.5), Some((2, 1)));
+    }
+
+    /// Four rows a quarter of an `f64` step high at 1e9 share rounded edge
+    /// values. A box reaching the top edge touches every row whose bounds
+    /// reach it, and `tile_at` returns a row whose bounds contain the
+    /// position.
+    #[test]
+    fn rows_thinner_than_the_resolution_are_all_found() {
+        let set = TileMatrixSet::new(0, 0.0, 999_999_999.999_999_9, 1.0, 1e9);
+        let matrix = set
+            .ladder(ZoomLadder::new(0, 0).base_grid(1, 4).tile_size(1, 1))
+            .unwrap()[0];
+        let range = set.tile_range(&matrix, 0.0, 0.0, 0.0, 1e9).unwrap();
+        assert_eq!((range.min_row, range.max_row), (0, 3));
+        for y in [set.min_y, 1e9] {
+            let (column, row) = set.tile_at(&matrix, 0.5, y).unwrap();
+            let bounds = set.tile_bounds(&matrix, column, row);
+            assert!(bounds.min_y <= y && y <= bounds.max_y, "{y} in row {row}");
+        }
     }
 
     #[test]
