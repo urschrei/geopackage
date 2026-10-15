@@ -20,6 +20,16 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+# The archives that `.github/workflows/release.yml` attaches to each GitHub
+# release, for `cargo binstall geopackage-cli`.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }-v{ version }{ archive-suffix }"
+bin-dir = "{ name }-{ target }-v{ version }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
 [dependencies]
 geopackage.workspace = true
 clap.workspace = true
