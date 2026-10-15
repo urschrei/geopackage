@@ -133,8 +133,12 @@ impl GeoPackage {
     /// A row covers a table when it names that table, or when its
     /// `table_name` is NULL and it therefore applies to the whole GeoPackage
     /// (Requirement 60). Checking before you write is the "fail fast" check
-    /// that clause 2.3.2 describes. The write methods check for you, and return
-    /// [`Error::UnsupportedExtension`] if the answer is `Some`.
+    /// that clause 2.3.2 describes. Every write to a user table checks for
+    /// you, and returns [`Error::UnsupportedExtension`] if the answer is
+    /// `Some`: creating a feature layer, attribute table, tile pyramid,
+    /// coverage or relationship mapping table, and writing features, tiles,
+    /// coverage tiles, mappings or a spatial index. Writes to the catalogue
+    /// tables, such as metadata and spatial reference systems, do not check.
     ///
     /// Always `None` when
     /// [`OpenOptions::allow_unsupported_extension_writes`](crate::OpenOptions::allow_unsupported_extension_writes)

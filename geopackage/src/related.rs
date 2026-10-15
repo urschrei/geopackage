@@ -164,6 +164,9 @@ impl GeoPackage {
     ///   the mapping table's name is empty or contains NUL.
     /// - [`Error::ReservedTablePrefix`] if the mapping table's name begins
     ///   `gpkg_` or `sqlite_`, in any case.
+    /// - [`Error::UnsupportedExtension`] if an extension this crate cannot
+    ///   identify covers the mapping table's name or the whole GeoPackage
+    ///   ([`GeoPackage::blocking_extension`]).
     /// - [`Error::NoSuchTable`] if either the base or the related table is not
     ///   in `gpkg_contents` (Requirements 5 and 6).
     /// - [`Error::TableAlreadyExists`] if the mapping table already exists.
@@ -177,6 +180,7 @@ impl GeoPackage {
         }
 
         crate::create::check_new_table_name(&relation.mapping_table_name)?;
+        self.check_writable(&relation.mapping_table_name)?;
         let conn = self.connection();
         let tx = WriteTransaction::begin(conn)?;
 
@@ -249,8 +253,11 @@ impl GeoPackage {
     ///
     /// # Errors
     ///
-    /// [`Error::NoSuchTable`] if the mapping table is absent.
+    /// [`Error::NoSuchTable`] if the mapping table is absent, and
+    /// [`Error::UnsupportedExtension`] if an extension this crate cannot
+    /// identify covers it ([`GeoPackage::blocking_extension`]).
     pub fn add_mapping(&self, relation: &Relation, base_id: i64, related_id: i64) -> Result<()> {
+        self.check_writable(&relation.mapping_table_name)?;
         let conn = self.connection();
         if !table_exists(conn, &relation.mapping_table_name)? {
             return Err(Error::NoSuchTable {
