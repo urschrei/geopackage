@@ -16,6 +16,7 @@ While the version is below 1.0 the API may change in any release.
   rings and an empty exterior ring.
 - `DateTime::format_strict` returns the strict 1.4 text of an instant,
   normalised to UTC and floored to the millisecond.
+- `Error::NoSuchRow`, for a `ROWID` a table does not have.
 
 ### Changed
 
@@ -57,6 +58,17 @@ While the version is below 1.0 the API may change in any release.
 - `read_arrow_in` and `read_arrow_in_where` select no row for a box with a
   NaN edge or inverted edges, as `features_in` does. `read_arrow_in` returns
   its rows in key order; its docs no longer say `features_in`'s order.
+- `add_metadata_reference` checks that a column target's column
+  (Requirement 98) and a row target's `ROWID` (Requirement 99) exist, and
+  writes its timestamp in the strict form. A row in a view is not checked.
+- `RelationName::is_conformant` judges the string a name writes: an
+  `Extended` name with an empty author or name, or an author containing `_`,
+  is not conformant, because it reads back as another name; `Other` holding a
+  class name is. `add_relation` follows it. `MetadataScope::is_listed` also
+  judges the written name.
+- `add_relation` checks its mapping table's name as every other creation path
+  does: an empty or NUL name is `InvalidIdentifier`, and a `gpkg_` or
+  `sqlite_` prefix is `ReservedTablePrefix`.
 - A NaN written to a `REAL` column is stored as NULL and a negative zero as
   zero, as SQLite stores them; the write docs now say so.
 - Dev-dependency `hegeltest` is now 0.49.11 in both `geopackage` and
