@@ -79,6 +79,22 @@ impl BoundingBox {
         !(self.min_x <= self.max_x && self.min_y <= self.max_y)
     }
 
+    /// Returns the box a query binds: this box, or for a box that contains no
+    /// point, one that also contains none and that every path can bind. A NaN
+    /// binds as NULL, which `ST_EnvIntersects` rejects.
+    pub(crate) fn for_query(self) -> Self {
+        if self.contains_no_point() {
+            Self::new(
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            )
+        } else {
+            self
+        }
+    }
+
     /// Returns `true` if this box intersects an envelope
     /// `[min_x, max_x, min_y, max_y]`,
     /// inclusive at the boundary (touching boxes intersect).
@@ -536,19 +552,7 @@ impl<'a> Layer<'a> {
     #[hotpath::measure(label = "Layer::features_in")]
     pub fn features_in(&self, bbox: BoundingBox) -> Result<Features> {
         let (sql, geom_idx, uses_rtree) = self.features_in_plan()?;
-        // A box that contains no point is replaced by one that also contains
-        // none and that both paths can bind: NaN binds as NULL, which
-        // `ST_EnvIntersects` rejects.
-        let bbox = if bbox.contains_no_point() {
-            BoundingBox::new(
-                f64::INFINITY,
-                f64::INFINITY,
-                f64::NEG_INFINITY,
-                f64::NEG_INFINITY,
-            )
-        } else {
-            bbox
-        };
+        let bbox = bbox.for_query();
         self.execute(&sql, box_params(bbox, uses_rtree), geom_idx, Some(bbox))
     }
 
