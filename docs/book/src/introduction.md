@@ -48,6 +48,16 @@ SQLite, so you'll need a C compiler:
 $ cargo add geopackage --features bundled
 ```
 
+Then set these SQLite compile flags in your project's `.cargo/config.toml`:
+
+```toml
+[env]
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS=0"
+```
+
+Without them, all connections in a process share one SQLite page cache behind
+one mutex, and the threads of a threaded Arrow read wait for each other.
+
 To install the command-line tool:
 
 ```console

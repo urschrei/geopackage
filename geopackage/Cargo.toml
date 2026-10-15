@@ -49,6 +49,8 @@ arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:serde_json", "dep:sysinfo"]
 ## system SQLite development files and an `SQLITE_ENABLE_RTREE` build, which
 ## is checked at open time. Required on hosts with no system SQLite (Windows),
 ## and needs a C compiler.
+## Set `LIBSQLITE3_FLAGS` as the crate documentation describes under
+## "Cargo features", or threaded reads wait on a shared page-cache mutex.
 bundled = ["rusqlite/bundled"]
 ## Activate the hotpath timing instrumentation in this crate and in
 ## `geopackage-core`. Off by default: without it, every hotpath macro is a

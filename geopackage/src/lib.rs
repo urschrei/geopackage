@@ -469,6 +469,20 @@
 //! - **`bundled`**: Compile and statically link a vendored SQLite instead of
 //!   linking the system library. Requires a C compiler. Required on Windows
 //!
+//!   Set these SQLite compile flags in your `.cargo/config.toml` when you
+//!   enable `bundled`:
+//!
+//!   ```toml
+//!   [env]
+//!   LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS=0"
+//!   ```
+//!
+//!   Without them, all connections in a process share one SQLite page cache
+//!   behind one mutex. Threads that read from different connections, such as
+//!   those of a threaded [`Layer::read_arrow`], then wait for each other. The
+//!   system SQLite on Linux and macOS is built without
+//!   `SQLITE_ENABLE_MEMORY_MANAGEMENT`.
+//!
 //! Without `bundled`, you need SQLite's development files (`libsqlite3-dev` on
 //! Debian and Ubuntu; macOS includes them), and SQLite must be built with the
 //! RTree module. Opening a file checks this, and returns

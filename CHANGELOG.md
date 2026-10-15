@@ -18,6 +18,15 @@ While the version is below 1.0 the API may change in any release.
 
 ### Changed
 
+- Builds from this repository compile the bundled SQLite without
+  `SQLITE_ENABLE_MEMORY_MANAGEMENT` and with `SQLITE_DEFAULT_MEMSTATUS=0`,
+  through `LIBSQLITE3_FLAGS` in `.cargo/config.toml`. With the first flag, all
+  connections in a process shared one page cache behind one mutex, so the
+  threads of a threaded `read_arrow` waited for each other. A 4-thread read of
+  the rivers dataset takes 1.5 s instead of 1.76 s, and an 8-thread read 0.82 s
+  instead of 1.23 s. The crate documentation of the `bundled` feature gives
+  the same setting for dependants. A `cargo install` from crates.io does not
+  read this file.
 - `GeoPackage::open` and `open_read_only` open the connection with
   `SQLITE_OPEN_NO_MUTEX`, as `create` already did. SQLite no longer locks a
   mutex around each column read: a scalar read of the rivers dataset takes
