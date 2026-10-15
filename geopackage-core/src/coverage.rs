@@ -503,16 +503,17 @@ const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 /// Checks a PNG tile payload against Requirement 13: 16-bit unsigned, single
 /// channel.
 ///
-/// Reads the signature and the `IHDR` chunk only. It does not read `IDAT`, so
-/// this function does not check Requirement 21, as with [`coverage_tiff`].
+/// Reads the signature and the `IHDR` fields up to the colour type only. It
+/// does not read `IDAT`, so this function does not check Requirement 21, as
+/// with [`coverage_tiff`].
 ///
 /// # Errors
 ///
 /// [`TileError::CoverageProfileViolation`], with Requirement 13, if the bit
 /// depth or colour type is not 16-bit greyscale.
 ///
-/// [`TileError::UnreadablePayload`] if the bytes are not a PNG, or if they are
-/// truncated before the end of `IHDR`.
+/// [`TileError::UnreadablePayload`] if the bytes are not a PNG, or if they end
+/// before the colour type, the last `IHDR` field that this function reads.
 ///
 /// # Examples
 ///
