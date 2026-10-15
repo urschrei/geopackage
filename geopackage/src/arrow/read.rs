@@ -1,3 +1,4 @@
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 
 use geopackage_core::ident::quote;
@@ -437,6 +438,11 @@ impl Layer<'_> {
                     capacity: options.batch_size.clamp(1, DEFAULT_BATCH_SIZE),
                     limit: options.batch_size.max(1),
                     max_bytes: options.max_batch_bytes.clamp(1, DEFAULT_MAX_BATCH_BYTES),
+                    row_bytes: schema
+                        .fields()
+                        .iter()
+                        .map(|_| AtomicUsize::new(0))
+                        .collect(),
                     output: Arc::new(Mutex::new(None)),
                     failure: Arc::new(Mutex::new(None)),
                 },

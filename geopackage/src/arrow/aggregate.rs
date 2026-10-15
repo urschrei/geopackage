@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use arrow_schema::DataType;
@@ -75,6 +75,11 @@ pub(crate) struct BatchFiller {
     pub(crate) limit: usize,
     /// Ceiling on the geometry bytes one batch may contain.
     pub(crate) max_bytes: usize,
+    /// For each field, the value bytes per row of the last batch, rounded up,
+    /// or 0 before the first batch and for fixed-width types. [`Aggregate::init`]
+    /// sizes the next batch's buffers from it, so that a buffer does not grow
+    /// and copy itself while the batch is filled.
+    pub(crate) row_bytes: Vec<AtomicUsize>,
     pub(crate) output: Arc<Mutex<Option<FilledBatch>>>,
     /// The first append failure, kept so a typed error survives instead of
     /// becoming a bare SQL error.
@@ -118,8 +123,24 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
         let mut builders = Vec::with_capacity(self.types.len());
         for (index, data_type) in self.types.iter().enumerate() {
             let is_geometry = Some(index) == self.geometry_index;
+            let value_bytes = self
+                .row_bytes
+                .get(index)
+                .map(|row_bytes| row_bytes.load(Ordering::Relaxed))
+                .filter(|row_bytes| *row_bytes > 0)
+                .map(|row_bytes| {
+                    // An eighth more than the last batch used, so that a batch
+                    // with slightly longer values does not grow the buffer.
+                    let bytes = row_bytes.saturating_mul(self.capacity);
+                    let bytes = bytes.saturating_add(bytes / 8);
+                    if is_geometry {
+                        bytes.min(self.max_bytes)
+                    } else {
+                        bytes
+                    }
+                });
             builders.push(
-                ColumnBuilder::new(data_type, is_geometry, self.capacity)
+                ColumnBuilder::new(data_type, is_geometry, self.capacity, value_bytes)
                     .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?,
             );
         }
@@ -177,6 +198,15 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
 
     fn finalize(&self, _: &mut Context<'_>, acc: Option<FilledBatch>) -> rusqlite::Result<i64> {
         let rows = acc.as_ref().map_or(0, |batch| batch.rows);
+        if let Some(batch) = &acc
+            && batch.rows > 0
+        {
+            for (builder, row_bytes) in batch.builders.iter().zip(&self.row_bytes) {
+                if let Some(bytes) = builder.value_bytes() {
+                    row_bytes.store(bytes.div_ceil(batch.rows), Ordering::Relaxed);
+                }
+            }
+        }
         if let Some(batch) = acc
             && let Ok(mut slot) = self.output.lock()
         {
