@@ -67,6 +67,10 @@ pub(crate) struct BatchFiller {
     /// Where the schema fields start among the arguments: 1 when the key had to
     /// be selected separately, 0 when it is one of the fields.
     pub(crate) field_offset: usize,
+    /// Set when the key is one of the fields and its column is `Int64`. The
+    /// finaliser then takes the batch's last key from that column's builder,
+    /// and the step function does not read the key a second time.
+    pub(crate) key_in_fields: bool,
     pub(crate) geometry_index: Option<usize>,
     pub(crate) datetime: DateTimeParsing,
     /// Rows to pre-size the builders for.
@@ -105,6 +109,46 @@ pub(crate) struct FilledBatch {
     /// Set when the aggregate stopped the scan, because the batch was full or
     /// at its byte ceiling, so that rows may remain after it.
     pub(crate) stopped: bool,
+}
+
+impl BatchFiller {
+    /// Appends one row to `builders`, one builder per field. `geometry` is the
+    /// geometry field's index and value, already read for the byte ceiling,
+    /// so that it is not read a second time.
+    fn append_row(
+        &self,
+        ctx: &Context<'_>,
+        builders: &mut [ColumnBuilder],
+        geometry: Option<(usize, ValueRef<'_>)>,
+    ) -> Result<()> {
+        let split = geometry.and_then(|(index, value)| {
+            let (before, rest) = builders.split_at_mut_checked(index)?;
+            let (builder, after) = rest.split_first_mut()?;
+            Some((before, (index, builder, value), after))
+        });
+        let Some((before, (index, builder, value), after)) = split else {
+            return self.append_fields(ctx, builders, 0);
+        };
+        self.append_fields(ctx, before, 0)?;
+        builder.append(&self.names, index, value, self.datetime)?;
+        self.append_fields(ctx, after, index + 1)
+    }
+
+    /// Appends the arguments of fields `first..` to `builders`, which hold
+    /// those fields in order.
+    fn append_fields(
+        &self,
+        ctx: &Context<'_>,
+        builders: &mut [ColumnBuilder],
+        first: usize,
+    ) -> Result<()> {
+        for (offset, builder) in builders.iter_mut().enumerate() {
+            let index = first + offset;
+            let value = ctx.get_raw(index + self.field_offset);
+            builder.append(&self.names, index, value, self.datetime)?;
+        }
+        Ok(())
+    }
 }
 
 /// Marks the batch as stopped and returns the error that ends SQLite's scan.
@@ -156,15 +200,17 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
 
     #[hotpath::measure(label = "arrow::BatchFiller::step")]
     fn step(&self, ctx: &mut Context<'_>, acc: &mut FilledBatch) -> rusqlite::Result<()> {
-        let geometry_bytes = self.geometry_index.map_or(0, |index| {
-            match ctx.get_raw(index + self.field_offset) {
-                // The GPB header is stripped before the body is appended, so
-                // this over-counts by a header per row. Erring high is the
-                // right direction for a ceiling that must not be crossed.
-                ValueRef::Blob(blob) => blob.len(),
-                _ => 0,
-            }
-        });
+        // Read once, for the byte ceiling and for its builder.
+        let geometry = self
+            .geometry_index
+            .map(|index| (index, ctx.get_raw(index + self.field_offset)));
+        let geometry_bytes = match geometry {
+            // The GPB header is stripped before the body is appended, so this
+            // over-counts by a header per row. Erring high is the right
+            // direction for a ceiling that must not be crossed.
+            Some((_, ValueRef::Blob(blob))) => blob.len(),
+            _ => 0,
+        };
         // The row count guard means a batch always contains at least one row,
         // so a geometry larger than the whole budget still makes progress
         // instead of stalling the read.
@@ -172,21 +218,20 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
             acc.truncated = true;
             return Err(stop(acc));
         }
-        if let ValueRef::Integer(key) = ctx.get_raw(self.key_argument) {
+        if !self.key_in_fields
+            && let ValueRef::Integer(key) = ctx.get_raw(self.key_argument)
+        {
             acc.last_key = Some(key);
         }
-        for (index, builder) in acc.builders.iter_mut().enumerate() {
-            let value = ctx.get_raw(index + self.field_offset);
-            if let Err(error) = builder.append(&self.names, index, value, self.datetime) {
-                if let Ok(mut slot) = self.failure.lock() {
-                    *slot = Some(error);
-                }
-                // Stop the scan. The finaliser still runs, so the typed error
-                // above is what the caller sees rather than this one.
-                return Err(rusqlite::Error::UserFunctionError(
-                    "geopackage: columnar read failed".into(),
-                ));
+        if let Err(error) = self.append_row(ctx, &mut acc.builders, geometry) {
+            if let Ok(mut slot) = self.failure.lock() {
+                *slot = Some(error);
             }
+            // Stop the scan. The finaliser still runs, so the typed error
+            // above is what the caller sees rather than this one.
+            return Err(rusqlite::Error::UserFunctionError(
+                "geopackage: columnar read failed".into(),
+            ));
         }
         acc.rows += 1;
         acc.bytes = acc.bytes.saturating_add(geometry_bytes);
@@ -196,11 +241,17 @@ impl Aggregate<FilledBatch, i64> for BatchFiller {
         Ok(())
     }
 
-    fn finalize(&self, _: &mut Context<'_>, acc: Option<FilledBatch>) -> rusqlite::Result<i64> {
+    fn finalize(&self, _: &mut Context<'_>, mut acc: Option<FilledBatch>) -> rusqlite::Result<i64> {
         let rows = acc.as_ref().map_or(0, |batch| batch.rows);
-        if let Some(batch) = &acc
+        if let Some(batch) = &mut acc
             && batch.rows > 0
         {
+            if self.key_in_fields {
+                batch.last_key = batch
+                    .builders
+                    .get(self.key_argument)
+                    .and_then(ColumnBuilder::last_integer);
+            }
             for (builder, row_bytes) in batch.builders.iter().zip(&self.row_bytes) {
                 if let Some(bytes) = builder.value_bytes() {
                     row_bytes.store(bytes.div_ceil(batch.rows), Ordering::Relaxed);
