@@ -55,13 +55,15 @@ cross D3's "transform never" line without supplying what we needed.
 | `arrow-array`/`arrow-schema` + [`geoarrow-array`](https://github.com/geoarrow/geoarrow-rs) | RecordBatch I/O, GeoArrow(WKB) columns | M3 |
 | `cargo-c`/`cbindgen` | C ABI packaging | M3 |
 | `clap` | CLI | M3 |
-| [`hegeltest`](https://hegel.dev) (Hegel) | property tests | **landed M2** (dev-dep of `geopackage`, `0.28`) |
+| [`hegeltest`](https://hegel.dev) (Hegel) | property tests | **landed M2** (dev-dep of `geopackage` and `geopackage-core`, `0.49`) |
 | `criterion` | benches | M2 (dev-dep) |
 | `pyo3`+`maturin`, `napi-rs`, `uniffi` | bindings | post-v0.2, demand-driven |
 | `sqlite-wasm-rs` | browser | parked (D5) |
 
 `hegeltest` (the Hegel PBT library, Hypothesis-powered) is a dev-dependency of
-`geopackage` only. It closes the property-test scope of **issue #2**: the RTree
+`geopackage` and `geopackage-core`; `hegel.toml` at the workspace root sets 2000
+cases per property for local and CI runs. It closes the property-test scope of
+**issue #2**: the RTree
 contents provably match a full-scan rebuild after arbitrary
 insert/update/delete/upsert sequences through both the triggered and the D8 bulk
 build (`geopackage/tests/spatial_index.rs`), and the `features_in`

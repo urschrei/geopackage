@@ -8,14 +8,19 @@ This file is the harness plan; milestone docs reference it.
 1. **Spec-derived unit tests** (`geopackage-core`): testable requirements get
    tests named for their requirement number (`req11_srs_seeds`,
    `req20_gpb_magic`, …). The M0 suite starts this; keep the convention.
-2. **Property tests** (Hegel/[`hegeltest`](https://hegel.dev), from M2): GPB
-   round-trip over arbitrary geometries (all types × XY/Z/M/ZM × empty ×
-   nested collections); envelope ⊇ geometry; `features_in(bbox)` ≡
-   scan-filter; rtree state ≡ full rebuild after arbitrary
-   write/update/delete/upsert sequences. Hegel is Hypothesis-powered
-   (server-side shrinking, `#[hegel::test]` on the standard test runner);
-   the hand-rolled SplitMix64 generator in `tests/features_in.rs` gets
-   ported to it when the dev-dependency lands.
+2. **Property tests** (Hegel/[`hegeltest`](https://hegel.dev), from M2 ✅):
+   in `geopackage-core`, the GPB header codec, GPB round-trip and envelopes
+   over the seven core types nested in collections and over XY/Z/M/ZM WKB
+   bodies, arc envelopes, `DATE`/`DATETIME` against the calendar and the
+   documented grammars, tile arithmetic, and the type vocabularies; in
+   `geopackage`, `features_in(bbox)` against an independent oracle on both
+   paths, the RTree against a full scan and the audit after arbitrary write
+   sequences, bulk against triggered builds, tile pyramid and coverage
+   writers against a model, creation against the consistency rules, and table
+   names from the whole of Unicode. `tests/scale.rs` puts one very large or
+   deeply nested instance per surface through every operation. Hegel is
+   Hypothesis-powered (server-side shrinking, `#[hegel::test]` on the
+   standard test runner); `hegel.toml` sets 2000 cases per property.
 3. **Fuzzing** (cargo-fuzz, continuous once public via OSS-Fuzz):
    `gpb_parse` (M0 ✅), `gpb_geometry` (header+body via wkb, M1),
    `open_arbitrary` (arbitrary bytes as .gpkg file, M1), `tile_payload`
