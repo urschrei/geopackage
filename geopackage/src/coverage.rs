@@ -806,6 +806,27 @@ fn check_float_defaults(
     Ok(())
 }
 
+/// Rejects a NaN in a tile ancillary row, which SQLite would store as NULL.
+fn check_not_nan(ancillary: &TileAncillary, table_name: &str) -> Result<()> {
+    let values = [
+        ("scale", Some(ancillary.scale)),
+        ("offset", Some(ancillary.offset)),
+        ("min", ancillary.min),
+        ("max", ancillary.max),
+        ("mean", ancillary.mean),
+        ("std_dev", ancillary.std_dev),
+    ];
+    for (field, value) in values {
+        if value.is_some_and(f64::is_nan) {
+            return Err(Error::NanTileAncillary {
+                table_name: table_name.to_owned(),
+                field,
+            });
+        }
+    }
+    Ok(())
+}
+
 impl<'a> Coverage<'a> {
     /// Writes one tile and its ancillary row, in a separate transaction.
     ///
@@ -954,6 +975,7 @@ impl<'conn> CoverageWriter<'conn> {
     ///   but a write does not.
     /// - [`Error::FloatCoverageScaled`] if the ancillary row has a scale or
     ///   offset other than the defaults on a `float` coverage (Requirement 11).
+    /// - [`Error::NanTileAncillary`] if a value in the ancillary row is NaN.
     pub fn put_with_ancillary(
         &mut self,
         coord: TileCoord,
@@ -1001,6 +1023,7 @@ impl<'conn> CoverageWriter<'conn> {
             ancillary.offset,
             &self.table_name,
         )?;
+        check_not_nan(ancillary, &self.table_name)?;
 
         // The tile row and its ancillary row are written together or not at
         // all, so a failed put leaves no tile without its row.

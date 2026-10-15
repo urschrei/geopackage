@@ -202,6 +202,20 @@ pub enum Error {
         /// The offset in the request.
         offset: f64,
     },
+    /// A tile ancillary value that is NaN.
+    ///
+    /// SQLite stores NaN as NULL. `scale` and `offset` are `NOT NULL`
+    /// columns, and a NULL statistic means "not recorded", so the table cannot
+    /// store a NaN. Writing a tile returns this error.
+    #[error(
+        "the {field} of a tile of coverage {table_name:?} is NaN, and SQLite stores NaN as NULL"
+    )]
+    NanTileAncillary {
+        /// The coverage in the write.
+        table_name: String,
+        /// The column: `scale`, `offset`, `min`, `max`, `mean` or `std_dev`.
+        field: &'static str,
+    },
     /// A coverage payload that this crate reads but does not write.
     ///
     /// Deflate compression is the only case. A read accepts it, because
