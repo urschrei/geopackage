@@ -8,6 +8,8 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-16
+
 ### Added
 
 - `Error::NanAncillaryValue`, for a NaN in a coverage's ancillary row or a
@@ -1510,7 +1512,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/urschrei/geopackage/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/urschrei/geopackage/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/urschrei/geopackage/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/urschrei/geopackage/compare/v0.10.2...v0.11.0

@@ -24,7 +24,7 @@ Until 1.0, the API may change between minor versions.
 
 ```toml
 [dependencies]
-geopackage = "0.11"
+geopackage = "0.12"
 ```
 
 By default the crate links the system SQLite, which must include the RTree
