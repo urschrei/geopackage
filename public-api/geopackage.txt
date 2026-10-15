@@ -246,6 +246,8 @@ pub geopackage::Finding::RemovedExtension::table_name: core::option::Option<allo
 pub geopackage::Finding::SpatialIndexOutOfStep
 pub geopackage::Finding::SpatialIndexOutOfStep::audit: geopackage::SpatialIndexAudit
 pub geopackage::Finding::SpatialIndexOutOfStep::table_name: alloc::string::String
+pub geopackage::Finding::StaleSpatialIndex
+pub geopackage::Finding::StaleSpatialIndex::table_name: alloc::string::String
 pub geopackage::Finding::TableNameCaseMismatch
 pub geopackage::Finding::TableNameCaseMismatch::actual: alloc::string::String
 pub geopackage::Finding::TableNameCaseMismatch::declared: alloc::string::String

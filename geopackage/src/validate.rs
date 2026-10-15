@@ -114,6 +114,12 @@ pub enum Finding {
         /// The indexed table.
         table_name: String,
     },
+    /// A spatial index with its virtual table but no triggers, or with
+    /// triggers but no virtual table (see [`SpatialIndexStatus::Stale`]).
+    StaleSpatialIndex {
+        /// The indexed table.
+        table_name: String,
+    },
     /// A feature table with no spatial index.
     NoSpatialIndex {
         /// The unindexed table.
@@ -218,6 +224,7 @@ impl Finding {
             // entry leads nowhere.
             Self::MissingContentsTable { .. }
             | Self::SpatialIndexOutOfStep { .. }
+            | Self::StaleSpatialIndex { .. }
             | Self::DanglingMetadataReference { .. }
             | Self::CoverageUninterpretable { .. }
             | Self::CoverageDatatypeUnknown { .. }
@@ -260,6 +267,7 @@ impl Finding {
             Self::MissingContentsTable { table_name }
             | Self::SpatialIndexOutOfStep { table_name, .. }
             | Self::LegacySpatialIndexTriggers { table_name }
+            | Self::StaleSpatialIndex { table_name }
             | Self::NoSpatialIndex { table_name }
             | Self::TilePyramidInconsistent { table_name, .. }
             | Self::CoverageUninterpretable { table_name, .. }
@@ -293,6 +301,9 @@ impl Finding {
             }
             Self::LegacySpatialIndexTriggers { .. } => {
                 Some("upgrade the trigger set with Layer::repair_spatial_index")
+            }
+            Self::StaleSpatialIndex { .. } => {
+                Some("rebuild the index and its triggers with Layer::repair_spatial_index")
             }
             Self::NoSpatialIndex { .. } => Some("build one with Layer::create_spatial_index"),
             Self::LegacyApplicationId { .. } => {
@@ -389,6 +400,12 @@ impl fmt::Display for Finding {
                 write!(
                     f,
                     "spatial index on {table_name:?} is maintained by a pre-1.4 or mixed trigger set"
+                )
+            }
+            Self::StaleSpatialIndex { table_name } => {
+                write!(
+                    f,
+                    "spatial index on {table_name:?} is stale: its virtual table or its triggers are missing"
                 )
             }
             Self::NoSpatialIndex { table_name } => {
@@ -626,7 +643,12 @@ impl GeoPackage {
                 SpatialIndexStatus::Legacy => {
                     findings.push(Finding::LegacySpatialIndexTriggers { table_name });
                 }
-                SpatialIndexStatus::Current | SpatialIndexStatus::Stale => {
+                // No audit: the triggers no longer maintain the index, or
+                // there is no index to audit. A repair rebuilds it either way.
+                SpatialIndexStatus::Stale => {
+                    findings.push(Finding::StaleSpatialIndex { table_name });
+                }
+                SpatialIndexStatus::Current => {
                     let audit = layer.audit_spatial_index()?;
                     if !audit.is_consistent() {
                         findings.push(Finding::SpatialIndexOutOfStep { table_name, audit });
