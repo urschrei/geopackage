@@ -93,6 +93,9 @@ impl ExtensionScope {
 pub enum Extension {
     /// `gpkg_geom_<TYPE>` (Annex F.1): a geometry type beyond the core seven,
     /// registered against the geometry column that contains it.
+    ///
+    /// A core type writes a name no reader identifies, so its
+    /// [`Self::support`] is [`ExtensionSupport::Unrecognised`].
     GeometryType(GeometryType),
     /// `gpkg_rtree_index` (Annex F.3): the RTree spatial index.
     RtreeIndex,
@@ -147,6 +150,10 @@ pub enum Extension {
     /// This is not an OGC extension. Its author prefix is `gdal`.
     GdalAspatial,
     /// A name this workspace does not recognise, kept as written.
+    ///
+    /// A value holding a name this workspace identifies writes that name,
+    /// which reads back as the matching variant; [`Self::support`] judges the
+    /// name.
     Other(String),
 }
 
@@ -218,7 +225,8 @@ impl Extension {
         }
     }
 
-    /// Returns what this workspace can do with the extension.
+    /// Returns what this workspace can do with the extension, judged by the
+    /// name it writes.
     ///
     /// This lives beside the names rather than in the `geopackage` crate so
     /// that the match is exhaustive. A new variant does not compile until its
@@ -226,6 +234,14 @@ impl Extension {
     /// classify it as [`ExtensionSupport::Unrecognised`].
     pub fn support(&self) -> ExtensionSupport {
         match self {
+            // Judged by the name each writes, which is what a reader sees.
+            Self::GeometryType(geometry_type) if !geometry_type.is_extension() => {
+                ExtensionSupport::Unrecognised
+            }
+            Self::Other(name) => match Self::from_name(name) {
+                Self::Other(_) => ExtensionSupport::Unrecognised,
+                identified => identified.support(),
+            },
             // A non-linear geometry column is read and written: the blobs are
             // encoded with the extended flag, their envelopes are computed from
             // the WKB, and they index. What a caller cannot do is get one back
@@ -245,7 +261,6 @@ impl Extension {
             | Self::RelatedTables => ExtensionSupport::Implemented,
             Self::GdalAspatial => ExtensionSupport::Known,
             Self::GeometryTypeTrigger | Self::SrsIdTrigger => ExtensionSupport::Removed,
-            Self::Other(_) => ExtensionSupport::Unrecognised,
         }
     }
 
