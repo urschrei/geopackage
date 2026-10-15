@@ -133,7 +133,9 @@ impl Layer<'_> {
     /// Reads the layer's rows intersecting `bbox` as Arrow record batches.
     ///
     /// This is the columnar equivalent of [`Layer::features_in`], and returns
-    /// the same rows in the same order. It is single-threaded. The parallel
+    /// the same rows, in primary-key order. [`Layer::features_in`] returns
+    /// them in the order its query produces, which on an indexed layer is the
+    /// index's. It is single-threaded. The parallel
     /// path gives key *windows* to workers and assumes that a window's key
     /// span implies its row count. A spatial filter breaks that assumption,
     /// because matching rows are scattered through the key space. Whether a
@@ -252,6 +254,7 @@ impl Layer<'_> {
         filter: Option<BoundingBox>,
         sql_filter: Option<(&str, &[crate::ValueRef<'_>])>,
     ) -> Result<ArrowBatches<'_>> {
+        let filter = filter.map(BoundingBox::for_query);
         let schema = self.arrow_schema()?;
         // The pagination key: the declared primary key, or SQLite's rowid for a
         // table that has none. This is the same fallback the write path uses.
