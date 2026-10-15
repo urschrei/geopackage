@@ -374,7 +374,13 @@ impl GeoPackage {
     /// - [`Error::UnexpectedGeometrySpec`] if the builder has a geometry column.
     /// - [`Error::Core`], [`Error::ReservedTablePrefix`] and
     ///   [`Error::TableAlreadyExists`] as [`Self::create_layer`].
+    /// - [`Error::UnsupportedExtension`] if an extension this crate cannot
+    ///   identify applies to the whole GeoPackage
+    ///   ([`Self::blocking_extension`]).
     pub fn create_attributes_table(&self, builder: &TableSchemaBuilder) -> Result<Layer<'_>> {
+        // As in `create_layer`: a whole-GeoPackage extension this crate cannot
+        // identify covers a table that does not exist yet.
+        self.check_writable(&builder.table_name)?;
         if builder.geometry.is_some() {
             return Err(Error::UnexpectedGeometrySpec {
                 table_name: builder.table_name.clone(),

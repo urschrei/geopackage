@@ -889,6 +889,8 @@ impl<'a> Coverage<'a> {
     ///
     /// # Errors
     ///
+    /// [`Error::UnsupportedExtension`] if an extension this crate cannot
+    /// identify covers the coverage ([`GeoPackage::blocking_extension`]), and
     /// [`Error`] if the transaction cannot be opened or the statements
     /// prepared.
     pub fn writer(&self) -> Result<CoverageWriter<'a>> {
@@ -923,6 +925,7 @@ pub struct CoverageWriter<'conn> {
 
 impl<'conn> CoverageWriter<'conn> {
     fn new(coverage: &Coverage<'conn>) -> Result<Self> {
+        coverage.gpkg().check_writable(coverage.table_name())?;
         let conn = coverage.gpkg().connection();
         let table = quote(coverage.table_name())?;
         let address = "zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3";
