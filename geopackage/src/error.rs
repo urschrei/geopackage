@@ -202,19 +202,19 @@ pub enum Error {
         /// The offset in the request.
         offset: f64,
     },
-    /// A tile ancillary value that is NaN.
+    /// A NaN in a coverage's ancillary row or in a tile's.
     ///
     /// SQLite stores NaN as NULL. `scale` and `offset` are `NOT NULL`
-    /// columns, and a NULL statistic means "not recorded", so the table cannot
-    /// store a NaN. Writing a tile returns this error.
-    #[error(
-        "the {field} of a tile of coverage {table_name:?} is NaN, and SQLite stores NaN as NULL"
-    )]
-    NanTileAncillary {
+    /// columns, and in the optional columns NULL means "not set", so neither
+    /// table can store a NaN. Creating a coverage or writing a tile returns
+    /// this error.
+    #[error("{column} of coverage {table_name:?} is NaN, and SQLite stores NaN as NULL")]
+    NanAncillaryValue {
         /// The coverage in the write.
         table_name: String,
-        /// The column: `scale`, `offset`, `min`, `max`, `mean` or `std_dev`.
-        field: &'static str,
+        /// The column, qualified by its table, for example
+        /// `gpkg_2d_gridded_tile_ancillary.scale`.
+        column: &'static str,
     },
     /// A coverage payload that this crate reads but does not write.
     ///
