@@ -72,10 +72,11 @@ pub enum Error {
          this crate's `bundled` feature"
     )]
     RtreeUnavailable,
-    /// An EPSG code outside the vendored definition subset.
+    /// An EPSG code in neither the vendored definitions nor the EPSG
+    /// registry.
     #[error(
-        "EPSG:{code} is not in the vendored definition subset; \
-         supply the WKT yourself via GeoPackage::add_srs"
+        "EPSG:{code} is in neither the vendored definitions nor the EPSG registry; \
+         supply the definition yourself via GeoPackage::add_srs"
     )]
     UnknownEpsgCode {
         /// The requested EPSG code.
