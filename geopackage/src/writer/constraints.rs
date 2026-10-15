@@ -183,6 +183,12 @@ pub(crate) enum Checkable<'a> {
 pub(crate) trait AsCheckable {
     /// This value, as a constraint sees it.
     fn as_checkable(&self) -> Checkable<'_>;
+
+    /// This value if it is a `DATETIME`, which the writer checks can be
+    /// stored in the strict form.
+    fn datetime(&self) -> Option<geopackage_core::datetime::DateTime> {
+        None
+    }
 }
 
 impl AsCheckable for Value {
@@ -196,6 +202,13 @@ impl AsCheckable for Value {
             Self::Blob(_) | Self::Date(_) | Self::DateTime(_) => Checkable::Unchecked,
         }
     }
+
+    fn datetime(&self) -> Option<geopackage_core::datetime::DateTime> {
+        match self {
+            Self::DateTime(value) => Some(*value),
+            _ => None,
+        }
+    }
 }
 
 impl AsCheckable for CellRef<'_> {
@@ -207,6 +220,13 @@ impl AsCheckable for CellRef<'_> {
             Self::Float(value) => Checkable::Real(*value),
             Self::Text(value) => Checkable::Text(value),
             Self::Blob(_) | Self::Date(_) | Self::DateTime(_) => Checkable::Unchecked,
+        }
+    }
+
+    fn datetime(&self) -> Option<geopackage_core::datetime::DateTime> {
+        match self {
+            Self::DateTime(value) => Some(*value),
+            _ => None,
         }
     }
 }

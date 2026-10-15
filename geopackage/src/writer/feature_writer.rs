@@ -800,6 +800,9 @@ impl<'conn> FeatureWriter<'conn> {
     /// Returns immediately for a file that did not ask for enforcement, or a
     /// layer no constraint covers, so the ordinary write path pays one branch.
     fn check_constraints<V: AsCheckable>(&mut self, values: &[V]) -> Result<()> {
+        for (index, value) in values.iter().enumerate() {
+            self.check_datetime(index, value)?;
+        }
         if self.constraints.is_empty() {
             return Ok(());
         }
@@ -814,6 +817,11 @@ impl<'conn> FeatureWriter<'conn> {
     /// Like [`Self::check_constraints`], for a partial update naming its
     /// columns.
     fn check_named_constraints(&mut self, columns: &[(&str, CellRef<'_>)]) -> Result<()> {
+        for (name, value) in columns {
+            if let Some(index) = self.value_columns.iter().position(|c| c.name == *name) {
+                self.check_datetime(index, value)?;
+            }
+        }
         if self.constraints.is_empty() {
             return Ok(());
         }
@@ -836,6 +844,25 @@ impl<'conn> FeatureWriter<'conn> {
     ///
     /// This is off the hot path, so it re-reads what it needs instead of
     /// having it threaded through the check.
+    /// Rejects a `DATETIME` that the strict form cannot store: one whose
+    /// offset moves its instant outside years 0 to 9999.
+    fn check_datetime<V: AsCheckable>(&self, index: usize, value: &V) -> Result<()> {
+        let Some(datetime) = value.datetime() else {
+            return Ok(());
+        };
+        datetime
+            .format_strict()
+            .map(drop)
+            .map_err(|source| Error::InvalidDateTimeValue {
+                column: self
+                    .value_columns
+                    .get(index)
+                    .map_or_else(String::new, |column| column.name.clone()),
+                text: datetime.to_string(),
+                source,
+            })
+    }
+
     fn violation(&self, index: usize, value: Checkable<'_>) -> Error {
         let (constraint_name, constraint) = match self.constraints.at(index) {
             Some(constraint) => (constraint.name.clone(), constraint.kind.to_string()),
