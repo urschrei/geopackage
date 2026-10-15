@@ -73,6 +73,12 @@ impl BoundingBox {
         }
     }
 
+    /// Returns `true` if the box contains no point: an edge is NaN, or a
+    /// minimum is above its maximum.
+    pub(crate) fn contains_no_point(&self) -> bool {
+        !(self.min_x <= self.max_x && self.min_y <= self.max_y)
+    }
+
     /// Returns `true` if this box intersects an envelope
     /// `[min_x, max_x, min_y, max_y]`,
     /// inclusive at the boundary (touching boxes intersect).
@@ -503,7 +509,8 @@ impl<'a> Layer<'a> {
     }
 
     /// Iterates the features whose geometry envelope intersects `bbox`
-    /// (inclusive at the boundary).
+    /// (inclusive at the boundary). A box with a NaN edge, or with a minimum
+    /// above its maximum, contains no point and selects no feature.
     ///
     /// When a usable RTree spatial index is present (see
     /// [`Self::has_spatial_index`]), the query uses the
@@ -528,6 +535,19 @@ impl<'a> Layer<'a> {
     #[hotpath::measure(label = "Layer::features_in")]
     pub fn features_in(&self, bbox: BoundingBox) -> Result<Features> {
         let (sql, geom_idx, uses_rtree) = self.features_in_plan()?;
+        // A box that contains no point is replaced by one that also contains
+        // none and that both paths can bind: NaN binds as NULL, which
+        // `ST_EnvIntersects` rejects.
+        let bbox = if bbox.contains_no_point() {
+            BoundingBox::new(
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            )
+        } else {
+            bbox
+        };
         self.execute(&sql, box_params(bbox, uses_rtree), geom_idx, Some(bbox))
     }
 
