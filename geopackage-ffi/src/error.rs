@@ -149,6 +149,7 @@ impl From<&Error> for Status {
             | Error::DuplicateUpdateColumn { .. }
             | Error::MissingGeometrySpec { .. }
             | Error::UnexpectedGeometrySpec { .. }
+            | Error::NanEpoch { .. }
             | Error::WrongDataType { .. }
             | Error::GeometryNotProjected => Self::InvalidArgument,
             Error::Tile(tile) => tile_status(tile),
