@@ -42,6 +42,17 @@
 //! which are the rules SQLite itself uses to decide what such a column
 //! contains.
 //!
+//! # Conversion
+//!
+//! A read converts each stored value as the row path does, under the layer's
+//! [`crate::ConversionOptions`]: `DATETIME` text is parsed strictly or
+//! leniently, and [`crate::StorageStrictness::Strict`] rejects a `BOOLEAN`
+//! integer other than 0 or 1. A value whose storage class does not fit its
+//! column's Arrow type is [`crate::Error::ArrowValueMismatch`]. A value in
+//! the geometry column that is not a BLOB is a null geometry, as on the row
+//! path; a BLOB that is not a GeoPackage geometry is an error, because its
+//! header cannot be removed.
+//!
 //! # Nullability
 //!
 //! A field is non-nullable only when the column is `NOT NULL`. The primary key

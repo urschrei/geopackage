@@ -10,7 +10,8 @@ use geopackage_core::datetime::{Date, DateTime};
 use geopackage_core::gpb;
 use rusqlite::types::ValueRef;
 
-use crate::value::DateTimeParsing;
+use crate::ConversionOptions;
+use crate::value::{DateTimeParsing, StorageStrictness};
 use crate::{Error, Result};
 
 /// One Arrow array under construction, with the append logic for the SQLite
@@ -86,7 +87,7 @@ impl ColumnBuilder {
         names: &[String],
         index: usize,
         value: ValueRef<'_>,
-        datetime: DateTimeParsing,
+        options: ConversionOptions,
     ) -> Result<()> {
         if let ValueRef::Null = value {
             self.append_null();
@@ -94,13 +95,24 @@ impl ColumnBuilder {
         }
         match (self, value) {
             // A BOOLEAN column can hold any integer, since SQLite gives the
-            // declared type no affinity. Non-zero is `true`, as on the scalar
-            // path's default (see `StorageStrictness`).
-            (Self::Boolean(builder), ValueRef::Integer(int)) => builder.append_value(int != 0),
+            // declared type no affinity. As on the scalar path, non-zero is
+            // `true` unless `StorageStrictness::Strict` permits only 0 and 1.
+            (Self::Boolean(builder), ValueRef::Integer(int)) => {
+                if int != 0 && int != 1 && options.storage == StorageStrictness::Strict {
+                    return Err(Error::NonBooleanInteger {
+                        column: column_name(names, index),
+                        value: int,
+                    });
+                }
+                builder.append_value(int != 0);
+            }
             (Self::Int64(builder), ValueRef::Integer(int)) => builder.append_value(int),
             (Self::Float64(builder), ValueRef::Real(real)) => builder.append_value(real),
-            // An integer in a real column widens losslessly, as on the scalar
-            // path.
+            // An integer in a real column widens, as on the scalar path. A
+            // declared FLOAT or DOUBLE column cannot store one, because REAL
+            // affinity converts it, so `StorageStrictness::Strict` has nothing
+            // to reject here; a NUMERIC-affinity column maps to `Float64` and
+            // widens by the documented mapping.
             (Self::Float64(builder), ValueRef::Integer(int)) => builder.append_value(int as f64),
             (Self::Utf8(builder), ValueRef::Text(bytes)) => builder.append_value(text(bytes)?),
             (Self::Binary(builder), ValueRef::Blob(bytes)) => builder.append_value(bytes),
@@ -115,7 +127,7 @@ impl ColumnBuilder {
             }
             (Self::Timestamp(builder), ValueRef::Text(bytes)) => {
                 let text = text(bytes)?;
-                let parsed = match datetime {
+                let parsed = match options.datetime {
                     DateTimeParsing::Strict => DateTime::parse_strict(text),
                     DateTimeParsing::Lenient => DateTime::parse_lenient(text),
                 };
@@ -136,6 +148,14 @@ impl ColumnBuilder {
             }
             // The GPB body is already ISO WKB, so the geometry costs a header
             // read and a copy, with no parsing of the geometry itself.
+            // A value of another storage class in the geometry column is no
+            // geometry, as on the scalar path.
+            (
+                Self::Geometry(builder),
+                ValueRef::Integer(_) | ValueRef::Real(_) | ValueRef::Text(_),
+            ) => {
+                builder.append_null();
+            }
             (Self::Geometry(builder), ValueRef::Blob(blob)) => {
                 // `body_offset` rather than `parse_header`: the offset follows
                 // from the envelope indicator, and parsing the header would

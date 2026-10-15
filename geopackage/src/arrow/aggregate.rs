@@ -6,7 +6,6 @@ use rusqlite::Connection;
 use rusqlite::functions::{Aggregate, Context, FunctionFlags};
 use rusqlite::types::ValueRef;
 
-use crate::value::DateTimeParsing;
 use crate::{Error, Result};
 
 use super::builder::ColumnBuilder;
@@ -72,7 +71,7 @@ pub(crate) struct BatchFiller {
     /// and the step function does not read the key a second time.
     pub(crate) key_in_fields: bool,
     pub(crate) geometry_index: Option<usize>,
-    pub(crate) datetime: DateTimeParsing,
+    pub(crate) conversion: crate::ConversionOptions,
     /// Rows to pre-size the builders for.
     pub(crate) capacity: usize,
     /// Rows in a full batch. The aggregate stops the scan when it has them.
@@ -130,7 +129,7 @@ impl BatchFiller {
             return self.append_fields(ctx, builders, 0);
         };
         self.append_fields(ctx, before, 0)?;
-        builder.append(&self.names, index, value, self.datetime)?;
+        builder.append(&self.names, index, value, self.conversion)?;
         self.append_fields(ctx, after, index + 1)
     }
 
@@ -145,7 +144,7 @@ impl BatchFiller {
         for (offset, builder) in builders.iter_mut().enumerate() {
             let index = first + offset;
             let value = ctx.get_raw(index + self.field_offset);
-            builder.append(&self.names, index, value, self.datetime)?;
+            builder.append(&self.names, index, value, self.conversion)?;
         }
         Ok(())
     }
