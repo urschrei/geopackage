@@ -8,6 +8,9 @@
 #   HEGEL_TEST_CASES=20000 cargo nextest r
 
 [profiles.common]
+# Without `extends`, hegeltest 0.49.11 reports the cycle
+# "common -> development -> common", although its settings docs say the
+# `default` alias skips profiles already in the chain.
 extends = "base"
 test_cases = 2000
 
