@@ -329,7 +329,7 @@ fn what_this_crate_writes_validates_clean(tc: hegel::TestCase) {
 /// completeness property makes, so that each defect has its own target.
 fn build_clean() -> GeoPackage {
     let gpkg = GeoPackage::create(Path::new(":memory:")).unwrap();
-    for name in ["pts", "noidx", "legacy", "lost", "casepts"] {
+    for name in ["pts", "noidx", "legacy", "stale", "lost", "casepts"] {
         let layer = gpkg
             .create_layer(
                 &TableSchemaBuilder::new(name)
@@ -605,6 +605,29 @@ fn corrupt(tc: &hegel::TestCase, gpkg: &GeoPackage, defect: usize) -> Key {
             );
             expect("TableNameCaseMismatch", Some("CasePts"))
         }
+        23 => {
+            // The virtual table without its triggers, or the reverse.
+            if tc.draw(generators::booleans()) {
+                sql(gpkg, "DROP TABLE rtree_stale_geom");
+            } else {
+                let triggers: Vec<String> = gpkg
+                    .connection()
+                    .prepare(
+                        "SELECT name FROM sqlite_master \
+                         WHERE type = 'trigger' AND name LIKE 'rtree_stale_geom_%'",
+                    )
+                    .unwrap()
+                    .query_map([], |row| row.get(0))
+                    .unwrap()
+                    .collect::<rusqlite::Result<_>>()
+                    .unwrap();
+                assert!(!triggers.is_empty());
+                for trigger in triggers {
+                    sql(gpkg, &format!("DROP TRIGGER {trigger}"));
+                }
+            }
+            expect("StaleSpatialIndex", Some("stale"))
+        }
         _ => {
             sql(
                 gpkg,
@@ -617,7 +640,7 @@ fn corrupt(tc: &hegel::TestCase, gpkg: &GeoPackage, defect: usize) -> Key {
 }
 
 /// The number of defects `corrupt` knows.
-const DEFECTS: usize = 24;
+const DEFECTS: usize = 25;
 
 /// Each defect, made alone or together with others on separate objects of a
 /// clean file, is reported as exactly its own finding, and the findings come
