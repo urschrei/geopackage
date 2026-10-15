@@ -8,6 +8,15 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- Each GitHub release has `gpkg` binaries for x86_64 and aarch64 Linux,
+  x86_64 and aarch64 macOS, and x86_64 Windows, built with the workspace's
+  SQLite compile flags. `cargo binstall geopackage-cli` installs them. A
+  `cargo install` from crates.io does not get the flags unless
+  `LIBSQLITE3_FLAGS` is set in the environment: without them, `gpkg copy` of
+  the benchmark subsets takes 8 to 25 % longer.
+
 ## [0.11.1] - 2026-10-15
 
 ### Added

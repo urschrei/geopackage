@@ -363,11 +363,15 @@ The [geometry chapter](../explanation/geometry.md) covers this.
 ## Look at the file from outside
 
 So far only our own program has reported on the file. Let's check it with a
-separate tool. Install the command-line tool:
+separate tool. Install the command-line tool, which downloads a binary from the
+project's GitHub release:
 
 ```console
-$ cargo install geopackage-cli
+$ cargo binstall geopackage-cli
 ```
+
+If you don't have `cargo binstall`, run `cargo install geopackage-cli` to build
+the tool from source instead.
 
 Then ask it what our file contains:
 

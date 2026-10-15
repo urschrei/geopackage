@@ -19,8 +19,8 @@
 //!
 //! The `gpkg` command-line tool, from the `geopackage-cli` crate, handles
 //! common tasks without any code: `info`, `validate`, `index`, `repair`,
-//! `copy`, `tiles` and `coverage`. Install it with
-//! `cargo install geopackage-cli`.
+//! `copy`, `tiles` and `coverage`. Each GitHub release has binaries of it,
+//! which `cargo binstall geopackage-cli` installs.
 //!
 //! # Quick start
 //!
