@@ -230,47 +230,24 @@ impl DateTime {
     ///
     /// # Errors
     ///
-    /// [`DateTimeError::OutOfRange`] for an instant outside what a microsecond
-    /// count can address.
+    /// [`DateTimeError::OutOfRange`] for a time of day outside its range,
+    /// which a parsed value never has but one built field by field can.
     pub fn micros_since_epoch(self) -> Result<i64, DateTimeError> {
-        let time = jiff::civil::Time::new(
-            i8::try_from(self.hour)
-                .ok()
-                .ok_or(DateTimeError::OutOfRange("hour"))?,
-            i8::try_from(self.minute)
-                .ok()
-                .ok_or(DateTimeError::OutOfRange("minute"))?,
-            i8::try_from(self.second)
-                .ok()
-                .ok_or(DateTimeError::OutOfRange("second"))?,
-            i32::try_from(self.nanosecond)
-                .ok()
-                .ok_or(DateTimeError::OutOfRange("nanosecond"))?,
-        )
-        .ok()
-        .ok_or(DateTimeError::OutOfRange("time"))?;
-        let stamp = self
-            .date
-            .to_jiff()
-            .to_datetime(time)
-            .to_zoned(jiff::tz::TimeZone::UTC)
-            .ok()
-            .ok_or(DateTimeError::OutOfRange("datetime"))?
-            .timestamp()
-            .as_nanosecond()
-            // Floor, not `as_microsecond`'s truncation towards zero, which
-            // would move an instant before the epoch later, across a day
-            // boundary at 1969-12-31T23:59:59.9999995Z.
-            .div_euclid(1_000);
-        let stamp = i64::try_from(stamp)
-            .ok()
-            .ok_or(DateTimeError::OutOfRange("datetime"))?;
-        // The offset says how far ahead of UTC the written time is, so removing
-        // it is what normalises the instant.
-        let offset = i64::from(self.offset_minutes.unwrap_or(0)) * 60 * 1_000_000;
-        stamp
-            .checked_sub(offset)
-            .ok_or(DateTimeError::OutOfRange("datetime"))
+        // Civil arithmetic rather than a jiff `Timestamp`, whose range ends at
+        // 9999-12-30T22:00Z so that any time zone offset stays within year
+        // 9999, which would put the last hours of the year out of reach.
+        if self.hour > 23 || self.minute > 59 || self.second > 59 || self.nanosecond > 999_999_999 {
+            return Err(DateTimeError::OutOfRange("time of day"));
+        }
+        let seconds = i64::from(self.date.days_since_epoch()) * 86_400
+            + i64::from(self.hour) * 3_600
+            + i64::from(self.minute) * 60
+            + i64::from(self.second)
+            // The offset says how far ahead of UTC the written time is, so
+            // removing it is what normalises the instant.
+            - i64::from(self.offset_minutes.unwrap_or(0)) * 60;
+        // The fraction is never negative, so dividing it floors.
+        Ok(seconds * 1_000_000 + i64::from(self.nanosecond / 1_000))
     }
 
     /// Returns the UTC instant `micros` microseconds from the Unix epoch, the
@@ -281,33 +258,23 @@ impl DateTime {
     /// [`DateTimeError::OutOfRange`] for a count outside the years this type
     /// can represent.
     pub fn from_micros_since_epoch(micros: i64) -> Result<Self, DateTimeError> {
-        let civil = jiff::Timestamp::from_microsecond(micros)
+        const MICROS_PER_DAY: i64 = 86_400_000_000;
+        let days = i32::try_from(micros.div_euclid(MICROS_PER_DAY))
             .ok()
-            .ok_or(DateTimeError::OutOfRange("datetime"))?
-            .to_zoned(jiff::tz::TimeZone::UTC)
-            .datetime();
+            .ok_or(DateTimeError::OutOfRange("day"))?;
+        let of_day = micros.rem_euclid(MICROS_PER_DAY);
+        let seconds = of_day / 1_000_000;
+        let field = |value: i64, name| {
+            u8::try_from(value)
+                .ok()
+                .ok_or(DateTimeError::OutOfRange(name))
+        };
         Ok(Self {
-            date: Date::new(
-                u16::try_from(civil.year())
-                    .ok()
-                    .ok_or(DateTimeError::OutOfRange("year"))?,
-                u8::try_from(civil.month())
-                    .ok()
-                    .ok_or(DateTimeError::OutOfRange("month"))?,
-                u8::try_from(civil.day())
-                    .ok()
-                    .ok_or(DateTimeError::OutOfRange("day"))?,
-            )?,
-            hour: u8::try_from(civil.hour())
-                .ok()
-                .ok_or(DateTimeError::OutOfRange("hour"))?,
-            minute: u8::try_from(civil.minute())
-                .ok()
-                .ok_or(DateTimeError::OutOfRange("minute"))?,
-            second: u8::try_from(civil.second())
-                .ok()
-                .ok_or(DateTimeError::OutOfRange("second"))?,
-            nanosecond: u32::try_from(civil.subsec_nanosecond())
+            date: Date::from_days_since_epoch(days)?,
+            hour: field(seconds / 3_600, "hour")?,
+            minute: field(seconds / 60 % 60, "minute")?,
+            second: field(seconds % 60, "second")?,
+            nanosecond: u32::try_from(of_day % 1_000_000 * 1_000)
                 .ok()
                 .ok_or(DateTimeError::OutOfRange("nanosecond"))?,
             // Always UTC: that is what the column means, and what
@@ -534,6 +501,22 @@ mod tests {
                 Err(DateTimeError::OutOfRange(_))
             ));
         }
+    }
+
+    /// The last hours of year 9999 convert both ways; jiff's `Timestamp`
+    /// range, which ends at 9999-12-30T22:00Z, does not limit them.
+    #[test]
+    fn the_last_instant_of_9999_converts_both_ways() {
+        let last = DateTime::parse_strict("9999-12-31T23:59:59.999Z").unwrap();
+        let micros = last.micros_since_epoch().unwrap();
+        assert_eq!(micros, 253_402_300_799_999_000);
+        assert_eq!(DateTime::from_micros_since_epoch(micros), Ok(last));
+        DateTime::from_micros_since_epoch(micros + 1_000).unwrap_err();
+        let first = DateTime::parse_strict("0000-01-01T00:00:00.000Z").unwrap();
+        assert_eq!(
+            DateTime::from_micros_since_epoch(first.micros_since_epoch().unwrap()),
+            Ok(first)
+        );
     }
 
     /// Dropping the sub-microsecond digits keeps an instant before the epoch

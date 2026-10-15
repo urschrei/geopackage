@@ -49,6 +49,15 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 
 /// Draws a valid date from the whole range a `Date` can hold.
 fn draw_date(tc: &hegel::TestCase) -> Date {
+    // One time in five, the first or last day of the range, where a
+    // conversion through a narrower range of an underlying library fails.
+    if tc.draw(generators::weighted_booleans(0.2)) {
+        return if tc.draw(generators::booleans()) {
+            Date::new(0, 1, 1).unwrap()
+        } else {
+            Date::new(9999, 12, 31).unwrap()
+        };
+    }
     let year = tc.draw(generators::integers::<u16>().min_value(0).max_value(9999));
     let month = tc.draw(generators::integers::<u8>().min_value(1).max_value(12));
     let last = days_in_month(i64::from(year), i64::from(month));
@@ -176,6 +185,32 @@ fn micros_since_epoch_counts_to_the_utc_instant(tc: hegel::TestCase) {
         assert_eq!(back.micros_since_epoch(), Ok(micros));
         assert_eq!(back.offset_minutes, Some(0));
         assert_eq!(back.nanosecond, dt.nanosecond / 1_000 * 1_000);
+    }
+}
+
+/// `from_micros_since_epoch` accepts exactly the counts from
+/// 0000-01-01T00:00Z to the last microsecond of 9999, over the whole `i64`
+/// domain, and `micros_since_epoch` inverts it.
+#[hegel::test]
+fn from_micros_since_epoch_accepts_exactly_the_representable_instants(tc: hegel::TestCase) {
+    let first = days_from_civil(0, 1, 1) * 86_400_000_000;
+    let end = (days_from_civil(9999, 12, 31) + 1) * 86_400_000_000;
+    let micros = if tc.draw(generators::booleans()) {
+        tc.draw(generators::integers::<i64>())
+    } else {
+        let edge = tc.draw(generators::sampled_from(vec![first, end]));
+        edge + tc.draw(
+            generators::integers::<i64>()
+                .min_value(-200_000_000_000)
+                .max_value(200_000_000_000),
+        )
+    };
+    match DateTime::from_micros_since_epoch(micros) {
+        Ok(dt) => {
+            assert!((first..end).contains(&micros), "{micros} gave {dt}");
+            assert_eq!(dt.micros_since_epoch(), Ok(micros));
+        }
+        Err(error) => assert!(!(first..end).contains(&micros), "{micros}: {error}"),
     }
 }
 
