@@ -12,6 +12,8 @@ While the version is below 1.0 the API may change in any release.
 
 - `Error::NanAncillaryValue`, for a NaN in a coverage's ancillary row or a
   tile's. SQLite stores NaN as NULL, so neither table can store one.
+- `GeometryError::InteriorRingsWithoutExterior`, for a polygon with interior
+  rings and an empty exterior ring.
 
 ### Changed
 
@@ -28,11 +30,16 @@ While the version is below 1.0 the API may change in any release.
 - Creating a layer, attribute table, tile pyramid or coverage whose name
   begins `sqlite_`, in any case, is `Error::ReservedTablePrefix`. It used to
   be an SQLite error.
+- `encode_gpb`, and with it `FeatureWriter` and `write_all`, rejects a
+  geometry nested more than 32 levels deep (`GeometryError::NestingTooDeep`)
+  and a polygon with interior rings but no exterior ring. The first could not
+  be read by the `ST_*` functions or indexed; `wkb` 0.9.3 wrote the second
+  with a ring count of zero, so its holes were lost on read.
 - `create_coverage` and `CoverageWriter::put_with_ancillary` reject a NaN
   in the ancillary row. A NaN scale or offset was an SQLite error, and a NaN
   `data_null` or statistic read back as `None`.
-- Dev-dependency `hegeltest` is now 0.49.11 in `geopackage`, and
-  `hegel.toml` runs 2000 cases per property test.
+- Dev-dependency `hegeltest` is now 0.49.11 in both `geopackage` and
+  `geopackage-core`, and `hegel.toml` runs 2000 cases per property test.
 
 ### Fixed
 
@@ -43,6 +50,15 @@ While the version is below 1.0 the API may change in any release.
   RTree stores a coordinate beyond the `f32` range as an infinite bound, or a
   subnormal coordinate as the nearest `f32`. A rebuild could not fix it. The
   bulk index build fell back to the triggered build for the same data.
+- `Date::from_days_since_epoch` panicked for a count beyond about 20,000
+  years from 1970, instead of returning `OutOfRange`.
+- `DateTime::micros_since_epoch` rounded an instant before 1970 with
+  sub-microsecond digits up to the next microsecond, which at
+  1969-12-31T23:59:59.9999995Z moved it into 1970.
+- A GPB header's Z range included the Z of a coordinate whose X or Y is not
+  finite, such as an empty point, which the XY range already left out.
+- `gpb::body_offset` reported a 4 to 7 byte blob with a bad magic as
+  `BadMagic`, where `parse_header` reports it as `Truncated`.
 
 ## [0.11.2] - 2026-10-15
 
