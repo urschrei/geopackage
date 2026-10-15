@@ -87,6 +87,8 @@ bundled = ["geopackage/bundled"]
 geopackage = { workspace = true, features = ["arrow"] }
 arrow-array = { workspace = true, features = ["ffi"] }
 arrow-schema = { workspace = true, features = ["ffi"] }
+# Only to name an SQLite error code when classifying `geopackage::Error`.
+rusqlite.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
