@@ -4,12 +4,10 @@
 //! The property is a set equality against an independent oracle: the expected
 //! fids are computed directly from the `f64` coordinates hegel generated
 //! (`env_intersects`), never from either query path, so a bug in one path
-//! cannot hide. Coordinates are `f64` values that are not `f32`-exact (so they
-//! stress the RTree's `f32` bound rounding and `features_in`'s candidate re-test
-//! against the true `f64` envelope), quantised only to keep their magnitude out
-//! of the `f32` sub-normal band (see `draw_coord`). Ported from a hand-rolled
-//! SplitMix64 generator to `#[hegel::test]` (which shrinks failing cases to a
-//! minimal counterexample; the sub-normal edge above was found this way).
+//! cannot hide. Coordinates are arbitrary `f64` values, most of them not
+//! `f32`-exact, so they stress the RTree's `f32` bound rounding and
+//! `features_in`'s candidate re-test against the true `f64` envelope. Hegel
+//! found the `f32` sub-normal edge described at `draw_coord` (issue #12).
 
 #![expect(
     clippy::unwrap_used,

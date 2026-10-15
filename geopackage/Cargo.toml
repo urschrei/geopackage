@@ -73,7 +73,7 @@ geo-types.workspace = true
 # Also used by the Arrow schema test, to inspect the PROJJSON in the geometry
 # field's metadata.
 serde_json.workspace = true
-hegeltest = "0.49.2"
+hegeltest = "0.49.11"
 criterion = "0.8"
 
 [[bench]]
