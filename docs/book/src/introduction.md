@@ -58,10 +58,19 @@ LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS
 Without them, all connections in a process share one SQLite page cache behind
 one mutex, and the threads of a threaded Arrow read wait for each other.
 
-To install the command-line tool:
+Each GitHub release has binaries of the command-line tool for Linux, macOS and
+Windows, which `cargo binstall` installs:
 
 ```console
-$ cargo install geopackage-cli
+$ cargo binstall geopackage-cli
+```
+
+To build it from crates.io instead, set the SQLite compile flags in the
+environment:
+
+```console
+$ LIBSQLITE3_FLAGS="-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS=0" \
+    cargo install geopackage-cli
 ```
 
 The tool uses the bundled SQLite by default. To link the system library

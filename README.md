@@ -44,10 +44,19 @@ one mutex, and the threads of a threaded Arrow read wait for each other.
 
 The `arrow` feature adds Arrow I/O. The minimum supported Rust version is 1.95.
 
-The command-line tool uses a vendored SQLite by default:
+The command-line tool uses a vendored SQLite by default. Each GitHub release has
+binaries for Linux, macOS and Windows, which `cargo binstall` installs:
 
 ```sh
-cargo install geopackage-cli
+cargo binstall geopackage-cli
+```
+
+To build it from crates.io instead, set the SQLite compile flags in the
+environment:
+
+```sh
+LIBSQLITE3_FLAGS="-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS=0" \
+    cargo install geopackage-cli
 ```
 
 ## Example
