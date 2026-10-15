@@ -107,6 +107,13 @@ pub enum Status {
 impl From<&Error> for Status {
     fn from(error: &Error) -> Self {
         match error {
+            // A row that breaks a UNIQUE, NOT NULL, CHECK or foreign key
+            // constraint, such as an insert with a feature id already in use.
+            Error::Sqlite(sqlite)
+                if sqlite.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) =>
+            {
+                Self::Constraint
+            }
             Error::Sqlite(_) | Error::ExtentPersist { .. } => Self::Io,
             Error::NotAGeoPackage { .. } => Self::NotAGeoPackage,
             Error::NoSuchTable { .. }
