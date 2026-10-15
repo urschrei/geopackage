@@ -55,7 +55,7 @@ use geopackage_core::tiles::{self, TileCoord, TileFormat, TileMatrix, TileMatrix
 use rusqlite::{CachedStatement, Connection, OptionalExtension};
 
 use crate::tiles::{PyramidSpec, TileCursor, TilePyramid};
-use crate::transaction::WriteTransaction;
+use crate::transaction::{WriteTransaction, in_savepoint};
 use crate::{BoundingBox, Error, GeoPackage, Result, table_exists};
 
 /// A `gpkg_2d_gridded_coverage_ancillary` row, which states what the samples of
@@ -1002,28 +1002,33 @@ impl<'conn> CoverageWriter<'conn> {
             &self.table_name,
         )?;
 
-        self.put_stmt.execute(rusqlite::params![
-            coord.zoom_level,
-            coord.column,
-            coord.row,
-            data
-        ])?;
-        // Requirement 10: the ancillary row of the tile, with the id of the
-        // tile as its key.
-        let tile_id: i64 = self.tile_id_stmt.query_row(
-            rusqlite::params![coord.zoom_level, coord.column, coord.row],
-            |row| row.get(0),
-        )?;
-        self.put_ancillary_stmt.execute(rusqlite::params![
-            self.table_name,
-            tile_id,
-            ancillary.scale,
-            ancillary.offset,
-            ancillary.min,
-            ancillary.max,
-            ancillary.mean,
-            ancillary.std_dev,
-        ])?;
+        // The tile row and its ancillary row are written together or not at
+        // all, so a failed put leaves no tile without its row.
+        in_savepoint(self.conn, "coverage_put", || -> Result<()> {
+            self.put_stmt.execute(rusqlite::params![
+                coord.zoom_level,
+                coord.column,
+                coord.row,
+                data
+            ])?;
+            // Requirement 10: the ancillary row of the tile, with the id of the
+            // tile as its key.
+            let tile_id: i64 = self.tile_id_stmt.query_row(
+                rusqlite::params![coord.zoom_level, coord.column, coord.row],
+                |row| row.get(0),
+            )?;
+            self.put_ancillary_stmt.execute(rusqlite::params![
+                self.table_name,
+                tile_id,
+                ancillary.scale,
+                ancillary.offset,
+                ancillary.min,
+                ancillary.max,
+                ancillary.mean,
+                ancillary.std_dev,
+            ])?;
+            Ok(())
+        })?;
         self.dirty = true;
         Ok(())
     }
