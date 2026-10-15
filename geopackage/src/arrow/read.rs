@@ -1,6 +1,7 @@
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 
+use arrow_schema::DataType;
 use geopackage_core::ident::quote;
 use rusqlite::limits::Limit;
 
@@ -433,6 +434,9 @@ impl Layer<'_> {
                         .collect(),
                     key_argument: key_field.unwrap_or(0),
                     field_offset: usize::from(key_field.is_none()),
+                    key_in_fields: key_field
+                        .and_then(|index| schema.fields().get(index))
+                        .is_some_and(|field| *field.data_type() == DataType::Int64),
                     geometry_index,
                     datetime,
                     capacity: options.batch_size.clamp(1, DEFAULT_BATCH_SIZE),

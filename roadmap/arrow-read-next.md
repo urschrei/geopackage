@@ -112,9 +112,27 @@ Done since:
   subset fits in one batch, so it has no previous batch to size from, and its
   64,500 page faults did not change.
 
-Remaining: the malloc tunables still reach 4966, 1302 and 742 ms, so about
-3 to 13 % is left in page faults, from the fixed-width buffers and the first
-batch of each reader. The rusqlite issue about
+After the sizing, our page faults (18k on one thread, 57k on 4) are about
+GDAL's (14k, 59k), and our kernel cycles are equal or lower. Most remaining
+faults are the first write to each new buffer, which GDAL has as well.
+
+- The step function read the geometry twice per row (byte ceiling, then
+  append) and the key twice when it is a field. Now once each: instructions
+  -3.9 % on `buildings`, -1.3 % on `rivers`, `admin` unchanged.
+
+Our time over GDAL's, same machine, interleaved, medians of 3, after all of
+the above:
+
+| | 1 thread | 2 | 4 | 8 |
+|---|---|---|---|---|
+| full `rivers` | 1.08 | 1.07 | 1.05 | 1.02 |
+| `rivers` subset | 1.06 | 1.08 | 0.90 | 0.76 |
+
+The system time is now the same on both sides. The remaining difference is
+about 5 % of user time: we execute 13 % more user instructions, most of them
+in the per-value dispatch through rusqlite (`ValueRef::from_value` 13 % and
+`sqlite3_value_type` 5 % of instructions, against 28 % for all of GDAL's step
+function). That is avenue 3. The rusqlite issue about
 `SQLITE_ENABLE_MEMORY_MANAGEMENT` is not raised yet.
 
 `dataset_bench arrow <file> <layer> 1 <threads>` and

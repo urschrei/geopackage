@@ -32,6 +32,11 @@ While the version is below 1.0 the API may change in any release.
   so that a buffer does not grow and copy itself while the batch is filled. A
   read of the rivers dataset has 18,000 page faults instead of 129,000, and
   takes 5.1 s instead of 5.5 s on one thread and 1.39 s instead of 1.56 s on 4.
+- `read_arrow` reads each row's geometry once, instead of once for the batch's
+  byte ceiling and again to append it. When the key is one of the selected
+  columns, the batch's last key comes from that column. A read of the
+  buildings dataset executes 3.9 % fewer instructions, and of the rivers
+  dataset 1.3 % fewer.
 - `GeoPackage::open` and `open_read_only` open the connection with
   `SQLITE_OPEN_NO_MUTEX`, as `create` already did. SQLite no longer locks a
   mutex around each column read: a scalar read of the rivers dataset takes

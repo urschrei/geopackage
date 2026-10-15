@@ -182,6 +182,21 @@ impl ColumnBuilder {
         }
     }
 
+    /// Returns the last value of an `Int64` column, and `None` for an empty
+    /// one or another type.
+    pub(crate) fn last_integer(&self) -> Option<i64> {
+        match self {
+            Self::Int64(builder) => builder.values_slice().last().copied(),
+            Self::Boolean(_)
+            | Self::Float64(_)
+            | Self::Utf8(_)
+            | Self::Binary(_)
+            | Self::Date32(_)
+            | Self::Timestamp(_)
+            | Self::Geometry(_) => None,
+        }
+    }
+
     /// Returns the Arrow type name, for diagnostics.
     fn type_name(&self) -> &'static str {
         match self {
