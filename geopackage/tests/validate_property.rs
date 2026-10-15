@@ -7,6 +7,7 @@
     reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"
 )]
 
+use std::cmp::Reverse;
 use std::path::Path;
 
 use geo_types::{LineString, Point};
@@ -322,4 +323,333 @@ fn what_this_crate_writes_validates_clean(tc: hegel::TestCase) {
     expected.sort_by_key(key);
     findings.sort_by_key(key);
     assert_eq!(findings, expected);
+}
+
+/// Builds a file that validates clean, with one object for each defect the
+/// completeness property makes, so that each defect has its own target.
+fn build_clean() -> GeoPackage {
+    let gpkg = GeoPackage::create(Path::new(":memory:")).unwrap();
+    for name in ["pts", "noidx", "legacy", "lost", "casepts"] {
+        let layer = gpkg
+            .create_layer(
+                &TableSchemaBuilder::new(name)
+                    .geometry(GeometrySpec::new(GeometryType::Point, 4326))
+                    .spatial_index(true),
+            )
+            .unwrap();
+        let mut writer = layer.writer().unwrap();
+        for x in [0.0, 1.0, 2.0] {
+            writer.insert(None, &Point::new(x, x), &[]).unwrap();
+        }
+        writer.commit().unwrap();
+    }
+    for name in ["notes", "gone", "case"] {
+        gpkg.create_attributes_table(
+            &TableSchemaBuilder::new(name).column(ColumnSpec::new("body", ColumnType::Text(None))),
+        )
+        .unwrap();
+    }
+    let set = TileMatrixSet::new(0, 0.0, 0.0, 256.0, 256.0);
+    let pyramid = gpkg
+        .create_tile_pyramid(
+            &TilePyramidBuilder::new("tiles", set)
+                .matrices(set.ladder(ZoomLadder::new(0, 1).tile_size(16, 16)).unwrap()),
+        )
+        .unwrap();
+    pyramid.put_tile(TileCoord::new(0, 0, 0), &png(16)).unwrap();
+    gpkg.create_tile_pyramid(
+        &TilePyramidBuilder::new("tiles_lost", set)
+            .matrices(set.ladder(ZoomLadder::new(0, 0).tile_size(16, 16)).unwrap()),
+    )
+    .unwrap();
+    for name in COVERAGES {
+        let datatype = if name == "cov_scale" {
+            CoverageDatatype::Float
+        } else {
+            CoverageDatatype::Integer
+        };
+        let coverage = gpkg
+            .create_coverage(
+                &CoverageBuilder::new(name, TileMatrixSet::new(0, 0.0, 0.0, 16.0, 16.0), datatype)
+                    .matrix(TileMatrix::new(0, 1, 1, 16, 16, 1.0, 1.0)),
+            )
+            .unwrap();
+        let payload = if datatype == CoverageDatatype::Float {
+            tiff(16, 3, 32)
+        } else {
+            tiff(16, 1, 16)
+        };
+        coverage
+            .put_tile(TileCoord::new(0, 0, 0), &payload)
+            .unwrap();
+    }
+    let parent = gpkg
+        .add_metadata(&NewMetadata::new(MetadataScope::Dataset, "uri", "parent"))
+        .unwrap();
+    let child = gpkg
+        .add_metadata(&NewMetadata::new(MetadataScope::Dataset, "uri", "child"))
+        .unwrap();
+    assert_eq!((parent, child), (PARENT, CHILD));
+    gpkg.add_metadata_reference(
+        CHILD,
+        &MetadataTarget::GeoPackage,
+        DateTime::from_micros_since_epoch(0).unwrap(),
+        Some(PARENT),
+    )
+    .unwrap();
+    for mapping in ["map1", "map2"] {
+        gpkg.add_relation(&NewRelation::new(
+            "notes",
+            "notes",
+            RelationName::Attributes,
+            mapping,
+        ))
+        .unwrap();
+    }
+    gpkg
+}
+
+/// The coverages of the clean file, one for each coverage defect.
+const COVERAGES: [&str; 8] = [
+    "cov_uninterpretable",
+    "cov_datatype",
+    "cov_scale",
+    "cov_profile",
+    "cov_mismatch",
+    "cov_missing",
+    "cov_dangling",
+    "cov_lost",
+];
+
+/// The ids of the two metadata records of the clean file.
+const PARENT: i64 = 1;
+const CHILD: i64 = 2;
+
+/// What identifies a finding for this property: its variant, its table, and
+/// the record id of a dangling metadata reference.
+type Key = (String, Option<String>, Option<i64>);
+
+fn key(finding: &Finding) -> Key {
+    let debug = format!("{finding:?}");
+    let variant = debug.split([' ', '(']).next().unwrap().to_owned();
+    let md_id = match finding {
+        Finding::DanglingMetadataReference { md_id } => Some(*md_id),
+        _ => None,
+    };
+    (variant, finding.table_name().map(str::to_owned), md_id)
+}
+
+fn expect(variant: &str, table: Option<&str>) -> Key {
+    (variant.to_owned(), table.map(str::to_owned), None)
+}
+
+/// Runs a statement of a defect.
+fn sql(gpkg: &GeoPackage, statement: &str) {
+    gpkg.connection().execute_batch(statement).unwrap();
+}
+
+/// Applies the drawn defect number `defect` to the clean file, and returns
+/// the finding it should cause.
+fn corrupt(tc: &hegel::TestCase, gpkg: &GeoPackage, defect: usize) -> Key {
+    match defect {
+        // First, because the crate refuses this write once a later defect
+        // registers an extension it does not know.
+        0 => {
+            gpkg.layer("noidx").unwrap().drop_spatial_index().unwrap();
+            expect("NoSpatialIndex", Some("noidx"))
+        }
+        1 => {
+            sql(gpkg, "DROP TABLE gone");
+            expect("MissingContentsTable", Some("gone"))
+        }
+        2 => {
+            sql(gpkg, "DROP TABLE lost");
+            expect("MissingContentsTable", Some("lost"))
+        }
+        3 => {
+            sql(
+                gpkg,
+                "UPDATE gpkg_contents SET table_name = 'CASE' WHERE table_name = 'case'",
+            );
+            expect("TableNameCaseMismatch", Some("CASE"))
+        }
+        4 => {
+            sql(
+                gpkg,
+                "INSERT INTO gpkg_extensions VALUES \
+                 (NULL, NULL, 'gpkg_srs_id_trigger', 'def', 'read-write')",
+            );
+            expect("RemovedExtension", None)
+        }
+        5 => {
+            sql(
+                gpkg,
+                "INSERT INTO gpkg_extensions VALUES \
+                 (NULL, NULL, 'acme_widgets', 'def', 'write-only')",
+            );
+            expect("UnrecognisedExtension", None)
+        }
+        6 => {
+            sql(gpkg, "DELETE FROM rtree_pts_geom WHERE id = 2");
+            expect("SpatialIndexOutOfStep", Some("pts"))
+        }
+        7 => {
+            let id = tc.draw(generators::sampled_from(vec![0x4750_3130_u32, 0x4750_3131]));
+            sql(gpkg, &format!("PRAGMA application_id = {id}"));
+            expect("LegacyApplicationId", None)
+        }
+        8 => {
+            // A pre-1.4 set, or a mixed set when the 1.4 triggers stay.
+            sql(
+                gpkg,
+                "CREATE TRIGGER rtree_legacy_geom_update1 AFTER UPDATE ON legacy \
+                 BEGIN SELECT 1; END",
+            );
+            if tc.draw(generators::booleans()) {
+                sql(
+                    gpkg,
+                    "DROP TRIGGER rtree_legacy_geom_update5; \
+                     DROP TRIGGER rtree_legacy_geom_update6; \
+                     DROP TRIGGER rtree_legacy_geom_update7",
+                );
+            }
+            expect("LegacySpatialIndexTriggers", Some("legacy"))
+        }
+        9 => {
+            sql(
+                gpkg,
+                "UPDATE gpkg_tile_matrix SET pixel_x_size = pixel_x_size * 3 \
+                 WHERE table_name = 'tiles' AND zoom_level = 1",
+            );
+            expect("TilePyramidInconsistent", Some("tiles"))
+        }
+        10 => {
+            sql(
+                gpkg,
+                "DELETE FROM gpkg_2d_gridded_coverage_ancillary \
+                 WHERE tile_matrix_set_name = 'cov_uninterpretable'",
+            );
+            expect("CoverageUninterpretable", Some("cov_uninterpretable"))
+        }
+        11 => {
+            sql(
+                gpkg,
+                "UPDATE gpkg_2d_gridded_coverage_ancillary SET datatype = 'double' \
+                 WHERE tile_matrix_set_name = 'cov_datatype'",
+            );
+            expect("CoverageDatatypeUnknown", Some("cov_datatype"))
+        }
+        12 => {
+            let column = tc.draw(generators::sampled_from(vec!["scale", "offset"]));
+            let (table, name_column) = tc.draw(generators::sampled_from(vec![
+                ("gpkg_2d_gridded_coverage_ancillary", "tile_matrix_set_name"),
+                ("gpkg_2d_gridded_tile_ancillary", "tpudt_name"),
+            ]));
+            sql(
+                gpkg,
+                &format!("UPDATE {table} SET {column} = 2 WHERE {name_column} = 'cov_scale'"),
+            );
+            expect("CoverageScaleNotDefault", Some("cov_scale"))
+        }
+        13 => {
+            sql(gpkg, "UPDATE cov_profile SET tile_data = x'00010203'");
+            expect("CoveragePayloadNonConformant", Some("cov_profile"))
+        }
+        14 => {
+            gpkg.connection()
+                .execute("UPDATE cov_mismatch SET tile_data = ?1", [tiff(16, 3, 32)])
+                .unwrap();
+            expect("CoveragePayloadDatatypeMismatch", Some("cov_mismatch"))
+        }
+        15 => {
+            sql(
+                gpkg,
+                "DELETE FROM gpkg_2d_gridded_tile_ancillary WHERE tpudt_name = 'cov_missing'",
+            );
+            expect("MissingTileAncillary", Some("cov_missing"))
+        }
+        16 => {
+            sql(gpkg, "DELETE FROM cov_dangling");
+            expect("DanglingTileAncillary", Some("cov_dangling"))
+        }
+        17 => {
+            sql(
+                gpkg,
+                &format!("DELETE FROM gpkg_metadata WHERE id = {PARENT}"),
+            );
+            ("DanglingMetadataReference".to_owned(), None, Some(PARENT))
+        }
+        18 => {
+            sql(
+                gpkg,
+                &format!("DELETE FROM gpkg_metadata WHERE id = {CHILD}"),
+            );
+            ("DanglingMetadataReference".to_owned(), None, Some(CHILD))
+        }
+        19 => {
+            sql(gpkg, "DROP TABLE map1");
+            expect("MissingMappingTable", Some("map1"))
+        }
+        20 => {
+            sql(gpkg, "DROP TABLE tiles_lost");
+            expect("MissingContentsTable", Some("tiles_lost"))
+        }
+        21 => {
+            sql(gpkg, "DROP TABLE cov_lost");
+            expect("MissingContentsTable", Some("cov_lost"))
+        }
+        22 => {
+            sql(
+                gpkg,
+                "UPDATE gpkg_contents SET table_name = 'CasePts' WHERE table_name = 'casepts'",
+            );
+            expect("TableNameCaseMismatch", Some("CasePts"))
+        }
+        _ => {
+            sql(
+                gpkg,
+                "UPDATE gpkgext_relations SET relation_name = 'bogus' \
+                 WHERE mapping_table_name = 'map2'",
+            );
+            expect("NonConformantRelationName", None)
+        }
+    }
+}
+
+/// The number of defects `corrupt` knows.
+const DEFECTS: usize = 24;
+
+/// Each defect, made alone or together with others on separate objects of a
+/// clean file, is reported as exactly its own finding, and the findings come
+/// back most severe first.
+///
+/// Each case builds a file of about 25 tables, so this property runs 500
+/// cases rather than the suite's 2000. Each defect is drawn in about 30 % of
+/// cases.
+#[hegel::test(test_cases = 500)]
+fn validate_reports_each_defect(tc: hegel::TestCase) {
+    let gpkg = build_clean();
+    assert_eq!(gpkg.validate().unwrap(), Vec::new());
+    // The defects break references and CHECK constraints on purpose, as a
+    // file from another writer can.
+    sql(
+        &gpkg,
+        "PRAGMA foreign_keys = OFF; PRAGMA ignore_check_constraints = ON",
+    );
+    let mut expected = Vec::new();
+    for defect in 0..DEFECTS {
+        if tc.draw(generators::weighted_booleans(0.3)) {
+            tc.event(format!("defect {defect}"));
+            expected.push(corrupt(&tc, &gpkg, defect));
+        }
+    }
+    let findings = gpkg.validate().unwrap();
+    assert!(
+        findings.is_sorted_by_key(|finding| Reverse(finding.severity())),
+        "{findings:?}"
+    );
+    let mut found: Vec<Key> = findings.iter().map(key).collect();
+    found.sort();
+    expected.sort();
+    assert_eq!(found, expected, "{findings:#?}");
 }
