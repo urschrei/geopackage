@@ -44,7 +44,8 @@ pub enum Value {
     Boolean(bool),
     /// An integer value of any declared width.
     Integer(i64),
-    /// A floating-point value.
+    /// A floating-point value. A write stores a NaN as NULL and a negative
+    /// zero as zero, as SQLite stores them.
     Float(f64),
     /// A text value.
     Text(String),
@@ -52,7 +53,9 @@ pub enum Value {
     Blob(Vec<u8>),
     /// A `DATE` value.
     Date(Date),
-    /// A `DATETIME` value.
+    /// A `DATETIME` value. A write stores it in the strict 1.4 form,
+    /// normalised to UTC and floored to the millisecond
+    /// ([`DateTime::format_strict`]).
     DateTime(DateTime),
 }
 
@@ -76,7 +79,8 @@ pub enum ValueRef<'a> {
     Boolean(bool),
     /// An integer value of any declared width.
     Integer(i64),
-    /// A floating-point value.
+    /// A floating-point value. A write stores a NaN as NULL and a negative
+    /// zero as zero, as SQLite stores them.
     Float(f64),
     /// A text value.
     Text(&'a str),
@@ -84,7 +88,9 @@ pub enum ValueRef<'a> {
     Blob(&'a [u8]),
     /// A `DATE` value.
     Date(Date),
-    /// A `DATETIME` value.
+    /// A `DATETIME` value. A write stores it in the strict 1.4 form,
+    /// normalised to UTC and floored to the millisecond
+    /// ([`DateTime::format_strict`]).
     DateTime(DateTime),
 }
 
@@ -394,6 +400,19 @@ pub(crate) fn value_ref_to_sql(value: &ValueRef<'_>) -> rusqlite::types::Value {
     value_into_sql(value.to_value())
 }
 
+/// The text a `DATETIME` is stored and compared as: the strict 1.4 form,
+/// normalised to UTC and floored to the millisecond
+/// ([`DateTime::format_strict`]).
+///
+/// The writer rejects a value the strict form cannot express before it binds
+/// anything (`FeatureWriter::check_datetime`), so only a query parameter
+/// reaches the fallback, its display form.
+pub(crate) fn datetime_text(datetime: DateTime) -> String {
+    datetime
+        .format_strict()
+        .unwrap_or_else(|_| datetime.to_string())
+}
+
 /// Binds a borrowed [`Value`] without copying it.
 ///
 /// The scalar write path keeps the caller's values for the whole insert, so
@@ -411,7 +430,7 @@ pub(crate) fn value_ref_to_bind(value: ValueRef<'_>) -> rusqlite::types::ToSqlOu
         ValueRef::Text(s) => ToSqlOutput::Borrowed(SqlValueRef::Text(s.as_bytes())),
         ValueRef::Blob(b) => ToSqlOutput::Borrowed(SqlValueRef::Blob(b)),
         ValueRef::Date(d) => ToSqlOutput::Owned(Sql::Text(d.to_string())),
-        ValueRef::DateTime(dt) => ToSqlOutput::Owned(Sql::Text(dt.to_string())),
+        ValueRef::DateTime(dt) => ToSqlOutput::Owned(Sql::Text(datetime_text(dt))),
     }
 }
 
@@ -426,7 +445,7 @@ pub(crate) fn value_to_bind(value: &Value) -> rusqlite::types::ToSqlOutput<'_> {
         Value::Text(s) => ToSqlOutput::Borrowed(SqlValueRef::Text(s.as_bytes())),
         Value::Blob(b) => ToSqlOutput::Borrowed(SqlValueRef::Blob(b)),
         Value::Date(d) => ToSqlOutput::Owned(Sql::Text(d.to_string())),
-        Value::DateTime(dt) => ToSqlOutput::Owned(Sql::Text(dt.to_string())),
+        Value::DateTime(dt) => ToSqlOutput::Owned(Sql::Text(datetime_text(*dt))),
     }
 }
 
@@ -445,7 +464,7 @@ pub(crate) fn value_into_sql(value: Value) -> rusqlite::types::Value {
         Value::Text(s) => Sql::Text(s),
         Value::Blob(b) => Sql::Blob(b),
         Value::Date(d) => Sql::Text(d.to_string()),
-        Value::DateTime(dt) => Sql::Text(dt.to_string()),
+        Value::DateTime(dt) => Sql::Text(datetime_text(dt)),
     }
 }
 

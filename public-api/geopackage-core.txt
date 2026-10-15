@@ -78,6 +78,7 @@ pub geopackage_core::datetime::DateTime::nanosecond: u32
 pub geopackage_core::datetime::DateTime::offset_minutes: core::option::Option<i16>
 pub geopackage_core::datetime::DateTime::second: u8
 impl geopackage_core::datetime::DateTime
+pub fn geopackage_core::datetime::DateTime::format_strict(self) -> core::result::Result<alloc::string::String, geopackage_core::datetime::DateTimeError>
 pub fn geopackage_core::datetime::DateTime::from_micros_since_epoch(i64) -> core::result::Result<Self, geopackage_core::datetime::DateTimeError>
 pub fn geopackage_core::datetime::DateTime::micros_since_epoch(self) -> core::result::Result<i64, geopackage_core::datetime::DateTimeError>
 pub fn geopackage_core::datetime::DateTime::parse_lenient(&str) -> core::result::Result<Self, geopackage_core::datetime::DateTimeError>

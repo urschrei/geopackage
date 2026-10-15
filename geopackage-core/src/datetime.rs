@@ -283,6 +283,34 @@ impl DateTime {
         })
     }
 
+    /// Returns the strict 1.4 text for this instant, `YYYY-MM-DDTHH:MM:SS.SSSZ`:
+    /// normalised to UTC, with sub-millisecond digits dropped, so the
+    /// millisecond at or before the instant.
+    ///
+    /// This is the form a `DATETIME` column stores, and what
+    /// [`Self::parse_strict`] reads back. [`fmt::Display`] instead keeps the
+    /// value's offset and any finer digits.
+    ///
+    /// # Errors
+    ///
+    /// [`DateTimeError::OutOfRange`] if normalising the offset moves the
+    /// instant outside years 0 to 9999, or for a time of day outside its
+    /// range.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use geopackage_core::datetime::DateTime;
+    ///
+    /// let dt = DateTime::parse_lenient("2026-07-24 12:34:56.7899+02:00")?;
+    /// assert_eq!(dt.format_strict()?, "2026-07-24T10:34:56.789Z");
+    /// # Ok::<(), geopackage_core::datetime::DateTimeError>(())
+    /// ```
+    pub fn format_strict(self) -> Result<String, DateTimeError> {
+        let millis = self.micros_since_epoch()?.div_euclid(1_000);
+        Ok(Self::from_micros_since_epoch(millis * 1_000)?.to_string())
+    }
+
     /// Parses the strict 1.4 form `YYYY-MM-DDTHH:MM:SS.SSSZ` and nothing else.
     ///
     /// # Examples
