@@ -296,6 +296,23 @@ impl TableSchemaBuilder {
     }
 }
 
+/// Checks the name of a new user table: SQLite must be able to store it, and
+/// neither the spec (Requirement 25) nor SQLite may reserve it.
+pub(crate) fn check_new_table_name(name: &str) -> Result<()> {
+    quote(name)?;
+    for prefix in ["gpkg_", "sqlite_"] {
+        if name
+            .get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+        {
+            return Err(Error::ReservedTablePrefix {
+                table_name: name.to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
 impl GeoPackage {
     /// Creates a feature layer from a [`TableSchemaBuilder`].
     ///
@@ -306,7 +323,11 @@ impl GeoPackage {
     /// # Errors
     ///
     /// - [`Error::MissingGeometrySpec`] if the builder has no geometry column.
-    /// - [`Error::ReservedTablePrefix`] if the name begins `gpkg_`.
+    /// - [`Error::Core`] with
+    ///   [`InvalidIdentifier`](geopackage_core::Error::InvalidIdentifier) if
+    ///   the name is empty or contains NUL.
+    /// - [`Error::ReservedTablePrefix`] if the name begins `gpkg_` or
+    ///   `sqlite_`, in any case.
     /// - [`Error::TableAlreadyExists`] if a table or view of that name exists.
     /// - [`Error::UnknownSrs`] if the geometry `srs_id` is not registered in
     ///   `gpkg_spatial_ref_sys`.
@@ -351,8 +372,8 @@ impl GeoPackage {
     /// # Errors
     ///
     /// - [`Error::UnexpectedGeometrySpec`] if the builder has a geometry column.
-    /// - [`Error::ReservedTablePrefix`] / [`Error::TableAlreadyExists`] as
-    ///   [`Self::create_layer`].
+    /// - [`Error::Core`], [`Error::ReservedTablePrefix`] and
+    ///   [`Error::TableAlreadyExists`] as [`Self::create_layer`].
     pub fn create_attributes_table(&self, builder: &TableSchemaBuilder) -> Result<Layer<'_>> {
         if builder.geometry.is_some() {
             return Err(Error::UnexpectedGeometrySpec {
@@ -386,14 +407,7 @@ impl GeoPackage {
         geometry: Option<&GeometrySpec>,
     ) -> Result<()> {
         let name = &builder.table_name;
-        if name
-            .get(..5)
-            .is_some_and(|p| p.eq_ignore_ascii_case("gpkg_"))
-        {
-            return Err(Error::ReservedTablePrefix {
-                table_name: name.clone(),
-            });
-        }
+        check_new_table_name(name)?;
         if table_exists(tx, name)? {
             return Err(Error::TableAlreadyExists {
                 table_name: name.clone(),

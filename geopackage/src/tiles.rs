@@ -294,7 +294,11 @@ impl GeoPackage {
     ///
     /// # Errors
     ///
-    /// - [`Error::ReservedTablePrefix`] if the name begins `gpkg_`.
+    /// - [`Error::Core`] with
+    ///   [`InvalidIdentifier`](geopackage_core::Error::InvalidIdentifier) if
+    ///   the name is empty or contains NUL.
+    /// - [`Error::ReservedTablePrefix`] if the name begins `gpkg_` or
+    ///   `sqlite_`, in any case.
     /// - [`Error::TableAlreadyExists`] if a table or view of that name exists.
     /// - [`Error::UnknownSrs`] if the matrix set's `srs_id` is not registered
     ///   in `gpkg_spatial_ref_sys`.
@@ -330,14 +334,7 @@ impl GeoPackage {
         // As with `create_layer`: a whole-GeoPackage extension we cannot
         // identify covers a table that does not exist yet.
         self.check_writable(name)?;
-        if name
-            .get(..5)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("gpkg_"))
-        {
-            return Err(Error::ReservedTablePrefix {
-                table_name: name.to_owned(),
-            });
-        }
+        crate::create::check_new_table_name(name)?;
         let conn = self.connection();
         if table_exists(conn, name)? {
             return Err(Error::TableAlreadyExists {
