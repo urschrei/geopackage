@@ -153,3 +153,26 @@ fn mmap_size_is_opt_in() {
         .unwrap();
     assert_eq!(map_size(&mapped), 1 << 20);
 }
+
+/// The workspace's `.cargo/config.toml` sets `LIBSQLITE3_FLAGS` for the
+/// bundled SQLite. This test fails if those flags do not reach the build.
+#[cfg(feature = "bundled")]
+#[test]
+fn bundled_sqlite_has_workspace_flags() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    let options: Vec<String> = conn
+        .prepare("PRAGMA compile_options")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        !options.iter().any(|o| o == "ENABLE_MEMORY_MANAGEMENT"),
+        "{options:?}"
+    );
+    assert!(
+        options.iter().any(|o| o == "DEFAULT_MEMSTATUS=0"),
+        "{options:?}"
+    );
+}

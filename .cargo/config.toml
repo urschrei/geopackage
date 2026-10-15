@@ -1,0 +1,12 @@
+# Compile flags for the bundled SQLite (the `bundled` feature), for every
+# build in this workspace: tests, benchmarks, the CLI and the C library.
+#
+# libsqlite3-sys defines SQLITE_ENABLE_MEMORY_MANAGEMENT. With it, all
+# connections in a process share one page cache behind one mutex, so the
+# threads of a parallel Arrow read wait for each other on every page.
+# SQLITE_DEFAULT_MEMSTATUS=0 removes the mutex that sqlite3_malloc takes to
+# count memory. Neither flag changes the SQL that SQLite accepts.
+#
+# A value for LIBSQLITE3_FLAGS in the environment replaces this one.
+[env]
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS=0"
