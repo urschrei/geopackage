@@ -127,7 +127,8 @@ impl From<&Error> for Status {
             | Error::NoSpatialIndex { .. }
             | Error::NoTileMatrixSet { .. }
             | Error::NoGeometryColumn { .. }
-            | Error::NoPrimaryKey { .. } => Self::NotFound,
+            | Error::NoPrimaryKey { .. }
+            | Error::NoCoverageAncillary { .. } => Self::NotFound,
             Error::AlreadyExists(_)
             | Error::TableAlreadyExists { .. }
             | Error::SpatialIndexExists { .. } => Self::AlreadyExists,
@@ -136,6 +137,7 @@ impl From<&Error> for Status {
             | Error::GeometryValueUnsupported { .. }
             | Error::ZoomOtherNotEnabled { .. }
             | Error::TileFormatNotAllowed { .. }
+            | Error::UnwritableCoveragePayload { .. }
             | Error::RtreeUnavailable => Self::Unsupported,
             Error::ColumnConstraintViolation { .. }
             | Error::ZmViolation { .. }
@@ -143,7 +145,8 @@ impl From<&Error> for Status {
             | Error::NonConformantRelationName { .. }
             | Error::ReservedTablePrefix { .. }
             | Error::MetadataCycle { .. }
-            | Error::SelfParentedMetadata { .. } => Self::Constraint,
+            | Error::SelfParentedMetadata { .. }
+            | Error::FloatCoverageScaled { .. } => Self::Constraint,
             Error::ValueTypeMismatch { .. }
             | Error::ArrowValueMismatch { .. }
             | Error::NonBooleanInteger { .. }
@@ -157,6 +160,7 @@ impl From<&Error> for Status {
             | Error::MissingGeometrySpec { .. }
             | Error::UnexpectedGeometrySpec { .. }
             | Error::NanEpoch { .. }
+            | Error::NanAncillaryValue { .. }
             | Error::WrongDataType { .. }
             | Error::GeometryNotProjected => Self::InvalidArgument,
             Error::Tile(tile) => tile_status(tile),
@@ -250,7 +254,8 @@ fn geometry_status(error: &GeometryError) -> Status {
         | GeometryError::AbstractWkbType(_)
         | GeometryError::TruncatedAt { .. }
         | GeometryError::InvalidByteOrder { .. }
-        | GeometryError::NestingTooDeep => Status::InvalidArgument,
+        | GeometryError::NestingTooDeep
+        | GeometryError::InteriorRingsWithoutExterior => Status::InvalidArgument,
         // The body is well formed and this library cannot write it, which is
         // the one geometry failure that is not a fault in the bytes.
         GeometryError::NonLinearMember { .. } => Status::Unsupported,
@@ -431,5 +436,53 @@ mod tests {
             detail: "PNG coverage tile is 8-bit".to_owned(),
         };
         assert_eq!(tile_status(&error), Status::Constraint);
+    }
+
+    /// The coverage errors, like the profile violation above, cannot reach a
+    /// C program yet; the geometry error cannot either, because the C writer
+    /// takes WKB and stores it as given. These pin each category, so that
+    /// none of them reports `Other`.
+    #[test]
+    fn errors_no_c_call_reaches_yet_have_a_category() {
+        let table_name = "dem".to_owned();
+        let cases = [
+            (
+                Error::FloatCoverageScaled {
+                    table_name: table_name.clone(),
+                    scale: 2.0,
+                    offset: 0.0,
+                },
+                Status::Constraint,
+            ),
+            (
+                Error::NanAncillaryValue {
+                    table_name: table_name.clone(),
+                    column: "gpkg_2d_gridded_tile_ancillary.scale",
+                },
+                Status::InvalidArgument,
+            ),
+            (
+                Error::UnwritableCoveragePayload {
+                    table_name: table_name.clone(),
+                    reason: "Deflate compression".to_owned(),
+                },
+                Status::Unsupported,
+            ),
+            (
+                Error::NoCoverageAncillary {
+                    table_name: table_name.clone(),
+                },
+                Status::NotFound,
+            ),
+            (
+                Error::Core(CoreError::Geometry(
+                    GeometryError::InteriorRingsWithoutExterior,
+                )),
+                Status::InvalidArgument,
+            ),
+        ];
+        for (error, status) in cases {
+            assert_eq!(Status::from(&error), status, "{error}");
+        }
     }
 }
