@@ -107,6 +107,10 @@ pub struct CoverageAncillary {
 /// the four statistics optional, and a writer that does not decode samples
 /// cannot calculate them. `None` therefore means "not recorded", not "no
 /// value".
+///
+/// Each value is stored as an SQLite `REAL`. A write rejects NaN, which
+/// SQLite stores as NULL, and SQLite stores a negative zero as zero, so a
+/// `-0.0` reads back as `0.0`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct TileAncillary {
