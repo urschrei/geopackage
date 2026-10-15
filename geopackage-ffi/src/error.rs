@@ -114,6 +114,12 @@ impl From<&Error> for Status {
             {
                 Self::Constraint
             }
+            // A file that SQLite reads but that is not a database at all.
+            Error::Sqlite(sqlite)
+                if sqlite.sqlite_error_code() == Some(rusqlite::ErrorCode::NotADatabase) =>
+            {
+                Self::NotAGeoPackage
+            }
             Error::Sqlite(_) | Error::ExtentPersist { .. } => Self::Io,
             Error::NotAGeoPackage { .. } => Self::NotAGeoPackage,
             Error::NoSuchTable { .. }
