@@ -207,7 +207,14 @@ impl GeoPackage {
     /// EPSG registry's WKT2 for that code. Adding the columns gives the rows
     /// already in the file the same, so the table does not depend on the
     /// order of the calls.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NanEpoch`] if [`Srs::epoch`] is NaN. Nothing is written.
     pub fn add_srs(&self, srs: &Srs) -> Result<bool> {
+        if srs.epoch.is_some_and(f64::is_nan) {
+            return Err(Error::NanEpoch { srs_id: srs.srs_id });
+        }
         if self.srs(srs.srs_id)?.is_some() {
             return Ok(false);
         }

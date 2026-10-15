@@ -224,6 +224,16 @@ pub enum Error {
         /// `gpkg_2d_gridded_tile_ancillary.scale`.
         column: &'static str,
     },
+    /// A NaN epoch in a spatial reference system row.
+    ///
+    /// SQLite stores NaN as NULL, and a NULL `epoch` means the row has no
+    /// epoch, so the column cannot store a NaN. [`crate::GeoPackage::add_srs`]
+    /// returns this error.
+    #[error("epoch of spatial reference system {srs_id} is NaN, and SQLite stores NaN as NULL")]
+    NanEpoch {
+        /// The `srs_id` of the row.
+        srs_id: i32,
+    },
     /// A coverage payload that this crate reads but does not write.
     ///
     /// Deflate compression is the only case. A read accepts it, because
