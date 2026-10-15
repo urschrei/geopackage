@@ -525,3 +525,56 @@ fn encode_gpb_from_wkb_writes_the_body_after_its_envelope(tc: hegel::TestCase) {
     };
     assert_eq!(encoded.dimensions, declared);
 }
+
+/// The deepest nesting level of any member, counting each member of a
+/// collection or multi-geometry as one level below its container.
+fn deepest(geometry: &Geometry<f64>, depth: u32) -> u32 {
+    let members = |count: usize| if count > 0 { depth + 1 } else { depth };
+    match geometry {
+        Geometry::MultiPoint(m) => members(m.0.len()),
+        Geometry::MultiLineString(m) => members(m.0.len()),
+        Geometry::MultiPolygon(m) => members(m.0.len()),
+        Geometry::GeometryCollection(c) => {
+            c.0.iter()
+                .map(|member| deepest(member, depth + 1))
+                .max()
+                .unwrap_or(depth)
+        }
+        _ => depth,
+    }
+}
+
+/// `encode_gpb` writes only what every reader of the crate can read back:
+/// it rejects a geometry nested more than 32 levels deep, and the blob of any
+/// other geometry is readable by `GpbGeometry::parse`, the `ST_*` readers and
+/// `encode_gpb_from_wkb`.
+#[hegel::test]
+fn every_encoded_blob_is_readable_by_every_reader(tc: hegel::TestCase) {
+    let mut geometry = draw_any_geometry(&tc);
+    tc.assume(!has_interior_rings_without_exterior(&geometry));
+    let wrappers = tc.draw(generators::integers::<u32>().min_value(0).max_value(40));
+    for _ in 0..wrappers {
+        geometry = Geometry::GeometryCollection(GeometryCollection::new_from(vec![geometry]));
+    }
+    let too_deep = deepest(&geometry, 0) > 32;
+    tc.event(if too_deep {
+        "too deep"
+    } else {
+        "readable depth"
+    });
+    match encode_gpb(&geometry, 4326) {
+        Err(GeometryError::NestingTooDeep) => {
+            assert!(too_deep, "rejected at depth {}", deepest(&geometry, 0))
+        }
+        Err(error) => panic!("{error:?}"),
+        Ok((blob, _)) => {
+            assert!(!too_deep, "accepted at depth {}", deepest(&geometry, 0));
+            let (_, offset) = parse_header(&blob).unwrap();
+            drop(GpbGeometry::parse(&blob).unwrap());
+            blob_is_empty(&blob).unwrap();
+            blob_xy_envelope(&blob).unwrap();
+            blob_envelope_and_empty(&blob).unwrap();
+            drop(encode_gpb_from_wkb(&blob[offset..], 4326).unwrap());
+        }
+    }
+}
