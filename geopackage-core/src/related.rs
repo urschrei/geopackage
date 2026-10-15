@@ -86,6 +86,11 @@ pub enum RelationName {
     /// Related tiles.
     Tiles,
     /// An `x-<author>_<name>` extension, stored without the `x-` prefix.
+    ///
+    /// The author runs to the first underscore of the stored value, so it
+    /// must be non-empty and contain no `_`, and the name must be non-empty.
+    /// A value that breaks this writes a string that reads back as another
+    /// name, and [`Self::is_conformant`] returns `false` for it.
     Extended {
         /// The person or organisation maintaining the relation type.
         author: String,
@@ -94,6 +99,9 @@ pub enum RelationName {
     },
     /// A value that is neither a defined class nor the `x-` form, kept as
     /// written. Requirement 8 makes it non-conformant.
+    ///
+    /// A value whose text is a defined class or the `x-` form writes that
+    /// text, which reads back as the matching variant.
     Other(String),
 }
 
@@ -136,9 +144,18 @@ impl RelationName {
         }
     }
 
-    /// Returns `true` if Requirement 8 accepts this value.
+    /// Returns `true` if Requirement 8 accepts the value this writes, and a
+    /// reader reads it back as this name.
+    ///
+    /// The written string is what is judged: [`Self::Other`] holding a class
+    /// name is conformant, and an [`Self::Extended`] whose author is empty or
+    /// contains `_`, or whose name is empty, is not.
     pub fn is_conformant(&self) -> bool {
-        !matches!(self, Self::Other(_))
+        let read_back = Self::parse(&self.as_string());
+        match self {
+            Self::Other(_) => !matches!(read_back, Self::Other(_)),
+            _ => read_back == *self,
+        }
     }
 }
 

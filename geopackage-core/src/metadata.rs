@@ -119,6 +119,9 @@ pub enum MetadataScope {
     /// Applies to a specific style.
     Style,
     /// A scope not in Table 15, kept as written.
+    ///
+    /// A value whose text is a Table 15 name writes that name, which reads
+    /// back as the matching variant; [`Self::is_listed`] judges the text.
     Other(String),
 }
 
@@ -178,9 +181,9 @@ impl MetadataScope {
         }
     }
 
-    /// Returns `true` if this is one of the names Table 15 lists.
+    /// Returns `true` if the name this writes is one Table 15 lists.
     pub fn is_listed(&self) -> bool {
-        !matches!(self, Self::Other(_))
+        !matches!(Self::parse(self.as_str()), Self::Other(_))
     }
 }
 
