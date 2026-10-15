@@ -100,7 +100,12 @@ pub enum GeometryError {
         /// Byte offset into the body of the offending marker.
         offset: usize,
     },
-    /// Nested geometry containers exceeded the walk's depth limit.
+    /// Nested geometry containers exceeded the walk's depth limit of 32
+    /// levels below the body's own geometry.
+    ///
+    /// [`encode_gpb`] returns it too, for a geometry nested deeper than the
+    /// walk reads, because the `ST_*` functions and the spatial index could
+    /// not read the blob it would write.
     #[error("WKB geometry nesting is too deep")]
     NestingTooDeep,
     /// The georust `wkb` writer could not encode the geometry, for example
@@ -502,8 +507,9 @@ pub struct EncodedGpb {
 ///
 /// # Errors
 ///
-/// [`GeometryError::InteriorRingsWithoutExterior`] for a polygon, at any
-/// depth, with interior rings and an empty exterior ring, and
+/// [`GeometryError::NestingTooDeep`] for a geometry nested more than 32
+/// levels deep, [`GeometryError::InteriorRingsWithoutExterior`] for a
+/// polygon, at any depth, with interior rings and an empty exterior ring, and
 /// [`GeometryError::EncodeWkb`] if the `wkb` writer cannot serialise the
 /// geometry.
 #[hotpath::measure(label = "geometry::encode_gpb")]
@@ -511,6 +517,9 @@ pub fn encode_gpb<G: GeometryTrait<T = f64>>(
     geom: &G,
     srs_id: i32,
 ) -> Result<(Vec<u8>, Option<[f64; 4]>), GeometryError> {
+    if nested_deeper_than_the_scan_reads(geom, 0) {
+        return Err(GeometryError::NestingTooDeep);
+    }
     if has_interior_rings_without_exterior(geom) {
         return Err(GeometryError::InteriorRingsWithoutExterior);
     }
@@ -701,6 +710,27 @@ fn visit_polygon(
 /// coordinate's `(x, y, z?)` to `visit`. Recurses into geometry collections.
 /// The read-path envelope accumulates only X and Y and ignores the third
 /// argument. The write-path envelope uses it.
+/// Returns `true` if `geom`, at nesting `depth`, has a member deeper than
+/// [`crate::curve::scan`] reads. Like the scan, it counts each member of a
+/// collection or multi-geometry as one level deeper, and it stops descending
+/// at the limit, so a deeply nested input cannot overflow the stack.
+fn nested_deeper_than_the_scan_reads<G: GeometryTrait<T = f64>>(geom: &G, depth: u32) -> bool {
+    if depth > crate::curve::MAX_DEPTH {
+        return true;
+    }
+    let member_depth = depth + 1;
+    let members_too_deep = |count: usize| count > 0 && member_depth > crate::curve::MAX_DEPTH;
+    match geom.as_type() {
+        GtGeometryType::MultiPoint(m) => members_too_deep(m.num_points()),
+        GtGeometryType::MultiLineString(m) => members_too_deep(m.num_line_strings()),
+        GtGeometryType::MultiPolygon(m) => members_too_deep(m.num_polygons()),
+        GtGeometryType::GeometryCollection(collection) => collection
+            .geometries()
+            .any(|member| nested_deeper_than_the_scan_reads(&member, member_depth)),
+        _ => false,
+    }
+}
+
 /// Returns `true` if a polygon in `geom`, at any depth, has interior rings and
 /// an empty exterior ring. See [`GeometryError::InteriorRingsWithoutExterior`].
 fn has_interior_rings_without_exterior<G: GeometryTrait<T = f64>>(geom: &G) -> bool {

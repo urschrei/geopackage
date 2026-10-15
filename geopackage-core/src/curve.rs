@@ -49,7 +49,7 @@ use geo_traits::Dimensions;
 /// Maximum nesting depth of geometry containers, so a hostile body cannot
 /// drive the recursive walk into a stack overflow. No writer nests this deeply
 /// in practice.
-const MAX_DEPTH: u32 = 32;
+pub(crate) const MAX_DEPTH: u32 = 32;
 
 /// Relative tolerance below which three points count as collinear.
 ///
