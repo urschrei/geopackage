@@ -42,36 +42,71 @@ module of about 280 lines. The approach is avenue 3 below if that changes.
 
 ## Avenues, in order of likely gain
 
-### 1. Thread scaling
+### 1. Thread scaling: measured 2026-10-15
 
-Four threads make our `rivers` read 2.3 times faster than one thread; GDAL's
-2.8 times. Hypotheses, each with the measurement that would test it:
+Full `rivers` (8,477,883 rows, 130 windows), build of 24707b4, medians of 3,
+wall time in ms, user and system time in seconds:
 
-- **The last round of windows is uneven.** The `rivers` subset has 847,788
-  rows: 13 windows of 65,536 keys over 4 workers, so the last round has one
-  worker busy and three idle. Test: compare the scaling on the subset with
-  the scaling on the full `rivers` (130 windows), and with a batch size that
-  divides the subset into a multiple of 4 windows. If this is the cause,
-  options are smaller work units than a batch (a worker fills part of a
-  window, the consumer joins the parts), or windows handed out by a shared
-  counter instead of a fixed rotation.
-- **Workers wait for the consumer.** Each worker's channel is a rendezvous
-  channel; the consumer takes what is offered with `try_recv` on each call of
-  `next`, but a worker whose batch is not taken stops. Test: per-thread busy
-  and idle time from `samply record` with `--samples` (counts time off the
-  CPU), or user plus system time against wall time.
-- **Worker start-up.** Each worker opens a read-only connection, reads the
-  layer's schema and registers an aggregate. Test: time from `read_arrow` to
-  the first batch, against the total.
+| threads | ours | user | sys | GDAL | user | sys |
+|---|---|---|---|---|---|---|
+| 1 | 5476 | 4.59 | 0.92 | 4809 | 4.16 | 0.59 |
+| 2 | 2870 | 4.85 | 0.87 | 2449 | 4.21 | 0.71 |
+| 4 | 1756 | 5.08 | 1.22 | 1301 | 4.16 | 0.74 |
+| 8 | 1282 | 5.67 | 2.27 | 857 | 4.32 | 1.03 |
 
-First experiment: 1, 2, 4 and 8 threads on each side, on the `rivers` subset
-and on the full `rivers`, reporting wall time, user and system time. This
-needs wall time on an idle machine, so use `bench_datasets.sh` (or a small
-script on the Fly machine), not `quick`, which counts instructions.
+The gap is about the same on the full file as on the subset, so the uneven
+last round of windows is not the cause. Both sides keep their threads busy
+(CPU time over wall time is 3.6 for us at 4 threads, 3.8 for GDAL), so
+workers waiting for the consumer is not the cause either. The cause is extra
+CPU time per row that grows with the thread count, from two sources.
+
+**SQLite's page cache is shared between connections.** libsqlite3-sys
+compiles the bundled SQLite with `SQLITE_ENABLE_MEMORY_MANAGEMENT`, which
+makes all connections in a process share one page-cache group behind one
+global mutex (`pcache1.separateCache = 0`). Each worker has its own
+connection, but every page fetch and unpin takes that mutex. At 4 threads we
+made 49,919 `futex` calls (14,967 contended) to GDAL's 5,665, and 85 % of our
+context switches were in `pcache1Fetch` and `pcache1Unpin`; 10 % more were
+in `sqlite3Malloc`, which takes the memory-statistics mutex
+(`SQLITE_DEFAULT_MEMSTATUS` is 1). Ubuntu's system SQLite 3.45.1 and GDAL's
+conda-forge SQLite 3.54.0 do not have `SQLITE_ENABLE_MEMORY_MANAGEMENT`;
+macOS's system SQLite also has `DEFAULT_MEMSTATUS=0`. So this affects the
+`bundled` feature only, which the benchmark and the CLI use.
+
+**glibc returns batch memory to the system.** On one thread we take 129,101
+page faults to GDAL's 13,876, and spend 2.85 G kernel cycles to GDAL's
+2.03 G. User cycles are equal (13.4 G each), although we execute 14 % more
+instructions. With `GLIBC_TUNABLES` that stop malloc from using `mmap` or
+trimming the heap, faults fall to 5,934 and system time to that of GDAL.
+
+The same read with each change, built with `LIBSQLITE3_FLAGS`:
+
+| variant | 1 thread | 4 threads | 8 threads |
+|---|---|---|---|
+| as released | 5530 | 1763 | 1234 |
+| `-USQLITE_ENABLE_MEMORY_MANAGEMENT` | 5772 | 1567 | 916 |
+| and `-DSQLITE_DEFAULT_MEMSTATUS=0` | 5267 | 1497 | 820 |
+| and the malloc tunables | 4966 | 1302 | 742 |
+| `mmap_size` of 4 GiB, either build | 6153 | 1668 | 958 |
+| GDAL 3.13.3 | 4809 | 1301 | 857 |
+
+The tunables are `glibc.malloc.mmap_threshold=4294967295` and
+`glibc.malloc.trim_threshold=4294967295`. A memory map adds about 1 s of user
+time and is not a way round the page-cache mutex.
+
+Next steps:
+
+- Pre-size the builders (avenue 2), now to reduce the page faults as well as
+  the copies. Measure page faults and system time, not only instructions.
+- Decide what to do about the bundled SQLite flags: set `LIBSQLITE3_FLAGS` in
+  the workspace's `.cargo/config.toml` (affects the benchmark, the tests and
+  the CLI built from this repository, not dependants), document the flags
+  for dependants that use `bundled`, and raise the shared page cache with
+  rusqlite.
 
 `dataset_bench arrow <file> <layer> 1 <threads>` and
 `OGR_GPKG_NUM_THREADS=<n> gdal_dataset_bench arrow <file> <layer>` take a
-thread count.
+thread count. `DATASET_BENCH_MMAP=<bytes>` sets the memory map.
 
 ### 2. Pre-size the builders from the previous batch
 
