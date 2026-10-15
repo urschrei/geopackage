@@ -1,0 +1,95 @@
+name: release
+
+# Builds `gpkg` for each target and attaches the archives to the GitHub
+# release. A build from this repository reads `.cargo/config.toml`, so the
+# bundled SQLite gets the workspace's LIBSQLITE3_FLAGS; a `cargo install` from
+# crates.io does not. The archive names follow cargo-binstall's defaults.
+#
+# A release that already exists gets its archives through a manual run with
+# its tag. A pull request that changes this file builds and packages every
+# target, and uploads nothing.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag to build and attach archives to, such as v0.11.1
+        required: true
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 for its older glibc (2.35), so the binary runs on more
+          # distributions.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release -p geopackage-cli --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          version="${TAG:-v$(cargo pkgid -p geopackage-cli | sed 's/.*[#@]//')}"
+          name="geopackage-cli-${TARGET}-${version}"
+          exe=""
+          [[ $TARGET == *windows* ]] && exe=".exe"
+          mkdir "$name"
+          cp "target/${TARGET}/release/gpkg${exe}" README.md LICENSE-APACHE LICENSE-MIT "$name/"
+          if [[ -n $exe ]]; then
+              archive="$name.zip"
+              7z a -bd "$archive" "$name" >/dev/null
+          else
+              archive="$name.tar.gz"
+              tar -czf "$archive" "$name"
+          fi
+          if command -v sha256sum >/dev/null; then
+              sha256sum "$archive" > "$archive.sha256"
+          else
+              shasum -a 256 "$archive" > "$archive.sha256"
+          fi
+          {
+              echo "NAME=$name"
+              echo "EXE=$exe"
+              echo "ARCHIVE=$archive"
+          } >> "$GITHUB_ENV"
+      # The x86_64 macOS binary is cross-compiled on an arm64 runner, so it
+      # is not run here.
+      - if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        run: '"$NAME/gpkg$EXE" --version'
+      - if: env.TAG != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" --clobber
