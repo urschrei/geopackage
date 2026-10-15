@@ -32,6 +32,16 @@ module. Install `libsqlite3-dev` on Debian or Ubuntu, or `sqlite-devel` on
 Fedora; macOS needs nothing extra. To use a vendored SQLite instead, enable the
 `bundled` feature, which needs a C compiler. Windows requires `bundled`.
 
+With `bundled`, set these SQLite compile flags in your `.cargo/config.toml`:
+
+```toml
+[env]
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS=0"
+```
+
+Without them, all connections in a process share one SQLite page cache behind
+one mutex, and the threads of a threaded Arrow read wait for each other.
+
 The `arrow` feature adds Arrow I/O. The minimum supported Rust version is 1.95.
 
 The command-line tool uses a vendored SQLite by default:
