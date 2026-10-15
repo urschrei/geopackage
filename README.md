@@ -7,7 +7,7 @@
 Read and write [OGC GeoPackage 1.4](https://www.geopackage.org/spec140/)
 files in Rust: feature and attribute tables, RTree spatial indexes, tile
 pyramids, tiled gridded coverages, and Apache Arrow I/O. The workspace also
-includes a command-line tool and a C API built on the same library.
+includes a command-line tool and a C API.
 
 Until 1.0, the API may change between minor versions.
 
