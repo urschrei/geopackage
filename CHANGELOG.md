@@ -19,6 +19,7 @@ While the version is below 1.0 the API may change in any release.
 - `Error::NoSuchRow`, for a `ROWID` a table does not have.
 - `Finding::StaleSpatialIndex`, for a spatial index whose virtual table or
   whose triggers are missing. `Layer::repair_spatial_index` repairs it.
+- `Error::NanEpoch`, for a NaN epoch in a spatial reference system row.
 
 ### Changed
 
@@ -78,6 +79,16 @@ While the version is below 1.0 the API may change in any release.
 - `add_relation` checks its mapping table's name as every other creation path
   does: an empty or NUL name is `InvalidIdentifier`, and a `gpkg_` or
   `sqlite_` prefix is `ReservedTablePrefix`.
+- Once a file has the `definition_12_063` column, `add_srs` and
+  `add_epsg_srs` give an EPSG row without WKT2 of its own the EPSG
+  registry's WKT2, as adding the column already did for the rows present.
+  The table no longer depends on the order of the calls: a WKT1 code added
+  after a WKT2-only code used to get `undefined`.
+- `add_srs` rejects a NaN epoch with `Error::NanEpoch`. It used to store
+  NULL, which reads back as no epoch, and still add the WKT2 columns.
+- `Error::UnknownEpsgCode` says the code is in neither the vendored
+  definitions nor the EPSG registry. It used to name only the vendored
+  subset.
 - A NaN written to a `REAL` column is stored as NULL and a negative zero as
   zero, as SQLite stores them; the write docs now say so.
 - Dev-dependency `hegeltest` is now 0.49.11 in both `geopackage` and
@@ -114,6 +125,9 @@ While the version is below 1.0 the API may change in any release.
   both as `StaleSpatialIndex`.
 - `validate` reported no dangling metadata reference once every metadata
   record was deleted.
+- Adding the WKT2 column filled in a row's WKT2 from its `srs_id`, not from
+  its `organization_coordsys_id`. A row whose id is not its EPSG code got
+  another CRS's definition, or none.
 
 ## [0.11.2] - 2026-10-15
 
