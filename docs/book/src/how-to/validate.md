@@ -95,8 +95,10 @@ for finding in gpkg.validate()? {
         Finding::SpatialIndexOutOfStep { table_name, .. } => {
             gpkg.layer(&table_name)?.rebuild_spatial_index()?;
         }
-        // Structure is a pre-1.4 or mixed trigger set: repair.
-        Finding::LegacySpatialIndexTriggers { table_name } => {
+        // Structure is a pre-1.4 or mixed trigger set, or the virtual
+        // table or its triggers are missing: repair.
+        Finding::LegacySpatialIndexTriggers { table_name }
+        | Finding::StaleSpatialIndex { table_name } => {
             gpkg.layer(&table_name)?.repair_spatial_index()?;
         }
         // An advisory, so build one only if you want the queries indexed.

@@ -402,6 +402,12 @@ fn every_finding_renders_as_a_sentence_naming_its_subject() {
             "pre-1.4",
         ),
         (
+            Finding::StaleSpatialIndex {
+                table_name: "roads".into(),
+            },
+            "stale",
+        ),
+        (
             Finding::NoSpatialIndex {
                 table_name: "roads".into(),
             },
