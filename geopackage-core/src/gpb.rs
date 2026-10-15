@@ -131,7 +131,9 @@ const HEADER_BASE_LEN: usize = 8;
 /// or version, or an envelope indicator outside 0-4.
 #[hotpath::measure(label = "gpb::body_offset")]
 pub fn body_offset(blob: &[u8]) -> Result<usize, GpbError> {
-    let &[m0, m1, version, flags, ..] = blob else {
+    // The whole fixed header, as `parse_header` requires, so that a blob too
+    // short for it is `Truncated` in both functions.
+    let &[m0, m1, version, flags, _, _, _, _, ..] = blob else {
         return Err(GpbError::Truncated {
             expected: HEADER_BASE_LEN,
             actual: blob.len(),
@@ -312,6 +314,18 @@ pub fn encode_header_into(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A blob shorter than the fixed header is truncated in both functions,
+    /// whatever its first bytes are.
+    #[test]
+    fn a_short_blob_is_truncated_before_its_magic_is_read() {
+        let expected = || GpbError::Truncated {
+            expected: 8,
+            actual: 4,
+        };
+        assert_eq!(body_offset(&[0, 0, 0, 0]), Err(expected()));
+        assert_eq!(parse_header(&[0, 0, 0, 0]).unwrap_err(), expected());
+    }
 
     fn roundtrip(srs_id: i32, envelope: Envelope, empty: bool, extended: bool) {
         let buf = encode_header(srs_id, &envelope, empty, extended);
