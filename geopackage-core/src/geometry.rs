@@ -63,6 +63,16 @@ pub enum GeometryError {
         /// The first non-linear type found inside it.
         member: GeometryType,
     },
+    /// A polygon, at any depth, with interior rings and an empty exterior
+    /// ring.
+    ///
+    /// The `wkb` writer (0.9) writes the ring count of such a polygon as zero
+    /// and then writes the interior rings. A reader then returns an empty
+    /// polygon, and the envelope, which includes the interior rings,
+    /// contradicts the body. [`encode_gpb`] rejects the geometry rather than
+    /// write that body.
+    #[error("a polygon has interior rings but an empty exterior ring, which cannot be encoded")]
+    InteriorRingsWithoutExterior,
     /// The WKB body was too short to contain the one-byte order marker and
     /// four-byte geometry type code.
     #[error("WKB body truncated: need at least 5 bytes for the geometry type code")]
@@ -491,6 +501,8 @@ pub struct EncodedGpb {
 ///
 /// # Errors
 ///
+/// [`GeometryError::InteriorRingsWithoutExterior`] for a polygon, at any
+/// depth, with interior rings and an empty exterior ring, and
 /// [`GeometryError::EncodeWkb`] if the `wkb` writer cannot serialise the
 /// geometry.
 #[hotpath::measure(label = "geometry::encode_gpb")]
@@ -498,6 +510,9 @@ pub fn encode_gpb<G: GeometryTrait<T = f64>>(
     geom: &G,
     srs_id: i32,
 ) -> Result<(Vec<u8>, Option<[f64; 4]>), GeometryError> {
+    if has_interior_rings_without_exterior(geom) {
+        return Err(GeometryError::InteriorRingsWithoutExterior);
+    }
     let (envelope, empty) = write_envelope(geom);
     let xy = envelope
         .xy_bounds()
@@ -680,6 +695,24 @@ fn visit_polygon(
 /// coordinate's `(x, y, z?)` to `visit`. Recurses into geometry collections.
 /// The read-path envelope accumulates only X and Y and ignores the third
 /// argument. The write-path envelope uses it.
+/// Returns `true` if a polygon in `geom`, at any depth, has interior rings and
+/// an empty exterior ring. See [`GeometryError::InteriorRingsWithoutExterior`].
+fn has_interior_rings_without_exterior<G: GeometryTrait<T = f64>>(geom: &G) -> bool {
+    fn polygon<P: PolygonTrait<T = f64>>(polygon: &P) -> bool {
+        polygon.exterior().is_none() && polygon.num_interiors() > 0
+    }
+    match geom.as_type() {
+        GtGeometryType::Polygon(p) => polygon(p),
+        GtGeometryType::MultiPolygon(multi_polygon) => {
+            multi_polygon.polygons().any(|p| polygon(&p))
+        }
+        GtGeometryType::GeometryCollection(collection) => collection
+            .geometries()
+            .any(|member| has_interior_rings_without_exterior(&member)),
+        _ => false,
+    }
+}
+
 fn visit_coords<G: GeometryTrait<T = f64>>(
     geom: &G,
     visit: &mut impl FnMut(f64, f64, Option<f64>),
@@ -803,6 +836,32 @@ mod tests {
     use super::*;
     use crate::gpb::{Envelope, encode_header};
     use geo_traits::GeometryType as GtType;
+
+    #[cfg(feature = "geo-types")]
+    #[test]
+    fn interior_rings_without_an_exterior_are_rejected() {
+        use geo_types::{Geometry, GeometryCollection, LineString, MultiPolygon, Polygon, coord};
+        let holed = Polygon::new(
+            LineString::new(vec![]),
+            vec![LineString::new(vec![coord! { x: 1.0, y: 2.0 }])],
+        );
+        let nested: [Geometry<f64>; 3] = [
+            holed.clone().into(),
+            MultiPolygon::new(vec![holed.clone()]).into(),
+            Geometry::GeometryCollection(GeometryCollection::new_from(vec![holed.into()])),
+        ];
+        for geometry in nested {
+            assert!(matches!(
+                encode_gpb(&geometry, 0),
+                Err(GeometryError::InteriorRingsWithoutExterior)
+            ));
+        }
+        let empty: Geometry<f64> = Polygon::new(LineString::new(vec![]), vec![]).into();
+        assert!(
+            encode_gpb(&empty, 0).is_ok(),
+            "an empty polygon has no holes"
+        );
+    }
 
     /// Build a GPB blob from a little-endian WKB body and no envelope.
     fn gpb(body: &[u8]) -> Vec<u8> {

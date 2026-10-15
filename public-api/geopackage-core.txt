@@ -146,6 +146,7 @@ pub geopackage_core::geometry::GeometryError::AbstractWkbType(u32)
 pub geopackage_core::geometry::GeometryError::Body(wkb::error::WkbError)
 pub geopackage_core::geometry::GeometryError::EncodeWkb(wkb::error::WkbError)
 pub geopackage_core::geometry::GeometryError::Header(geopackage_core::gpb::GpbError)
+pub geopackage_core::geometry::GeometryError::InteriorRingsWithoutExterior
 pub geopackage_core::geometry::GeometryError::InvalidByteOrder
 pub geopackage_core::geometry::GeometryError::InvalidByteOrder::offset: usize
 pub geopackage_core::geometry::GeometryError::NestingTooDeep
@@ -611,6 +612,7 @@ pub geopackage_core::GeometryError::AbstractWkbType(u32)
 pub geopackage_core::GeometryError::Body(wkb::error::WkbError)
 pub geopackage_core::GeometryError::EncodeWkb(wkb::error::WkbError)
 pub geopackage_core::GeometryError::Header(geopackage_core::gpb::GpbError)
+pub geopackage_core::GeometryError::InteriorRingsWithoutExterior
 pub geopackage_core::GeometryError::InvalidByteOrder
 pub geopackage_core::GeometryError::InvalidByteOrder::offset: usize
 pub geopackage_core::GeometryError::NestingTooDeep
