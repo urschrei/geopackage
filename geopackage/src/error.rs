@@ -115,6 +115,14 @@ pub enum Error {
         /// The requested column name.
         column_name: String,
     },
+    /// A row was named, by `ROWID`, that the table does not have.
+    #[error("table {table_name:?} has no row with ROWID {row_id}")]
+    NoSuchRow {
+        /// The table that was queried.
+        table_name: String,
+        /// The requested `ROWID`.
+        row_id: i64,
+    },
     /// A stored value's SQLite storage class is incompatible with the column's
     /// declared GeoPackage type. The value is reported instead of coerced.
     #[error("column {column:?} declared {declared:?} contains an incompatible {found} value")]

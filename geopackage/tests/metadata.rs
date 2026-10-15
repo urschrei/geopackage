@@ -28,6 +28,10 @@ fn gpkg() -> (TempDir, GeoPackage) {
             .geometry(GeometrySpec::new(GeometryType::LineString, 4326)),
     )
     .unwrap();
+    // Row 7, which the row and cell targets below name (Requirement 99).
+    gpkg.connection()
+        .execute("INSERT INTO roads (fid, name) VALUES (7, 'seventh')", [])
+        .unwrap();
     (dir, gpkg)
 }
 

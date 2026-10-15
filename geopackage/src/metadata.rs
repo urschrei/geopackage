@@ -22,6 +22,7 @@
 
 use geopackage_core::datetime::DateTime;
 use geopackage_core::ddl;
+use geopackage_core::ident::quote;
 use geopackage_core::metadata::{
     EXTENSION_DEFINITION, EXTENSION_NAME, EXTENSION_SCOPE, MetadataRecord, MetadataReference,
     MetadataScope, ReferenceScope,
@@ -273,17 +274,25 @@ impl GeoPackage {
     /// forbids it from equalling `md_file_id`, so that case is rejected here
     /// rather than written.
     ///
-    /// The timestamp is written in the spec's DATETIME form by
-    /// [`geopackage_core::datetime`], like every other DATETIME this crate
+    /// The timestamp is written in the spec's DATETIME form, normalised to
+    /// UTC and floored to the millisecond
+    /// ([`DateTime::format_strict`]), like every other DATETIME this crate
     /// writes.
     ///
     /// # Errors
     ///
+    /// - [`Error::SelfParentedMetadata`] if `parent_id` equals `md_file_id`.
+    /// - [`Error::InvalidDateTimeValue`] if `timestamp`'s offset moves it
+    ///   outside years 0 to 9999.
     /// - [`Error::NoSuchMetadata`] if `md_file_id` or `parent_id` is not a
     ///   `gpkg_metadata` row.
-    /// - [`Error::SelfParentedMetadata`] if `parent_id` equals `md_file_id`.
     /// - [`Error::NoSuchTable`] if the target names a table that is not in
     ///   `gpkg_contents` (Requirement 97).
+    /// - [`Error::NoSuchColumn`] if a column or cell target names a column the
+    ///   table does not have (Requirement 98).
+    /// - [`Error::NoSuchRow`] if a row or cell target names a `ROWID` the table
+    ///   does not have (Requirement 99). A view has no stable `ROWID`, so a
+    ///   row in a view is not checked.
     pub fn add_metadata_reference(
         &self,
         md_file_id: i64,
@@ -294,6 +303,14 @@ impl GeoPackage {
         if parent_id == Some(md_file_id) {
             return Err(Error::SelfParentedMetadata { md_file_id });
         }
+        let timestamp_text =
+            timestamp
+                .format_strict()
+                .map_err(|source| Error::InvalidDateTimeValue {
+                    column: "timestamp".to_owned(),
+                    text: timestamp.to_string(),
+                    source,
+                })?;
         let conn = self.connection();
         let tx = WriteTransaction::begin(conn)?;
         ensure_tables(conn)?;
@@ -324,6 +341,50 @@ impl GeoPackage {
                     table_name: table_name.to_owned(),
                 });
             }
+            // Requirement 98: a column target names a column of the table.
+            if let Some(column_name) = target.column_name() {
+                let has_column: Option<i64> = conn
+                    .query_row(
+                        "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2 COLLATE NOCASE",
+                        [table_name, column_name],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if has_column.is_none() {
+                    return Err(Error::NoSuchColumn {
+                        table_name: table_name.to_owned(),
+                        column_name: column_name.to_owned(),
+                    });
+                }
+            }
+            // Requirement 99: a row target names a row of the table.
+            if let Some(row_id) = target.row_id() {
+                let is_table: Option<i64> = conn
+                    .query_row(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 \
+                         COLLATE NOCASE",
+                        [table_name],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let has_row = match is_table {
+                    Some(_) => conn
+                        .query_row(
+                            &format!("SELECT 1 FROM {} WHERE rowid = ?1", quote(table_name)?),
+                            [row_id],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .optional()?
+                        .is_some(),
+                    None => true,
+                };
+                if !has_row {
+                    return Err(Error::NoSuchRow {
+                        table_name: table_name.to_owned(),
+                        row_id,
+                    });
+                }
+            }
         }
 
         conn.execute(
@@ -336,7 +397,7 @@ impl GeoPackage {
                 target.table_name(),
                 target.column_name(),
                 target.row_id(),
-                timestamp.to_string(),
+                timestamp_text,
                 md_file_id,
                 parent_id,
             ],

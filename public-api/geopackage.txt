@@ -124,6 +124,9 @@ pub geopackage::Error::NoSuchLayer
 pub geopackage::Error::NoSuchLayer::table_name: alloc::string::String
 pub geopackage::Error::NoSuchMetadata
 pub geopackage::Error::NoSuchMetadata::id: i64
+pub geopackage::Error::NoSuchRow
+pub geopackage::Error::NoSuchRow::row_id: i64
+pub geopackage::Error::NoSuchRow::table_name: alloc::string::String
 pub geopackage::Error::NoSuchTable
 pub geopackage::Error::NoSuchTable::table_name: alloc::string::String
 pub geopackage::Error::NoTileMatrixSet

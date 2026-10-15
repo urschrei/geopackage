@@ -159,12 +159,16 @@ impl GeoPackage {
     ///
     /// # Errors
     ///
+    /// - [`Error::Core`] with
+    ///   [`InvalidIdentifier`](geopackage_core::Error::InvalidIdentifier) if
+    ///   the mapping table's name is empty or contains NUL.
+    /// - [`Error::ReservedTablePrefix`] if the mapping table's name begins
+    ///   `gpkg_` or `sqlite_`, in any case.
     /// - [`Error::NoSuchTable`] if either the base or the related table is not
     ///   in `gpkg_contents` (Requirements 5 and 6).
     /// - [`Error::TableAlreadyExists`] if the mapping table already exists.
-    /// - [`Error::NonConformantRelationName`] if `relation_name` is neither a
-    ///   defined requirements class nor the `x-<author>_<name>` form
-    ///   (Requirement 8).
+    /// - [`Error::NonConformantRelationName`] if `relation_name` is not one
+    ///   Requirement 8 accepts, as [`RelationName::is_conformant`] judges it.
     pub fn add_relation(&self, relation: &NewRelation) -> Result<i64> {
         if !relation.relation_name.is_conformant() {
             return Err(Error::NonConformantRelationName {
@@ -172,6 +176,7 @@ impl GeoPackage {
             });
         }
 
+        crate::create::check_new_table_name(&relation.mapping_table_name)?;
         let conn = self.connection();
         let tx = WriteTransaction::begin(conn)?;
 
