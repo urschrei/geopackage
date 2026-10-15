@@ -1,0 +1,18 @@
+# Hegel property-test settings for every crate in the workspace.
+#
+# The shipped `development` and `ci` profiles are siblings, so the case count
+# is set once in `common` and both extend it. `ci` keeps its shipped settings:
+# derandomised, no failure database, `too_slow` suppressed.
+#
+# For a longer local run, override the count for one invocation:
+#   HEGEL_TEST_CASES=20000 cargo nextest r
+
+[profiles.common]
+extends = "base"
+test_cases = 2000
+
+[profiles.development]
+extends = "common"
+
+[profiles.ci]
+extends = "common"
