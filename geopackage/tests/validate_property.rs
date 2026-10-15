@@ -524,10 +524,17 @@ fn corrupt(tc: &hegel::TestCase, gpkg: &GeoPackage, defect: usize) -> Key {
             expect("TilePyramidInconsistent", Some("tiles"))
         }
         10 => {
+            // No ancillary row, or no tile matrix set.
+            let table = tc.draw(generators::sampled_from(vec![
+                ("gpkg_2d_gridded_coverage_ancillary", "tile_matrix_set_name"),
+                ("gpkg_tile_matrix_set", "table_name"),
+            ]));
             sql(
                 gpkg,
-                "DELETE FROM gpkg_2d_gridded_coverage_ancillary \
-                 WHERE tile_matrix_set_name = 'cov_uninterpretable'",
+                &format!(
+                    "DELETE FROM {} WHERE {} = 'cov_uninterpretable'",
+                    table.0, table.1
+                ),
             );
             expect("CoverageUninterpretable", Some("cov_uninterpretable"))
         }
