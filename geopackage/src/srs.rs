@@ -342,19 +342,22 @@ fn enable_crs_wkt_extension(conn: &Connection) -> Result<()> {
 /// that triggered it and `undefined` for every code registered earlier. That
 /// would wrongly say those codes have no WKT2 form. GDAL backfills the same
 /// way. Rows outside the registry keep `undefined`, which is accurate.
+///
+/// The code is `organization_coordsys_id`, not `srs_id`: the spec lets a file
+/// give an EPSG definition any `srs_id`.
 fn backfill_wkt2(conn: &Connection) -> Result<()> {
-    let codes: Vec<i32> = conn
+    let rows: Vec<(i32, i32)> = conn
         .prepare(
-            "SELECT srs_id FROM gpkg_spatial_ref_sys \
+            "SELECT srs_id, organization_coordsys_id FROM gpkg_spatial_ref_sys \
              WHERE organization_coordsys_id > 0 AND organization LIKE 'EPSG'",
         )?
-        .query_map([], |r| r.get(0))?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
-    for code in codes {
+    for (srs_id, code) in rows {
         if let Ok(wkt2) = epsg_utils::epsg_to_wkt2(code) {
             conn.execute(
                 "UPDATE gpkg_spatial_ref_sys SET definition_12_063 = ?1 WHERE srs_id = ?2",
-                rusqlite::params![wkt2, code],
+                rusqlite::params![wkt2, srs_id],
             )?;
         }
     }
