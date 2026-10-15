@@ -89,10 +89,20 @@ While the version is below 1.0 the API may change in any release.
 - `Error::UnknownEpsgCode` says the code is in neither the vendored
   definitions nor the EPSG registry. It used to name only the vendored
   subset.
+- `geopackage-ffi`: an SQLite constraint failure, such as an insert with a
+  feature id already in use, is `GPKG_STATUS_CONSTRAINT` instead of
+  `GPKG_STATUS_IO`. A file that is not an SQLite database is
+  `GPKG_STATUS_NOT_A_GEOPACKAGE` instead of `GPKG_STATUS_IO`, as an empty
+  file or a plain SQLite database already was.
+- `geopackage-ffi`: `FloatCoverageScaled`, `NanAncillaryValue`,
+  `UnwritableCoveragePayload`, `NoCoverageAncillary` and
+  `InteriorRingsWithoutExterior` have a status category instead of
+  `GPKG_STATUS_OTHER`.
 - A NaN written to a `REAL` column is stored as NULL and a negative zero as
   zero, as SQLite stores them; the write docs now say so.
-- Dev-dependency `hegeltest` is now 0.49.11 in both `geopackage` and
-  `geopackage-core`, and `hegel.toml` runs 2000 cases per property test.
+- Dev-dependency `hegeltest` is now 0.49.11 in `geopackage` and
+  `geopackage-core`, and new in `geopackage-ffi`; `hegel.toml` runs 2000
+  cases per property test.
 
 ### Fixed
 
@@ -128,6 +138,16 @@ While the version is below 1.0 the API may change in any release.
 - Adding the WKT2 column filled in a row's WKT2 from its `srs_id`, not from
   its `organization_coordsys_id`. A row whose id is not its EPSG code got
   another CRS's definition, or none.
+- `geopackage-ffi`: `gpkg_writer_insert`, `gpkg_writer_update` and
+  `gpkg_writer_update_column` returned `GPKG_STATUS_INVALID_ARGUMENT` for a
+  NULL or non-UTF-8 text value, while the error they filled in said
+  `GPKG_STATUS_BAD_ARGUMENT`. `gpkg_layer_read_arrow_filtered` returned
+  `GPKG_STATUS_BAD_ARGUMENT` for an invalid date parameter, while the error
+  said `GPKG_STATUS_INVALID_ARGUMENT`. Each now returns the status its error
+  reports.
+- `geopackage-ffi`: the `gpkg_tiles_put` docs said an address outside the
+  grid or a payload of the wrong size returns `GPKG_STATUS_OTHER`. They
+  return `GPKG_STATUS_INVALID_ARGUMENT` and `GPKG_STATUS_CONSTRAINT`.
 
 ## [0.11.2] - 2026-10-15
 
