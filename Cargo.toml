@@ -135,5 +135,12 @@ dbg_macro = "warn"
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
 
+# Optimise dependencies in dev and test builds. Most test time is in the
+# bundled SQLite and the hegel engine, which run about twice as fast at this
+# level. The workspace crates stay at level 0, so incremental builds and
+# debugging do not change.
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
 lto = "thin"
