@@ -1426,6 +1426,10 @@ mod tests {
     /// Three columns of a third over `[-1, 0]`: the last column's east edge
     /// is `max_x`, which `-1 + 2/3 + 1/3` does not reach.
     #[test]
+    #[expect(
+        clippy::float_cmp,
+        reason = "adjacent tiles must share a bit-identical edge, so exact equality is the property under test; a tolerance would accept gaps and overlaps"
+    )]
     fn the_outer_tile_edges_are_the_extent() {
         let set = TileMatrixSet::new(0, -1.0, 0.0, 0.0, 1.0);
         let matrices = set

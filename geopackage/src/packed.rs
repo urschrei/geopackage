@@ -628,7 +628,11 @@ mod tests {
         for value in [1e39, -1e39, 2.938_737_261_932_717e-39, 0.1, -7.25] {
             assert!(entry_covers(stored(value), at(value)), "{value}");
         }
-        assert_eq!(f64::from(coord_down(1e39)), f64::INFINITY);
+        let beyond = f64::from(coord_down(1e39));
+        assert!(
+            beyond.is_infinite() && beyond.is_sign_positive(),
+            "{beyond}"
+        );
         let mut inward = stored(0.1);
         inward[0] = 0.2;
         assert!(!entry_covers(inward, at(0.1)));
