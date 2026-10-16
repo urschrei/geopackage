@@ -31,7 +31,7 @@ Data Interface as the bulk data plane.
 | M3 Arrow, C ABI, CLI | Complete. Arrow landed in v0.2.0; the C ABI and CLI were built as M5 phases 8 and 9 and released in v0.6.0, which is what closes acceptance criteria 6 and 7. |
 | M4 tiles | Complete, released as v0.6.0. |
 | M5 extensions, then CLI and C ABI, then the freeze | **In progress.** Phases 0 to 9 done; phase 10, the API freeze, is what remains. |
-| M6 tiled gridded coverage | **Complete but for the corpus.** Phases 1, 1b, 2a, 2b, 2c and 2d are done: the payload profile, the `Coverage` handle, the write path, the validate pass and CLI, the GDAL round trip and the extension's twelve abstract tests. What is open is acceptance criterion 1's other half, which needs a coverage in the fetched corpus, and the `corpus_external.rs` re-pin that goes with it. Released as v0.10.0. |
+| M6 tiled gridded coverage | **Complete but for the corpus.** Phases 1, 1b, 2a, 2b, 2c and 2d are done: the payload profile, the `Coverage` handle, the write path, the validate pass and CLI, the GDAL round trip and the extension's twelve abstract tests. What is open is acceptance criterion 1's other half, which needs a coverage in the fetched corpus, and the `corpus_external.rs` re-pin that goes with it. Released as v0.10.0. Phase 3, sample decoding behind the `coverage-samples` feature (values, statistics, Requirement 21), added after it. |
 
 Released: v0.1.0, v0.1.1, v0.1.2 (2026-07-24), v0.2.0 (2026-07-25), v0.3.0,
 v0.4.0, v0.5.0 (2026-07-26), v0.6.0 (2026-07-29), v0.7.0 and v0.7.1

@@ -266,6 +266,9 @@ pub fn geopackage::Finding::severity(&self) -> geopackage::Severity
 pub fn geopackage::Finding::table_name(&self) -> core::option::Option<&str>
 impl core::fmt::Display for geopackage::Finding
 pub fn geopackage::Finding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub enum geopackage::Interpolation
+pub geopackage::Interpolation::Bilinear
+pub geopackage::Interpolation::Nearest
 #[non_exhaustive] pub enum geopackage::JournalMode
 pub geopackage::JournalMode::Delete
 pub geopackage::JournalMode::Wal
@@ -452,6 +455,13 @@ pub fn geopackage::Coverage<'a>::validate(&self) -> geopackage::Result<()>
 pub fn geopackage::Coverage<'a>::value(&self, &geopackage::TileAncillary, f64) -> f64
 pub fn geopackage::Coverage<'a>::zoom_levels(&self) -> alloc::vec::Vec<i64>
 impl<'a> geopackage::Coverage<'a>
+pub fn geopackage::Coverage<'a>::check_samples(&self, &geopackage::TileSamples) -> geopackage::Result<()>
+pub fn geopackage::Coverage<'a>::decode(&self, &[u8]) -> geopackage::Result<geopackage::TileSamples>
+pub fn geopackage::Coverage<'a>::sampler(&self, i64) -> geopackage::Result<geopackage::CoverageSampler<'_>>
+pub fn geopackage::Coverage<'a>::samples(&self, geopackage_core::tiles::TileCoord) -> geopackage::Result<core::option::Option<geopackage::TileSamples>>
+pub fn geopackage::Coverage<'a>::statistics(&self, &geopackage::TileSamples, &geopackage::TileAncillary) -> core::option::Option<geopackage::SampleStatistics>
+pub fn geopackage::Coverage<'a>::value_at(&self, i64, f64, f64, geopackage::Interpolation) -> geopackage::Result<core::option::Option<f64>>
+impl<'a> geopackage::Coverage<'a>
 pub fn geopackage::Coverage<'a>::delete_tile(&self, geopackage_core::tiles::TileCoord) -> geopackage::Result<bool>
 pub fn geopackage::Coverage<'a>::put_tile(&self, geopackage_core::tiles::TileCoord, &[u8]) -> geopackage::Result<()>
 pub fn geopackage::Coverage<'a>::writer(&self) -> geopackage::Result<geopackage::CoverageWriter<'a>>
@@ -484,7 +494,14 @@ pub fn geopackage::CoverageBuilder::quantity_definition(self, impl core::convert
 pub fn geopackage::CoverageBuilder::scale(self, f64, f64) -> Self
 pub fn geopackage::CoverageBuilder::table_name(&self) -> &str
 pub fn geopackage::CoverageBuilder::uom(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub struct geopackage::CoverageSampler<'c>
+impl geopackage::CoverageSampler<'_>
+pub fn geopackage::CoverageSampler<'_>::value_at(&mut self, f64, f64, geopackage::Interpolation) -> geopackage::Result<core::option::Option<f64>>
+impl core::fmt::Debug for geopackage::CoverageSampler<'_>
+pub fn geopackage::CoverageSampler<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct geopackage::CoverageWriter<'conn>
+impl geopackage::CoverageWriter<'_>
+pub fn geopackage::CoverageWriter<'_>::put_with_statistics(&mut self, geopackage_core::tiles::TileCoord, &[u8], &geopackage::TileAncillary) -> geopackage::Result<()>
 impl<'conn> geopackage::CoverageWriter<'conn>
 pub fn geopackage::CoverageWriter<'conn>::commit(self) -> geopackage::Result<()>
 pub fn geopackage::CoverageWriter<'conn>::delete(&mut self, geopackage_core::tiles::TileCoord) -> geopackage::Result<bool>
@@ -724,6 +741,12 @@ pub fn geopackage::OpenOptions::new() -> Self
 pub fn geopackage::OpenOptions::open<P: core::convert::AsRef<std::path::Path>>(self, P) -> geopackage::Result<geopackage::GeoPackage>
 pub fn geopackage::OpenOptions::open_read_only<P: core::convert::AsRef<std::path::Path>>(self, P) -> geopackage::Result<geopackage::GeoPackage>
 pub fn geopackage::OpenOptions::synchronous(self, geopackage::Synchronous) -> Self
+#[non_exhaustive] pub struct geopackage::SampleStatistics
+pub geopackage::SampleStatistics::count: usize
+pub geopackage::SampleStatistics::max: f64
+pub geopackage::SampleStatistics::mean: f64
+pub geopackage::SampleStatistics::min: f64
+pub geopackage::SampleStatistics::std_dev: f64
 #[non_exhaustive] pub struct geopackage::SpatialIndexAudit
 pub geopackage::SpatialIndexAudit::entries: usize
 pub geopackage::SpatialIndexAudit::extra: usize
@@ -819,6 +842,13 @@ pub fn geopackage::TilePyramidBuilder::matrices(self, impl core::iter::traits::c
 pub fn geopackage::TilePyramidBuilder::matrix(self, geopackage_core::tiles::TileMatrix) -> Self
 pub fn geopackage::TilePyramidBuilder::new(impl core::convert::Into<alloc::string::String>, geopackage_core::tiles::TileMatrixSet) -> Self
 pub fn geopackage::TilePyramidBuilder::table_name(&self) -> &str
+pub struct geopackage::TileSamples
+impl geopackage::TileSamples
+pub fn geopackage::TileSamples::as_slice(&self) -> &[f64]
+pub fn geopackage::TileSamples::get(&self, usize, usize) -> core::option::Option<f64>
+pub fn geopackage::TileSamples::height(&self) -> usize
+pub fn geopackage::TileSamples::into_vec(self) -> alloc::vec::Vec<f64>
+pub fn geopackage::TileSamples::width(&self) -> usize
 pub struct geopackage::TileStream<'c>
 impl geopackage::TileStream<'_>
 pub fn geopackage::TileStream<'_>::for_each(&mut self, impl core::ops::function::FnMut(&geopackage::Tile<'_>) -> geopackage::Result<()>) -> geopackage::Result<()>

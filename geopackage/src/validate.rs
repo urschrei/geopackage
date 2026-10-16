@@ -159,6 +159,12 @@ pub enum Finding {
     },
     /// Coverage tiles with payloads that break the encoding profile of the
     /// extension (Requirements 13 and 15 to 20).
+    ///
+    /// With the `coverage-samples` feature, the samples too: Requirement 21
+    /// for a NaN or infinite sample, and the requirement of the encoding (15
+    /// for TIFF, 13 for PNG) for data that does not decode. Those come as a
+    /// second finding, so a fault in the header does not hide one in the
+    /// samples.
     CoveragePayloadNonConformant {
         /// The coverage's table.
         table_name: String,
@@ -524,7 +530,9 @@ impl GeoPackage {
     /// tables, so the work is proportional to the number of tables, not to the
     /// size of the file. The exception is coverages. The extension's encoding
     /// requirements apply to payloads, so that check reads every coverage
-    /// tile. A file without a coverage does not pay this cost.
+    /// tile. A file without a coverage does not pay this cost. With the
+    /// `coverage-samples` feature it also decodes every coverage tile, for
+    /// Requirement 21, which costs more again.
     ///
     /// An empty vector means every check passed. It does not mean the file
     /// conforms in every respect the spec defines. This method reports what it
@@ -831,6 +839,12 @@ impl GeoPackage {
         let mut profile_tiles = 0;
         let mut mismatch: Option<String> = None;
         let mut mismatch_tiles = 0;
+        // Findings about the samples, kept apart from those about the header,
+        // so that one does not hide the other.
+        #[cfg(feature = "coverage-samples")]
+        let mut samples: Option<(u8, String)> = None;
+        #[cfg(feature = "coverage-samples")]
+        let mut samples_tiles = 0;
 
         let mut cursor = coverage.cursor()?;
         let mut stream = cursor.tiles()?;
@@ -860,6 +874,13 @@ impl GeoPackage {
                     mismatch = Some(error.to_string());
                 }
             }
+            #[cfg(feature = "coverage-samples")]
+            if let Err(finding) = check_coverage_samples(tile.data(), &payload) {
+                samples_tiles += 1;
+                if samples.is_none() {
+                    samples = Some(finding);
+                }
+            }
         }
 
         if let Some((requirement, detail)) = profile {
@@ -876,6 +897,15 @@ impl GeoPackage {
                 datatype: coverage.ancillary().datatype.clone(),
                 detail,
                 tiles: mismatch_tiles,
+            });
+        }
+        #[cfg(feature = "coverage-samples")]
+        if let Some((requirement, detail)) = samples {
+            findings.push(Finding::CoveragePayloadNonConformant {
+                table_name: coverage.table_name().to_owned(),
+                requirement,
+                detail,
+                tiles: samples_tiles,
             });
         }
         Ok(())
@@ -911,4 +941,27 @@ impl GeoPackage {
         }
         Ok(())
     }
+}
+
+/// Decodes a coverage payload whose header is conformant, and checks
+/// Requirement 21. Returns the requirement a failure breaks and its detail.
+///
+/// Data that does not decode breaks the requirement that names the encoding:
+/// 15 (baseline TIFF) for a TIFF, and 13 for a PNG.
+#[cfg(feature = "coverage-samples")]
+fn check_coverage_samples(
+    bytes: &[u8],
+    payload: &geopackage_core::coverage::CoveragePayload,
+) -> std::result::Result<(), (u8, String)> {
+    use crate::coverage::{check_finite, decode_payload};
+    use geopackage_core::coverage::CoveragePayload;
+
+    let samples = decode_payload(bytes, payload).map_err(|error| {
+        let requirement = match payload {
+            CoveragePayload::Tiff(_) => 15,
+            _ => 13,
+        };
+        (requirement, error.to_string())
+    })?;
+    check_finite(&samples).map_err(|error| (21, error.to_string()))
 }

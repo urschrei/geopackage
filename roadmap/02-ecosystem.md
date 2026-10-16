@@ -193,7 +193,9 @@ small gap it looks like, because `tiff` already contains the tag constants
 2. **Pixel access: `tiff`, if and when the API needs to hand back values.**
    Off by default, and in `geopackage` or a `geopackage-coverage` crate rather
    than `-core`, whose stated line is header inspection and never a decode.
-   Not scheduled.
+   *(Done 2026-10-16 as `geopackage`'s `coverage-samples` feature, with `png`
+   beside `tiff` for Requirement 13's encoding. See
+   [10-coverage.md](10-coverage.md#phase-3-samples).)*
 3. **GeoTIFF ingest and export** (`gpkg tiles import dem.tif`) is a resampling
    and reprojection question, not a codec question, and reprojection is D3's
    line. If it is ever wanted, the CLI shelling out to `gdal_translate -of

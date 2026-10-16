@@ -45,14 +45,23 @@ reads seven tags, and checks the encoding requirements against them.
 
 ## The limits of a header check
 
-This library cannot check one requirement. Requirement 21 says that every pixel
-in a tile must have a valid value, and that NaN and Inf must not occur. That is
-a statement about samples, and a check of the samples needs a decoder. A
-payload that this library accepts conforms in structure only, and the check
-says nothing about its contents.
+A header check cannot check one requirement. Requirement 21 says that every
+pixel in a tile must have a valid value, and that NaN and Inf must not occur.
+That is a statement about samples, and a check of the samples needs a decoder.
+By default, a payload that this library accepts conforms in structure only, and
+the check says nothing about its contents.
 
-The same limit applies to the write path. The four per-tile statistics come
-from the samples, so they are `None` unless you supply them:
+The decoder is behind the `coverage-samples` feature, which adds the `tiff` and
+`png` crates. With it, the library checks Requirement 21, looks up values at a
+position, and calculates per-tile statistics. [How to read values from a
+coverage](../how-to/coverage-values.md) shows each of these. The feature stays
+off by default because a reader that only copies or serves tiles never needs a
+sample, and the core crate never decodes: the header check above is all
+`geopackage-core` does.
+
+Without the feature, the same limit applies to the write path. The four
+per-tile statistics come from the samples, so they are `None` unless you supply
+them:
 
 ```rust,no_run
 # use geopackage::core::tiles::TileCoord;
@@ -102,7 +111,8 @@ two scale and offset pairs, and compared with the null:
 let coverage = gpkg.coverage("elevation")?;
 let tile = coverage.tile_ancillary(TileCoord::new(0, 0, 0))?.unwrap();
 
-// `sample` comes from a decode of the payload, which your code does.
+// `sample` comes from a decode of the payload: your code's, or, with the
+// `coverage-samples` feature, `Coverage::samples`.
 let sample = 1234.0;
 if coverage.is_null(sample) {
     println!("no data here");

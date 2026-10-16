@@ -8,6 +8,32 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- The `coverage-samples` feature, off by default, decodes the samples of
+  tiled gridded coverage tiles with the `tiff` and `png` crates.
+  `geopackage-core` still decodes nothing.
+  - `Coverage::decode` and `Coverage::samples` return a tile's stored
+    samples as `TileSamples`.
+  - `Coverage::value_at` returns the value at a position in the coverage's
+    CRS, with `Interpolation::Nearest` or `Interpolation::Bilinear`, following
+    its `grid_cell_encoding`. `Coverage::sampler` opens a `CoverageSampler`,
+    which keeps decoded tiles across lookups.
+  - `Coverage::statistics` calculates a tile's `SampleStatistics`, and
+    `CoverageWriter::put_with_statistics` records them on write. Both match
+    the statistics GDAL records: of values after the scale and offset,
+    without `data_null`, with the population standard deviation.
+  - `Coverage::check_samples` checks Requirement 21 (no NaN or infinite
+    samples), and `put_with_statistics` enforces it.
+
+### Changed
+
+- With the `coverage-samples` feature, `GeoPackage::validate` decodes every
+  coverage tile and reports a NaN or infinite sample as
+  `Finding::CoveragePayloadNonConformant` with requirement 21, and data that
+  does not decode with requirement 15 (TIFF) or 13 (PNG). Without the feature
+  it does not change.
+
 ## [0.12.0] - 2026-10-16
 
 ### Added

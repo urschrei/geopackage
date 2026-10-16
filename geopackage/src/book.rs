@@ -25,3 +25,7 @@ pub struct HowToValidate;
 #[cfg(feature = "arrow")]
 #[doc = include_str!("../../docs/book/src/how-to/read-arrow.md")]
 pub struct HowToReadArrow;
+
+#[cfg(feature = "coverage-samples")]
+#[doc = include_str!("../../docs/book/src/how-to/coverage-values.md")]
+pub struct HowToCoverageValues;

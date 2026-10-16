@@ -50,6 +50,15 @@ epsg-utils = "0.0.3"
 # there is not a breaking change here, on the same principle as `jiff`.
 imagesize = "0.15"
 serde_json = "1"
+# Coverage sample decoding, behind `geopackage`'s off-by-default
+# `coverage-samples` feature, and never in `geopackage-core`, whose line is
+# header inspection only. Assessed in roadmap/02-ecosystem.md: the encoder is
+# strip-only, which Requirement 20 requires, and the decoder reads strips and
+# internal tiles alike. `lzw` is Requirement 18 and `deflate` is C2's read-side
+# allowance; `fax` and `jpeg` would pull codecs the profile forbids.
+tiff = { version = "0.11.3", default-features = false, features = ["lzw", "deflate"] }
+# The PNG half of the same feature: Requirement 13's 16-bit greyscale payload.
+png = "0.18.1"
 # Total system memory, for the Arrow read path's default batch byte ceiling.
 # Only the `system` feature: the default set also probes disks, networks,
 # components and users, none of which we ask anything about.

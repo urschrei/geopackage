@@ -32,6 +32,8 @@ arrow-array = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 sysinfo = { workspace = true, optional = true }
+png = { workspace = true, optional = true }
+tiff = { workspace = true, optional = true }
 
 [features]
 default = ["geo-types"]
@@ -44,6 +46,11 @@ geo-types = ["geopackage-core/geo-types"]
 ## `arrow-schema` crates, which a caller using only the scalar API does not
 ## need.
 arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:serde_json", "dep:sysinfo"]
+## Decode the samples of tiled gridded coverage tiles: point lookups
+## (`Coverage::value_at`), per-tile statistics, and the Requirement 21 check
+## that a header read cannot make. Off by default: it pulls the `tiff` and
+## `png` decoders, which a caller that reads coverages as bytes does not need.
+coverage-samples = ["dep:png", "dep:tiff"]
 ## Compile and statically link the vendored SQLite amalgamation instead of
 ## linking the system library. Off by default; the default build needs the
 ## system SQLite development files and an `SQLITE_ENABLE_RTREE` build, which
@@ -73,8 +80,17 @@ geo-types.workspace = true
 # Also used by the Arrow schema test, to inspect the PROJJSON in the geometry
 # field's metadata.
 serde_json.workspace = true
+# The sample tests encode their own payloads, so that a decode is checked
+# against an encoder other than the one under test. Already optional
+# dependencies, so this adds no build cost.
+png.workspace = true
+tiff.workspace = true
 hegeltest = "0.49.11"
 criterion = "0.8"
+
+[[test]]
+name = "coverage_samples"
+required-features = ["coverage-samples"]
 
 [[bench]]
 name = "write"
