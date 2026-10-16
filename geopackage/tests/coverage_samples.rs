@@ -12,10 +12,6 @@
     clippy::unwrap_used,
     reason = "clippy's allow-*-in-tests covers #[test] fns but not the free helper fns in an integration-test crate; the unwraps in these helpers are the intended failure mechanism"
 )]
-#![expect(
-    clippy::float_cmp,
-    reason = "float32 samples of the form n + 0.5 are exact in binary, and so are the averages of two of them, so exact equality is the property under test"
-)]
 
 use std::io::Cursor;
 
