@@ -305,6 +305,21 @@ fn float_tile(side: u32) -> Vec<u8> {
     tiff(side, side, 3, 32, 5)
 }
 
+/// A float32 LZW payload of the given size, every sample zero, encoded by
+/// `tiff`: a whole image rather than a header, for a test that validates the
+/// file. With the `coverage-samples` feature, `validate` decodes coverage
+/// payloads, and a header with no image data is then a finding of its own.
+fn encoded_float_tile(side: u32) -> Vec<u8> {
+    let count = usize::try_from(side * side).unwrap();
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    tiff::encoder::TiffEncoder::new(&mut bytes)
+        .unwrap()
+        .with_compression(tiff::encoder::Compression::Lzw)
+        .write_image::<tiff::encoder::colortype::Gray32Float>(side, side, &vec![0.0; count])
+        .unwrap();
+    bytes.into_inner()
+}
+
 /// A new file with one coverage over a 256-unit square, one zoom level of a
 /// single 256-pixel tile.
 fn new_coverage(datatype: CoverageDatatype) -> (tempfile::TempDir, GeoPackage, String) {
@@ -391,7 +406,7 @@ fn every_written_tile_gets_an_ancillary_row() {
     let (_dir, gpkg, name) = new_coverage(CoverageDatatype::Float);
     let coverage = gpkg.coverage(&name).unwrap();
     coverage
-        .put_tile(TileCoord::new(0, 0, 0), &float_tile(256))
+        .put_tile(TileCoord::new(0, 0, 0), &encoded_float_tile(256))
         .unwrap();
 
     let (tiles, rows) = pairing(&gpkg, &name);

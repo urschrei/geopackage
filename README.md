@@ -42,7 +42,8 @@ LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS
 Without them, all connections in a process share one SQLite page cache behind
 one mutex, and the threads of a threaded Arrow read wait for each other.
 
-The `arrow` feature adds Arrow I/O. The minimum supported Rust version is 1.95.
+The `arrow` feature adds Arrow I/O, and `coverage-samples` decodes the samples
+of tiled gridded coverages. The minimum supported Rust version is 1.95.
 
 The command-line tool uses a vendored SQLite by default. Each GitHub release has
 binaries for Linux, macOS and Windows, which `cargo binstall` installs:
@@ -118,12 +119,13 @@ Only `geopackage-ffi` uses `unsafe`.
   dependency and no reprojection.
 - Tiles are stored and validated as bytes. Images aren't decoded, so the
   crate can't render tiles, reproject a pyramid, or build one from a raster.
-- Tiled gridded coverages (OGC 17-066r2) are fully supported, but their
-  samples aren't decoded either. Payloads are checked against the extension's
-  TIFF and PNG rules using their headers, and a coverage's scale, offset and
-  null value can be applied to samples you decode yourself. Per-tile
-  statistics are therefore whatever you supply, and Requirement 21 (no NaN or
-  infinite values) can't be enforced.
+- Tiled gridded coverages (OGC 17-066r2) are fully supported. By default
+  their samples aren't decoded either: payloads are checked against the
+  extension's TIFF and PNG rules using their headers, and a coverage's scale,
+  offset and null value can be applied to samples you decode yourself. The
+  `coverage-samples` feature adds the decode, for value lookups at a position
+  (nearest or bilinear, in the coverage's own CRS), calculated per-tile
+  statistics, and Requirement 21 (no NaN or infinite values).
 - Curved geometry types (`CIRCULARSTRING` and others) can be written, indexed
   and queried by extent, but can't be read back as geometry objects.
   `Feature::geometry_bytes` returns their WKB.

@@ -421,6 +421,60 @@ file without that row.
 - [x] `Extension::GriddedCoverage` cites r2 rather than r1. *(Landed with 2b,
       beside the support-level change it sits next to.)*
 
+## Phase 3: samples
+
+Added 2026-10-16, after a gap analysis against NGA's `geopackage-java`, the
+reference implementation. NGA's raster side does much more (tile rendering,
+pyramid generation from a URL or from features, reprojection, its tile scaling
+extension), but its coverage side is one thing above the header: values. Its
+`CoverageData.getValue(s)` decodes PNG and TIFF tiles and returns values at a
+point or over a box, with nearest, bilinear or bicubic interpolation. Neither
+NGA nor this crate computed per-tile statistics, and neither checked
+Requirement 21. Those three are what a decoder buys, and the rest of NGA's
+raster surface is the "build or render a pyramid" question that stays out
+(D3, and the non-goals below).
+
+- [x] The `coverage-samples` feature on `geopackage`, off by default:
+      `tiff` 0.11 (`lzw` and `deflate` only, so Deflate reads per C2) and
+      `png` 0.18. `geopackage-core` still decodes nothing.
+- [x] `Coverage::decode` and `Coverage::samples`, returning `TileSamples`:
+      the stored samples widened to `f64`, which is exact for every sample type
+      Requirement 17 permits. The payload is checked before it is decoded, and
+      the decoder's dimensions must agree with the header's.
+- [x] `Coverage::value_at` and `CoverageSampler`: nearest and bilinear, in the
+      coverage's own CRS, following `grid_cell_encoding`. `corner` is read as
+      the lower-left corner, after NGA, because the extension does not name
+      the corner; `area` makes a bilinear lookup nearest, because the
+      extension says the value holds across the cell; an unknown encoding is
+      read as `center`, again after NGA. A null, NaN or missing sample with
+      a weight above zero gives no value. Bicubic is left out: nothing here
+      asked for it, and NGA's is the only implementation to compare it with.
+- [x] `Coverage::statistics` and `CoverageWriter::put_with_statistics`. The
+      spec's "the min, max, and mean values are natural, i.e., not scaled or
+      offset" reads two ways; the two GDAL fixtures settle it, because their
+      rows agree and the PNG one has a per-tile scale: the statistics are of
+      values after the scale and offset. The standard deviation is the
+      population's, which GDAL's row matches to 1e-14 and the sample form
+      does not. `data_null` and non-finite samples are left out.
+- [x] Requirement 21: `Coverage::check_samples`, `put_with_statistics`
+      rejects, and `validate()` decodes every coverage tile and reports
+      `CoveragePayloadNonConformant` with requirement 21 (or 15 or 13 for data
+      that does not decode) as a second finding beside the header's.
+- [x] Tests (`geopackage/tests/coverage_samples.rs`): both GDAL fixtures
+      decode to their source grid (the PNG within one quantisation step, not
+      half a step, because GDAL moves the top of the range off the
+      `data_null` sentinel 65535, checked with an independent decode),
+      statistics against GDAL's rows, every cell encoding, lookups across tile
+      edges and missing tiles, and a Hegel property that a bilinear value is
+      bounded by the samples and equals the sample on its centre. Payloads
+      come from the `tiff` and `png` encoders, so the decode is not checked
+      only against itself.
+- [ ] `gpkg coverage value` and statistics in `gpkg coverage get`. Not done:
+      the CLI builds without the feature today, and whether it should carry
+      the two decoders by default is a separate decision.
+- [ ] Benchmark `validate()` on a coverage with the feature on. The decode
+      makes the one check that scales with the file size scale more steeply.
+
 ## Acceptance criteria
 
 These are phase 1's, and the milestone's as a whole; 2a adds none of its own,
@@ -449,9 +503,8 @@ because reading a coverage is only worth having once something reports on it
 
 ## Explicit non-goals
 
-- **Pixel access.** Returning samples needs `tiff`; off by default and in
-  `geopackage` or a `geopackage-coverage` crate rather than `-core`, whose
-  line is header inspection and never a decode. Not scheduled.
+- ~~**Pixel access.**~~ Done in phase 3, behind the `coverage-samples`
+  feature in `geopackage`, as planned.
 - **GeoTIFF ingest or export** (`gpkg tiles import dem.tif`): resampling and
   reprojection, not a codec question, and reprojection is D3's line. If it is
   ever wanted, the CLI shelling out to `gdal_translate -of GPKG` costs no

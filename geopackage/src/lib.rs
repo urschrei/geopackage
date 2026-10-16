@@ -226,9 +226,13 @@
 //! A tiled gridded coverage is a tile pyramid whose tiles hold measurements,
 //! such as elevations, instead of images. Create one with
 //! [`GeoPackage::create_coverage`] and open one with [`GeoPackage::coverage`].
-//! As with tiles, samples are never decoded: [`Coverage::value`] applies the
-//! coverage's scale, offset and null value to a sample you have decoded
-//! yourself.
+//! By default, as with tiles, samples are not decoded: [`Coverage::value`]
+//! applies the coverage's scale, offset and null value to a sample you have
+//! decoded yourself. With the `coverage-samples` feature,
+//! [`Coverage::value_at`] returns the value at a position, with nearest or
+//! bilinear interpolation, [`Coverage::statistics`] calculates a tile's
+//! statistics, and [`Coverage::check_samples`] checks Requirement 21 (no NaN
+//! or infinite samples).
 //!
 //! # Arrow
 //!
@@ -466,6 +470,9 @@
 //!   which converts a stored geometry to a `geo-types` geometry
 //! - **`arrow`**: Arrow record batch I/O. Adds dependencies on `arrow-array`
 //!   and `arrow-schema`
+//! - **`coverage-samples`**: Decode the samples of tiled gridded coverage
+//!   tiles, for value lookups, per-tile statistics and Requirement 21. Adds
+//!   dependencies on `tiff` and `png`
 //! - **`bundled`**: Compile and statically link a vendored SQLite instead of
 //!   linking the system library. Requires a C compiler. Required on Windows
 //!
@@ -522,6 +529,8 @@ mod writer;
 
 pub use bulk::{BulkIndexOptions, BulkVerification, DEFAULT_BULK_THRESHOLD, DEFAULT_FILL_FACTOR};
 pub use coverage::{Coverage, CoverageAncillary, CoverageBuilder, CoverageWriter, TileAncillary};
+#[cfg(feature = "coverage-samples")]
+pub use coverage::{CoverageSampler, Interpolation, SampleStatistics, TileSamples};
 pub use create::{
     ColumnSpec, DEFAULT_GEOMETRY_COLUMN, DEFAULT_PRIMARY_KEY, GeometrySpec, TableSchemaBuilder,
 };

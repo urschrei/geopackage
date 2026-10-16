@@ -12,11 +12,18 @@
 //!
 //! # Samples
 //!
-//! This module reads and writes metadata and bytes only. A coverage's samples
-//! are stored as TIFF or PNG, and this workspace decodes neither format.
-//! [`Coverage::get_tile`] returns the stored payload, and
+//! By default this module reads and writes metadata and bytes only. A
+//! coverage's samples are stored as TIFF or PNG, and the default build decodes
+//! neither format. [`Coverage::get_tile`] returns the stored payload, and
 //! [`Coverage::check_payload`] checks that the coverage permits the payload.
 //! [`Coverage::value`] converts a sample you have decoded into a value.
+//!
+//! The `coverage-samples` feature adds the decode: [`Coverage::samples`] and
+//! [`Coverage::decode`] return a tile's [`TileSamples`],
+//! [`Coverage::value_at`] and [`CoverageSampler`] look up values at a
+//! position, [`Coverage::statistics`] and
+//! [`CoverageWriter::put_with_statistics`] calculate the per-tile statistics,
+//! and [`Coverage::check_samples`] checks Requirement 21.
 //!
 //! # Why a coverage is not a [`TilePyramid`]
 //!
@@ -57,6 +64,13 @@ use rusqlite::{CachedStatement, Connection, OptionalExtension};
 use crate::tiles::{PyramidSpec, TileCursor, TilePyramid};
 use crate::transaction::{WriteTransaction, in_savepoint};
 use crate::{BoundingBox, Error, GeoPackage, Result, table_exists};
+
+#[cfg(feature = "coverage-samples")]
+mod samples;
+#[cfg(feature = "coverage-samples")]
+pub use samples::{CoverageSampler, Interpolation, SampleStatistics, TileSamples};
+#[cfg(feature = "coverage-samples")]
+pub(crate) use samples::{check_finite, decode_payload};
 
 /// A `gpkg_2d_gridded_coverage_ancillary` row, which states what the samples of
 /// a coverage mean.
@@ -110,7 +124,8 @@ pub struct CoverageAncillary {
 /// Requirement 10 specifies one row for each tile. The table definition makes
 /// the four statistics optional, and a writer that does not decode samples
 /// cannot calculate them. `None` therefore means "not recorded", not "no
-/// value".
+/// value". The statistics are of values, after the scale and offset, as the
+/// extension specifies.
 ///
 /// Each value is stored as an SQLite `REAL`. A write rejects NaN, which
 /// SQLite stores as NULL, and SQLite stores a negative zero as zero, so a
@@ -159,10 +174,11 @@ impl TileAncillary {
         }
     }
 
-    /// Sets the statistics of the samples in the tile.
+    /// Sets the statistics of the values in the tile.
     ///
-    /// This workspace does not decode samples, so you must supply the
-    /// statistics.
+    /// Without the `coverage-samples` feature this crate does not decode
+    /// samples, so you supply the statistics. With it,
+    /// [`CoverageWriter::put_with_statistics`] calculates them.
     #[must_use]
     pub fn with_statistics(mut self, min: f64, max: f64, mean: f64, std_dev: f64) -> Self {
         self.min = Some(min);
@@ -286,7 +302,8 @@ impl<'a> Coverage<'a> {
     /// value that the spec does not define constrains nothing.
     ///
     /// Does not check Requirement 21 (every pixel valid, no NaN, no Inf). That
-    /// requirement is about samples, and this workspace does not check it.
+    /// requirement is about samples, which this check does not decode. With
+    /// the `coverage-samples` feature, [`Coverage::check_samples`] checks it.
     ///
     /// # Errors
     ///
@@ -307,14 +324,15 @@ impl<'a> Coverage<'a> {
     ///
     /// The spec gives the calculation as pseudo-code: multiply the stored value
     /// by the `scale` of the tile and add the `offset` of the tile, then do the
-    /// same with the pair of the coverage. You decode the sample, because this
-    /// workspace does not read pixels. The arithmetic is part of the extension,
-    /// so this crate supplies it.
+    /// same with the pair of the coverage. Without the `coverage-samples`
+    /// feature you decode the sample, because the default build does not read
+    /// pixels. The arithmetic is part of the extension, so this crate supplies
+    /// it either way.
     ///
     /// Do not use this function for `data_null`, which the requirement
     /// excludes. Use [`Coverage::is_null`].
     pub fn value(&self, tile: &TileAncillary, stored: f64) -> f64 {
-        (stored * tile.scale + tile.offset) * self.ancillary.scale + self.ancillary.offset
+        natural_value(&self.ancillary, tile, stored)
     }
 
     /// Returns `true` if a stored sample is the "no data" value of the
@@ -325,7 +343,7 @@ impl<'a> Coverage<'a> {
     /// `data_null` value". A tolerance would also match valid samples near the
     /// sentinel.
     pub fn is_null(&self, stored: f64) -> bool {
-        self.ancillary.data_null == Some(stored)
+        is_null(&self.ancillary, stored)
     }
 
     /// Returns one tile's payload, or `None` if the coverage has no tile
@@ -467,6 +485,18 @@ impl std::fmt::Debug for Coverage<'_> {
             .field("zoom_levels", &self.zoom_levels())
             .finish_non_exhaustive()
     }
+}
+
+/// The extension's conversion of a stored sample to a value: the pair of the
+/// tile, then the pair of the coverage.
+fn natural_value(coverage: &CoverageAncillary, tile: &TileAncillary, stored: f64) -> f64 {
+    (stored * tile.scale + tile.offset) * coverage.scale + coverage.offset
+}
+
+/// Whether a stored sample is the coverage's `data_null`, compared exactly
+/// and before any scale or offset, as [`Coverage::is_null`] explains.
+fn is_null(coverage: &CoverageAncillary, stored: f64) -> bool {
+    coverage.data_null == Some(stored)
 }
 
 /// Reads the `gpkg_2d_gridded_coverage_ancillary` row of a coverage.
@@ -698,10 +728,11 @@ impl GeoPackage {
     ///
     /// # Per-tile statistics
     ///
-    /// The file contains per-tile statistics only if you supply them. `min`,
-    /// `max`, `mean` and `std_dev` come from the samples, which this workspace
-    /// does not decode, and the table definition makes all four optional. See
-    /// [`CoverageWriter::put_with_ancillary`].
+    /// The file contains per-tile statistics only if they are written. `min`,
+    /// `max`, `mean` and `std_dev` come from the samples, and the table
+    /// definition makes all four optional. Supply them through
+    /// [`CoverageWriter::put_with_ancillary`], or, with the `coverage-samples`
+    /// feature, have [`CoverageWriter::put_with_statistics`] calculate them.
     ///
     /// # Errors
     ///
@@ -911,6 +942,11 @@ pub struct CoverageWriter<'conn> {
     conn: &'conn Connection,
     table_name: String,
     datatype: Option<CoverageDatatype>,
+    /// The coverage row, for the statistics of
+    /// [`CoverageWriter::put_with_statistics`], which are in values and so
+    /// need the scale, offset and `data_null` of the coverage.
+    #[cfg(feature = "coverage-samples")]
+    ancillary: CoverageAncillary,
     /// The zoom levels of the coverage, ascending. Copied as
     /// [`crate::TileWriter`] copies the zoom levels of a pyramid, for the same
     /// reason.
@@ -935,6 +971,8 @@ impl<'conn> CoverageWriter<'conn> {
             conn,
             table_name: coverage.table_name().to_owned(),
             datatype: coverage.datatype(),
+            #[cfg(feature = "coverage-samples")]
+            ancillary: coverage.ancillary().clone(),
             matrices: coverage.matrices().to_vec(),
             put_stmt: conn.prepare_cached(&format!(
                 "INSERT INTO {table} (zoom_level, tile_column, tile_row, tile_data) \
@@ -981,8 +1019,10 @@ impl<'conn> CoverageWriter<'conn> {
     /// Writes one tile with the ancillary row you supply.
     ///
     /// If you decoded the samples, supply the statistics here. The table
-    /// definition makes the four statistics optional, and this workspace does
+    /// definition makes the four statistics optional, and this function does
     /// not decode samples, so it cannot calculate them.
+    /// [`CoverageWriter::put_with_statistics`], with the `coverage-samples`
+    /// feature, does.
     ///
     /// # Checks
     ///
@@ -994,8 +1034,10 @@ impl<'conn> CoverageWriter<'conn> {
     ///
     /// **This function does not check Requirement 21** ("all pixels … set with
     /// a valid component value … NaN and Inf SHALL NOT be used"). That
-    /// requirement is about samples, and this crate does not decode samples. If
-    /// you write a payload from another source, you are responsible for it.
+    /// requirement is about samples, and this function does not decode
+    /// samples. If you write a payload from another source, you are responsible
+    /// for it, or, with the `coverage-samples` feature,
+    /// [`CoverageWriter::put_with_statistics`] checks it.
     ///
     /// # Errors
     ///

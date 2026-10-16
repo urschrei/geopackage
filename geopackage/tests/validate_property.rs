@@ -46,29 +46,31 @@ fn webp(side: u32) -> Vec<u8> {
     bytes
 }
 
-/// A coverage TIFF header of the given size and sample type.
-fn tiff(side: u16, sample_format: u16, bits: u16) -> Vec<u8> {
-    let entries: [(u16, u16); 7] = [
-        (256, side),
-        (257, side),
-        (258, bits),
-        (259, 5),
-        (277, 1),
-        (278, side),
-        (339, sample_format),
-    ];
-    let mut bytes = b"II\x2a\x00".to_vec();
-    bytes.extend_from_slice(&8u32.to_le_bytes());
-    bytes.extend_from_slice(&7u16.to_le_bytes());
-    for (tag, value) in entries {
-        bytes.extend_from_slice(&tag.to_le_bytes());
-        bytes.extend_from_slice(&3u16.to_le_bytes());
-        bytes.extend_from_slice(&1u32.to_le_bytes());
-        bytes.extend_from_slice(&value.to_le_bytes());
-        bytes.extend_from_slice(&[0, 0]);
+/// A coverage TIFF of the given size, float32 or 16-bit unsigned, every sample
+/// zero, encoded by `tiff`.
+///
+/// A whole image rather than a header: with the `coverage-samples` feature,
+/// `validate` decodes coverage payloads, and a header with no image data is
+/// then a finding of its own.
+fn tiff(side: u16, float: bool) -> Vec<u8> {
+    use tiff::encoder::{Compression, TiffEncoder, colortype};
+
+    let side = u32::from(side);
+    let count = usize::try_from(side * side).unwrap();
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    let mut encoder = TiffEncoder::new(&mut bytes)
+        .unwrap()
+        .with_compression(Compression::Lzw);
+    if float {
+        encoder
+            .write_image::<colortype::Gray32Float>(side, side, &vec![0.0; count])
+            .unwrap();
+    } else {
+        encoder
+            .write_image::<colortype::Gray16>(side, side, &vec![0; count])
+            .unwrap();
     }
-    bytes.extend_from_slice(&0u32.to_le_bytes());
-    bytes
+    bytes.into_inner()
 }
 
 /// A little-endian `CIRCULARSTRING` body through three points.
@@ -208,11 +210,7 @@ fn apply(tc: &hegel::TestCase, gpkg: &GeoPackage, created: &mut Created) {
                         .matrix(TileMatrix::new(0, 1, 1, 16, 16, 1.0, 1.0)),
                 )
                 .unwrap();
-            let payload = if float {
-                tiff(16, 3, 32)
-            } else {
-                tiff(16, 1, 16)
-            };
+            let payload = tiff(16, float);
             coverage
                 .put_tile(TileCoord::new(0, 0, 0), &payload)
                 .unwrap();
@@ -374,11 +372,7 @@ fn build_clean() -> GeoPackage {
                     .matrix(TileMatrix::new(0, 1, 1, 16, 16, 1.0, 1.0)),
             )
             .unwrap();
-        let payload = if datatype == CoverageDatatype::Float {
-            tiff(16, 3, 32)
-        } else {
-            tiff(16, 1, 16)
-        };
+        let payload = tiff(16, datatype == CoverageDatatype::Float);
         coverage
             .put_tile(TileCoord::new(0, 0, 0), &payload)
             .unwrap();
@@ -564,7 +558,7 @@ fn corrupt(tc: &hegel::TestCase, gpkg: &GeoPackage, defect: usize) -> Key {
         }
         14 => {
             gpkg.connection()
-                .execute("UPDATE cov_mismatch SET tile_data = ?1", [tiff(16, 3, 32)])
+                .execute("UPDATE cov_mismatch SET tile_data = ?1", [tiff(16, true)])
                 .unwrap();
             expect("CoveragePayloadDatatypeMismatch", Some("cov_mismatch"))
         }
