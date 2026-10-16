@@ -1426,10 +1426,6 @@ mod tests {
     /// Three columns of a third over `[-1, 0]`: the last column's east edge
     /// is `max_x`, which `-1 + 2/3 + 1/3` does not reach.
     #[test]
-    #[expect(
-        clippy::float_cmp,
-        reason = "adjacent tiles must share a bit-identical edge, so exact equality is the property under test; a tolerance would accept gaps and overlaps"
-    )]
     fn the_outer_tile_edges_are_the_extent() {
         let set = TileMatrixSet::new(0, -1.0, 0.0, 0.0, 1.0);
         let matrices = set
@@ -1440,14 +1436,14 @@ mod tests {
         assert_eq!((last.max_x, last.min_y), (set.max_x, set.min_y));
         for index in 0..2 {
             assert_eq!(
-                set.tile_bounds(&matrix, index, 0).max_x,
-                set.tile_bounds(&matrix, index + 1, 0).min_x,
-                "adjacent columns share their edge"
+                set.tile_bounds(&matrix, index, 0).max_x.to_bits(),
+                set.tile_bounds(&matrix, index + 1, 0).min_x.to_bits(),
+                "adjacent columns share a bit-identical edge"
             );
             assert_eq!(
-                set.tile_bounds(&matrix, 0, index).min_y,
-                set.tile_bounds(&matrix, 0, index + 1).max_y,
-                "adjacent rows share their edge"
+                set.tile_bounds(&matrix, 0, index).min_y.to_bits(),
+                set.tile_bounds(&matrix, 0, index + 1).max_y.to_bits(),
+                "adjacent rows share a bit-identical edge"
             );
         }
         assert_eq!(set.tile_at(&matrix, -1e-17, 0.5), Some((2, 1)));
