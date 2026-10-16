@@ -696,9 +696,8 @@ fn draw_ancillary(tc: &hegel::TestCase, datatype: CoverageDatatype, scaled: bool
     let mut ancillary = if datatype == CoverageDatatype::Integer || scaled {
         let (scale, offset) = (draw_non_nan_f64(tc), draw_non_nan_f64(tc));
         if scaled {
-            tc.assume(
-                scale.to_bits() != 1.0_f64.to_bits() || offset.to_bits() != 0.0_f64.to_bits(),
-            );
+            // Compare values, not bits: an offset of -0.0 is the default.
+            tc.assume(scale != 1.0 || offset != 0.0);
         }
         TileAncillary::new(scale, offset)
     } else {
