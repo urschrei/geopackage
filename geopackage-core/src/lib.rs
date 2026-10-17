@@ -25,7 +25,8 @@
 //!   version
 //! - **[`tiles`]**: Tile pyramid table definitions and the tile matrix model
 //! - **[`coverage`]**: Payload rules for tiled gridded coverages, checked from
-//!   the TIFF or PNG header
+//!   the TIFF or PNG header, the ancillary rows, and, with the
+//!   `coverage-samples` feature, sample decoding, statistics and value lookups
 //! - **[`schema`]**: Column descriptions and value constraints from the
 //!   `gpkg_schema` extension (Annex F.9)
 //! - **[`metadata`]**: Metadata records and references from the
@@ -65,6 +66,9 @@
 //! - **`geo-types`** (default): Enables [`GpbGeometry::to_geo`], which converts
 //!   a parsed geometry to a `geo-types` geometry. The [`geo_traits`]
 //!   implementation doesn't need it
+//! - **`coverage-samples`**: Decodes the samples of tiled gridded coverage
+//!   tiles, for Requirement 21, per-tile statistics and value lookups. Adds
+//!   dependencies on `tiff` and `png`. Image tiles are never decoded
 
 // `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
 // workspace lints table (root Cargo.toml). This crate never uses `unsafe`; the

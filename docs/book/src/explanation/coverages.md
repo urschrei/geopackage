@@ -56,8 +56,14 @@ The decoder is behind the `coverage-samples` feature, which adds the `tiff` and
 position, and calculates per-tile statistics. [How to read values from a
 coverage](../how-to/coverage-values.md) shows each of these. The feature stays
 off by default because a reader that only copies or serves tiles never needs a
-sample, and the core crate never decodes: the header check above is all
-`geopackage-core` does.
+sample.
+
+The decode is in `geopackage-core`, behind a feature of the same name that
+`geopackage` turns on. A coverage's samples are its data, and the rules about
+them (Requirement 21, the scale and offset, `data_null`, `grid_cell_encoding`,
+what the statistics columns mean) are part of the format, which is what the
+core crate holds. Image tiles are different: the spec says nothing about their
+pixels, so neither crate decodes them.
 
 Without the feature, the same limit applies to the write path. The four
 per-tile statistics come from the samples, so they are `None` unless you supply

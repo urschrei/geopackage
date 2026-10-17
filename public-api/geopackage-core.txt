@@ -15,6 +15,9 @@ pub fn geopackage_core::coverage::CoveragePayload::height(self) -> i64
 pub fn geopackage_core::coverage::CoveragePayload::mime_type(self) -> &'static str
 pub fn geopackage_core::coverage::CoveragePayload::sample_type(self) -> geopackage_core::coverage::SampleType
 pub fn geopackage_core::coverage::CoveragePayload::width(self) -> i64
+#[non_exhaustive] pub enum geopackage_core::coverage::Interpolation
+pub geopackage_core::coverage::Interpolation::Bilinear
+pub geopackage_core::coverage::Interpolation::Nearest
 #[non_exhaustive] pub enum geopackage_core::coverage::SampleType
 pub geopackage_core::coverage::SampleType::Float32
 pub geopackage_core::coverage::SampleType::Signed(u8)
@@ -27,6 +30,22 @@ pub geopackage_core::coverage::TiffCompression::Lzw
 pub geopackage_core::coverage::TiffCompression::None
 impl geopackage_core::coverage::TiffCompression
 pub fn geopackage_core::coverage::TiffCompression::is_baseline(self) -> bool
+#[non_exhaustive] pub struct geopackage_core::coverage::CoverageAncillary
+pub geopackage_core::coverage::CoverageAncillary::data_null: core::option::Option<f64>
+pub geopackage_core::coverage::CoverageAncillary::datatype: alloc::string::String
+pub geopackage_core::coverage::CoverageAncillary::field_name: core::option::Option<alloc::string::String>
+pub geopackage_core::coverage::CoverageAncillary::grid_cell_encoding: core::option::Option<alloc::string::String>
+pub geopackage_core::coverage::CoverageAncillary::offset: f64
+pub geopackage_core::coverage::CoverageAncillary::precision: core::option::Option<f64>
+pub geopackage_core::coverage::CoverageAncillary::quantity_definition: core::option::Option<alloc::string::String>
+pub geopackage_core::coverage::CoverageAncillary::scale: f64
+pub geopackage_core::coverage::CoverageAncillary::tile_matrix_set_name: alloc::string::String
+pub geopackage_core::coverage::CoverageAncillary::uom: core::option::Option<alloc::string::String>
+impl geopackage_core::coverage::CoverageAncillary
+pub fn geopackage_core::coverage::CoverageAncillary::datatype(&self) -> core::option::Option<geopackage_core::coverage::CoverageDatatype>
+pub fn geopackage_core::coverage::CoverageAncillary::is_null(&self, f64) -> bool
+pub fn geopackage_core::coverage::CoverageAncillary::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn geopackage_core::coverage::CoverageAncillary::value(&self, &geopackage_core::coverage::TileAncillary, f64) -> f64
 #[non_exhaustive] pub struct geopackage_core::coverage::CoveragePng
 pub geopackage_core::coverage::CoveragePng::height: i64
 pub geopackage_core::coverage::CoveragePng::width: i64
@@ -35,15 +54,56 @@ pub geopackage_core::coverage::CoverageTiff::compression: geopackage_core::cover
 pub geopackage_core::coverage::CoverageTiff::height: i64
 pub geopackage_core::coverage::CoverageTiff::sample_type: geopackage_core::coverage::SampleType
 pub geopackage_core::coverage::CoverageTiff::width: i64
+pub struct geopackage_core::coverage::SampleLookup
+impl geopackage_core::coverage::SampleLookup
+pub fn geopackage_core::coverage::SampleLookup::new(&geopackage_core::tiles::TileMatrixSet, &geopackage_core::tiles::TileMatrix, &geopackage_core::coverage::CoverageAncillary, f64, f64, geopackage_core::coverage::Interpolation) -> core::option::Option<Self>
+pub fn geopackage_core::coverage::SampleLookup::samples(&self) -> &[geopackage_core::coverage::WeightedSample]
+pub fn geopackage_core::coverage::SampleLookup::value<E>(&self, impl core::ops::function::FnMut(&geopackage_core::coverage::WeightedSample) -> core::result::Result<core::option::Option<f64>, E>) -> core::result::Result<core::option::Option<f64>, E>
+#[non_exhaustive] pub struct geopackage_core::coverage::SampleStatistics
+pub geopackage_core::coverage::SampleStatistics::count: usize
+pub geopackage_core::coverage::SampleStatistics::max: f64
+pub geopackage_core::coverage::SampleStatistics::mean: f64
+pub geopackage_core::coverage::SampleStatistics::min: f64
+pub geopackage_core::coverage::SampleStatistics::std_dev: f64
+#[non_exhaustive] pub struct geopackage_core::coverage::TileAncillary
+pub geopackage_core::coverage::TileAncillary::max: core::option::Option<f64>
+pub geopackage_core::coverage::TileAncillary::mean: core::option::Option<f64>
+pub geopackage_core::coverage::TileAncillary::min: core::option::Option<f64>
+pub geopackage_core::coverage::TileAncillary::offset: f64
+pub geopackage_core::coverage::TileAncillary::scale: f64
+pub geopackage_core::coverage::TileAncillary::std_dev: core::option::Option<f64>
+impl geopackage_core::coverage::TileAncillary
+pub fn geopackage_core::coverage::TileAncillary::defaults() -> Self
+pub fn geopackage_core::coverage::TileAncillary::new(f64, f64) -> Self
+pub fn geopackage_core::coverage::TileAncillary::with_statistics(self, f64, f64, f64, f64) -> Self
+pub struct geopackage_core::coverage::TileSamples
+impl geopackage_core::coverage::TileSamples
+pub fn geopackage_core::coverage::TileSamples::as_slice(&self) -> &[f64]
+pub fn geopackage_core::coverage::TileSamples::check_finite(&self) -> core::result::Result<(), geopackage_core::tiles::TileError>
+pub fn geopackage_core::coverage::TileSamples::get(&self, usize, usize) -> core::option::Option<f64>
+pub fn geopackage_core::coverage::TileSamples::height(&self) -> usize
+pub fn geopackage_core::coverage::TileSamples::into_vec(self) -> alloc::vec::Vec<f64>
+pub fn geopackage_core::coverage::TileSamples::statistics(&self, &geopackage_core::coverage::CoverageAncillary, &geopackage_core::coverage::TileAncillary) -> core::option::Option<geopackage_core::coverage::SampleStatistics>
+pub fn geopackage_core::coverage::TileSamples::value(&self, usize, usize, &geopackage_core::coverage::CoverageAncillary, &geopackage_core::coverage::TileAncillary) -> core::option::Option<f64>
+pub fn geopackage_core::coverage::TileSamples::width(&self) -> usize
+#[non_exhaustive] pub struct geopackage_core::coverage::WeightedSample
+pub geopackage_core::coverage::WeightedSample::column: i64
+pub geopackage_core::coverage::WeightedSample::row: i64
+pub geopackage_core::coverage::WeightedSample::weight: f64
+impl geopackage_core::coverage::WeightedSample
+pub fn geopackage_core::coverage::WeightedSample::tile(&self, &geopackage_core::tiles::TileMatrix) -> core::option::Option<(geopackage_core::tiles::TileCoord, usize, usize)>
 pub const geopackage_core::coverage::COVERAGE_ANCILLARY_TABLE: &str
 pub const geopackage_core::coverage::COVERAGE_DATA_TYPE: &str
 pub const geopackage_core::coverage::COVERAGE_EXTENSION_DEFINITION: &str
 pub const geopackage_core::coverage::COVERAGE_EXTENSION_NAME: &str
 pub const geopackage_core::coverage::COVERAGE_EXTENSION_SCOPE: &str
+pub const geopackage_core::coverage::MAX_DECODED_SAMPLES: usize
 pub const geopackage_core::coverage::TILE_ANCILLARY_TABLE: &str
 pub fn geopackage_core::coverage::coverage_payload(&[u8]) -> core::result::Result<geopackage_core::coverage::CoveragePayload, geopackage_core::tiles::TileError>
 pub fn geopackage_core::coverage::coverage_png(&[u8]) -> core::result::Result<geopackage_core::coverage::CoveragePng, geopackage_core::tiles::TileError>
 pub fn geopackage_core::coverage::coverage_tiff(&[u8]) -> core::result::Result<geopackage_core::coverage::CoverageTiff, geopackage_core::tiles::TileError>
+pub fn geopackage_core::coverage::decode_payload(&[u8], &geopackage_core::coverage::CoveragePayload) -> core::result::Result<geopackage_core::coverage::TileSamples, geopackage_core::tiles::TileError>
+pub fn geopackage_core::coverage::decode_samples(&[u8]) -> core::result::Result<geopackage_core::coverage::TileSamples, geopackage_core::tiles::TileError>
 pub mod geopackage_core::curve
 pub struct geopackage_core::curve::BodyScan
 pub geopackage_core::curve::BodyScan::dimensions: geo_traits::dimension::Dimensions
@@ -401,6 +461,10 @@ pub geopackage_core::tiles::TileError::PayloadSizeMismatch::actual_width: i64
 pub geopackage_core::tiles::TileError::PayloadSizeMismatch::expected_height: i64
 pub geopackage_core::tiles::TileError::PayloadSizeMismatch::expected_width: i64
 pub geopackage_core::tiles::TileError::PayloadSizeMismatch::zoom_level: i64
+pub geopackage_core::tiles::TileError::PayloadTooLarge
+pub geopackage_core::tiles::TileError::PayloadTooLarge::height: i64
+pub geopackage_core::tiles::TileError::PayloadTooLarge::limit: usize
+pub geopackage_core::tiles::TileError::PayloadTooLarge::width: i64
 pub geopackage_core::tiles::TileError::PixelSizeNotDescending
 pub geopackage_core::tiles::TileError::PixelSizeNotDescending::field: &'static str
 pub geopackage_core::tiles::TileError::PixelSizeNotDescending::previous_value: f64
@@ -708,6 +772,10 @@ pub geopackage_core::TileError::PayloadSizeMismatch::actual_width: i64
 pub geopackage_core::TileError::PayloadSizeMismatch::expected_height: i64
 pub geopackage_core::TileError::PayloadSizeMismatch::expected_width: i64
 pub geopackage_core::TileError::PayloadSizeMismatch::zoom_level: i64
+pub geopackage_core::TileError::PayloadTooLarge
+pub geopackage_core::TileError::PayloadTooLarge::height: i64
+pub geopackage_core::TileError::PayloadTooLarge::limit: usize
+pub geopackage_core::TileError::PayloadTooLarge::width: i64
 pub geopackage_core::TileError::PixelSizeNotDescending
 pub geopackage_core::TileError::PixelSizeNotDescending::field: &'static str
 pub geopackage_core::TileError::PixelSizeNotDescending::previous_value: f64

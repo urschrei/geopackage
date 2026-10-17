@@ -1,17 +1,22 @@
 pub mod geopackage
 pub use geopackage::ColumnConstraint
 pub use geopackage::ConstraintKind
+pub use geopackage::CoverageAncillary
 pub use geopackage::DataColumn
 pub use geopackage::Extension
 pub use geopackage::ExtensionScope
 pub use geopackage::ExtensionSupport
 pub use geopackage::GpkgVersion
+pub use geopackage::Interpolation
 pub use geopackage::MetadataRecord
 pub use geopackage::MetadataReference
 pub use geopackage::MetadataScope
 pub use geopackage::ReferenceScope
 pub use geopackage::Relation
 pub use geopackage::RelationName
+pub use geopackage::SampleStatistics
+pub use geopackage::TileAncillary
+pub use geopackage::TileSamples
 pub use geopackage::core
 pub mod geopackage::arrow
 pub struct geopackage::arrow::ArrowBatches<'a>
@@ -266,9 +271,6 @@ pub fn geopackage::Finding::severity(&self) -> geopackage::Severity
 pub fn geopackage::Finding::table_name(&self) -> core::option::Option<&str>
 impl core::fmt::Display for geopackage::Finding
 pub fn geopackage::Finding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-#[non_exhaustive] pub enum geopackage::Interpolation
-pub geopackage::Interpolation::Bilinear
-pub geopackage::Interpolation::Nearest
 #[non_exhaustive] pub enum geopackage::JournalMode
 pub geopackage::JournalMode::Delete
 pub geopackage::JournalMode::Wal
@@ -433,7 +435,7 @@ pub fn geopackage::ConversionOptions::with_datetime(self, geopackage::DateTimePa
 pub fn geopackage::ConversionOptions::with_storage(self, geopackage::StorageStrictness) -> Self
 pub struct geopackage::Coverage<'a>
 impl<'a> geopackage::Coverage<'a>
-pub fn geopackage::Coverage<'a>::ancillary(&self) -> &geopackage::CoverageAncillary
+pub fn geopackage::Coverage<'a>::ancillary(&self) -> &geopackage_core::coverage::ancillary::CoverageAncillary
 pub fn geopackage::Coverage<'a>::check_payload(&self, &[u8]) -> geopackage::Result<geopackage_core::coverage::CoveragePayload>
 pub fn geopackage::Coverage<'a>::cursor(&self) -> geopackage::Result<geopackage::TileCursor<'_>>
 pub fn geopackage::Coverage<'a>::cursor_at(&self, i64) -> geopackage::Result<geopackage::TileCursor<'_>>
@@ -448,36 +450,25 @@ pub fn geopackage::Coverage<'a>::matrices(&self) -> &[geopackage_core::tiles::Ti
 pub fn geopackage::Coverage<'a>::matrix(&self, i64) -> core::option::Option<&geopackage_core::tiles::TileMatrix>
 pub fn geopackage::Coverage<'a>::matrix_set(&self) -> &geopackage_core::tiles::TileMatrixSet
 pub fn geopackage::Coverage<'a>::table_name(&self) -> &str
-pub fn geopackage::Coverage<'a>::tile_ancillary(&self, geopackage_core::tiles::TileCoord) -> geopackage::Result<core::option::Option<geopackage::TileAncillary>>
+pub fn geopackage::Coverage<'a>::tile_ancillary(&self, geopackage_core::tiles::TileCoord) -> geopackage::Result<core::option::Option<geopackage_core::coverage::ancillary::TileAncillary>>
 pub fn geopackage::Coverage<'a>::tile_count(&self) -> geopackage::Result<i64>
 pub fn geopackage::Coverage<'a>::tile_count_at(&self, i64) -> geopackage::Result<i64>
 pub fn geopackage::Coverage<'a>::validate(&self) -> geopackage::Result<()>
-pub fn geopackage::Coverage<'a>::value(&self, &geopackage::TileAncillary, f64) -> f64
+pub fn geopackage::Coverage<'a>::value(&self, &geopackage_core::coverage::ancillary::TileAncillary, f64) -> f64
 pub fn geopackage::Coverage<'a>::zoom_levels(&self) -> alloc::vec::Vec<i64>
 impl<'a> geopackage::Coverage<'a>
-pub fn geopackage::Coverage<'a>::check_samples(&self, &geopackage::TileSamples) -> geopackage::Result<()>
-pub fn geopackage::Coverage<'a>::decode(&self, &[u8]) -> geopackage::Result<geopackage::TileSamples>
+pub fn geopackage::Coverage<'a>::check_samples(&self, &geopackage_core::coverage::samples::TileSamples) -> geopackage::Result<()>
+pub fn geopackage::Coverage<'a>::decode(&self, &[u8]) -> geopackage::Result<geopackage_core::coverage::samples::TileSamples>
 pub fn geopackage::Coverage<'a>::sampler(&self, i64) -> geopackage::Result<geopackage::CoverageSampler<'_>>
-pub fn geopackage::Coverage<'a>::samples(&self, geopackage_core::tiles::TileCoord) -> geopackage::Result<core::option::Option<geopackage::TileSamples>>
-pub fn geopackage::Coverage<'a>::statistics(&self, &geopackage::TileSamples, &geopackage::TileAncillary) -> core::option::Option<geopackage::SampleStatistics>
-pub fn geopackage::Coverage<'a>::value_at(&self, i64, f64, f64, geopackage::Interpolation) -> geopackage::Result<core::option::Option<f64>>
+pub fn geopackage::Coverage<'a>::samples(&self, geopackage_core::tiles::TileCoord) -> geopackage::Result<core::option::Option<geopackage_core::coverage::samples::TileSamples>>
+pub fn geopackage::Coverage<'a>::statistics(&self, &geopackage_core::coverage::samples::TileSamples, &geopackage_core::coverage::ancillary::TileAncillary) -> core::option::Option<geopackage_core::coverage::samples::SampleStatistics>
+pub fn geopackage::Coverage<'a>::value_at(&self, i64, f64, f64, geopackage_core::coverage::samples::Interpolation) -> geopackage::Result<core::option::Option<f64>>
 impl<'a> geopackage::Coverage<'a>
 pub fn geopackage::Coverage<'a>::delete_tile(&self, geopackage_core::tiles::TileCoord) -> geopackage::Result<bool>
 pub fn geopackage::Coverage<'a>::put_tile(&self, geopackage_core::tiles::TileCoord, &[u8]) -> geopackage::Result<()>
 pub fn geopackage::Coverage<'a>::writer(&self) -> geopackage::Result<geopackage::CoverageWriter<'a>>
 impl core::fmt::Debug for geopackage::Coverage<'_>
 pub fn geopackage::Coverage<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-#[non_exhaustive] pub struct geopackage::CoverageAncillary
-pub geopackage::CoverageAncillary::data_null: core::option::Option<f64>
-pub geopackage::CoverageAncillary::datatype: alloc::string::String
-pub geopackage::CoverageAncillary::field_name: core::option::Option<alloc::string::String>
-pub geopackage::CoverageAncillary::grid_cell_encoding: core::option::Option<alloc::string::String>
-pub geopackage::CoverageAncillary::offset: f64
-pub geopackage::CoverageAncillary::precision: core::option::Option<f64>
-pub geopackage::CoverageAncillary::quantity_definition: core::option::Option<alloc::string::String>
-pub geopackage::CoverageAncillary::scale: f64
-pub geopackage::CoverageAncillary::tile_matrix_set_name: alloc::string::String
-pub geopackage::CoverageAncillary::uom: core::option::Option<alloc::string::String>
 pub struct geopackage::CoverageBuilder
 impl geopackage::CoverageBuilder
 pub fn geopackage::CoverageBuilder::allow_zoom_other(self, bool) -> Self
@@ -496,17 +487,17 @@ pub fn geopackage::CoverageBuilder::table_name(&self) -> &str
 pub fn geopackage::CoverageBuilder::uom(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub struct geopackage::CoverageSampler<'c>
 impl geopackage::CoverageSampler<'_>
-pub fn geopackage::CoverageSampler<'_>::value_at(&mut self, f64, f64, geopackage::Interpolation) -> geopackage::Result<core::option::Option<f64>>
+pub fn geopackage::CoverageSampler<'_>::value_at(&mut self, f64, f64, geopackage_core::coverage::samples::Interpolation) -> geopackage::Result<core::option::Option<f64>>
 impl core::fmt::Debug for geopackage::CoverageSampler<'_>
 pub fn geopackage::CoverageSampler<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct geopackage::CoverageWriter<'conn>
 impl geopackage::CoverageWriter<'_>
-pub fn geopackage::CoverageWriter<'_>::put_with_statistics(&mut self, geopackage_core::tiles::TileCoord, &[u8], &geopackage::TileAncillary) -> geopackage::Result<()>
+pub fn geopackage::CoverageWriter<'_>::put_with_statistics(&mut self, geopackage_core::tiles::TileCoord, &[u8], &geopackage_core::coverage::ancillary::TileAncillary) -> geopackage::Result<()>
 impl<'conn> geopackage::CoverageWriter<'conn>
 pub fn geopackage::CoverageWriter<'conn>::commit(self) -> geopackage::Result<()>
 pub fn geopackage::CoverageWriter<'conn>::delete(&mut self, geopackage_core::tiles::TileCoord) -> geopackage::Result<bool>
 pub fn geopackage::CoverageWriter<'conn>::put(&mut self, geopackage_core::tiles::TileCoord, &[u8]) -> geopackage::Result<()>
-pub fn geopackage::CoverageWriter<'conn>::put_with_ancillary(&mut self, geopackage_core::tiles::TileCoord, &[u8], &geopackage::TileAncillary) -> geopackage::Result<()>
+pub fn geopackage::CoverageWriter<'conn>::put_with_ancillary(&mut self, geopackage_core::tiles::TileCoord, &[u8], &geopackage_core::coverage::ancillary::TileAncillary) -> geopackage::Result<()>
 impl core::fmt::Debug for geopackage::CoverageWriter<'_>
 pub fn geopackage::CoverageWriter<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct geopackage::ExtensionRow
@@ -741,12 +732,6 @@ pub fn geopackage::OpenOptions::new() -> Self
 pub fn geopackage::OpenOptions::open<P: core::convert::AsRef<std::path::Path>>(self, P) -> geopackage::Result<geopackage::GeoPackage>
 pub fn geopackage::OpenOptions::open_read_only<P: core::convert::AsRef<std::path::Path>>(self, P) -> geopackage::Result<geopackage::GeoPackage>
 pub fn geopackage::OpenOptions::synchronous(self, geopackage::Synchronous) -> Self
-#[non_exhaustive] pub struct geopackage::SampleStatistics
-pub geopackage::SampleStatistics::count: usize
-pub geopackage::SampleStatistics::max: f64
-pub geopackage::SampleStatistics::mean: f64
-pub geopackage::SampleStatistics::min: f64
-pub geopackage::SampleStatistics::std_dev: f64
 #[non_exhaustive] pub struct geopackage::SpatialIndexAudit
 pub geopackage::SpatialIndexAudit::entries: usize
 pub geopackage::SpatialIndexAudit::extra: usize
@@ -791,17 +776,6 @@ pub fn geopackage::Tile<'_>::coord(&self) -> geopackage_core::tiles::TileCoord
 pub fn geopackage::Tile<'_>::data(&self) -> &[u8]
 pub fn geopackage::Tile<'_>::probe(&self) -> geopackage::Result<geopackage_core::tiles::TilePayload>
 pub fn geopackage::Tile<'_>::to_vec(&self) -> alloc::vec::Vec<u8>
-#[non_exhaustive] pub struct geopackage::TileAncillary
-pub geopackage::TileAncillary::max: core::option::Option<f64>
-pub geopackage::TileAncillary::mean: core::option::Option<f64>
-pub geopackage::TileAncillary::min: core::option::Option<f64>
-pub geopackage::TileAncillary::offset: f64
-pub geopackage::TileAncillary::scale: f64
-pub geopackage::TileAncillary::std_dev: core::option::Option<f64>
-impl geopackage::TileAncillary
-pub fn geopackage::TileAncillary::defaults() -> Self
-pub fn geopackage::TileAncillary::new(f64, f64) -> Self
-pub fn geopackage::TileAncillary::with_statistics(self, f64, f64, f64, f64) -> Self
 pub struct geopackage::TileCursor<'a>
 impl geopackage::TileCursor<'_>
 pub fn geopackage::TileCursor<'_>::tiles(&mut self) -> geopackage::Result<geopackage::TileStream<'_>>
@@ -842,13 +816,6 @@ pub fn geopackage::TilePyramidBuilder::matrices(self, impl core::iter::traits::c
 pub fn geopackage::TilePyramidBuilder::matrix(self, geopackage_core::tiles::TileMatrix) -> Self
 pub fn geopackage::TilePyramidBuilder::new(impl core::convert::Into<alloc::string::String>, geopackage_core::tiles::TileMatrixSet) -> Self
 pub fn geopackage::TilePyramidBuilder::table_name(&self) -> &str
-pub struct geopackage::TileSamples
-impl geopackage::TileSamples
-pub fn geopackage::TileSamples::as_slice(&self) -> &[f64]
-pub fn geopackage::TileSamples::get(&self, usize, usize) -> core::option::Option<f64>
-pub fn geopackage::TileSamples::height(&self) -> usize
-pub fn geopackage::TileSamples::into_vec(self) -> alloc::vec::Vec<f64>
-pub fn geopackage::TileSamples::width(&self) -> usize
 pub struct geopackage::TileStream<'c>
 impl geopackage::TileStream<'_>
 pub fn geopackage::TileStream<'_>::for_each(&mut self, impl core::ops::function::FnMut(&geopackage::Tile<'_>) -> geopackage::Result<()>) -> geopackage::Result<()>

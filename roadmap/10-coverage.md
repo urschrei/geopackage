@@ -39,6 +39,9 @@ answer when it comes. The assessment gives the reasons, and the measurement
 that its encoder is strip-only, which is what Requirement 20 requires and not a
 gap.
 
+*(Phase 3 added the decode, and phase 4 moved it into core. The header checks
+still need no codec.)*
+
 ### C2. Deflate: accepted on read, rejected on write
 
 Requirement 18 says that LZW *MAY* be used, and does not say "only LZW". But
@@ -475,6 +478,41 @@ raster surface is the "build or render a pyramid" question that stays out
 - [ ] Benchmark `validate()` on a coverage with the feature on. The decode
       makes the one check that scales with the file size scale more steeply.
 
+## Phase 4: samples in core
+
+Added 2026-10-17. Phase 3 put the decode in `geopackage` because of M4's "no
+decode in core" line, and C1 and the ecosystem assessment carried that line
+over without asking whether it fits. It does not. The line was written for
+image tiles, whose pixels the spec does not constrain. A coverage's samples
+are its data, and Requirement 21, the scale and offset, `data_null`,
+`grid_cell_encoding` and the meaning of the statistics columns are format
+rules. Core's charter is the format without a database, and of phase 3's code
+only the tile fetch, the sampler's cache and the statistics write needed
+SQLite.
+
+- [x] `coverage-samples` on `geopackage-core`, off by default, with the same
+      `tiff` and `png` dependencies; `geopackage`'s feature forwards it.
+      Image tiles are still never decoded.
+- [x] `CoverageAncillary` and `TileAncillary` move to core, with
+      `CoverageAncillary::value` and `is_null` beside them. `geopackage`
+      re-exports the names it had.
+- [x] In core: `decode_samples`, `decode_payload`, `TileSamples` with
+      `check_finite`, `statistics` and `value`, and `SampleLookup`, which
+      finds the `WeightedSample`s for a position from the grid alone and
+      combines the values a caller reads. `CoverageSampler` keeps the tile
+      cache and the fetch, and nothing else.
+- [x] A `coverage_samples` fuzz target beside `tile_payload`, seeded with
+      the two GDAL fixtures' tiles. Its first run found a payload of 172 bytes
+      whose PNG header declares 192 by 4,294,705,216 samples: the decoder
+      allocated the whole frame, about 1.6 TB, before reading any data,
+      because the `png` crate's limits do not cover the caller's buffer. The
+      same bytes in a file would have aborted `validate()` in phase 3's
+      build. Fixed with `MAX_DECODED_SAMPLES`, 4096 by 4096 (GDAL's largest
+      GeoPackage tile), checked from the header before either decoder runs,
+      and as the `tiff` decoder's buffer limit; a larger tile returns
+      `TileError::PayloadTooLarge`, and `validate()` skips its samples rather
+      than call it non-conformant.
+
 ## Acceptance criteria
 
 These are phase 1's, and the milestone's as a whole; 2a adds none of its own,
@@ -504,7 +542,8 @@ because reading a coverage is only worth having once something reports on it
 ## Explicit non-goals
 
 - ~~**Pixel access.**~~ Done in phase 3, behind the `coverage-samples`
-  feature in `geopackage`, as planned.
+  feature in `geopackage`, as planned, and moved to `geopackage-core` in
+  phase 4.
 - **GeoTIFF ingest or export** (`gpkg tiles import dem.tif`): resampling and
   reprojection, not a codec question, and reprojection is D3's line. If it is
   ever wanted, the CLI shelling out to `gdal_translate -of GPKG` costs no

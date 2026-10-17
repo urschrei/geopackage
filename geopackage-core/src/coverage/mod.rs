@@ -16,7 +16,7 @@
 //! | 20 | *SHALL NOT* contain internal tiles |
 //! | 21 | Every pixel valid; no NaN, no Inf |
 //!
-//! This module therefore needs no image codec. [`coverage_tiff`] checks
+//! The header checks therefore need no image codec. [`coverage_tiff`] checks
 //! Requirements 15 to 20 from the first IFD, the same header that
 //! [`crate::tiles::probe`] reads, and does not decode samples.
 //!
@@ -26,11 +26,24 @@
 //! [`CoverageDatatype::check_payload`] compares a payload with the `datatype`
 //! of its coverage.
 //!
-//! **This module does not check Requirement 21.** "All pixels in a tile of
+//! **The header checks do not check Requirement 21.** "All pixels in a tile of
 //! coverage data _SHALL_ be set with a valid component value … Special
 //! floating point values such as NaN and Inf SHALL NOT be used" is a statement
-//! about samples, and checking samples needs a decoder. A payload that this
-//! module accepts satisfies the structural requirements only.
+//! about samples, and checking samples needs a decoder. A payload that the
+//! header checks accept satisfies the structural requirements only.
+//!
+//! # Samples
+//!
+//! The `coverage-samples` feature adds the decode, with the `tiff` and `png`
+//! crates: `decode_samples` returns a tile's `TileSamples`, which check
+//! Requirement 21 and calculate the tile's statistics, and `SampleLookup`
+//! finds the samples for the value at a position. Image tiles stay opaque:
+//! this crate never decodes a PNG, JPEG or WebP map tile, whose pixels the
+//! spec does not constrain.
+//!
+//! [`CoverageAncillary`] and [`TileAncillary`] are the rows that state what the
+//! samples mean, and convert a stored sample to a value, with or without the
+//! feature.
 //!
 //! The requirement numbers are those of the migrated spec source,
 //! [`spec/2d-gridded-coverage/requirements`](https://github.com/opengeospatial/geopackage/tree/master/spec/2d-gridded-coverage/requirements).
@@ -45,6 +58,17 @@
 //! single number.
 
 use crate::tiles::TileError;
+
+mod ancillary;
+#[cfg(feature = "coverage-samples")]
+mod samples;
+
+pub use ancillary::{CoverageAncillary, TileAncillary};
+#[cfg(feature = "coverage-samples")]
+pub use samples::{
+    Interpolation, MAX_DECODED_SAMPLES, SampleLookup, SampleStatistics, TileSamples,
+    WeightedSample, decode_payload, decode_samples,
+};
 
 /// The registered extension name for tiled gridded coverages (OGC 17-066r2).
 pub const COVERAGE_EXTENSION_NAME: &str = "gpkg_2d_gridded_coverage";
