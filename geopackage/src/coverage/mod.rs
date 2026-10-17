@@ -68,126 +68,11 @@ use crate::{BoundingBox, Error, GeoPackage, Result, table_exists};
 #[cfg(feature = "coverage-samples")]
 mod samples;
 #[cfg(feature = "coverage-samples")]
-pub use samples::{CoverageSampler, Interpolation, SampleStatistics, TileSamples};
+pub use geopackage_core::coverage::{Interpolation, SampleStatistics, TileSamples};
 #[cfg(feature = "coverage-samples")]
-pub(crate) use samples::{check_finite, decode_payload};
+pub use samples::CoverageSampler;
 
-/// A `gpkg_2d_gridded_coverage_ancillary` row, which states what the samples of
-/// a coverage mean.
-///
-/// There is one row for each coverage (Requirements 1 and 7). The fields are
-/// the columns of the spec, including the optional columns. Requirement 1 lets
-/// an implementation add columns, and tells clients to ignore columns that they
-/// do not recognise. This struct reads a fixed set of columns, so it ignores
-/// other columns.
-///
-/// Each number is stored as an SQLite `REAL`. Creating a coverage rejects
-/// NaN, which SQLite stores as NULL, and SQLite stores a negative zero as
-/// zero, so a `-0.0` reads back as `0.0`.
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub struct CoverageAncillary {
-    /// The `gpkg_tile_matrix_set` and `gpkg_contents` row that this row
-    /// describes (Requirements 7 and 8).
-    pub tile_matrix_set_name: String,
-    /// `integer` or `float` (Requirement 9), as stored.
-    ///
-    /// The field is text, because a read does not reject a file.
-    /// [`Coverage::datatype`] returns the parsed form, or `None` for a value
-    /// that the requirement does not permit.
-    pub datatype: String,
-    /// The scale for all samples in the coverage. Requirement 11 sets it to
-    /// 1.0 for a `float` coverage.
-    pub scale: f64,
-    /// The offset for all samples in the coverage, applied after the scale.
-    pub offset: f64,
-    /// The smallest difference between two values that the coverage
-    /// distinguishes.
-    pub precision: Option<f64>,
-    /// The sample value that means "no data", to which scale and offset do
-    /// **not** apply.
-    pub data_null: Option<f64>,
-    /// The position of the value in a cell: `grid-value-is-center`,
-    /// `grid-value-is-area`, or a corner.
-    pub grid_cell_encoding: Option<String>,
-    /// The unit of measure of the values.
-    pub uom: Option<String>,
-    /// The name of the quantity: `Height` by default.
-    pub field_name: Option<String>,
-    /// The definition of the quantity that the field measures.
-    pub quantity_definition: Option<String>,
-}
-
-/// A `gpkg_2d_gridded_tile_ancillary` row: the scale, offset and statistics of
-/// one tile.
-///
-/// Requirement 10 specifies one row for each tile. The table definition makes
-/// the four statistics optional, and a writer that does not decode samples
-/// cannot calculate them. `None` therefore means "not recorded", not "no
-/// value". The statistics are of values, after the scale and offset, as the
-/// extension specifies.
-///
-/// Each value is stored as an SQLite `REAL`. A write rejects NaN, which
-/// SQLite stores as NULL, and SQLite stores a negative zero as zero, so a
-/// `-0.0` reads back as `0.0`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[non_exhaustive]
-pub struct TileAncillary {
-    /// The scale for the tile, applied before the scale of the coverage.
-    /// Requirement 11 sets it to 1.0 for a `float` coverage.
-    pub scale: f64,
-    /// The offset for the tile, applied after the scale of the tile.
-    pub offset: f64,
-    /// The smallest sample in the tile, if recorded.
-    pub min: Option<f64>,
-    /// The largest sample in the tile, if recorded.
-    pub max: Option<f64>,
-    /// The mean of the samples in the tile, if recorded.
-    pub mean: Option<f64>,
-    /// The standard deviation of the samples in the tile, if recorded.
-    pub std_dev: Option<f64>,
-}
-
-impl TileAncillary {
-    /// Returns the default row: scale 1.0, offset 0.0, and no statistics.
-    ///
-    /// Requirement 11 specifies these values for a `float` coverage. For an
-    /// `integer` coverage, they mean that the samples are the values.
-    pub fn defaults() -> Self {
-        Self {
-            scale: 1.0,
-            offset: 0.0,
-            min: None,
-            max: None,
-            mean: None,
-            std_dev: None,
-        }
-    }
-
-    /// Returns a row with its own scale and offset. Only an `integer` coverage
-    /// permits a pair other than the defaults (Requirement 11).
-    pub fn new(scale: f64, offset: f64) -> Self {
-        Self {
-            scale,
-            offset,
-            ..Self::defaults()
-        }
-    }
-
-    /// Sets the statistics of the values in the tile.
-    ///
-    /// Without the `coverage-samples` feature this crate does not decode
-    /// samples, so you supply the statistics. With it,
-    /// [`CoverageWriter::put_with_statistics`] calculates them.
-    #[must_use]
-    pub fn with_statistics(mut self, min: f64, max: f64, mean: f64, std_dev: f64) -> Self {
-        self.min = Some(min);
-        self.max = Some(max);
-        self.mean = Some(mean);
-        self.std_dev = Some(std_dev);
-        self
-    }
-}
+pub use geopackage_core::coverage::{CoverageAncillary, TileAncillary};
 
 impl GeoPackage {
     /// Opens an existing tiled gridded coverage by `gpkg_contents` name.
@@ -291,7 +176,7 @@ impl<'a> Coverage<'a> {
     /// `CHECK` constraint of the table definition prevents such a value, but a
     /// file written without the constraint can contain one.
     pub fn datatype(&self) -> Option<CoverageDatatype> {
-        CoverageDatatype::parse(&self.ancillary.datatype)
+        self.ancillary.datatype()
     }
 
     /// Checks a payload against this coverage: the encoding profile
@@ -332,7 +217,7 @@ impl<'a> Coverage<'a> {
     /// Do not use this function for `data_null`, which the requirement
     /// excludes. Use [`Coverage::is_null`].
     pub fn value(&self, tile: &TileAncillary, stored: f64) -> f64 {
-        natural_value(&self.ancillary, tile, stored)
+        self.ancillary.value(tile, stored)
     }
 
     /// Returns `true` if a stored sample is the "no data" value of the
@@ -343,7 +228,7 @@ impl<'a> Coverage<'a> {
     /// `data_null` value". A tolerance would also match valid samples near the
     /// sentinel.
     pub fn is_null(&self, stored: f64) -> bool {
-        is_null(&self.ancillary, stored)
+        self.ancillary.is_null(stored)
     }
 
     /// Returns one tile's payload, or `None` if the coverage has no tile
@@ -450,14 +335,12 @@ impl<'a> Coverage<'a> {
                 &sql,
                 rusqlite::params![self.table_name(), coord.zoom_level, coord.column, coord.row],
                 |row| {
-                    Ok(TileAncillary {
-                        scale: row.get(0)?,
-                        offset: row.get(1)?,
-                        min: row.get(2)?,
-                        max: row.get(3)?,
-                        mean: row.get(4)?,
-                        std_dev: row.get(5)?,
-                    })
+                    let mut ancillary = TileAncillary::new(row.get(0)?, row.get(1)?);
+                    ancillary.min = row.get(2)?;
+                    ancillary.max = row.get(3)?;
+                    ancillary.mean = row.get(4)?;
+                    ancillary.std_dev = row.get(5)?;
+                    Ok(ancillary)
                 },
             )
             .optional()?)
@@ -487,18 +370,6 @@ impl std::fmt::Debug for Coverage<'_> {
     }
 }
 
-/// The extension's conversion of a stored sample to a value: the pair of the
-/// tile, then the pair of the coverage.
-fn natural_value(coverage: &CoverageAncillary, tile: &TileAncillary, stored: f64) -> f64 {
-    (stored * tile.scale + tile.offset) * coverage.scale + coverage.offset
-}
-
-/// Whether a stored sample is the coverage's `data_null`, compared exactly
-/// and before any scale or offset, as [`Coverage::is_null`] explains.
-fn is_null(coverage: &CoverageAncillary, stored: f64) -> bool {
-    coverage.data_null == Some(stored)
-}
-
 /// Reads the `gpkg_2d_gridded_coverage_ancillary` row of a coverage.
 fn read_coverage_ancillary(
     gpkg: &GeoPackage,
@@ -517,18 +388,17 @@ fn read_coverage_ancillary(
             ),
             [table_name],
             |row| {
-                Ok(CoverageAncillary {
-                    tile_matrix_set_name: row.get(0)?,
-                    datatype: row.get(1)?,
-                    scale: row.get(2)?,
-                    offset: row.get(3)?,
-                    precision: row.get(4)?,
-                    data_null: row.get(5)?,
-                    grid_cell_encoding: row.get(6)?,
-                    uom: row.get(7)?,
-                    field_name: row.get(8)?,
-                    quantity_definition: row.get(9)?,
-                })
+                let mut ancillary =
+                    CoverageAncillary::new(row.get::<_, String>(0)?, row.get::<_, String>(1)?);
+                ancillary.scale = row.get(2)?;
+                ancillary.offset = row.get(3)?;
+                ancillary.precision = row.get(4)?;
+                ancillary.data_null = row.get(5)?;
+                ancillary.grid_cell_encoding = row.get(6)?;
+                ancillary.uom = row.get(7)?;
+                ancillary.field_name = row.get(8)?;
+                ancillary.quantity_definition = row.get(9)?;
+                Ok(ancillary)
             },
         )
         .optional()?)

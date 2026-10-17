@@ -271,8 +271,8 @@ pub enum TileError {
     /// A coverage tile payload that does not conform to an encoding requirement
     /// of the tiled gridded coverage extension (OGC 17-066r2).
     ///
-    /// The checks in [`crate::coverage`] read the header of a payload and not
-    /// its samples, so they do not check Requirement 21.
+    /// The header checks in [`crate::coverage`] read the header of a payload
+    /// and not its samples, so they do not check Requirement 21.
     #[error(
         "coverage tile payload breaks tiled gridded coverage Requirement {requirement}: {detail}"
     )]
@@ -281,6 +281,19 @@ pub enum TileError {
         requirement: u8,
         /// What the payload declares, and what the requirement specifies.
         detail: String,
+    },
+    /// A coverage tile whose header declares more samples than this crate
+    /// decodes. The payload is not known to be wrong; it is not decoded.
+    #[error(
+        "coverage tile payload declares {width} by {height} samples, more than the {limit} this crate decodes"
+    )]
+    PayloadTooLarge {
+        /// Width the payload's header declares.
+        width: i64,
+        /// Height the payload's header declares.
+        height: i64,
+        /// The most samples a decode accepts.
+        limit: usize,
     },
     /// A tile payload whose pixel dimensions are not the ones its zoom level
     /// declares.

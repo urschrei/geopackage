@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-geopackage-core = { path = ".." }
+geopackage-core = { path = "..", features = ["coverage-samples"] }
 
 [[bin]]
 name = "gpb_parse"
@@ -28,6 +28,13 @@ bench = false
 [[bin]]
 name = "tile_payload"
 path = "fuzz_targets/tile_payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "coverage_samples"
+path = "fuzz_targets/coverage_samples.rs"
 test = false
 doc = false
 bench = false

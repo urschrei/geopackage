@@ -8,7 +8,7 @@ the source.
 | Crate | Contents | Reference |
 |---|---|---|
 | `geopackage` | The main library: files, feature and attribute layers, spatial indexes, tile pyramids, tiled gridded coverages, Arrow I/O. | [docs.rs/geopackage](https://docs.rs/geopackage) |
-| `geopackage-core` | Format code with no I/O or SQLite: the GPB geometry codec, table definitions, RTree triggers, identifier quoting, `application_id` and `user_version` handling. | [docs.rs/geopackage-core](https://docs.rs/geopackage-core) |
+| `geopackage-core` | Format code with no I/O or SQLite: the GPB geometry codec, table definitions, RTree triggers, identifier quoting, `application_id` and `user_version` handling, coverage payload rules and, behind `coverage-samples`, the coverage sample decode. | [docs.rs/geopackage-core](https://docs.rs/geopackage-core) |
 | `geopackage-ffi` | The C API: opaque handles over the same library, with data passed through the Arrow C Data Interface. Packaged with cargo-c. The only crate that uses `unsafe`. | [docs.rs/geopackage-ffi](https://docs.rs/geopackage-ffi) |
 | `geopackage-cli` | The `gpkg` command-line tool. | `gpkg --help` |
 

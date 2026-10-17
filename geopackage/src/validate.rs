@@ -947,21 +947,29 @@ impl GeoPackage {
 /// Requirement 21. Returns the requirement a failure breaks and its detail.
 ///
 /// Data that does not decode breaks the requirement that names the encoding:
-/// 15 (baseline TIFF) for a TIFF, and 13 for a PNG.
+/// 15 (baseline TIFF) for a TIFF, and 13 for a PNG. A tile larger than
+/// [`MAX_DECODED_SAMPLES`](geopackage_core::coverage::MAX_DECODED_SAMPLES) is
+/// not decoded, so its samples are not checked.
 #[cfg(feature = "coverage-samples")]
 fn check_coverage_samples(
     bytes: &[u8],
     payload: &geopackage_core::coverage::CoveragePayload,
 ) -> std::result::Result<(), (u8, String)> {
-    use crate::coverage::{check_finite, decode_payload};
-    use geopackage_core::coverage::CoveragePayload;
+    use geopackage_core::TileError;
+    use geopackage_core::coverage::{CoveragePayload, decode_payload};
 
-    let samples = decode_payload(bytes, payload).map_err(|error| {
-        let requirement = match payload {
-            CoveragePayload::Tiff(_) => 15,
-            _ => 13,
-        };
-        (requirement, error.to_string())
-    })?;
-    check_finite(&samples).map_err(|error| (21, error.to_string()))
+    let samples = match decode_payload(bytes, payload) {
+        Ok(samples) => samples,
+        Err(TileError::PayloadTooLarge { .. }) => return Ok(()),
+        Err(error) => {
+            let requirement = match payload {
+                CoveragePayload::Tiff(_) => 15,
+                _ => 13,
+            };
+            return Err((requirement, error.to_string()));
+        }
+    };
+    samples
+        .check_finite()
+        .map_err(|error| (21, error.to_string()))
 }

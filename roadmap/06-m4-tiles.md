@@ -4,6 +4,11 @@ Goal: full tiles requirement class. Bytes in/bytes out, with no image
 decoding/encoding in core (PNG/JPEG/WebP payloads are opaque BLOBs; format and
 header inspection only, never a decode).
 
+*(The rule is about image tiles, whose pixels the spec does not constrain, and
+it stands for them. Coverage samples, which are the extension's data and which
+its requirements constrain, are decoded in core behind a feature since
+2026-10-17: see [10-coverage.md](10-coverage.md#phase-4-samples-in-core).)*
+
 The milestone was written as "v0.3"; 0.4 and 0.5 shipped other work first, so
 this lands as **0.6.0**.
 

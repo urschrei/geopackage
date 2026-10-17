@@ -11,8 +11,18 @@ While the version is below 1.0 the API may change in any release.
 ### Added
 
 - The `coverage-samples` feature, off by default, decodes the samples of
-  tiled gridded coverage tiles with the `tiff` and `png` crates.
-  `geopackage-core` still decodes nothing.
+  tiled gridded coverage tiles with the `tiff` and `png` crates. The feature
+  is on `geopackage-core`, which holds the decode, and `geopackage` forwards
+  it. Image tiles are still never decoded.
+  - In `geopackage-core::coverage`: `decode_samples` and `decode_payload`
+    return a tile's `TileSamples`, whose `check_finite` checks Requirement
+    21 and whose `statistics` calculates `SampleStatistics`. `SampleLookup`
+    finds the `WeightedSample`s a position reads and combines their values,
+    so a reader without SQLite can look up values too.
+  - A payload whose header declares more than `MAX_DECODED_SAMPLES`
+    (4096 by 4096) samples is not decoded, and returns the new
+    `TileError::PayloadTooLarge`, so a small payload that declares a huge
+    tile cannot make the decoder allocate for it.
   - `Coverage::decode` and `Coverage::samples` return a tile's stored
     samples as `TileSamples`.
   - `Coverage::value_at` returns the value at a position in the coverage's
@@ -31,8 +41,14 @@ While the version is below 1.0 the API may change in any release.
 - With the `coverage-samples` feature, `GeoPackage::validate` decodes every
   coverage tile and reports a NaN or infinite sample as
   `Finding::CoveragePayloadNonConformant` with requirement 21, and data that
-  does not decode with requirement 15 (TIFF) or 13 (PNG). Without the feature
-  it does not change.
+  does not decode with requirement 15 (TIFF) or 13 (PNG). A tile larger than
+  `MAX_DECODED_SAMPLES` is not decoded, and its samples are not checked.
+  Without the feature it does not change.
+- `CoverageAncillary` and `TileAncillary` move to `geopackage-core::coverage`,
+  and `geopackage` re-exports them under the same names. `CoverageAncillary`
+  gains `new`, `datatype`, `value` and `is_null`. Both are
+  `#[non_exhaustive]`, so code outside the crates builds them with `new` and
+  field assignment rather than a struct literal.
 
 ## [0.12.0] - 2026-10-16
 

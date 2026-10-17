@@ -301,6 +301,9 @@ fn tile_status(error: &TileError) -> Status {
         // The arguments are fine; this pyramid's grid is not one XYZ indices
         // address, which is a property of the file.
         TileError::NotAnXyzGrid { .. } => Status::Unsupported,
+        // The payload may be fine; this library does not decode one that
+        // large.
+        TileError::PayloadTooLarge { .. } => Status::Unsupported,
         // `TileError` is `#[non_exhaustive]`, so a new variant classifies here
         // until it is given a category, exactly as for `Error` above.
         _ => Status::Other,

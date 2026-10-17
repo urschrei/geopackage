@@ -115,3 +115,44 @@ if let Some(samples) = coverage.samples(TileCoord::new(0, 0, 0))? {
 }
 # Ok(()) }
 ```
+
+A tile whose header declares more than 4096 by 4096 samples is not decoded:
+these calls return `Error::Tile` with `TileError::PayloadTooLarge` for it, and
+`validate` skips its samples. 4096 is the largest tile size GDAL's GeoPackage
+driver supports.
+
+## Decode without SQLite
+
+The decode, the statistics and the lookup arithmetic are in
+`geopackage-core`, under its own `coverage-samples` feature, so code that
+reads tiles some other way can use them. You supply the bytes of a tile and
+its ancillary rows; `SampleLookup` says which samples a position reads, and
+you fetch them:
+
+```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+use geopackage::core::coverage::{
+    CoverageAncillary, Interpolation, SampleLookup, TileAncillary, decode_samples,
+};
+use geopackage::core::tiles::{TileMatrix, TileMatrixSet};
+
+# let tile_data: Vec<u8> = Vec::new();
+// One 256 by 256 tile over its extent, from your own reader.
+let set = TileMatrixSet::new(3857, 0.0, 0.0, 256.0, 256.0);
+let matrix = TileMatrix::new(0, 1, 1, 256, 256, 1.0, 1.0);
+let coverage = CoverageAncillary::new("elevation", "float");
+let tile = TileAncillary::defaults();
+let samples = decode_samples(&tile_data)?;
+
+if let Some(lookup) =
+    SampleLookup::new(&set, &matrix, &coverage, 100.0, 50.0, Interpolation::Bilinear)
+{
+    let value = lookup.value(|sample| {
+        // This grid has one tile, so every sample is in it.
+        let (_, column, row) = sample.tile(&matrix).expect("a positive tile size");
+        Ok::<_, std::convert::Infallible>(samples.value(column, row, &coverage, &tile))
+    })?;
+    println!("{value:?}");
+}
+# Ok(()) }
+```

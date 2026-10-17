@@ -471,8 +471,9 @@
 //! - **`arrow`**: Arrow record batch I/O. Adds dependencies on `arrow-array`
 //!   and `arrow-schema`
 //! - **`coverage-samples`**: Decode the samples of tiled gridded coverage
-//!   tiles, for value lookups, per-tile statistics and Requirement 21. Adds
-//!   dependencies on `tiff` and `png`
+//!   tiles, for value lookups, per-tile statistics and Requirement 21. Turns
+//!   on `geopackage-core`'s feature of the same name, which holds the decode
+//!   and adds dependencies on `tiff` and `png`
 //! - **`bundled`**: Compile and statically link a vendored SQLite instead of
 //!   linking the system library. Requires a C compiler. Required on Windows
 //!

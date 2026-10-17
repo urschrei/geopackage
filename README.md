@@ -107,7 +107,7 @@ coverages, Arrow, extensions, validation and configuration.
 | Crate | Contents | Reference |
 |---|---|---|
 | [`geopackage`](geopackage) | The main library: files, layers, spatial indexes, tiles, coverages, Arrow I/O. | [docs.rs](https://docs.rs/geopackage) |
-| [`geopackage-core`](geopackage-core) | Format code with no SQLite dependency: the geometry codec, table definitions, RTree triggers. | [docs.rs](https://docs.rs/geopackage-core) |
+| [`geopackage-core`](geopackage-core) | Format code with no SQLite dependency: the geometry codec, table definitions, RTree triggers, coverage payload rules and, behind `coverage-samples`, the coverage sample decode. | [docs.rs](https://docs.rs/geopackage-core) |
 | [`geopackage-cli`](geopackage-cli) | The `gpkg` tool: `info`, `validate`, `index`, `repair`, `copy`, `tiles` and `coverage`. | `gpkg --help` |
 | [`geopackage-ffi`](geopackage-ffi) | The C API: opaque handles, with data passed through the Arrow C Data Interface. Packaged with [cargo-c](https://github.com/lu-zero/cargo-c). CI builds and runs the C programs in [`examples`](geopackage-ffi/examples) against the committed header. | [docs.rs](https://docs.rs/geopackage-ffi), [`include/geopackage.h`](geopackage-ffi/include/geopackage.h) |
 
@@ -125,7 +125,8 @@ Only `geopackage-ffi` uses `unsafe`.
   offset and null value can be applied to samples you decode yourself. The
   `coverage-samples` feature adds the decode, for value lookups at a position
   (nearest or bilinear, in the coverage's own CRS), calculated per-tile
-  statistics, and Requirement 21 (no NaN or infinite values).
+  statistics, and Requirement 21 (no NaN or infinite values). The decode is
+  in `geopackage-core`, so it's available without SQLite.
 - Curved geometry types (`CIRCULARSTRING` and others) can be written, indexed
   and queried by extent, but can't be read back as geometry objects.
   `Feature::geometry_bytes` returns their WKB.
