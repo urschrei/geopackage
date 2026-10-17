@@ -52,28 +52,25 @@ impl<'a> Coverage<'a> {
     /// Reads and decodes one tile, or returns `None` if the coverage has no
     /// tile there.
     ///
-    /// Refuses, before decoding it, a tile whose header declares more pixels
-    /// across or down than the `tile_width` and `tile_height` of its zoom
-    /// level, because the decode would allocate for samples the zoom level
-    /// cannot hold. A smaller tile is decoded, because a read does not reject
-    /// a file; [`CoverageSampler`] refuses it, because it addresses samples
-    /// through the grid.
+    /// Refuses, before decoding it, a tile whose header declares a size other
+    /// than the `tile_width` and `tile_height` of its zoom level, as GDAL
+    /// does. A larger tile would make the decode allocate for samples the zoom
+    /// level cannot hold, and the samples of any other size would not be where
+    /// the grid puts them.
     ///
     /// # Errors
     ///
     /// As [`Coverage::decode`], [`Error::Tile`] with
-    /// [`TileError::PayloadSizeMismatch`](crate::core::TileError::PayloadSizeMismatch) for a tile larger than its zoom
-    /// level, and [`Error`] if the row cannot be read.
+    /// [`TileError::PayloadSizeMismatch`](crate::core::TileError::PayloadSizeMismatch)
+    /// for a tile whose size is not its zoom level's, and [`Error`] if the row
+    /// cannot be read.
     pub fn samples(&self, coord: TileCoord) -> Result<Option<TileSamples>> {
         let Some(bytes) = self.get_tile(coord)? else {
             return Ok(None);
         };
         let payload = self.check_payload(&bytes)?;
         if let Some(matrix) = self.matrix(coord.zoom_level) {
-            let declared = payload.tile_payload();
-            if declared.width > matrix.tile_width || declared.height > matrix.tile_height {
-                matrix.check_payload(&declared)?;
-            }
+            matrix.check_payload(&payload.tile_payload())?;
         }
         self.decode_checked(&bytes, &payload).map(Some)
     }
@@ -257,12 +254,9 @@ impl CoverageSampler<'_> {
     }
 
     fn read(&self, coord: TileCoord) -> Result<Option<(TileSamples, TileAncillary)>> {
-        let Some(bytes) = self.coverage.get_tile(coord)? else {
+        let Some(samples) = self.coverage.samples(coord)? else {
             return Ok(None);
         };
-        let payload = self.coverage.check_payload(&bytes)?;
-        self.matrix.check_payload(&payload.tile_payload())?;
-        let samples = self.coverage.decode_checked(&bytes, &payload)?;
         let tile = self
             .coverage
             .tile_ancillary(coord)?

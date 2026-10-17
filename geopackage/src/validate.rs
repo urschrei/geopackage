@@ -953,8 +953,9 @@ impl GeoPackage {
 ///
 /// Data that does not decode breaks the requirement that names the encoding:
 /// 15 (baseline TIFF) for a TIFF, and 13 for a PNG. A tile is not decoded,
-/// so its samples are not checked, if its header declares more pixels across
-/// or down than its zoom level (`matrix`), or more samples than `max_samples`.
+/// so its samples are not checked, if its header declares a size other than
+/// its zoom level's (`matrix`), as [`Coverage::samples`] refuses it, or more
+/// samples than `max_samples`.
 #[cfg(feature = "coverage-samples")]
 fn check_coverage_samples(
     bytes: &[u8],
@@ -965,9 +966,7 @@ fn check_coverage_samples(
     use geopackage_core::TileError;
     use geopackage_core::coverage::{CoveragePayload, decode_payload};
 
-    if let Some(matrix) = matrix
-        && (payload.width() > matrix.tile_width || payload.height() > matrix.tile_height)
-    {
+    if matrix.is_some_and(|matrix| matrix.check_payload(&payload.tile_payload()).is_err()) {
         return Ok(());
     }
     let samples = match decode_payload(bytes, payload, max_samples) {

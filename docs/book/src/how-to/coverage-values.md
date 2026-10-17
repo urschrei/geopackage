@@ -120,7 +120,7 @@ if let Some(samples) = coverage.samples(TileCoord::new(0, 0, 0))? {
 
 A tile's header states its size, and a decoder allocates for that size before
 it reads the data. So a decode first compares the header with the tile's zoom
-level, as GDAL does, and refuses a tile larger than the level declares. On top
+level, as GDAL does, and refuses a tile of any other size. On top
 of that, it refuses a tile of more than 4096 by 4096 samples, which is the
 largest tile GDAL writes by default: these calls return `Error::Tile` with
 `TileError::PayloadTooLarge` for it, and `validate` skips its samples.

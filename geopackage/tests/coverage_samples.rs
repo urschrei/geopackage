@@ -640,11 +640,16 @@ fn a_lookup_refuses_a_tile_of_the_wrong_size() {
         matches!(error, Error::Tile(TileError::PayloadSizeMismatch { .. })),
         "{error:?}"
     );
-    // A read of the tile itself does not reject it.
+    // Nor does a read of the tile itself, as in GDAL.
+    let error = coverage.samples(TileCoord::new(0, 0, 0)).unwrap_err();
+    assert!(
+        matches!(error, Error::Tile(TileError::PayloadSizeMismatch { .. })),
+        "{error:?}"
+    );
+    // Without a zoom level, the bytes still decode.
     assert_eq!(
         coverage
-            .samples(TileCoord::new(0, 0, 0))
-            .unwrap()
+            .decode(&float_tiff(2, 2, &[1.0; 4]))
             .unwrap()
             .width(),
         2
