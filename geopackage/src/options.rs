@@ -119,6 +119,8 @@ pub struct OpenOptions {
     pub(crate) allow_unsupported_extension_writes: bool,
     pub(crate) enforce_column_constraints: bool,
     pub(crate) lenient: bool,
+    #[cfg(feature = "coverage-samples")]
+    pub(crate) max_decoded_samples: Option<usize>,
 }
 
 impl OpenOptions {
@@ -152,6 +154,28 @@ impl OpenOptions {
     #[must_use]
     pub fn lenient(mut self, lenient: bool) -> Self {
         self.lenient = lenient;
+        self
+    }
+
+    /// Sets the most samples a coverage tile may declare and still be
+    /// decoded. The default is
+    /// [`DEFAULT_MAX_DECODED_SAMPLES`](geopackage_core::coverage::DEFAULT_MAX_DECODED_SAMPLES),
+    /// 4096 by 4096.
+    ///
+    /// A tile's header states its size, and the decoders allocate for that
+    /// size before reading the data. Where a read knows the tile's zoom level,
+    /// it first refuses a tile larger than the level declares, as GDAL does;
+    /// this limit applies on top of that, to every decode. A tile over it is
+    /// not decoded: reads return
+    /// [`TileError::PayloadTooLarge`](geopackage_core::TileError::PayloadTooLarge),
+    /// and [`GeoPackage::validate`] does not check its samples.
+    ///
+    /// Raise it for coverages with larger tiles than GDAL writes by default.
+    /// Each sample costs eight bytes decoded.
+    #[cfg(feature = "coverage-samples")]
+    #[must_use]
+    pub fn max_decoded_samples(mut self, samples: usize) -> Self {
+        self.max_decoded_samples = Some(samples);
         self
     }
 

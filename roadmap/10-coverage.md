@@ -507,11 +507,21 @@ SQLite.
       allocated the whole frame, about 1.6 TB, before reading any data,
       because the `png` crate's limits do not cover the caller's buffer. The
       same bytes in a file would have aborted `validate()` in phase 3's
-      build. Fixed with `MAX_DECODED_SAMPLES`, 4096 by 4096 (GDAL's largest
-      GeoPackage tile), checked from the header before either decoder runs,
-      and as the `tiff` decoder's buffer limit; a larger tile returns
-      `TileError::PayloadTooLarge`, and `validate()` skips its samples rather
-      than call it non-conformant.
+      build. GDAL would not have decoded it: its `ReadTile` opens a tile's
+      header and refuses one whose size is not its zoom level's ("Inconsistent
+      tiles characteristics") before reading pixels, and sizes its buffer from
+      the zoom level, never from the tile. Fixed the same way where the zoom
+      level is known: the sampler and `put_with_statistics` require the
+      level's size from the header before decoding, and `Coverage::samples`
+      and `validate()` refuse a tile larger than the level (a smaller one
+      still reads, as phase 3 decided). Every decode also has a limit,
+      `DEFAULT_MAX_DECODED_SAMPLES`, 4096 by 4096 (the largest tile GDAL
+      writes unless `GPKG_ALLOW_CRAZY_SETTINGS` is set; it reads tile
+      matrices up to 65536 a side), checked from the header before either
+      decoder runs and set as the `tiff` decoder's buffer limit.
+      `OpenOptions::max_decoded_samples` and `decode_payload`'s argument
+      change it. A tile over it returns `TileError::PayloadTooLarge`, and
+      `validate()` skips its samples rather than call it non-conformant.
 
 ## Acceptance criteria
 

@@ -58,7 +58,7 @@ use geopackage_core::coverage::{
 };
 use geopackage_core::ddl;
 use geopackage_core::ident::quote;
-use geopackage_core::tiles::{self, TileCoord, TileFormat, TileMatrix, TileMatrixSet, TilePayload};
+use geopackage_core::tiles::{self, TileCoord, TileMatrix, TileMatrixSet};
 use rusqlite::{CachedStatement, Connection, OptionalExtension};
 
 use crate::tiles::{PyramidSpec, TileCursor, TilePyramid};
@@ -817,6 +817,9 @@ pub struct CoverageWriter<'conn> {
     /// need the scale, offset and `data_null` of the coverage.
     #[cfg(feature = "coverage-samples")]
     ancillary: CoverageAncillary,
+    /// See [`crate::OpenOptions::max_decoded_samples`].
+    #[cfg(feature = "coverage-samples")]
+    max_decoded_samples: usize,
     /// The zoom levels of the coverage, ascending. Copied as
     /// [`crate::TileWriter`] copies the zoom levels of a pyramid, for the same
     /// reason.
@@ -830,6 +833,22 @@ pub struct CoverageWriter<'conn> {
 }
 
 impl<'conn> CoverageWriter<'conn> {
+    /// Returns the zoom level of `coord`, after checking that the address is
+    /// inside its grid.
+    fn matrix_at(&self, coord: TileCoord) -> Result<&TileMatrix> {
+        let matrix = self
+            .matrices
+            .binary_search_by_key(&coord.zoom_level, |matrix| matrix.zoom_level)
+            .ok()
+            .and_then(|index| self.matrices.get(index))
+            .ok_or_else(|| Error::UnknownZoomLevel {
+                table_name: self.table_name.clone(),
+                zoom_level: coord.zoom_level,
+            })?;
+        matrix.check_contains(coord.column, coord.row)?;
+        Ok(matrix)
+    }
+
     fn new(coverage: &Coverage<'conn>) -> Result<Self> {
         coverage.gpkg().check_writable(coverage.table_name())?;
         let conn = coverage.gpkg().connection();
@@ -843,6 +862,8 @@ impl<'conn> CoverageWriter<'conn> {
             datatype: coverage.datatype(),
             #[cfg(feature = "coverage-samples")]
             ancillary: coverage.ancillary().clone(),
+            #[cfg(feature = "coverage-samples")]
+            max_decoded_samples: coverage.gpkg().max_decoded_samples(),
             matrices: coverage.matrices().to_vec(),
             put_stmt: conn.prepare_cached(&format!(
                 "INSERT INTO {table} (zoom_level, tile_column, tile_row, tile_data) \
@@ -925,17 +946,7 @@ impl<'conn> CoverageWriter<'conn> {
         data: &[u8],
         ancillary: &TileAncillary,
     ) -> Result<()> {
-        let matrix = self
-            .matrices
-            .binary_search_by_key(&coord.zoom_level, |matrix| matrix.zoom_level)
-            .ok()
-            .and_then(|index| self.matrices.get(index))
-            .ok_or_else(|| Error::UnknownZoomLevel {
-                table_name: self.table_name.clone(),
-                zoom_level: coord.zoom_level,
-            })?;
-        matrix.check_contains(coord.column, coord.row)?;
-
+        let matrix = self.matrix_at(coord)?;
         let payload = coverage_payload(data)?;
         if let Some(datatype) = self.datatype {
             datatype.check_payload(&payload)?;
@@ -951,15 +962,7 @@ impl<'conn> CoverageWriter<'conn> {
                 ),
             });
         }
-        matrix.check_payload(&TilePayload {
-            format: match payload {
-                CoveragePayload::Tiff(_) => TileFormat::Tiff,
-                CoveragePayload::Png(_) => TileFormat::Png,
-                _ => TileFormat::Other,
-            },
-            width: payload.width(),
-            height: payload.height(),
-        })?;
+        matrix.check_payload(&payload.tile_payload())?;
         check_float_defaults(
             self.datatype.unwrap_or(CoverageDatatype::Integer),
             ancillary.scale,

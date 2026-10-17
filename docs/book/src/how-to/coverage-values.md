@@ -116,10 +116,28 @@ if let Some(samples) = coverage.samples(TileCoord::new(0, 0, 0))? {
 # Ok(()) }
 ```
 
-A tile whose header declares more than 4096 by 4096 samples is not decoded:
-these calls return `Error::Tile` with `TileError::PayloadTooLarge` for it, and
-`validate` skips its samples. 4096 is the largest tile size GDAL's GeoPackage
-driver supports.
+## Decode larger tiles
+
+A tile's header states its size, and a decoder allocates for that size before
+it reads the data. So a decode first compares the header with the tile's zoom
+level, as GDAL does, and refuses a tile larger than the level declares. On top
+of that, it refuses a tile of more than 4096 by 4096 samples, which is the
+largest tile GDAL writes by default: these calls return `Error::Tile` with
+`TileError::PayloadTooLarge` for it, and `validate` skips its samples.
+
+If your coverages have larger tiles, raise the limit when you open the file.
+Each sample costs eight bytes decoded:
+
+```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+use geopackage::OpenOptions;
+
+let gpkg = OpenOptions::new()
+    .max_decoded_samples(8192 * 8192)
+    .open_read_only("dem.gpkg")?;
+# let _ = gpkg;
+# Ok(()) }
+```
 
 ## Decode without SQLite
 

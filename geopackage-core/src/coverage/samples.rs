@@ -175,50 +175,67 @@ pub struct SampleStatistics {
     pub count: usize,
 }
 
-/// The most samples [`decode_payload`] decodes from one tile: 4096 by 4096.
+/// The most samples [`decode_samples`] decodes from one tile, and the usual
+/// limit to give [`decode_payload`]: 4096 by 4096.
 ///
 /// The header of a payload states its size, and the decoders allocate for that
 /// size before reading the data, so a few bytes that declare a large tile would
-/// otherwise cost as much memory as a real one. 4096 is the largest tile width
-/// and height GDAL's GeoPackage driver supports, and 2^24 samples are
+/// otherwise cost as much memory as a real one. A reader that knows the tile's
+/// zoom level should first check the size against it, with
+/// [`CoveragePayload::tile_payload`], as GDAL does; the limit is the backstop
+/// for bytes decoded without one, and for a zoom level that itself declares
+/// huge tiles.
+///
+/// 4096 is the largest tile width and height GDAL's GeoPackage driver writes
+/// unless its `GPKG_ALLOW_CRAZY_SETTINGS` option is set, and 2^24 samples are
 /// 128 MiB as `f64`.
-pub const MAX_DECODED_SAMPLES: usize = 1 << 24;
+pub const DEFAULT_MAX_DECODED_SAMPLES: usize = 1 << 24;
 
 /// Decodes a coverage payload to its stored samples, after checking it
-/// against the payload profile as [`coverage_payload`] does.
+/// against the payload profile as [`coverage_payload`] does, with
+/// [`DEFAULT_MAX_DECODED_SAMPLES`] as the limit.
 ///
 /// # Errors
 ///
 /// Those of [`coverage_payload`] and [`decode_payload`].
 pub fn decode_samples(bytes: &[u8]) -> Result<TileSamples, TileError> {
-    decode_payload(bytes, &coverage_payload(bytes)?)
+    decode_payload(
+        bytes,
+        &coverage_payload(bytes)?,
+        DEFAULT_MAX_DECODED_SAMPLES,
+    )
 }
 
-/// Decodes a payload whose header has been read, and checks that the decoder
-/// agrees with that header.
+/// Decodes a payload whose header has been read, if the header declares at
+/// most `max_samples` samples, and checks that the decoder agrees with that
+/// header.
 ///
 /// # Errors
 ///
 /// - [`TileError::PayloadTooLarge`] if the header declares more than
-///   [`MAX_DECODED_SAMPLES`] samples. Nothing is decoded.
+///   `max_samples` samples. Nothing is decoded.
 /// - [`TileError::UnreadablePayload`] if the data cannot be decoded, or
 ///   decodes to a size or sample type other than the header's.
-pub fn decode_payload(bytes: &[u8], payload: &CoveragePayload) -> Result<TileSamples, TileError> {
+pub fn decode_payload(
+    bytes: &[u8],
+    payload: &CoveragePayload,
+    max_samples: usize,
+) -> Result<TileSamples, TileError> {
     let declared = (payload.width(), payload.height());
     let count = usize::try_from(declared.0)
         .ok()
         .zip(usize::try_from(declared.1).ok())
         .and_then(|(width, height)| width.checked_mul(height));
-    if count.is_none_or(|count| count > MAX_DECODED_SAMPLES) {
+    if count.is_none_or(|count| count > max_samples) {
         return Err(TileError::PayloadTooLarge {
             width: declared.0,
             height: declared.1,
-            limit: MAX_DECODED_SAMPLES,
+            limit: max_samples,
         });
     }
     let (width, height, samples) = match payload {
-        CoveragePayload::Tiff(_) => decode_tiff(bytes)?,
-        CoveragePayload::Png(_) => decode_png(bytes)?,
+        CoveragePayload::Tiff(_) => decode_tiff(bytes, max_samples)?,
+        CoveragePayload::Png(_) => decode_png(bytes, max_samples)?,
     };
     if (i64::try_from(width), i64::try_from(height)) != (Ok(declared.0), Ok(declared.1)) {
         return Err(unreadable(format!(
@@ -239,7 +256,7 @@ pub fn decode_payload(bytes: &[u8], payload: &CoveragePayload) -> Result<TileSam
     })
 }
 
-fn decode_tiff(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), TileError> {
+fn decode_tiff(bytes: &[u8], max_samples: usize) -> Result<(usize, usize, Vec<f64>), TileError> {
     use tiff::decoder::{Decoder, DecodingResult};
 
     let tiff_error = |error: tiff::TiffError| unreadable(error.to_string());
@@ -247,7 +264,7 @@ fn decode_tiff(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), TileError> {
     // has bounded the size the IFD declares, and this bounds what the decoder
     // allocates by the same measure.
     let mut limits = tiff::decoder::Limits::default();
-    limits.decoding_buffer_size = MAX_DECODED_SAMPLES * 4;
+    limits.decoding_buffer_size = max_samples.saturating_mul(4);
     let mut decoder = Decoder::new(Cursor::new(bytes))
         .map_err(tiff_error)?
         .with_limits(limits);
@@ -275,7 +292,7 @@ fn decode_tiff(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), TileError> {
     Ok((width as usize, height as usize, samples))
 }
 
-fn decode_png(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), TileError> {
+fn decode_png(bytes: &[u8], max_samples: usize) -> Result<(usize, usize, Vec<f64>), TileError> {
     let png_error = |error: png::DecodingError| unreadable(error.to_string());
     let mut decoder = png::Decoder::new(Cursor::new(bytes));
     // No expansion and no stripping: the samples as stored, 16 bits each,
@@ -292,7 +309,7 @@ fn decode_png(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), TileError> {
     // size.
     let size = reader
         .output_buffer_size()
-        .filter(|&size| size <= MAX_DECODED_SAMPLES * 2)
+        .filter(|&size| size <= max_samples.saturating_mul(2))
         .ok_or_else(|| unreadable("the PNG is too large to decode".to_owned()))?;
     let mut buffer = vec![0; size];
     let frame = reader.next_frame(&mut buffer).map_err(png_error)?;
@@ -653,8 +670,36 @@ mod tests {
             TileError::PayloadTooLarge {
                 width: 4097,
                 height: 4096,
-                limit: MAX_DECODED_SAMPLES
+                limit: DEFAULT_MAX_DECODED_SAMPLES
             }
+        ));
+    }
+
+    #[test]
+    fn the_limit_is_the_callers() {
+        let bytes = float_tiff(3, 2, &[0.0; 6]);
+        let payload = coverage_payload(&bytes).unwrap();
+        decode_payload(&bytes, &payload, 6).unwrap();
+        assert!(matches!(
+            decode_payload(&bytes, &payload, 5),
+            Err(TileError::PayloadTooLarge {
+                width: 3,
+                height: 2,
+                limit: 5
+            })
+        ));
+    }
+
+    #[test]
+    fn a_payload_checks_its_size_against_a_zoom_level() {
+        let bytes = grey16_png(3, 2, &[0; 6]);
+        let payload = coverage_payload(&bytes).unwrap().tile_payload();
+        let matching = TileMatrix::new(0, 1, 1, 3, 2, 1.0, 1.0);
+        let other = TileMatrix::new(0, 1, 1, 256, 256, 1.0, 1.0);
+        matching.check_payload(&payload).unwrap();
+        assert!(matches!(
+            other.check_payload(&payload),
+            Err(TileError::PayloadSizeMismatch { .. })
         ));
     }
 
