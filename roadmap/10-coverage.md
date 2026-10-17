@@ -512,9 +512,9 @@ SQLite.
       tiles characteristics") before reading pixels, and sizes its buffer from
       the zoom level, never from the tile. Fixed the same way where the zoom
       level is known: the sampler and `put_with_statistics` require the
-      level's size from the header before decoding, and `Coverage::samples`
-      and `validate()` refuse a tile larger than the level (a smaller one
-      still reads, as phase 3 decided). Every decode also has a limit,
+      level's size from the header before decoding, as do
+      `Coverage::samples` and `validate()` (reversing phase 3's "a read does
+      not reject a file" for this one case, to match GDAL). Every decode also has a limit,
       `DEFAULT_MAX_DECODED_SAMPLES`, 4096 by 4096 (the largest tile GDAL
       writes unless `GPKG_ALLOW_CRAZY_SETTINGS` is set; it reads tile
       matrices up to 65536 a side), checked from the header before either

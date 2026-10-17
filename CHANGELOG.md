@@ -20,16 +20,17 @@ While the version is below 1.0 the API may change in any release.
     finds the `WeightedSample`s a position reads and combines their values,
     so a reader without SQLite can look up values too.
   - A small payload whose header declares a huge tile cannot make the
-    decoder allocate for it. Where the zoom level is known, a tile larger
-    than the level declares is refused from its header before it is
-    decoded, as GDAL does (`TileError::PayloadSizeMismatch`). Every decode
+    decoder allocate for it. Where the zoom level is known, a tile whose size
+    is not the level's is refused from its header before it is decoded, as
+    GDAL does (`TileError::PayloadSizeMismatch`). Every decode
     also has a limit, `DEFAULT_MAX_DECODED_SAMPLES` (4096 by 4096) unless
     `OpenOptions::max_decoded_samples` or `decode_payload`'s argument sets
     another, over which it returns the new `TileError::PayloadTooLarge`.
   - `CoveragePayload::tile_payload`, to check a coverage payload's size with
     `TileMatrix::check_payload`.
   - `Coverage::decode` and `Coverage::samples` return a tile's stored
-    samples as `TileSamples`.
+    samples as `TileSamples`. `samples` refuses a tile whose size is not its
+    zoom level's.
   - `Coverage::value_at` returns the value at a position in the coverage's
     CRS, with `Interpolation::Nearest` or `Interpolation::Bilinear`, following
     its `grid_cell_encoding`. `Coverage::sampler` opens a `CoverageSampler`,
@@ -46,11 +47,9 @@ While the version is below 1.0 the API may change in any release.
 - With the `coverage-samples` feature, `GeoPackage::validate` decodes every
   coverage tile and reports a NaN or infinite sample as
   `Finding::CoveragePayloadNonConformant` with requirement 21, and data that
-  does not decode with requirement 15 (TIFF) or 13 (PNG). A tile larger than
-  its zoom level declares, or than the decode limit, is not decoded, and its
-  samples are not checked. Without the feature it does not change.
-- With the feature, `Coverage::samples` refuses a tile larger than its zoom
-  level declares, before decoding it. A smaller one still reads.
+  does not decode with requirement 15 (TIFF) or 13 (PNG). A tile whose size
+  is not its zoom level's, or that is over the decode limit, is not decoded,
+  and its samples are not checked. Without the feature it does not change.
 - `CoverageAncillary` and `TileAncillary` move to `geopackage-core::coverage`,
   and `geopackage` re-exports them under the same names. `CoverageAncillary`
   gains `new`, `datatype`, `value` and `is_null`. Both are
