@@ -222,6 +222,10 @@ pub geopackage::Finding::CoveragePayloadNonConformant::tiles: i64
 pub geopackage::Finding::CoverageScaleNotDefault
 pub geopackage::Finding::CoverageScaleNotDefault::detail: alloc::string::String
 pub geopackage::Finding::CoverageScaleNotDefault::table_name: alloc::string::String
+pub geopackage::Finding::CoverageTileSizeMismatch
+pub geopackage::Finding::CoverageTileSizeMismatch::detail: alloc::string::String
+pub geopackage::Finding::CoverageTileSizeMismatch::table_name: alloc::string::String
+pub geopackage::Finding::CoverageTileSizeMismatch::tiles: i64
 pub geopackage::Finding::CoverageUninterpretable
 pub geopackage::Finding::CoverageUninterpretable::detail: alloc::string::String
 pub geopackage::Finding::CoverageUninterpretable::table_name: alloc::string::String

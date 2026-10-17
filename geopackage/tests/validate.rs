@@ -600,6 +600,34 @@ fn a_payload_that_breaks_the_profile_is_a_warning_and_names_its_requirement() {
 }
 
 #[test]
+fn a_tile_of_another_size_than_its_zoom_level_is_an_error() {
+    // A conformant float32 TIFF, but 2 pixels a side where the zoom level
+    // declares 64.
+    let mut tile = std::io::Cursor::new(Vec::new());
+    tiff::encoder::TiffEncoder::new(&mut tile)
+        .unwrap()
+        .write_image::<tiff::encoder::colortype::Gray32Float>(2, 2, &[0.0; 4])
+        .unwrap();
+    let (dir, gpkg) = coverage_fixture();
+    gpkg.connection()
+        .execute(
+            "UPDATE coverage SET tile_data = ?1 WHERE id = (SELECT min(id) FROM coverage)",
+            [tile.into_inner()],
+        )
+        .unwrap();
+    let findings = gpkg.validate().unwrap();
+    drop(dir);
+    let finding = findings
+        .iter()
+        .find(|finding| matches!(finding, Finding::CoverageTileSizeMismatch { .. }))
+        .unwrap_or_else(|| panic!("{findings:?}"));
+    assert_eq!(finding.severity(), Severity::Error);
+    assert_eq!(finding.table_name(), Some("coverage"));
+    assert_eq!(finding.repair(), None);
+    assert!(finding.to_string().contains("1 tile(s)"), "{finding}");
+}
+
+#[test]
 fn a_payload_contradicting_the_datatype_is_an_error() {
     // The payload of the fixture is a float32 TIFF. If the coverage is
     // integer, the two disagree (Requirement 13), and a reader that uses the
