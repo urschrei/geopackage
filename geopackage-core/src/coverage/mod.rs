@@ -57,7 +57,7 @@
 //! not change any result, because each tag that the profile constrains is a
 //! single number.
 
-use crate::tiles::TileError;
+use crate::tiles::{TileError, TileFormat, TilePayload};
 
 mod ancillary;
 #[cfg(feature = "coverage-samples")]
@@ -66,7 +66,7 @@ mod samples;
 pub use ancillary::{CoverageAncillary, TileAncillary};
 #[cfg(feature = "coverage-samples")]
 pub use samples::{
-    Interpolation, MAX_DECODED_SAMPLES, SampleLookup, SampleStatistics, TileSamples,
+    DEFAULT_MAX_DECODED_SAMPLES, Interpolation, SampleLookup, SampleStatistics, TileSamples,
     WeightedSample, decode_payload, decode_samples,
 };
 
@@ -420,6 +420,23 @@ impl CoveragePayload {
         match self {
             Self::Tiff(_) => "image/tiff",
             Self::Png(_) => "image/png",
+        }
+    }
+
+    /// Returns the payload as a tile payload: its format and pixel size, for
+    /// [`TileMatrix::check_payload`](crate::tiles::TileMatrix::check_payload).
+    ///
+    /// A reader that knows the tile's zoom level checks its size this way
+    /// before decoding it, so that the decoder never allocates for a size the
+    /// zoom level does not declare.
+    pub fn tile_payload(self) -> TilePayload {
+        TilePayload {
+            format: match self {
+                Self::Tiff(_) => TileFormat::Tiff,
+                Self::Png(_) => TileFormat::Png,
+            },
+            width: self.width(),
+            height: self.height(),
         }
     }
 }

@@ -593,6 +593,10 @@ pub struct GeoPackage {
     /// constraints their columns declare. See
     /// [`OpenOptions::enforce_column_constraints`].
     enforce_column_constraints: bool,
+    /// The most samples a coverage tile may declare and still be decoded.
+    /// See [`OpenOptions::max_decoded_samples`].
+    #[cfg(feature = "coverage-samples")]
+    max_decoded_samples: usize,
 }
 
 impl GeoPackage {
@@ -644,6 +648,10 @@ impl GeoPackage {
         let options = options.with_default_busy_timeout();
         let allow_unsupported_extension_writes = options.allow_unsupported_extension_writes;
         let enforce_column_constraints = options.enforce_column_constraints;
+        #[cfg(feature = "coverage-samples")]
+        let max_decoded_samples = options
+            .max_decoded_samples
+            .unwrap_or(geopackage_core::coverage::DEFAULT_MAX_DECODED_SAMPLES);
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "application_id", version::APPLICATION_ID_GPKG)?;
         conn.pragma_update(
@@ -678,6 +686,8 @@ impl GeoPackage {
             journal_mode,
             allow_unsupported_extension_writes,
             enforce_column_constraints,
+            #[cfg(feature = "coverage-samples")]
+            max_decoded_samples,
         })
     }
 
@@ -725,6 +735,10 @@ impl GeoPackage {
         }
         let allow_unsupported_extension_writes = options.allow_unsupported_extension_writes;
         let enforce_column_constraints = options.enforce_column_constraints;
+        #[cfg(feature = "coverage-samples")]
+        let max_decoded_samples = options
+            .max_decoded_samples
+            .unwrap_or(geopackage_core::coverage::DEFAULT_MAX_DECODED_SAMPLES);
         // Collected before the pragmas are applied, so a warning describes the
         // file as it was found rather than as this handle left it.
         let warnings = if options.lenient {
@@ -742,7 +756,15 @@ impl GeoPackage {
             journal_mode,
             allow_unsupported_extension_writes,
             enforce_column_constraints,
+            #[cfg(feature = "coverage-samples")]
+            max_decoded_samples,
         })
+    }
+
+    /// The most samples a coverage tile may declare and still be decoded.
+    #[cfg(feature = "coverage-samples")]
+    pub(crate) fn max_decoded_samples(&self) -> usize {
+        self.max_decoded_samples
     }
 
     /// Returns the spec version declared by the file's pragmas.

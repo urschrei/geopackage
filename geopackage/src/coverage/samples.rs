@@ -19,10 +19,9 @@
 
 use std::collections::VecDeque;
 
-use geopackage_core::TileError;
 use geopackage_core::coverage::{
-    Interpolation, SampleLookup, SampleStatistics, TileSamples, WeightedSample, decode_payload,
-    decode_samples,
+    CoveragePayload, Interpolation, SampleLookup, SampleStatistics, TileSamples, WeightedSample,
+    coverage_payload, decode_payload,
 };
 use geopackage_core::tiles::{TileCoord, TileMatrix};
 
@@ -39,32 +38,54 @@ impl<'a> Coverage<'a> {
     ///
     /// Those of [`Coverage::check_payload`], and [`Error::Tile`] with:
     ///
-    /// - [`TileError::UnreadablePayload`] for a payload whose header is
+    /// - [`TileError::UnreadablePayload`](crate::core::TileError::UnreadablePayload) for a payload whose header is
     ///   conformant but whose data cannot be decoded.
-    /// - [`TileError::PayloadTooLarge`] for a payload whose header declares
-    ///   more than
-    ///   [`MAX_DECODED_SAMPLES`](geopackage_core::coverage::MAX_DECODED_SAMPLES)
-    ///   samples, which is not decoded.
+    /// - [`TileError::PayloadTooLarge`](crate::core::TileError::PayloadTooLarge) for a payload whose header declares
+    ///   more samples than
+    ///   [`OpenOptions::max_decoded_samples`](crate::OpenOptions::max_decoded_samples)
+    ///   allows, which is not decoded.
     pub fn decode(&self, bytes: &[u8]) -> Result<TileSamples> {
         let payload = self.check_payload(bytes)?;
-        Ok(decode_payload(bytes, &payload)?)
+        self.decode_checked(bytes, &payload)
     }
 
     /// Reads and decodes one tile, or returns `None` if the coverage has no
     /// tile there.
     ///
-    /// Does not compare the size of the tile with the `tile_width` and
-    /// `tile_height` of its zoom level, because a read does not reject a file.
-    /// [`CoverageSampler`] does, because it addresses samples through the
-    /// grid.
+    /// Refuses, before decoding it, a tile whose header declares more pixels
+    /// across or down than the `tile_width` and `tile_height` of its zoom
+    /// level, because the decode would allocate for samples the zoom level
+    /// cannot hold. A smaller tile is decoded, because a read does not reject
+    /// a file; [`CoverageSampler`] refuses it, because it addresses samples
+    /// through the grid.
     ///
     /// # Errors
     ///
-    /// As [`Coverage::decode`], and [`Error`] if the row cannot be read.
+    /// As [`Coverage::decode`], [`Error::Tile`] with
+    /// [`TileError::PayloadSizeMismatch`](crate::core::TileError::PayloadSizeMismatch) for a tile larger than its zoom
+    /// level, and [`Error`] if the row cannot be read.
     pub fn samples(&self, coord: TileCoord) -> Result<Option<TileSamples>> {
-        self.get_tile(coord)?
-            .map(|bytes| self.decode(&bytes))
-            .transpose()
+        let Some(bytes) = self.get_tile(coord)? else {
+            return Ok(None);
+        };
+        let payload = self.check_payload(&bytes)?;
+        if let Some(matrix) = self.matrix(coord.zoom_level) {
+            let declared = payload.tile_payload();
+            if declared.width > matrix.tile_width || declared.height > matrix.tile_height {
+                matrix.check_payload(&declared)?;
+            }
+        }
+        self.decode_checked(&bytes, &payload).map(Some)
+    }
+
+    /// Decodes a payload that [`Coverage::check_payload`] has accepted, with
+    /// the handle's limit.
+    fn decode_checked(&self, bytes: &[u8], payload: &CoveragePayload) -> Result<TileSamples> {
+        Ok(decode_payload(
+            bytes,
+            payload,
+            self.gpkg().max_decoded_samples(),
+        )?)
     }
 
     /// Checks Requirement 21: "Special floating point values such as NaN and
@@ -76,7 +97,7 @@ impl<'a> Coverage<'a> {
     /// # Errors
     ///
     /// [`Error::Tile`] with
-    /// [`TileError::CoverageProfileViolation`] for Requirement 21, naming the
+    /// [`TileError::CoverageProfileViolation`](crate::core::TileError::CoverageProfileViolation) for Requirement 21, naming the
     /// first sample that breaks it.
     pub fn check_samples(&self, samples: &TileSamples) -> Result<()> {
         Ok(samples.check_finite()?)
@@ -180,9 +201,10 @@ impl CoverageSampler<'_> {
     /// # Errors
     ///
     /// As [`Coverage::decode`] for a tile the lookup reads, and
-    /// [`Error::Tile`] with [`TileError::PayloadSizeMismatch`] for a tile
+    /// [`Error::Tile`] with [`TileError::PayloadSizeMismatch`](crate::core::TileError::PayloadSizeMismatch) for a tile
     /// whose size is not the one its zoom level declares, because its samples
-    /// would then be in the wrong places.
+    /// would then be in the wrong places. The size is checked from the header,
+    /// before the tile is decoded.
     pub fn value_at(
         &mut self,
         x: f64,
@@ -235,23 +257,12 @@ impl CoverageSampler<'_> {
     }
 
     fn read(&self, coord: TileCoord) -> Result<Option<(TileSamples, TileAncillary)>> {
-        let Some(samples) = self.coverage.samples(coord)? else {
+        let Some(bytes) = self.coverage.get_tile(coord)? else {
             return Ok(None);
         };
-        let (width, height) = (
-            i64::try_from(samples.width()),
-            i64::try_from(samples.height()),
-        );
-        if width != Ok(self.matrix.tile_width) || height != Ok(self.matrix.tile_height) {
-            return Err(TileError::PayloadSizeMismatch {
-                zoom_level: self.matrix.zoom_level,
-                expected_width: self.matrix.tile_width,
-                expected_height: self.matrix.tile_height,
-                actual_width: width.unwrap_or(i64::MAX),
-                actual_height: height.unwrap_or(i64::MAX),
-            }
-            .into());
-        }
+        let payload = self.coverage.check_payload(&bytes)?;
+        self.matrix.check_payload(&payload.tile_payload())?;
+        let samples = self.coverage.decode_checked(&bytes, &payload)?;
         let tile = self
             .coverage
             .tile_ancillary(coord)?
@@ -274,7 +285,8 @@ impl CoverageWriter<'_> {
     /// Writes one tile with statistics calculated from its samples, after
     /// checking Requirement 21.
     ///
-    /// Decodes the payload, rejects a NaN or infinite sample, and records the
+    /// Checks the payload's size against its zoom level, decodes it, rejects
+    /// a NaN or infinite sample, and records the
     /// [`SampleStatistics`] of the values in the ancillary row. The scale and
     /// offset come from `ancillary`, and any statistics in it are replaced. A
     /// tile whose samples are all `data_null` gets no statistics.
@@ -283,17 +295,22 @@ impl CoverageWriter<'_> {
     ///
     /// As [`CoverageWriter::put_with_ancillary`], and:
     ///
-    /// - [`Error::Tile`] with [`TileError::CoverageProfileViolation`] for
+    /// - [`Error::Tile`] with [`TileError::CoverageProfileViolation`](crate::core::TileError::CoverageProfileViolation) for
     ///   Requirement 21.
-    /// - [`Error::Tile`] with [`TileError::UnreadablePayload`] or
-    ///   [`TileError::PayloadTooLarge`], as for [`Coverage::decode`].
+    /// - [`Error::Tile`] with [`TileError::UnreadablePayload`](crate::core::TileError::UnreadablePayload) or
+    ///   [`TileError::PayloadTooLarge`](crate::core::TileError::PayloadTooLarge), as for [`Coverage::decode`].
     pub fn put_with_statistics(
         &mut self,
         coord: TileCoord,
         data: &[u8],
         ancillary: &TileAncillary,
     ) -> Result<()> {
-        let samples = decode_samples(data)?;
+        // The size first, from the header, so that nothing is decoded for a
+        // tile the write would refuse.
+        let payload = coverage_payload(data)?;
+        self.matrix_at(coord)?
+            .check_payload(&payload.tile_payload())?;
+        let samples = decode_payload(data, &payload, self.max_decoded_samples)?;
         samples.check_finite()?;
         let statistics = samples.statistics(&self.ancillary, ancillary);
         let mut ancillary = *ancillary;

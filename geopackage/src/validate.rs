@@ -875,7 +875,12 @@ impl GeoPackage {
                 }
             }
             #[cfg(feature = "coverage-samples")]
-            if let Err(finding) = check_coverage_samples(tile.data(), &payload) {
+            if let Err(finding) = check_coverage_samples(
+                tile.data(),
+                &payload,
+                coverage.matrix(tile.coord().zoom_level),
+                self.max_decoded_samples(),
+            ) {
                 samples_tiles += 1;
                 if samples.is_none() {
                     samples = Some(finding);
@@ -947,18 +952,25 @@ impl GeoPackage {
 /// Requirement 21. Returns the requirement a failure breaks and its detail.
 ///
 /// Data that does not decode breaks the requirement that names the encoding:
-/// 15 (baseline TIFF) for a TIFF, and 13 for a PNG. A tile larger than
-/// [`MAX_DECODED_SAMPLES`](geopackage_core::coverage::MAX_DECODED_SAMPLES) is
-/// not decoded, so its samples are not checked.
+/// 15 (baseline TIFF) for a TIFF, and 13 for a PNG. A tile is not decoded,
+/// so its samples are not checked, if its header declares more pixels across
+/// or down than its zoom level (`matrix`), or more samples than `max_samples`.
 #[cfg(feature = "coverage-samples")]
 fn check_coverage_samples(
     bytes: &[u8],
     payload: &geopackage_core::coverage::CoveragePayload,
+    matrix: Option<&geopackage_core::tiles::TileMatrix>,
+    max_samples: usize,
 ) -> std::result::Result<(), (u8, String)> {
     use geopackage_core::TileError;
     use geopackage_core::coverage::{CoveragePayload, decode_payload};
 
-    let samples = match decode_payload(bytes, payload) {
+    if let Some(matrix) = matrix
+        && (payload.width() > matrix.tile_width || payload.height() > matrix.tile_height)
+    {
+        return Ok(());
+    }
+    let samples = match decode_payload(bytes, payload, max_samples) {
         Ok(samples) => samples,
         Err(TileError::PayloadTooLarge { .. }) => return Ok(()),
         Err(error) => {

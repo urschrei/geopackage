@@ -19,7 +19,8 @@ use geopackage::core::TileError;
 use geopackage::core::coverage::CoverageDatatype;
 use geopackage::core::tiles::{TileCoord, TileMatrix, TileMatrixSet};
 use geopackage::{
-    Coverage, CoverageBuilder, Error, Finding, GeoPackage, Interpolation, TileAncillary,
+    Coverage, CoverageBuilder, Error, Finding, GeoPackage, Interpolation, OpenOptions,
+    TileAncillary,
 };
 use hegel::generators;
 
@@ -95,7 +96,19 @@ fn new_coverage(
     side: i64,
     configure: impl FnOnce(CoverageBuilder) -> CoverageBuilder,
 ) -> GeoPackage {
-    let gpkg = GeoPackage::create(std::path::Path::new(":memory:")).unwrap();
+    new_coverage_with(OpenOptions::new(), datatype, columns, rows, side, configure)
+}
+
+/// [`new_coverage`], in a file opened with `options`.
+fn new_coverage_with(
+    options: OpenOptions,
+    datatype: CoverageDatatype,
+    columns: i64,
+    rows: i64,
+    side: i64,
+    configure: impl FnOnce(CoverageBuilder) -> CoverageBuilder,
+) -> GeoPackage {
+    let gpkg = options.create(std::path::Path::new(":memory:")).unwrap();
     gpkg.add_epsg_srs(3857).unwrap();
     let set = TileMatrixSet::new(
         3857,
@@ -636,6 +649,128 @@ fn a_lookup_refuses_a_tile_of_the_wrong_size() {
             .width(),
         2
     );
+}
+
+/// A PNG whose header declares far more samples than its data holds: the
+/// 192 by 4,294,705,216 the fuzzer found, which a decoder that trusted the
+/// header would allocate about 1.6 TB for.
+fn lying_png() -> Vec<u8> {
+    let mut bytes = png16(2, 2, &[0; 4]);
+    // The width and height of the IHDR chunk, after the signature and the
+    // chunk's length and type.
+    let size = [192_u32, 4_294_705_216].map(u32::to_be_bytes);
+    bytes.splice(16..24, size.into_iter().flatten());
+    bytes
+}
+
+#[test]
+fn a_tile_larger_than_its_zoom_level_is_refused_before_it_is_decoded() {
+    let gpkg = new_coverage(CoverageDatatype::Integer, 1, 1, 4, |b| b);
+    gpkg.connection()
+        .execute(
+            "INSERT INTO dem (zoom_level, tile_column, tile_row, tile_data) VALUES (0, 0, 0, ?1)",
+            [lying_png()],
+        )
+        .unwrap();
+    let coverage = gpkg.coverage("dem").unwrap();
+    for error in [
+        coverage.samples(TileCoord::new(0, 0, 0)).unwrap_err(),
+        coverage
+            .value_at(0, 1.0, 1.0, Interpolation::Nearest)
+            .unwrap_err(),
+        coverage
+            .writer()
+            .unwrap()
+            .put_with_statistics(
+                TileCoord::new(0, 0, 0),
+                &lying_png(),
+                &TileAncillary::defaults(),
+            )
+            .unwrap_err(),
+    ] {
+        assert!(
+            matches!(error, Error::Tile(TileError::PayloadSizeMismatch { .. })),
+            "{error:?}"
+        );
+    }
+    // Without a zoom level to compare with, the limit refuses it.
+    assert!(matches!(
+        coverage.decode(&lying_png()).unwrap_err(),
+        Error::Tile(TileError::PayloadTooLarge { .. })
+    ));
+    // `validate` does not decode it, so it reports nothing about its samples.
+    let findings = gpkg.validate().unwrap();
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::CoveragePayloadNonConformant { .. })),
+        "{findings:#?}"
+    );
+}
+
+#[test]
+fn the_decode_limit_is_an_open_option() {
+    let tile = float_tiff(4, 4, &[f32::NAN; 16]);
+    let limited = new_coverage_with(
+        OpenOptions::new().max_decoded_samples(15),
+        CoverageDatatype::Float,
+        1,
+        1,
+        4,
+        |b| b,
+    );
+    let coverage = limited.coverage("dem").unwrap();
+    put(&coverage, 0, 0, &tile);
+    let too_large = |error: Error| {
+        assert!(
+            matches!(
+                error,
+                Error::Tile(TileError::PayloadTooLarge {
+                    width: 4,
+                    height: 4,
+                    limit: 15
+                })
+            ),
+            "{error:?}"
+        );
+    };
+    too_large(coverage.samples(TileCoord::new(0, 0, 0)).unwrap_err());
+    too_large(coverage.decode(&tile).unwrap_err());
+    too_large(
+        coverage
+            .writer()
+            .unwrap()
+            .put_with_statistics(TileCoord::new(0, 0, 0), &tile, &TileAncillary::defaults())
+            .unwrap_err(),
+    );
+    // The NaN samples are not decoded, so not reported.
+    assert_eq!(limited.validate().unwrap(), Vec::new());
+
+    let enough = new_coverage_with(
+        OpenOptions::new().max_decoded_samples(16),
+        CoverageDatatype::Float,
+        1,
+        1,
+        4,
+        |b| b,
+    );
+    let coverage = enough.coverage("dem").unwrap();
+    put(&coverage, 0, 0, &tile);
+    assert_eq!(
+        coverage
+            .samples(TileCoord::new(0, 0, 0))
+            .unwrap()
+            .unwrap()
+            .width(),
+        4
+    );
+    assert!(matches!(
+        enough.validate().unwrap().as_slice(),
+        [Finding::CoveragePayloadNonConformant {
+            requirement: 21,
+            ..
+        }]
+    ));
 }
 
 #[test]
