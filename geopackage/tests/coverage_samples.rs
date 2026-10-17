@@ -703,12 +703,17 @@ fn a_tile_larger_than_its_zoom_level_is_refused_before_it_is_decoded() {
         coverage.decode(&lying_png()).unwrap_err(),
         Error::Tile(TileError::PayloadTooLarge { .. })
     ));
-    // `validate` does not decode it, so it reports nothing about its samples.
+    // `validate` reports its size, and does not decode it. (The raw insert
+    // also left the tile without its ancillary row.)
     let findings = gpkg.validate().unwrap();
     assert!(
-        !findings
-            .iter()
-            .any(|finding| matches!(finding, Finding::CoveragePayloadNonConformant { .. })),
+        matches!(
+            findings.as_slice(),
+            [
+                Finding::MissingTileAncillary { .. },
+                Finding::CoverageTileSizeMismatch { tiles: 1, .. }
+            ]
+        ),
         "{findings:#?}"
     );
 }

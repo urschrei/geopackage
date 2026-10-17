@@ -187,6 +187,21 @@ pub enum Finding {
         /// How many tiles are affected.
         tiles: i64,
     },
+    /// Coverage tiles whose payload is not the pixel size that their zoom
+    /// level's `tile_width` and `tile_height` declare.
+    ///
+    /// A reader places samples through the grid, so it cannot use such a
+    /// tile: GDAL refuses it ("Inconsistent tiles characteristics"), and so do
+    /// this crate's sample reads and value lookups. Its samples are not
+    /// decoded.
+    CoverageTileSizeMismatch {
+        /// The coverage's table.
+        table_name: String,
+        /// The size of the first mismatched tile, and its zoom level's.
+        detail: String,
+        /// How many tiles are affected.
+        tiles: i64,
+    },
     /// Coverage tiles with no `gpkg_2d_gridded_tile_ancillary` row
     /// (Requirement 10).
     MissingTileAncillary {
@@ -235,6 +250,7 @@ impl Finding {
             | Self::CoverageUninterpretable { .. }
             | Self::CoverageDatatypeUnknown { .. }
             | Self::CoveragePayloadDatatypeMismatch { .. }
+            | Self::CoverageTileSizeMismatch { .. }
             | Self::MissingMappingTable { .. } => Severity::Error,
             // The severity depends on the coverage. Without the row, a reader
             // uses a scale of 1 and an offset of 0. Requirement 11 sets these
@@ -281,6 +297,7 @@ impl Finding {
             | Self::CoverageScaleNotDefault { table_name, .. }
             | Self::CoveragePayloadNonConformant { table_name, .. }
             | Self::CoveragePayloadDatatypeMismatch { table_name, .. }
+            | Self::CoverageTileSizeMismatch { table_name, .. }
             | Self::MissingTileAncillary { table_name, .. }
             | Self::DanglingTileAncillary { table_name, .. } => Some(table_name),
             Self::TableNameCaseMismatch { declared, .. } => Some(declared),
@@ -332,6 +349,7 @@ impl Finding {
             | Self::CoverageScaleNotDefault { .. }
             | Self::CoveragePayloadNonConformant { .. }
             | Self::CoveragePayloadDatatypeMismatch { .. }
+            | Self::CoverageTileSizeMismatch { .. }
             | Self::MissingTileAncillary { .. }
             | Self::DanglingTileAncillary { .. }
             | Self::NonConformantRelationName { .. } => None,
@@ -461,6 +479,16 @@ impl fmt::Display for Finding {
                 write!(
                     f,
                     "{tiles} tile(s) of coverage {table_name:?} do not match its datatype {datatype:?}: {detail}"
+                )
+            }
+            Self::CoverageTileSizeMismatch {
+                table_name,
+                detail,
+                tiles,
+            } => {
+                write!(
+                    f,
+                    "{tiles} tile(s) of coverage {table_name:?} are not the size their zoom level declares: {detail}"
                 )
             }
             Self::MissingTileAncillary {
@@ -839,6 +867,8 @@ impl GeoPackage {
         let mut profile_tiles = 0;
         let mut mismatch: Option<String> = None;
         let mut mismatch_tiles = 0;
+        let mut size: Option<String> = None;
+        let mut size_tiles = 0;
         // Findings about the samples, kept apart from those about the header,
         // so that one does not hide the other.
         #[cfg(feature = "coverage-samples")]
@@ -874,13 +904,22 @@ impl GeoPackage {
                     mismatch = Some(error.to_string());
                 }
             }
+            // A tile at a zoom level with no `gpkg_tile_matrix` row has no
+            // size to compare with.
+            if let Some(matrix) = coverage.matrix(tile.coord().zoom_level)
+                && let Err(error) = matrix.check_payload(&payload.tile_payload())
+            {
+                size_tiles += 1;
+                if size.is_none() {
+                    size = Some(error.to_string());
+                }
+                // Not decoded, as `Coverage::samples` refuses it.
+                continue;
+            }
             #[cfg(feature = "coverage-samples")]
-            if let Err(finding) = check_coverage_samples(
-                tile.data(),
-                &payload,
-                coverage.matrix(tile.coord().zoom_level),
-                self.max_decoded_samples(),
-            ) {
+            if let Err(finding) =
+                check_coverage_samples(tile.data(), &payload, self.max_decoded_samples())
+            {
                 samples_tiles += 1;
                 if samples.is_none() {
                     samples = Some(finding);
@@ -902,6 +941,13 @@ impl GeoPackage {
                 datatype: coverage.ancillary().datatype.clone(),
                 detail,
                 tiles: mismatch_tiles,
+            });
+        }
+        if let Some(detail) = size {
+            findings.push(Finding::CoverageTileSizeMismatch {
+                table_name: coverage.table_name().to_owned(),
+                detail,
+                tiles: size_tiles,
             });
         }
         #[cfg(feature = "coverage-samples")]
@@ -952,23 +998,18 @@ impl GeoPackage {
 /// Requirement 21. Returns the requirement a failure breaks and its detail.
 ///
 /// Data that does not decode breaks the requirement that names the encoding:
-/// 15 (baseline TIFF) for a TIFF, and 13 for a PNG. A tile is not decoded,
-/// so its samples are not checked, if its header declares a size other than
-/// its zoom level's (`matrix`), as [`Coverage::samples`] refuses it, or more
-/// samples than `max_samples`.
+/// 15 (baseline TIFF) for a TIFF, and 13 for a PNG. A tile whose header
+/// declares more samples than `max_samples` is not decoded, so its samples
+/// are not checked.
 #[cfg(feature = "coverage-samples")]
 fn check_coverage_samples(
     bytes: &[u8],
     payload: &geopackage_core::coverage::CoveragePayload,
-    matrix: Option<&geopackage_core::tiles::TileMatrix>,
     max_samples: usize,
 ) -> std::result::Result<(), (u8, String)> {
     use geopackage_core::TileError;
     use geopackage_core::coverage::{CoveragePayload, decode_payload};
 
-    if matrix.is_some_and(|matrix| matrix.check_payload(&payload.tile_payload()).is_err()) {
-        return Ok(());
-    }
     let samples = match decode_payload(bytes, payload, max_samples) {
         Ok(samples) => samples,
         Err(TileError::PayloadTooLarge { .. }) => return Ok(()),

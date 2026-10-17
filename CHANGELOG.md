@@ -10,6 +10,10 @@ While the version is below 1.0 the API may change in any release.
 
 ### Added
 
+- `GeoPackage::validate` reports coverage tiles whose pixel size is not the
+  one their zoom level declares as `Finding::CoverageTileSizeMismatch`, an
+  error: GDAL refuses such a tile, as do this crate's sample reads. It reads
+  only the header, so it does not need the `coverage-samples` feature.
 - The `coverage-samples` feature, off by default, decodes the samples of
   tiled gridded coverage tiles with the `tiff` and `png` crates. The feature
   is on `geopackage-core`, which holds the decode, and `geopackage` forwards

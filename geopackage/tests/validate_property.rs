@@ -404,7 +404,7 @@ fn build_clean() -> GeoPackage {
 }
 
 /// The coverages of the clean file, one for each coverage defect.
-const COVERAGES: [&str; 8] = [
+const COVERAGES: [&str; 9] = [
     "cov_uninterpretable",
     "cov_datatype",
     "cov_scale",
@@ -413,6 +413,7 @@ const COVERAGES: [&str; 8] = [
     "cov_missing",
     "cov_dangling",
     "cov_lost",
+    "cov_size",
 ];
 
 /// The ids of the two metadata records of the clean file.
@@ -629,6 +630,12 @@ fn corrupt(tc: &hegel::TestCase, gpkg: &GeoPackage, defect: usize) -> Key {
             }
             expect("StaleSpatialIndex", Some("stale"))
         }
+        24 => {
+            gpkg.connection()
+                .execute("UPDATE cov_size SET tile_data = ?1", [tiff(8, false)])
+                .unwrap();
+            expect("CoverageTileSizeMismatch", Some("cov_size"))
+        }
         _ => {
             sql(
                 gpkg,
@@ -641,7 +648,7 @@ fn corrupt(tc: &hegel::TestCase, gpkg: &GeoPackage, defect: usize) -> Key {
 }
 
 /// The number of defects `corrupt` knows.
-const DEFECTS: usize = 25;
+const DEFECTS: usize = 26;
 
 /// Each defect, made alone or together with others on separate objects of a
 /// clean file, is reported as exactly its own finding, and the findings come
