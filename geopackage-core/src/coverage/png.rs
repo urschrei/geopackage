@@ -26,7 +26,7 @@ pub(crate) const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0
 /// channel.
 ///
 /// Reads the signature and the `IHDR` fields up to the colour type only. It
-/// does not read `IDAT`, so this function does not check Requirement 21, as
+/// does not read `IDAT`, so this function does not check [Requirement 21], as
 /// with [`coverage_tiff`](super::coverage_tiff).
 ///
 /// # Errors
@@ -50,6 +50,8 @@ pub(crate) const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0
 ///     Err(TileError::UnreadablePayload { .. })
 /// ));
 /// ```
+///
+/// [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
 pub fn coverage_png(bytes: &[u8]) -> Result<CoveragePng, TileError> {
     if !bytes.starts_with(&PNG_SIGNATURE) {
         return Err(unreadable("no PNG signature"));

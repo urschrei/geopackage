@@ -131,11 +131,13 @@ pub enum Finding {
     /// Coverage tiles with payloads that break the encoding profile of the
     /// extension (Requirements 13 and 15 to 20).
     ///
-    /// With the `coverage-samples` feature, the samples too: Requirement 21
+    /// With the `coverage-samples` feature, the samples too: [Requirement 21]
     /// for a NaN or infinite sample, and the requirement of the encoding (15
     /// for TIFF, 13 for PNG) for data that does not decode. Those come as a
     /// second finding, so a fault in the header does not hide one in the
     /// samples.
+    ///
+    /// [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
     CoveragePayloadNonConformant {
         /// The coverage's table.
         table_name: String,
@@ -560,7 +562,7 @@ impl GeoPackage {
     /// requirements apply to payloads, so that check reads every coverage
     /// tile. A file without a coverage does not pay this cost. With the
     /// `coverage-samples` feature it also decodes every coverage tile, for
-    /// Requirement 21, which costs more again.
+    /// [Requirement 21], which costs more again.
     ///
     /// An empty vector means every check passed. It does not mean the file
     /// conforms in every respect the spec defines. This method reports what it
@@ -572,6 +574,8 @@ impl GeoPackage {
     /// # Errors
     ///
     /// [`crate::Error`] if the file cannot be read far enough to check it.
+    ///
+    /// [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
     #[hotpath::measure(label = "GeoPackage::validate")]
     pub fn validate(&self) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
@@ -995,12 +999,14 @@ impl GeoPackage {
 }
 
 /// Decodes a coverage payload whose header is conformant, and checks
-/// Requirement 21. Returns the requirement a failure breaks and its detail.
+/// [Requirement 21]. Returns the requirement a failure breaks and its detail.
 ///
 /// Data that does not decode breaks the requirement that names the encoding:
 /// 15 (baseline TIFF) for a TIFF, and 13 for a PNG. A tile whose header
 /// declares more samples than `max_samples` is not decoded, so its samples
 /// are not checked.
+///
+/// [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
 #[cfg(feature = "coverage-samples")]
 fn check_coverage_samples(
     bytes: &[u8],

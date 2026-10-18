@@ -23,7 +23,7 @@
 //! [`Coverage::value_at`] and [`CoverageSampler`] look up values at a
 //! position, [`Coverage::statistics`] and
 //! [`CoverageWriter::put_with_statistics`] calculate the per-tile statistics,
-//! and [`Coverage::check_samples`] checks Requirement 21.
+//! and [`Coverage::check_samples`] checks [Requirement 21].
 //!
 //! # Why a coverage is not a [`TilePyramid`]
 //!
@@ -50,6 +50,8 @@
 //! }
 //! # Ok(()) }
 //! ```
+//!
+//! [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
 
 use geopackage_core::coverage::{
     COVERAGE_ANCILLARY_TABLE, COVERAGE_DATA_TYPE, CoverageDatatype, CoveragePayload,
@@ -141,9 +143,10 @@ impl<'a> Coverage<'a> {
     /// Skips the `datatype` check if [`Coverage::datatype`] is `None`, because a
     /// value that the spec does not define constrains nothing.
     ///
-    /// Does not check Requirement 21 (every pixel valid, no NaN, no Inf). That
-    /// requirement is about samples, which this check does not decode. With
-    /// the `coverage-samples` feature, [`Coverage::check_samples`] checks it.
+    /// Does not check [Requirement 21] (every pixel valid, no NaN, no Inf).
+    /// That requirement is about samples, which this check does not decode.
+    /// With the `coverage-samples` feature, [`Coverage::check_samples`] checks
+    /// it.
     ///
     /// # Errors
     ///
@@ -151,6 +154,8 @@ impl<'a> Coverage<'a> {
     /// [`TileError::CoverageProfileViolation`](geopackage_core::TileError::CoverageProfileViolation)
     /// for the requirement, or an unreadable-payload error for bytes that are
     /// neither a TIFF nor a PNG.
+    ///
+    /// [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
     pub fn check_payload(&self, bytes: &[u8]) -> Result<CoveragePayload> {
         let payload = coverage_payload(bytes)?;
         if let Some(datatype) = self.datatype() {

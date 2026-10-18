@@ -5,7 +5,7 @@
 //! [`super`], or a 16-bit greyscale PNG. [`decode_samples`] decodes either to
 //! [`TileSamples`], with the `tiff` and `png` crates. From the samples:
 //!
-//! - **Requirement 21** (no NaN or infinite samples):
+//! - **[Requirement 21]** (no NaN or infinite samples):
 //!   [`TileSamples::check_finite`].
 //! - **Per-tile statistics**, in the form the tile ancillary row records them:
 //!   [`TileSamples::statistics`].
@@ -13,6 +13,8 @@
 //!   reads and their weights, following the coverage's `grid_cell_encoding`,
 //!   and combines their values. Finding the tiles that hold the samples is
 //!   left to the caller, which knows where the tiles are stored.
+//!
+//! [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
 
 use std::io::Cursor;
 
@@ -81,7 +83,7 @@ impl TileSamples {
         self.samples
     }
 
-    /// Checks Requirement 21: "Special floating point values such as NaN and
+    /// Checks [Requirement 21]: "Special floating point values such as NaN and
     /// Inf SHALL NOT be used".
     ///
     /// Integer samples cannot break the requirement, so only a `float`
@@ -91,6 +93,8 @@ impl TileSamples {
     ///
     /// [`TileError::CoverageProfileViolation`] for Requirement 21, naming the
     /// first sample that breaks it.
+    ///
+    /// [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
     pub fn check_finite(&self) -> Result<(), TileError> {
         let Some((index, sample)) = self
             .samples
@@ -160,7 +164,9 @@ impl TileSamples {
 /// coverage are applied first, as the extension specifies ("The min, max, and
 /// mean values are natural, i.e., not scaled or offset"). GDAL writes them so.
 /// `data_null` samples are left out, and so are NaN and infinite samples,
-/// which Requirement 21 forbids and [`TileSamples::check_finite`] reports.
+/// which [Requirement 21] forbids and [`TileSamples::check_finite`] reports.
+///
+/// [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct SampleStatistics {
