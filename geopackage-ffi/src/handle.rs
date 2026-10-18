@@ -64,7 +64,7 @@
 //!    `&mut` to it. Moving the `Container` itself, which cannot happen anyway
 //!    once it is behind a raw pointer, would not move the `GeoPackage`.
 //! 2. **A child never outlives its parent.** The only path that destroys a
-//!    container checks [`Container::outstanding_children`] first and fails
+//!    container checks `Container::outstanding_children` first and fails
 //!    while it is non-zero. Freeing a child decrements it. So the `GeoPackage`
 //!    a `Layer<'static>` points into is still alive whenever that layer is
 //!    used.
@@ -106,7 +106,7 @@ pub struct Container {
 
 impl Container {
     /// Wraps an open GeoPackage as a container handle.
-    pub fn new(gpkg: GeoPackage) -> Self {
+    pub(crate) fn new(gpkg: GeoPackage) -> Self {
         Self {
             gpkg: Box::new(gpkg),
             children: Cell::new(0),
@@ -125,7 +125,7 @@ impl Container {
     /// # Errors
     ///
     /// Whatever [`GeoPackage::layer`] returns.
-    pub fn layer(&self, name: &str) -> geopackage::Result<LayerHandle> {
+    pub(crate) fn layer(&self, name: &str) -> geopackage::Result<LayerHandle> {
         let layer = self.gpkg.layer(name)?;
         Ok(self.adopt(layer))
     }
@@ -135,7 +135,7 @@ impl Container {
     /// # Errors
     ///
     /// Whatever [`GeoPackage::attributes`] returns.
-    pub fn attributes(&self, name: &str) -> geopackage::Result<LayerHandle> {
+    pub(crate) fn attributes(&self, name: &str) -> geopackage::Result<LayerHandle> {
         let layer = self.gpkg.attributes(name)?;
         Ok(self.adopt(layer))
     }
@@ -149,7 +149,7 @@ impl Container {
     ///
     /// Whatever the open returns, or [`geopackage::Error::NoSuchColumn`] from
     /// the projection.
-    pub fn layer_with_columns(
+    pub(crate) fn layer_with_columns(
         &self,
         name: &str,
         columns: &[&str],
@@ -192,7 +192,7 @@ impl Container {
     /// # Errors
     ///
     /// Whatever [`GeoPackage::tiles`] returns.
-    pub fn tiles(&self, name: &str) -> geopackage::Result<TilesHandle> {
+    pub(crate) fn tiles(&self, name: &str) -> geopackage::Result<TilesHandle> {
         let pyramid = self.gpkg.tiles(name)?;
         // SAFETY: the same argument as `adopt`. `TilePyramid<'a>` borrows the
         // `GeoPackage` inside `self.gpkg`, which is boxed and never moved or
@@ -211,7 +211,7 @@ impl Container {
     /// # Errors
     ///
     /// Whatever [`GeoPackage::create_tile_pyramid`] returns.
-    pub fn create_tiles(
+    pub(crate) fn create_tiles(
         &self,
         builder: &geopackage::TilePyramidBuilder,
     ) -> geopackage::Result<TilesHandle> {
@@ -232,7 +232,7 @@ impl Container {
     /// Used by anything that borrows this container: layer handles, tiles
     /// handles, writers, tile cursors, and the Arrow streams in
     /// [`crate::stream`].
-    pub fn token(&self) -> ChildToken {
+    pub(crate) fn token(&self) -> ChildToken {
         self.children.set(self.children.get() + 1);
         ChildToken {
             parent: std::ptr::from_ref(self),
@@ -248,7 +248,7 @@ impl Container {
     ///
     /// Checked before [`Self::close`] consumes anything, so a failed close
     /// leaves the container open and usable rather than half-torn-down.
-    pub fn outstanding_children(&self) -> usize {
+    pub(crate) fn outstanding_children(&self) -> usize {
         self.children.get()
     }
 
@@ -261,7 +261,7 @@ impl Container {
     ///
     /// Whatever [`GeoPackage::close`] returns, which for a WAL handle is the
     /// checkpoint-and-reset that makes the file a single file again.
-    pub fn close(self) -> geopackage::Result<()> {
+    pub(crate) fn close(self) -> geopackage::Result<()> {
         self.gpkg.close()
     }
 }
@@ -273,7 +273,7 @@ impl Container {
 /// and needs the same protection: while a token is alive, the container
 /// cannot close, so an erased `'static` borrow cannot outlive what it points
 /// at.
-pub struct ChildToken {
+pub(crate) struct ChildToken {
     /// The container counted against. Raw rather than a reference, because a
     /// reference would reintroduce the borrow this exists to erase.
     parent: *const Container,
@@ -303,7 +303,7 @@ pub struct LayerHandle {
 impl LayerHandle {
     /// Returns the layer, borrowed for as long as the caller holds the
     /// handle.
-    pub fn layer(&self) -> &Layer<'static> {
+    pub(crate) fn layer(&self) -> &Layer<'static> {
         &self.layer
     }
 
@@ -320,7 +320,7 @@ impl LayerHandle {
     ///
     /// Whatever [`geopackage::Layer::writer`] returns, which fails on a
     /// read-only container.
-    pub fn writer(&self) -> geopackage::Result<WriterHandle> {
+    pub(crate) fn writer(&self) -> geopackage::Result<WriterHandle> {
         let writer = self.layer.writer()?;
         Ok(WriterHandle {
             writer,
@@ -331,7 +331,7 @@ impl LayerHandle {
     /// Takes another count against this handle's container, for something
     /// that borrows the same container independently, such as an Arrow
     /// stream.
-    pub fn token(&self) -> ChildToken {
+    pub(crate) fn token(&self) -> ChildToken {
         // SAFETY: this handle owns a token of its own, so the container it
         // points at is still alive; taking a second count against it is the
         // same operation `Container::token` performs.
@@ -357,7 +357,7 @@ pub struct WriterHandle {
 impl WriterHandle {
     /// Returns a mutable reference to the writer, which every staging call
     /// needs.
-    pub fn writer_mut(&mut self) -> &mut FeatureWriter<'static> {
+    pub(crate) fn writer_mut(&mut self) -> &mut FeatureWriter<'static> {
         &mut self.writer
     }
 
@@ -369,7 +369,7 @@ impl WriterHandle {
     /// # Errors
     ///
     /// Whatever [`geopackage::FeatureWriter::commit`] returns.
-    pub fn commit(self) -> geopackage::Result<()> {
+    pub(crate) fn commit(self) -> geopackage::Result<()> {
         self.writer.commit()
     }
 }
@@ -384,7 +384,7 @@ pub struct TilesHandle {
 }
 
 /// Which stored-tile scan a cursor runs.
-pub enum CursorScan {
+pub(crate) enum CursorScan {
     /// Every stored tile, in matrix order.
     All,
     /// One zoom level.
@@ -396,13 +396,13 @@ pub enum CursorScan {
 impl TilesHandle {
     /// Returns the pyramid, borrowed for as long as the caller holds the
     /// handle.
-    pub fn pyramid(&self) -> &TilePyramid<'static> {
+    pub(crate) fn pyramid(&self) -> &TilePyramid<'static> {
         &self.pyramid
     }
 
     /// Takes another count against this handle's container, for something
     /// that borrows the same container independently, such as a tile cursor.
-    pub fn token(&self) -> ChildToken {
+    pub(crate) fn token(&self) -> ChildToken {
         // SAFETY: this handle owns a token of its own, so the container it
         // points at is still alive; taking a second count against it is the
         // same operation `Container::token` performs.
@@ -423,7 +423,7 @@ impl TilesHandle {
     /// # Errors
     ///
     /// Whatever the corresponding [`TilePyramid`] cursor constructor returns.
-    pub fn cursor(&self, scan: &CursorScan) -> geopackage::Result<TileCursorHandle> {
+    pub(crate) fn cursor(&self, scan: &CursorScan) -> geopackage::Result<TileCursorHandle> {
         let cursor = match scan {
             CursorScan::All => self.pyramid.cursor()?,
             CursorScan::At(zoom) => self.pyramid.cursor_at(*zoom)?,
@@ -478,11 +478,7 @@ impl TileCursorHandle {
     /// # Errors
     ///
     /// Whatever [`TileStream::next`] returns.
-    #[expect(
-        clippy::should_implement_trait,
-        reason = "a lending cursor cannot implement Iterator: its item borrows the iterator. The name matches TileStream::next, whose expectation records the same reasoning"
-    )]
-    pub fn next(&mut self) -> geopackage::Result<Option<Tile<'_>>> {
+    pub(crate) fn next(&mut self) -> geopackage::Result<Option<Tile<'_>>> {
         self.stream.next()
     }
 }

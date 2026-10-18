@@ -36,42 +36,13 @@ pub mod geopackage_ffi::extensions
 #[no_mangle] pub unsafe c fn geopackage_ffi::extensions::gpkg_extension_at(*const geopackage_ffi::handle::Container, usize, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut *mut core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 #[no_mangle] pub unsafe c fn geopackage_ffi::extensions::gpkg_extensions_count(*const geopackage_ffi::handle::Container, *mut usize, *mut geopackage_ffi::error::gpkg_error_t) -> geopackage_ffi::error::Status
 pub mod geopackage_ffi::handle
-pub enum geopackage_ffi::handle::CursorScan
-pub geopackage_ffi::handle::CursorScan::All
-pub geopackage_ffi::handle::CursorScan::At(i64)
-pub geopackage_ffi::handle::CursorScan::In(i64, geopackage::layer::BoundingBox)
-pub struct geopackage_ffi::handle::ChildToken
-impl core::ops::drop::Drop for geopackage_ffi::handle::ChildToken
-pub fn geopackage_ffi::handle::ChildToken::drop(&mut self)
 pub struct geopackage_ffi::handle::Container
 impl geopackage_ffi::handle::Container
-pub fn geopackage_ffi::handle::Container::attributes(&self, &str) -> geopackage::error::Result<geopackage_ffi::handle::LayerHandle>
-pub fn geopackage_ffi::handle::Container::close(self) -> geopackage::error::Result<()>
-pub fn geopackage_ffi::handle::Container::create_tiles(&self, &geopackage::tiles::TilePyramidBuilder) -> geopackage::error::Result<geopackage_ffi::handle::TilesHandle>
 pub fn geopackage_ffi::handle::Container::gpkg(&self) -> &geopackage::GeoPackage
-pub fn geopackage_ffi::handle::Container::layer(&self, &str) -> geopackage::error::Result<geopackage_ffi::handle::LayerHandle>
-pub fn geopackage_ffi::handle::Container::layer_with_columns(&self, &str, &[&str], bool) -> geopackage::error::Result<geopackage_ffi::handle::LayerHandle>
-pub fn geopackage_ffi::handle::Container::new(geopackage::GeoPackage) -> Self
-pub fn geopackage_ffi::handle::Container::outstanding_children(&self) -> usize
-pub fn geopackage_ffi::handle::Container::tiles(&self, &str) -> geopackage::error::Result<geopackage_ffi::handle::TilesHandle>
-pub fn geopackage_ffi::handle::Container::token(&self) -> geopackage_ffi::handle::ChildToken
 pub struct geopackage_ffi::handle::LayerHandle
-impl geopackage_ffi::handle::LayerHandle
-pub fn geopackage_ffi::handle::LayerHandle::layer(&self) -> &geopackage::layer::Layer<'static>
-pub fn geopackage_ffi::handle::LayerHandle::token(&self) -> geopackage_ffi::handle::ChildToken
-pub fn geopackage_ffi::handle::LayerHandle::writer(&self) -> geopackage::error::Result<geopackage_ffi::handle::WriterHandle>
 pub struct geopackage_ffi::handle::TileCursorHandle
-impl geopackage_ffi::handle::TileCursorHandle
-pub fn geopackage_ffi::handle::TileCursorHandle::next(&mut self) -> geopackage::error::Result<core::option::Option<geopackage::tiles::Tile<'_>>>
 pub struct geopackage_ffi::handle::TilesHandle
-impl geopackage_ffi::handle::TilesHandle
-pub fn geopackage_ffi::handle::TilesHandle::cursor(&self, &geopackage_ffi::handle::CursorScan) -> geopackage::error::Result<geopackage_ffi::handle::TileCursorHandle>
-pub fn geopackage_ffi::handle::TilesHandle::pyramid(&self) -> &geopackage::tiles::TilePyramid<'static>
-pub fn geopackage_ffi::handle::TilesHandle::token(&self) -> geopackage_ffi::handle::ChildToken
 pub struct geopackage_ffi::handle::WriterHandle
-impl geopackage_ffi::handle::WriterHandle
-pub fn geopackage_ffi::handle::WriterHandle::commit(self) -> geopackage::error::Result<()>
-pub fn geopackage_ffi::handle::WriterHandle::writer_mut(&mut self) -> &mut geopackage::writer::feature_writer::FeatureWriter<'static>
 pub mod geopackage_ffi::layer
 #[no_mangle] pub unsafe c fn geopackage_ffi::layer::gpkg_attributes_open(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::layer::gpkg_layer_t
 #[no_mangle] pub unsafe c fn geopackage_ffi::layer::gpkg_attributes_open_with_columns(*const geopackage_ffi::handle::Container, *const core::ffi::primitives::c_char, *const *const core::ffi::primitives::c_char, usize, *mut geopackage_ffi::error::gpkg_error_t) -> *mut geopackage_ffi::layer::gpkg_layer_t
