@@ -178,9 +178,7 @@ impl Layer<'_> {
             (true, TriggerGeneration::None) | (false, _) => SpatialIndexStatus::Stale,
         })
     }
-}
 
-impl Layer<'_> {
     /// Builds an RTree spatial index over this feature layer's geometry
     /// column.
     ///

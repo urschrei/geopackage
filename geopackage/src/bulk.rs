@@ -113,6 +113,58 @@ pub struct BulkIndexOptions {
     pub fill_factor: f64,
 }
 
+impl BulkIndexOptions {
+    /// Creates options with an explicit bulk threshold.
+    pub fn with_threshold(bulk_threshold: usize) -> Self {
+        Self {
+            bulk_threshold,
+            ..Self::default()
+        }
+    }
+
+    /// Always takes the bulk path (threshold `0`).
+    ///
+    /// For [`crate::Layer::write_all`] this forces the path, not a rebuild. A
+    /// write that is small relative to an already populated index still adds
+    /// its entries to that index, rather than rebuilding the index around them.
+    /// Use [`crate::Layer::create_spatial_index_with`] to rebuild outright.
+    pub fn always_bulk() -> Self {
+        Self::with_threshold(0)
+    }
+
+    /// Never takes the bulk path (threshold [`usize::MAX`]).
+    pub fn never_bulk() -> Self {
+        Self::with_threshold(usize::MAX)
+    }
+
+    /// Sets how much of the written index the gate checks.
+    #[must_use]
+    pub fn with_verification(mut self, verification: BulkVerification) -> Self {
+        self.verification = verification;
+        self
+    }
+
+    /// Sets the fraction of each node's capacity to fill, in `(0, 1]`.
+    ///
+    /// Values outside that range are clamped, and every node contains at least
+    /// one entry regardless. See [`DEFAULT_FILL_FACTOR`] for the trade-off.
+    #[must_use]
+    pub fn with_fill_factor(mut self, fill_factor: f64) -> Self {
+        self.fill_factor = fill_factor;
+        self
+    }
+}
+
+impl Default for BulkIndexOptions {
+    fn default() -> Self {
+        Self {
+            bulk_threshold: DEFAULT_BULK_THRESHOLD,
+            verification: BulkVerification::default(),
+            fill_factor: DEFAULT_FILL_FACTOR,
+        }
+    }
+}
+
 /// How much of a bulk-built RTree is checked before it is trusted.
 ///
 /// Every level above [`Self::None`] also enables the automatic fallback. A
@@ -166,58 +218,6 @@ pub enum BulkVerification {
     Database,
 }
 
-impl Default for BulkIndexOptions {
-    fn default() -> Self {
-        Self {
-            bulk_threshold: DEFAULT_BULK_THRESHOLD,
-            verification: BulkVerification::default(),
-            fill_factor: DEFAULT_FILL_FACTOR,
-        }
-    }
-}
-
-impl BulkIndexOptions {
-    /// Creates options with an explicit bulk threshold.
-    pub fn with_threshold(bulk_threshold: usize) -> Self {
-        Self {
-            bulk_threshold,
-            ..Self::default()
-        }
-    }
-
-    /// Always takes the bulk path (threshold `0`).
-    ///
-    /// For [`crate::Layer::write_all`] this forces the path, not a rebuild. A
-    /// write that is small relative to an already populated index still adds
-    /// its entries to that index, rather than rebuilding the index around them.
-    /// Use [`crate::Layer::create_spatial_index_with`] to rebuild outright.
-    pub fn always_bulk() -> Self {
-        Self::with_threshold(0)
-    }
-
-    /// Never takes the bulk path (threshold [`usize::MAX`]).
-    pub fn never_bulk() -> Self {
-        Self::with_threshold(usize::MAX)
-    }
-
-    /// Sets how much of the written index the gate checks.
-    #[must_use]
-    pub fn with_verification(mut self, verification: BulkVerification) -> Self {
-        self.verification = verification;
-        self
-    }
-
-    /// Sets the fraction of each node's capacity to fill, in `(0, 1]`.
-    ///
-    /// Values outside that range are clamped, and every node contains at least
-    /// one entry regardless. See [`DEFAULT_FILL_FACTOR`] for the trade-off.
-    #[must_use]
-    pub fn with_fill_factor(mut self, fill_factor: f64) -> Self {
-        self.fill_factor = fill_factor;
-        self
-    }
-}
-
 /// Which path produced an index's contents. Returned by the internal build
 /// entry points so tests can assert the bulk path (and its fallback) were
 /// actually exercised.
@@ -249,334 +249,6 @@ pub(crate) type TestFault = fn(&Connection, &str) -> Result<()>;
 /// The [`TestFault`] used outside tests: it does nothing.
 pub(crate) fn no_fault(_: &Connection, _: &str) -> Result<()> {
     Ok(())
-}
-
-/// Writes a packed tree into the three shadow tables through cached prepared
-/// statements.
-///
-/// Node and parent rows are written immediately. The packer emits them in
-/// ascending node order, which is also their primary-key order, so they append
-/// to the B-tree. `%_rowid` rows are the exception. Their key is the feature
-/// id, but the packer emits them in the tree's leaf order. That is Hilbert
-/// order, and so close to random with respect to feature id. Page splits
-/// dominate inserting a million rows in that order. Measured at 1M points, it
-/// cost 556 ms on uniformly spread data and 1.76 s on clustered data, against
-/// 36 ms for the node rows. Buffering the rows and inserting them in feature-id
-/// order costs 16 bytes per entry and a sort. It brings both cases to ~265 ms,
-/// and removes the sensitivity to data distribution along with the cost.
-struct ShadowTables<'c> {
-    conn: &'c Connection,
-    node_sql: String,
-    rowid_sql: String,
-    parent_sql: String,
-    /// `(rowid, nodeno)` pairs, flushed in rowid order by [`Self::flush`].
-    rowid_buffer: Vec<(i64, i64)>,
-}
-
-impl ShadowTables<'_> {
-    /// Inserts the buffered `%_rowid` rows in key order.
-    fn flush(&mut self) -> Result<()> {
-        self.rowid_buffer.sort_unstable_by_key(|&(rowid, _)| rowid);
-        let mut stmt = self.conn.prepare_cached(&self.rowid_sql)?;
-        for &(rowid, nodeno) in &self.rowid_buffer {
-            stmt.execute(rusqlite::params![rowid, nodeno])?;
-        }
-        Ok(())
-    }
-}
-
-impl NodeSink for ShadowTables<'_> {
-    fn node(&mut self, nodeno: i64, blob: &[u8]) -> Result<()> {
-        self.conn
-            .prepare_cached(&self.node_sql)?
-            .execute(rusqlite::params![nodeno, blob])?;
-        Ok(())
-    }
-
-    fn rowid(&mut self, rowid: i64, nodeno: i64) -> Result<()> {
-        self.rowid_buffer.push((rowid, nodeno));
-        Ok(())
-    }
-
-    fn parent(&mut self, nodeno: i64, parentnode: i64) -> Result<()> {
-        self.conn
-            .prepare_cached(&self.parent_sql)?
-            .execute(rusqlite::params![nodeno, parentnode])?;
-        Ok(())
-    }
-}
-
-/// The byte length the RTree module expects every node blob of `rtree` to have.
-///
-/// This is read from the freshly created index's root node rather than
-/// re-derived from `PRAGMA page_size`. The module itself does the same when it
-/// reopens an existing index: it takes the node size from `length(data)` of
-/// node 1 and rejects any node that differs. Reading it keeps the two
-/// definitions from drifting apart.
-fn node_size(conn: &Connection, rtree: &str) -> Result<usize> {
-    let size: i64 = conn.query_row(
-        &format!(
-            "SELECT length(data) FROM {} WHERE nodeno = 1",
-            quote(&format!("{rtree}_node"))?
-        ),
-        [],
-        |r| r.get(0),
-    )?;
-    Ok(usize::try_from(size).unwrap_or(0))
-}
-
-/// Lifts SQLite's defensive flag for the duration of the direct shadow-table
-/// writes, restoring the value found on drop.
-///
-/// Stock SQLite ships with the flag off, and the packed build assumes that.
-/// [`write_packed`] inserts into `rtree_*_node` / `_rowid` / `_parent`
-/// directly, which defensive mode rejects with "table ... may not be
-/// modified". Apple's system SQLite turns the flag on by default, so a
-/// system-linked build on macOS cannot bulk-build an index without lifting
-/// it. The flag is lifted only for the packed write, not cleared at open, so
-/// a hardened connection keeps its hardening everywhere else.
-struct DefensiveOff<'conn> {
-    conn: &'conn Connection,
-    /// The flag as found. Only a lifted flag is restored.
-    was_on: bool,
-}
-
-impl<'conn> DefensiveOff<'conn> {
-    fn lift(conn: &'conn Connection) -> Result<Self> {
-        let was_on = conn.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE)?;
-        if was_on {
-            conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, false)?;
-        }
-        Ok(Self { conn, was_on })
-    }
-}
-
-impl Drop for DefensiveOff<'_> {
-    fn drop(&mut self) {
-        if self.was_on
-            && self
-                .conn
-                .set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)
-                .is_err()
-        {
-            // Restoration fails only on a connection that is already unusable,
-            // where the flag no longer guards anything.
-        }
-    }
-}
-
-/// Clears the three shadow tables and streams a freshly packed tree into
-/// them.
-fn write_packed(
-    conn: &Connection,
-    rtree: &str,
-    entries: &[(i64, [f64; 4])],
-    node_size: usize,
-    fill_factor: f64,
-) -> Result<()> {
-    let node_table = quote(&format!("{rtree}_node"))?;
-    let rowid_table = quote(&format!("{rtree}_rowid"))?;
-    let parent_table = quote(&format!("{rtree}_parent"))?;
-
-    conn.execute_batch(&format!(
-        "DELETE FROM {node_table}; DELETE FROM {rowid_table}; DELETE FROM {parent_table};"
-    ))?;
-
-    let mut sink = ShadowTables {
-        conn,
-        node_sql: format!("INSERT INTO {node_table} VALUES (?1, ?2)"),
-        rowid_sql: format!("INSERT INTO {rowid_table} VALUES (?1, ?2)"),
-        parent_sql: format!("INSERT INTO {parent_table} VALUES (?1, ?2)"),
-        rowid_buffer: Vec::with_capacity(entries.len()),
-    };
-    packed::pack_into(entries, node_size, fill_factor, &mut sink)?;
-    sink.flush()
-}
-
-/// Returns the number of rows in `table`, a cheap proxy for the path decision
-/// that makes no `ST_*` calls.
-pub(crate) fn table_row_count(conn: &Connection, table: &str) -> Result<usize> {
-    let count: i64 = conn.query_row(
-        &format!("SELECT count(*) FROM {}", quote(table)?),
-        [],
-        |r| r.get(0),
-    )?;
-    Ok(usize::try_from(count).unwrap_or(usize::MAX))
-}
-
-/// Returns the XY envelope to index for one geometry blob, or `None` if the
-/// row is not indexable (empty under the same rule the `ST_*` functions
-/// apply).
-///
-/// It computes in a single parse what the previous SQL scan computed with five
-/// `ST_*` calls per row. The blob is known to be non-NULL, because the query's
-/// `WHERE {c} NOT NULL` excludes NULLs. Emptiness is decided exactly as
-/// `ST_IsEmpty` decides it: by the header empty flag, or else a body traversal.
-/// The bounds come from the header envelope when present and from the body
-/// otherwise, exactly as `ST_MinX`/`ST_MaxX`/`ST_MinY`/`ST_MaxY` do. The
-/// returned set is therefore identical to the one the old scan produced.
-fn envelope_of(blob: &[u8]) -> std::result::Result<Option<[f64; 4]>, geopackage_core::Error> {
-    // `ST_IsEmpty` traverses the body whenever the header flag is unset, so a
-    // faithful set requires the same traversal here rather than trusting a
-    // present header envelope. That traversal also yields the bounds for a blob
-    // whose header has no envelope, so one walk serves both purposes.
-    let (bounds, _) = geometry::blob_envelope_and_empty(blob)?;
-    Ok(bounds)
-}
-
-/// Accumulates `(fid, [min_x, max_x, min_y, max_y])` for every row whose
-/// geometry is indexable, so the set is identical to what the triggered path
-/// would index.
-///
-/// Each envelope comes from parsing the blob once in Rust (see
-/// [`envelope_of`]). The previous version asked SQLite for `ST_IsEmpty` plus
-/// the four `ST_Min/Max` functions per row. That was five user-function
-/// dispatches, each re-fetching the blob and re-parsing the GPB header, and
-/// each `ST_*` call re-traversed the body of a blob without an envelope.
-/// Reading the blob once reduces that to a single parse per row, for the same
-/// set. This scan runs on the standalone `create_spatial_index` path, and on
-/// the bulk `write_all` path when the table already held rows before the
-/// write. Otherwise that path passes `precomputed` envelopes and never reaches
-/// it.
-fn accumulate_envelopes(
-    conn: &Connection,
-    table: &str,
-    geom: &str,
-    pk: &str,
-) -> Result<Vec<(i64, [f64; 4])>> {
-    let (t, c, i) = (quote(table)?, quote(geom)?, quote(pk)?);
-    let sql = format!("SELECT {i}, {c} FROM {t} WHERE {c} NOT NULL");
-    let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query([])?;
-    // The row count is an upper bound on the entries kept: rows with a NULL or
-    // empty geometry are skipped below. One count query is cheaper than the
-    // repeated doubling it saves.
-    let mut out = Vec::with_capacity(table_row_count(conn, table)?);
-    while let Some(row) = rows.next()? {
-        let id: i64 = row.get(0)?;
-        // Borrow the blob rather than `get::<Vec<u8>>`, so a million rows are
-        // not each copied out of SQLite's page just to read a header.
-        let blob = match row.get_ref(1)? {
-            ValueRef::Blob(b) => b,
-            // `WHERE {c} NOT NULL` rules out NULL; any other type in a geometry
-            // column is malformed, which the old `ST_*` scan also surfaced as an
-            // error rather than skipping.
-            _ => {
-                return Err(rusqlite::Error::InvalidColumnType(
-                    1,
-                    geom.to_string(),
-                    rusqlite::types::Type::Blob,
-                )
-                .into());
-            }
-        };
-        if let Some(bounds) = envelope_of(blob)? {
-            out.push((id, bounds));
-        }
-    }
-    Ok(out)
-}
-
-/// Gates a freshly written RTree against the accumulated `(fid, envelope)`
-/// set, checking as much as `verification` asks for.
-///
-/// [`BulkVerification::None`] passes without reading anything. Every other
-/// level passes only when the index contains exactly one row per accumulated
-/// entry (checked by row count and a bijection on `id`) and each stored bound
-/// covers the true envelope, as [`crate::packed::entry_covers`] defines it.
-/// [`BulkVerification::Structure`] also requires `rtreecheck` to report `ok`,
-/// and [`BulkVerification::Database`] also requires `PRAGMA integrity_check`
-/// to report `ok`. The RTree stores `f32` bounds, with minima rounded down and
-/// maxima rounded up, so covering, not equality, is the correct relation.
-fn gate(
-    conn: &Connection,
-    rtree: &str,
-    mut expected: Vec<(i64, [f64; 4])>,
-    verification: BulkVerification,
-) -> Result<bool> {
-    // Nothing to check, so nothing can fail and nothing falls back.
-    if verification == BulkVerification::None {
-        return Ok(true);
-    }
-    let quoted = quote(rtree)?;
-    let count: i64 = conn.query_row(&format!("SELECT count(*) FROM {quoted}"), [], |r| r.get(0))?;
-    if usize::try_from(count).unwrap_or(usize::MAX) != expected.len() {
-        return Ok(false);
-    }
-
-    // Sort and binary-search rather than building a `HashMap` of the whole
-    // accumulated set. The map was a second copy of every entry held for the
-    // duration of the scan, which at the row counts this path is built for is
-    // hundreds of megabytes on top of the set already in hand.
-    expected.sort_unstable_by_key(|&(id, _)| id);
-    // A duplicate fid would make the bijection below ambiguous: two index rows
-    // could match the same entry, or one could match twice. A primary key scan
-    // cannot produce one, so treat it as a failed gate rather than trying to
-    // resolve it.
-    if expected
-        .iter()
-        .zip(expected.iter().skip(1))
-        .any(|(a, b)| a.0 == b.0)
-    {
-        return Ok(false);
-    }
-    // One byte per entry, marking which have been matched, so a repeated id in
-    // the index is caught the same way `HashMap::remove` returning `None`
-    // caught it before.
-    let mut matched = vec![false; expected.len()];
-    let mut hits = 0usize;
-
-    let mut stmt = conn.prepare(&format!("SELECT id, minx, maxx, miny, maxy FROM {quoted}"))?;
-    let mut rows = stmt.query([])?;
-    while let Some(row) = rows.next()? {
-        let id: i64 = row.get(0)?;
-        let (s_min_x, s_max_x, s_min_y, s_max_y): (f64, f64, f64, f64) =
-            (row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?);
-        let Ok(at) = expected.binary_search_by_key(&id, |&(id, _)| id) else {
-            return Ok(false);
-        };
-        // `at` indexes both vectors, which are the same length, so neither
-        // lookup can miss; the fallible forms keep the panicking index out.
-        let (Some(seen), Some(&(_, [min_x, max_x, min_y, max_y]))) =
-            (matched.get_mut(at), expected.get(at))
-        else {
-            return Ok(false);
-        };
-        if std::mem::replace(seen, true) {
-            return Ok(false);
-        }
-        hits += 1;
-        if !crate::packed::entry_covers(
-            [s_min_x, s_max_x, s_min_y, s_max_y],
-            [min_x, max_x, min_y, max_y],
-        ) {
-            return Ok(false);
-        }
-    }
-    if hits != expected.len() {
-        return Ok(false);
-    }
-
-    if verification == BulkVerification::Contents {
-        return Ok(true);
-    }
-
-    // Structural check on top of the content gate above. `rtreecheck` walks the
-    // index just built, cross-checking every entry against its parent's bounds
-    // and the `%_rowid`/`%_parent` mappings against `%_node`, and reports `ok`
-    // or a description of what is wrong. Its cost is proportional to the index;
-    // `PRAGMA integrity_check` is O(database), so it is a level further up
-    // (issue #16).
-    let rtree_report: String = conn.query_row("SELECT rtreecheck(?1)", [rtree], |r| r.get(0))?;
-    if rtree_report != "ok" {
-        return Ok(false);
-    }
-
-    if verification == BulkVerification::Database {
-        let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
-        return Ok(integrity == "ok");
-    }
-    Ok(true)
 }
 
 /// Builds (or rebuilds) the RTree `rtree` for `table`/`geom` by packing the
@@ -699,4 +371,332 @@ where
 
     after(conn)?;
     Ok(path)
+}
+
+/// Accumulates `(fid, [min_x, max_x, min_y, max_y])` for every row whose
+/// geometry is indexable, so the set is identical to what the triggered path
+/// would index.
+///
+/// Each envelope comes from parsing the blob once in Rust (see
+/// [`envelope_of`]). The previous version asked SQLite for `ST_IsEmpty` plus
+/// the four `ST_Min/Max` functions per row. That was five user-function
+/// dispatches, each re-fetching the blob and re-parsing the GPB header, and
+/// each `ST_*` call re-traversed the body of a blob without an envelope.
+/// Reading the blob once reduces that to a single parse per row, for the same
+/// set. This scan runs on the standalone `create_spatial_index` path, and on
+/// the bulk `write_all` path when the table already held rows before the
+/// write. Otherwise that path passes `precomputed` envelopes and never reaches
+/// it.
+fn accumulate_envelopes(
+    conn: &Connection,
+    table: &str,
+    geom: &str,
+    pk: &str,
+) -> Result<Vec<(i64, [f64; 4])>> {
+    let (t, c, i) = (quote(table)?, quote(geom)?, quote(pk)?);
+    let sql = format!("SELECT {i}, {c} FROM {t} WHERE {c} NOT NULL");
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query([])?;
+    // The row count is an upper bound on the entries kept: rows with a NULL or
+    // empty geometry are skipped below. One count query is cheaper than the
+    // repeated doubling it saves.
+    let mut out = Vec::with_capacity(table_row_count(conn, table)?);
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        // Borrow the blob rather than `get::<Vec<u8>>`, so a million rows are
+        // not each copied out of SQLite's page just to read a header.
+        let blob = match row.get_ref(1)? {
+            ValueRef::Blob(b) => b,
+            // `WHERE {c} NOT NULL` rules out NULL; any other type in a geometry
+            // column is malformed, which the old `ST_*` scan also surfaced as an
+            // error rather than skipping.
+            _ => {
+                return Err(rusqlite::Error::InvalidColumnType(
+                    1,
+                    geom.to_string(),
+                    rusqlite::types::Type::Blob,
+                )
+                .into());
+            }
+        };
+        if let Some(bounds) = envelope_of(blob)? {
+            out.push((id, bounds));
+        }
+    }
+    Ok(out)
+}
+
+/// Returns the number of rows in `table`, a cheap proxy for the path decision
+/// that makes no `ST_*` calls.
+pub(crate) fn table_row_count(conn: &Connection, table: &str) -> Result<usize> {
+    let count: i64 = conn.query_row(
+        &format!("SELECT count(*) FROM {}", quote(table)?),
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(usize::try_from(count).unwrap_or(usize::MAX))
+}
+
+/// Returns the XY envelope to index for one geometry blob, or `None` if the
+/// row is not indexable (empty under the same rule the `ST_*` functions
+/// apply).
+///
+/// It computes in a single parse what the previous SQL scan computed with five
+/// `ST_*` calls per row. The blob is known to be non-NULL, because the query's
+/// `WHERE {c} NOT NULL` excludes NULLs. Emptiness is decided exactly as
+/// `ST_IsEmpty` decides it: by the header empty flag, or else a body traversal.
+/// The bounds come from the header envelope when present and from the body
+/// otherwise, exactly as `ST_MinX`/`ST_MaxX`/`ST_MinY`/`ST_MaxY` do. The
+/// returned set is therefore identical to the one the old scan produced.
+fn envelope_of(blob: &[u8]) -> std::result::Result<Option<[f64; 4]>, geopackage_core::Error> {
+    // `ST_IsEmpty` traverses the body whenever the header flag is unset, so a
+    // faithful set requires the same traversal here rather than trusting a
+    // present header envelope. That traversal also yields the bounds for a blob
+    // whose header has no envelope, so one walk serves both purposes.
+    let (bounds, _) = geometry::blob_envelope_and_empty(blob)?;
+    Ok(bounds)
+}
+
+/// The byte length the RTree module expects every node blob of `rtree` to have.
+///
+/// This is read from the freshly created index's root node rather than
+/// re-derived from `PRAGMA page_size`. The module itself does the same when it
+/// reopens an existing index: it takes the node size from `length(data)` of
+/// node 1 and rejects any node that differs. Reading it keeps the two
+/// definitions from drifting apart.
+fn node_size(conn: &Connection, rtree: &str) -> Result<usize> {
+    let size: i64 = conn.query_row(
+        &format!(
+            "SELECT length(data) FROM {} WHERE nodeno = 1",
+            quote(&format!("{rtree}_node"))?
+        ),
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(usize::try_from(size).unwrap_or(0))
+}
+
+/// Lifts SQLite's defensive flag for the duration of the direct shadow-table
+/// writes, restoring the value found on drop.
+///
+/// Stock SQLite ships with the flag off, and the packed build assumes that.
+/// [`write_packed`] inserts into `rtree_*_node` / `_rowid` / `_parent`
+/// directly, which defensive mode rejects with "table ... may not be
+/// modified". Apple's system SQLite turns the flag on by default, so a
+/// system-linked build on macOS cannot bulk-build an index without lifting
+/// it. The flag is lifted only for the packed write, not cleared at open, so
+/// a hardened connection keeps its hardening everywhere else.
+struct DefensiveOff<'conn> {
+    conn: &'conn Connection,
+    /// The flag as found. Only a lifted flag is restored.
+    was_on: bool,
+}
+
+impl<'conn> DefensiveOff<'conn> {
+    fn lift(conn: &'conn Connection) -> Result<Self> {
+        let was_on = conn.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE)?;
+        if was_on {
+            conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, false)?;
+        }
+        Ok(Self { conn, was_on })
+    }
+}
+
+impl Drop for DefensiveOff<'_> {
+    fn drop(&mut self) {
+        if self.was_on
+            && self
+                .conn
+                .set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)
+                .is_err()
+        {
+            // Restoration fails only on a connection that is already unusable,
+            // where the flag no longer guards anything.
+        }
+    }
+}
+
+/// Clears the three shadow tables and streams a freshly packed tree into
+/// them.
+fn write_packed(
+    conn: &Connection,
+    rtree: &str,
+    entries: &[(i64, [f64; 4])],
+    node_size: usize,
+    fill_factor: f64,
+) -> Result<()> {
+    let node_table = quote(&format!("{rtree}_node"))?;
+    let rowid_table = quote(&format!("{rtree}_rowid"))?;
+    let parent_table = quote(&format!("{rtree}_parent"))?;
+
+    conn.execute_batch(&format!(
+        "DELETE FROM {node_table}; DELETE FROM {rowid_table}; DELETE FROM {parent_table};"
+    ))?;
+
+    let mut sink = ShadowTables {
+        conn,
+        node_sql: format!("INSERT INTO {node_table} VALUES (?1, ?2)"),
+        rowid_sql: format!("INSERT INTO {rowid_table} VALUES (?1, ?2)"),
+        parent_sql: format!("INSERT INTO {parent_table} VALUES (?1, ?2)"),
+        rowid_buffer: Vec::with_capacity(entries.len()),
+    };
+    packed::pack_into(entries, node_size, fill_factor, &mut sink)?;
+    sink.flush()
+}
+
+/// Writes a packed tree into the three shadow tables through cached prepared
+/// statements.
+///
+/// Node and parent rows are written immediately. The packer emits them in
+/// ascending node order, which is also their primary-key order, so they append
+/// to the B-tree. `%_rowid` rows are the exception. Their key is the feature
+/// id, but the packer emits them in the tree's leaf order. That is Hilbert
+/// order, and so close to random with respect to feature id. Page splits
+/// dominate inserting a million rows in that order. Measured at 1M points, it
+/// cost 556 ms on uniformly spread data and 1.76 s on clustered data, against
+/// 36 ms for the node rows. Buffering the rows and inserting them in feature-id
+/// order costs 16 bytes per entry and a sort. It brings both cases to ~265 ms,
+/// and removes the sensitivity to data distribution along with the cost.
+struct ShadowTables<'c> {
+    conn: &'c Connection,
+    node_sql: String,
+    rowid_sql: String,
+    parent_sql: String,
+    /// `(rowid, nodeno)` pairs, flushed in rowid order by [`Self::flush`].
+    rowid_buffer: Vec<(i64, i64)>,
+}
+
+impl ShadowTables<'_> {
+    /// Inserts the buffered `%_rowid` rows in key order.
+    fn flush(&mut self) -> Result<()> {
+        self.rowid_buffer.sort_unstable_by_key(|&(rowid, _)| rowid);
+        let mut stmt = self.conn.prepare_cached(&self.rowid_sql)?;
+        for &(rowid, nodeno) in &self.rowid_buffer {
+            stmt.execute(rusqlite::params![rowid, nodeno])?;
+        }
+        Ok(())
+    }
+}
+
+impl NodeSink for ShadowTables<'_> {
+    fn node(&mut self, nodeno: i64, blob: &[u8]) -> Result<()> {
+        self.conn
+            .prepare_cached(&self.node_sql)?
+            .execute(rusqlite::params![nodeno, blob])?;
+        Ok(())
+    }
+
+    fn rowid(&mut self, rowid: i64, nodeno: i64) -> Result<()> {
+        self.rowid_buffer.push((rowid, nodeno));
+        Ok(())
+    }
+
+    fn parent(&mut self, nodeno: i64, parentnode: i64) -> Result<()> {
+        self.conn
+            .prepare_cached(&self.parent_sql)?
+            .execute(rusqlite::params![nodeno, parentnode])?;
+        Ok(())
+    }
+}
+
+/// Gates a freshly written RTree against the accumulated `(fid, envelope)`
+/// set, checking as much as `verification` asks for.
+///
+/// [`BulkVerification::None`] passes without reading anything. Every other
+/// level passes only when the index contains exactly one row per accumulated
+/// entry (checked by row count and a bijection on `id`) and each stored bound
+/// covers the true envelope, as [`crate::packed::entry_covers`] defines it.
+/// [`BulkVerification::Structure`] also requires `rtreecheck` to report `ok`,
+/// and [`BulkVerification::Database`] also requires `PRAGMA integrity_check`
+/// to report `ok`. The RTree stores `f32` bounds, with minima rounded down and
+/// maxima rounded up, so covering, not equality, is the correct relation.
+fn gate(
+    conn: &Connection,
+    rtree: &str,
+    mut expected: Vec<(i64, [f64; 4])>,
+    verification: BulkVerification,
+) -> Result<bool> {
+    // Nothing to check, so nothing can fail and nothing falls back.
+    if verification == BulkVerification::None {
+        return Ok(true);
+    }
+    let quoted = quote(rtree)?;
+    let count: i64 = conn.query_row(&format!("SELECT count(*) FROM {quoted}"), [], |r| r.get(0))?;
+    if usize::try_from(count).unwrap_or(usize::MAX) != expected.len() {
+        return Ok(false);
+    }
+
+    // Sort and binary-search rather than building a `HashMap` of the whole
+    // accumulated set. The map was a second copy of every entry held for the
+    // duration of the scan, which at the row counts this path is built for is
+    // hundreds of megabytes on top of the set already in hand.
+    expected.sort_unstable_by_key(|&(id, _)| id);
+    // A duplicate fid would make the bijection below ambiguous: two index rows
+    // could match the same entry, or one could match twice. A primary key scan
+    // cannot produce one, so treat it as a failed gate rather than trying to
+    // resolve it.
+    if expected
+        .iter()
+        .zip(expected.iter().skip(1))
+        .any(|(a, b)| a.0 == b.0)
+    {
+        return Ok(false);
+    }
+    // One byte per entry, marking which have been matched, so a repeated id in
+    // the index is caught the same way `HashMap::remove` returning `None`
+    // caught it before.
+    let mut matched = vec![false; expected.len()];
+    let mut hits = 0usize;
+
+    let mut stmt = conn.prepare(&format!("SELECT id, minx, maxx, miny, maxy FROM {quoted}"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        let (s_min_x, s_max_x, s_min_y, s_max_y): (f64, f64, f64, f64) =
+            (row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?);
+        let Ok(at) = expected.binary_search_by_key(&id, |&(id, _)| id) else {
+            return Ok(false);
+        };
+        // `at` indexes both vectors, which are the same length, so neither
+        // lookup can miss; the fallible forms keep the panicking index out.
+        let (Some(seen), Some(&(_, [min_x, max_x, min_y, max_y]))) =
+            (matched.get_mut(at), expected.get(at))
+        else {
+            return Ok(false);
+        };
+        if std::mem::replace(seen, true) {
+            return Ok(false);
+        }
+        hits += 1;
+        if !crate::packed::entry_covers(
+            [s_min_x, s_max_x, s_min_y, s_max_y],
+            [min_x, max_x, min_y, max_y],
+        ) {
+            return Ok(false);
+        }
+    }
+    if hits != expected.len() {
+        return Ok(false);
+    }
+
+    if verification == BulkVerification::Contents {
+        return Ok(true);
+    }
+
+    // Structural check on top of the content gate above. `rtreecheck` walks the
+    // index just built, cross-checking every entry against its parent's bounds
+    // and the `%_rowid`/`%_parent` mappings against `%_node`, and reports `ok`
+    // or a description of what is wrong. Its cost is proportional to the index;
+    // `PRAGMA integrity_check` is O(database), so it is a level further up
+    // (issue #16).
+    let rtree_report: String = conn.query_row("SELECT rtreecheck(?1)", [rtree], |r| r.get(0))?;
+    if rtree_report != "ok" {
+        return Ok(false);
+    }
+
+    if verification == BulkVerification::Database {
+        let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+        return Ok(integrity == "ok");
+    }
+    Ok(true)
 }

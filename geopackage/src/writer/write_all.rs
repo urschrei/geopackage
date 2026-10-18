@@ -1,18 +1,12 @@
 use geo_traits::GeometryTrait;
 use geopackage_core::ident::quote;
 use geopackage_core::triggers;
-use geopackage_core::types::{GeometryTypeSet, ZmFlag};
 use rusqlite::Connection;
 
 use crate::bulk::{self, BulkIndexOptions};
 use crate::index::drop_all_rtree_triggers;
-use crate::transaction::WriteTransaction;
 use crate::{Error, Layer, Result};
 
-use super::constraints::ColumnConstraints;
-use super::feature_writer::{
-    FeatureWriter, Shape, ValueColumn, build_insert_sql, build_partial_update_sql, build_update_sql,
-};
 use super::row::{NewFeature, WritableRow};
 
 /// How large a `write_all` must be, relative to the rows already in a spatial
@@ -23,164 +17,7 @@ use super::row::{NewFeature, WritableRow};
 /// rebuild. See [`rebuild_beats_append`] for the measurements behind the value.
 const MERGE_REBUILD_RATIO: usize = 10;
 
-/// The geometry column a [`FeatureWriter`] targets.
-#[derive(Debug)]
-pub(crate) struct GeomTarget {
-    pub(crate) name: String,
-    pub(crate) quoted_name: String,
-    pub(crate) srs_id: i32,
-    pub(crate) z: ZmFlag,
-    pub(crate) m: ZmFlag,
-}
-
-/// A running union of written XY envelopes, seeded from the existing
-/// `gpkg_contents` bounding box. Bounds are stored as
-/// `[min_x, max_x, min_y, max_y]` (the shape
-/// [`encode_gpb`](geopackage_core::geometry::encode_gpb) returns).
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct BboxFold {
-    pub(crate) min_x: f64,
-    pub(crate) max_x: f64,
-    pub(crate) min_y: f64,
-    pub(crate) max_y: f64,
-    pub(crate) seen: bool,
-}
-
-impl BboxFold {
-    pub(crate) fn new() -> Self {
-        Self {
-            min_x: f64::INFINITY,
-            max_x: f64::NEG_INFINITY,
-            min_y: f64::INFINITY,
-            max_y: f64::NEG_INFINITY,
-            seen: false,
-        }
-    }
-
-    pub(crate) fn seed(&mut self, existing: Option<[f64; 4]>) {
-        if let Some([min_x, max_x, min_y, max_y]) = existing {
-            self.min_x = min_x;
-            self.max_x = max_x;
-            self.min_y = min_y;
-            self.max_y = max_y;
-            self.seen = true;
-        }
-    }
-
-    pub(crate) fn add(&mut self, [min_x, max_x, min_y, max_y]: [f64; 4]) {
-        self.min_x = self.min_x.min(min_x);
-        self.max_x = self.max_x.max(max_x);
-        self.min_y = self.min_y.min(min_y);
-        self.max_y = self.max_y.max(max_y);
-        self.seen = true;
-    }
-
-    pub(crate) fn bounds(&self) -> Option<[f64; 4]> {
-        self.seen
-            .then_some([self.min_x, self.max_x, self.min_y, self.max_y])
-    }
-}
-
 impl<'a> Layer<'a> {
-    /// Begins a write transaction over this layer, returning a
-    /// [`FeatureWriter`].
-    ///
-    /// The writer owns the transaction. Stage rows with its `insert`/`update`/
-    /// `delete` methods, then call [`FeatureWriter::commit`]. Dropping the
-    /// writer without committing rolls the transaction back.
-    ///
-    /// The exception is when a transaction is already open on the connection.
-    /// The writer then joins that transaction, and committing and rolling back
-    /// are up to whoever began it. [`FeatureWriter::commit`] describes what
-    /// changes.
-    pub fn writer(&self) -> Result<FeatureWriter<'a>> {
-        self.gpkg().check_writable(self.table_name())?;
-        let conn: &Connection = self.gpkg().connection();
-        let tx = WriteTransaction::begin(conn)?;
-        let existing = self.stored_extent()?;
-        // An unusable recorded box over a table that already contains rows
-        // makes the fold a lower bound: it can be grown and used, but not
-        // recorded.
-        let bbox_covers_layer = existing.is_some() || !self.has_rows()?;
-
-        let pk_name = self.primary_key_column();
-        let pk_expr = match pk_name {
-            Some(pk) => quote(pk)?,
-            None => "rowid".to_owned(),
-        };
-        // The same set the read path yields: the layer's value columns exclude
-        // both the geometry and the primary key, which are written through
-        // their own arguments.
-        let value_columns = self
-            .value_columns()
-            .iter()
-            .map(|c| {
-                Ok(ValueColumn {
-                    quoted: quote(&c.name)?,
-                    name: c.name.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let geometry = match self.geometry_column() {
-            Some(g) => Some(GeomTarget {
-                name: g.column_name.clone(),
-                quoted_name: quote(&g.column_name)?,
-                srs_id: g.srs_id,
-                z: g.z,
-                m: g.m,
-            }),
-            None => None,
-        };
-        let mut bbox = BboxFold::new();
-        bbox.seed(existing.map(|b| [b.min_x, b.max_x, b.min_y, b.max_y]));
-        let quoted_table = quote(self.table_name())?;
-
-        // Compose every statement the writer can issue, then prepare them all,
-        // before anything moves into the writer.
-        let shape = Shape {
-            table_name: self.table_name(),
-            quoted_table: &quoted_table,
-            pk_expr: &pk_expr,
-            value_columns: &value_columns,
-            geometry: geometry.as_ref(),
-        };
-        let insert_stmts = [
-            conn.prepare_cached(&build_insert_sql(&shape, false, false))?,
-            conn.prepare_cached(&build_insert_sql(&shape, true, false))?,
-            conn.prepare_cached(&build_insert_sql(&shape, false, true))?,
-            conn.prepare_cached(&build_insert_sql(&shape, true, true))?,
-        ];
-        let update_stmts = [
-            conn.prepare_cached(&build_update_sql(&shape, false))?,
-            conn.prepare_cached(&build_update_sql(&shape, true))?,
-        ];
-        let delete_stmt =
-            conn.prepare_cached(&format!("DELETE FROM {quoted_table} WHERE {pk_expr} = ?1"))?;
-        let partial_stmt = conn.prepare_cached(&build_partial_update_sql(&shape, &[])?)?;
-        let constraints = ColumnConstraints::read(self, conn, &value_columns)?;
-
-        Ok(FeatureWriter {
-            tx,
-            conn,
-            table_name: self.table_name().to_owned(),
-            quoted_table,
-            pk_expr,
-            value_columns,
-            geometry,
-            bbox,
-            insert_stmts,
-            update_stmts,
-            delete_stmt,
-            partial_columns: Vec::new(),
-            partial_stmt,
-            dirty: false,
-            bbox_dirty: false,
-            bbox_covers_layer,
-            constraints,
-            geometry_types: GeometryTypeSet::new(),
-        })
-    }
-
     /// Writes every item of `features` in batches, each batch its own
     /// committed transaction.
     ///
@@ -197,8 +34,8 @@ impl<'a> Layer<'a> {
     /// opening the transaction, and matches the all-or-nothing behaviour of
     /// `batch_size = 0`.
     ///
-    /// Rows with `geometry: Some(_)` go through [`FeatureWriter::insert`], and
-    /// rows with `None` through [`FeatureWriter::insert_row`].
+    /// Rows with `geometry: Some(_)` go through [`FeatureWriter::insert`](crate::FeatureWriter::insert), and
+    /// rows with `None` through [`FeatureWriter::insert_row`](crate::FeatureWriter::insert_row).
     ///
     /// When the layer has a spatial index and the write is at least
     /// [`DEFAULT_BULK_THRESHOLD`](bulk::DEFAULT_BULK_THRESHOLD) rows, it takes

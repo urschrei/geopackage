@@ -56,83 +56,6 @@ const NODE_HEADER: usize = 4;
 const RND_TOWARDS: f64 = 1.0 - 1.0 / 8_388_608.0;
 const RND_AWAY: f64 = 1.0 + 1.0 / 8_388_608.0;
 
-/// Returns the minimum bound the RTree module's `rtreeValueDown` stores for
-/// `d`: `d as f32` if that is not above `d`, and otherwise `d` scaled towards
-/// zero by one part in 2^23 and converted, which is up to two `f32` steps
-/// below `d`.
-///
-/// For `d` above the `f32` range the result is +inf, and for `d` in the `f32`
-/// subnormal range it can be the nearest `f32` above `d`, because the scaling
-/// is smaller than a subnormal step. See [`entry_covers`].
-fn coord_down(d: f64) -> f32 {
-    let f = d as f32;
-    if f64::from(f) > d {
-        (d * if d < 0.0 { RND_AWAY } else { RND_TOWARDS }) as f32
-    } else {
-        f
-    }
-}
-
-/// Returns the maximum bound the RTree module's `rtreeValueUp` stores for
-/// `d`, the mirror of [`coord_down`]. For `d` below the `f32` range the result
-/// is -inf, and in the subnormal range it can be the nearest `f32` below `d`.
-fn coord_up(d: f64) -> f32 {
-    let f = d as f32;
-    if f64::from(f) < d {
-        (d * if d < 0.0 { RND_TOWARDS } else { RND_AWAY }) as f32
-    } else {
-        f
-    }
-}
-
-/// Returns `true` if a stored entry `[min_x, max_x, min_y, max_y]` covers an
-/// envelope in the same order.
-///
-/// Each stored bound must be on the outer side of the envelope's, or be the
-/// bound the RTree module itself stores for that value ([`coord_down`],
-/// [`coord_up`]). The module rounds outward to `f32` with two exceptions: a
-/// value beyond the `f32` range has an infinite bound on its own side, and a
-/// value in the `f32` subnormal range has the nearest `f32`, which can be
-/// inward by less than one `f32` step. A query that widens its box by one `f32`
-/// step outward, as `features_in` does, still selects both.
-pub(crate) fn entry_covers(stored: [f64; 4], envelope: [f64; 4]) -> bool {
-    let low = |stored: f64, value: f64| stored <= value.max(f64::from(coord_down(value)));
-    let high = |stored: f64, value: f64| stored >= value.min(f64::from(coord_up(value)));
-    let [s_min_x, s_max_x, s_min_y, s_max_y] = stored;
-    let [min_x, max_x, min_y, max_y] = envelope;
-    low(s_min_x, min_x) && high(s_max_x, max_x) && low(s_min_y, min_y) && high(s_max_y, max_y)
-}
-
-/// One cell: an id (rowid for a leaf, child node number for an internal node)
-/// and its `f32` bounds in the node-blob's coordinate order.
-#[derive(Debug, Clone, Copy)]
-struct Cell {
-    id: i64,
-    /// `[min_x, max_x, min_y, max_y]`, the order the RTree stores them in.
-    bounds: [f32; 4],
-}
-
-impl Cell {
-    /// Returns the union of two cells' bounds. Both inputs are already `f32`,
-    /// so the union is exact and needs no further rounding.
-    fn union(bounds: &[f32; 4], other: &[f32; 4]) -> [f32; 4] {
-        [
-            bounds[0].min(other[0]),
-            bounds[1].max(other[1]),
-            bounds[2].min(other[2]),
-            bounds[3].max(other[3]),
-        ]
-    }
-
-    /// Returns the centre of this cell, used for the spatial sort.
-    fn centre(&self) -> (f64, f64) {
-        (
-            (f64::from(self.bounds[0]) + f64::from(self.bounds[1])) / 2.0,
-            (f64::from(self.bounds[2]) + f64::from(self.bounds[3])) / 2.0,
-        )
-    }
-}
-
 /// Where a packed tree's rows are sent as it is built.
 ///
 /// The tree is streamed rather than returned, so peak memory does not include
@@ -145,97 +68,6 @@ pub(crate) trait NodeSink {
     fn rowid(&mut self, rowid: i64, nodeno: i64) -> Result<()>;
     /// One `%_parent` row: a non-root node and its parent.
     fn parent(&mut self, nodeno: i64, parentnode: i64) -> Result<()>;
-}
-
-/// Returns the Hilbert index of a point on a 16-bit-per-axis grid over
-/// `extent`, used to order entries so that nodes packed from consecutive
-/// entries are spatially compact.
-///
-/// `extent` is the bounding box of the whole entry set rather than a fixed
-/// domain, so this works for projected coordinate systems as well as degrees.
-fn hilbert(x: f64, y: f64, extent: &[f64; 4]) -> u32 {
-    const SIDE: u32 = 1 << 16;
-    let norm = |v: f64, lo: f64, hi: f64| -> u32 {
-        // A degenerate extent (all centres equal on this axis) or a non-finite
-        // coordinate collapses to 0: order is then arbitrary but consistent.
-        if !v.is_finite() || hi <= lo {
-            return 0;
-        }
-        // `t` is clamped into [0, 1], so the scaled value is non-negative and
-        // at most SIDE - 1.
-        let t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
-        let scaled = t * f64::from(SIDE - 1);
-        #[expect(
-            clippy::cast_sign_loss,
-            reason = "t is clamped to [0, 1], so scaled lies in [0, SIDE - 1] and is never negative"
-        )]
-        let index = scaled as u32;
-        index.min(SIDE - 1)
-    };
-    let mut hx = norm(x, extent[0], extent[1]);
-    let mut hy = norm(y, extent[2], extent[3]);
-
-    let mut d: u32 = 0;
-    let mut s: u32 = SIDE / 2;
-    while s > 0 {
-        let rx = u32::from((hx & s) > 0);
-        let ry = u32::from((hy & s) > 0);
-        d = d.wrapping_add(s.wrapping_mul(s).wrapping_mul((3 * rx) ^ ry));
-        // Rotate the quadrant so the curve stays continuous.
-        if ry == 0 {
-            if rx == 1 {
-                hx = s.wrapping_sub(1).wrapping_sub(hx);
-                hy = s.wrapping_sub(1).wrapping_sub(hy);
-            }
-            std::mem::swap(&mut hx, &mut hy);
-        }
-        s /= 2;
-    }
-    d
-}
-
-/// Serialises one node into `blob`: the header followed by its cells,
-/// zero-padded to `node_size`.
-///
-/// Writes into a caller-owned buffer so a build streams through one allocation
-/// rather than one per node. The buffer is cleared on entry, so any previous
-/// node's bytes are discarded.
-fn encode_node_into(blob: &mut Vec<u8>, depth: u16, cells: &[Cell], node_size: usize) {
-    blob.clear();
-    blob.reserve(node_size);
-    blob.extend_from_slice(&depth.to_be_bytes());
-    // The cell count fits u16: callers cap cells at (node_size - 4) / 24.
-    let count = u16::try_from(cells.len()).unwrap_or(u16::MAX);
-    blob.extend_from_slice(&count.to_be_bytes());
-    for cell in cells {
-        blob.extend_from_slice(&cell.id.to_be_bytes());
-        for coord in &cell.bounds {
-            blob.extend_from_slice(&coord.to_be_bytes());
-        }
-    }
-    blob.resize(node_size, 0);
-}
-
-/// Returns the number of nodes at each level, leaves first, for `entries`
-/// entries at `per_node` entries per node.
-///
-/// The last entry is always 1: the root. With these sizes, node numbers can be
-/// assigned before anything is built, so the tree can stream out instead of
-/// being assembled in memory and renumbered at the end.
-///
-/// `per_node` is forced to at least 2. A fanout of 1 never reduces the level
-/// size (`n.div_ceil(1) == n`), so the loop below would not terminate and would
-/// grow `levels` until the process ran out of memory.
-fn level_sizes(entries: usize, per_node: usize) -> Vec<usize> {
-    let fanout = per_node.max(2);
-    let mut levels = Vec::new();
-    let mut count = entries.div_ceil(fanout).max(1);
-    levels.push(count);
-    while count > 1 {
-        count = count.div_ceil(fanout);
-        levels.push(count);
-    }
-    levels
 }
 
 /// Builds an RTree over `entries` (`(rowid, [min_x, max_x, min_y, max_y])` in
@@ -396,6 +228,174 @@ pub(crate) fn pack_into<S: NodeSink>(
     }
 
     Ok(())
+}
+
+/// Returns the number of nodes at each level, leaves first, for `entries`
+/// entries at `per_node` entries per node.
+///
+/// The last entry is always 1: the root. With these sizes, node numbers can be
+/// assigned before anything is built, so the tree can stream out instead of
+/// being assembled in memory and renumbered at the end.
+///
+/// `per_node` is forced to at least 2. A fanout of 1 never reduces the level
+/// size (`n.div_ceil(1) == n`), so the loop below would not terminate and would
+/// grow `levels` until the process ran out of memory.
+fn level_sizes(entries: usize, per_node: usize) -> Vec<usize> {
+    let fanout = per_node.max(2);
+    let mut levels = Vec::new();
+    let mut count = entries.div_ceil(fanout).max(1);
+    levels.push(count);
+    while count > 1 {
+        count = count.div_ceil(fanout);
+        levels.push(count);
+    }
+    levels
+}
+
+/// Returns the Hilbert index of a point on a 16-bit-per-axis grid over
+/// `extent`, used to order entries so that nodes packed from consecutive
+/// entries are spatially compact.
+///
+/// `extent` is the bounding box of the whole entry set rather than a fixed
+/// domain, so this works for projected coordinate systems as well as degrees.
+fn hilbert(x: f64, y: f64, extent: &[f64; 4]) -> u32 {
+    const SIDE: u32 = 1 << 16;
+    let norm = |v: f64, lo: f64, hi: f64| -> u32 {
+        // A degenerate extent (all centres equal on this axis) or a non-finite
+        // coordinate collapses to 0: order is then arbitrary but consistent.
+        if !v.is_finite() || hi <= lo {
+            return 0;
+        }
+        // `t` is clamped into [0, 1], so the scaled value is non-negative and
+        // at most SIDE - 1.
+        let t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
+        let scaled = t * f64::from(SIDE - 1);
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "t is clamped to [0, 1], so scaled lies in [0, SIDE - 1] and is never negative"
+        )]
+        let index = scaled as u32;
+        index.min(SIDE - 1)
+    };
+    let mut hx = norm(x, extent[0], extent[1]);
+    let mut hy = norm(y, extent[2], extent[3]);
+
+    let mut d: u32 = 0;
+    let mut s: u32 = SIDE / 2;
+    while s > 0 {
+        let rx = u32::from((hx & s) > 0);
+        let ry = u32::from((hy & s) > 0);
+        d = d.wrapping_add(s.wrapping_mul(s).wrapping_mul((3 * rx) ^ ry));
+        // Rotate the quadrant so the curve stays continuous.
+        if ry == 0 {
+            if rx == 1 {
+                hx = s.wrapping_sub(1).wrapping_sub(hx);
+                hy = s.wrapping_sub(1).wrapping_sub(hy);
+            }
+            std::mem::swap(&mut hx, &mut hy);
+        }
+        s /= 2;
+    }
+    d
+}
+
+/// One cell: an id (rowid for a leaf, child node number for an internal node)
+/// and its `f32` bounds in the node-blob's coordinate order.
+#[derive(Debug, Clone, Copy)]
+struct Cell {
+    id: i64,
+    /// `[min_x, max_x, min_y, max_y]`, the order the RTree stores them in.
+    bounds: [f32; 4],
+}
+
+impl Cell {
+    /// Returns the union of two cells' bounds. Both inputs are already `f32`,
+    /// so the union is exact and needs no further rounding.
+    fn union(bounds: &[f32; 4], other: &[f32; 4]) -> [f32; 4] {
+        [
+            bounds[0].min(other[0]),
+            bounds[1].max(other[1]),
+            bounds[2].min(other[2]),
+            bounds[3].max(other[3]),
+        ]
+    }
+
+    /// Returns the centre of this cell, used for the spatial sort.
+    fn centre(&self) -> (f64, f64) {
+        (
+            (f64::from(self.bounds[0]) + f64::from(self.bounds[1])) / 2.0,
+            (f64::from(self.bounds[2]) + f64::from(self.bounds[3])) / 2.0,
+        )
+    }
+}
+
+/// Serialises one node into `blob`: the header followed by its cells,
+/// zero-padded to `node_size`.
+///
+/// Writes into a caller-owned buffer so a build streams through one allocation
+/// rather than one per node. The buffer is cleared on entry, so any previous
+/// node's bytes are discarded.
+fn encode_node_into(blob: &mut Vec<u8>, depth: u16, cells: &[Cell], node_size: usize) {
+    blob.clear();
+    blob.reserve(node_size);
+    blob.extend_from_slice(&depth.to_be_bytes());
+    // The cell count fits u16: callers cap cells at (node_size - 4) / 24.
+    let count = u16::try_from(cells.len()).unwrap_or(u16::MAX);
+    blob.extend_from_slice(&count.to_be_bytes());
+    for cell in cells {
+        blob.extend_from_slice(&cell.id.to_be_bytes());
+        for coord in &cell.bounds {
+            blob.extend_from_slice(&coord.to_be_bytes());
+        }
+    }
+    blob.resize(node_size, 0);
+}
+
+/// Returns the minimum bound the RTree module's `rtreeValueDown` stores for
+/// `d`: `d as f32` if that is not above `d`, and otherwise `d` scaled towards
+/// zero by one part in 2^23 and converted, which is up to two `f32` steps
+/// below `d`.
+///
+/// For `d` above the `f32` range the result is +inf, and for `d` in the `f32`
+/// subnormal range it can be the nearest `f32` above `d`, because the scaling
+/// is smaller than a subnormal step. See [`entry_covers`].
+fn coord_down(d: f64) -> f32 {
+    let f = d as f32;
+    if f64::from(f) > d {
+        (d * if d < 0.0 { RND_AWAY } else { RND_TOWARDS }) as f32
+    } else {
+        f
+    }
+}
+
+/// Returns the maximum bound the RTree module's `rtreeValueUp` stores for
+/// `d`, the mirror of [`coord_down`]. For `d` below the `f32` range the result
+/// is -inf, and in the subnormal range it can be the nearest `f32` below `d`.
+fn coord_up(d: f64) -> f32 {
+    let f = d as f32;
+    if f64::from(f) < d {
+        (d * if d < 0.0 { RND_TOWARDS } else { RND_AWAY }) as f32
+    } else {
+        f
+    }
+}
+
+/// Returns `true` if a stored entry `[min_x, max_x, min_y, max_y]` covers an
+/// envelope in the same order.
+///
+/// Each stored bound must be on the outer side of the envelope's, or be the
+/// bound the RTree module itself stores for that value ([`coord_down`],
+/// [`coord_up`]). The module rounds outward to `f32` with two exceptions: a
+/// value beyond the `f32` range has an infinite bound on its own side, and a
+/// value in the `f32` subnormal range has the nearest `f32`, which can be
+/// inward by less than one `f32` step. A query that widens its box by one `f32`
+/// step outward, as `features_in` does, still selects both.
+pub(crate) fn entry_covers(stored: [f64; 4], envelope: [f64; 4]) -> bool {
+    let low = |stored: f64, value: f64| stored <= value.max(f64::from(coord_down(value)));
+    let high = |stored: f64, value: f64| stored >= value.min(f64::from(coord_up(value)));
+    let [s_min_x, s_max_x, s_min_y, s_max_y] = stored;
+    let [min_x, max_x, min_y, max_y] = envelope;
+    low(s_min_x, min_x) && high(s_max_x, max_x) && low(s_min_y, min_y) && high(s_max_y, max_y)
 }
 
 #[cfg(test)]

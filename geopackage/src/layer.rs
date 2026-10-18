@@ -46,100 +46,6 @@ use crate::{
     resolve_table_name, table_exists,
 };
 
-/// An XY bounding box for spatial queries ([`Layer::features_in`]).
-///
-/// Fields are ordinary map coordinates in the layer's own spatial reference
-/// system. This crate never transforms coordinates.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BoundingBox {
-    /// Minimum x (west edge).
-    pub min_x: f64,
-    /// Minimum y (south edge).
-    pub min_y: f64,
-    /// Maximum x (east edge).
-    pub max_x: f64,
-    /// Maximum y (north edge).
-    pub max_y: f64,
-}
-
-impl BoundingBox {
-    /// Creates a bounding box from its four edges.
-    pub fn new(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Self {
-        Self {
-            min_x,
-            min_y,
-            max_x,
-            max_y,
-        }
-    }
-
-    /// Returns `true` if the box contains no point: an edge is NaN, or a
-    /// minimum is above its maximum.
-    pub(crate) fn contains_no_point(&self) -> bool {
-        !(self.min_x <= self.max_x && self.min_y <= self.max_y)
-    }
-
-    /// Returns the box a query binds: this box, or for a box that contains no
-    /// point, one that also contains none and that every path can bind. A NaN
-    /// binds as NULL, which `ST_EnvIntersects` rejects.
-    pub(crate) fn for_query(self) -> Self {
-        if self.contains_no_point() {
-            Self::new(
-                f64::INFINITY,
-                f64::INFINITY,
-                f64::NEG_INFINITY,
-                f64::NEG_INFINITY,
-            )
-        } else {
-            self
-        }
-    }
-
-    /// Returns `true` if this box intersects an envelope
-    /// `[min_x, max_x, min_y, max_y]`,
-    /// inclusive at the boundary (touching boxes intersect).
-    pub(crate) fn intersects_envelope(&self, env: [f64; 4]) -> bool {
-        env[0] <= self.max_x && env[1] >= self.min_x && env[2] <= self.max_y && env[3] >= self.min_y
-    }
-}
-
-/// Which kind of user table a [`Layer`] wraps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum LayerKind {
-    /// A feature layer (`gpkg_contents.data_type = 'features'`) with a geometry
-    /// column.
-    Feature,
-    /// An attribute layer (`gpkg_contents.data_type = 'attributes'`), no
-    /// geometry.
-    Attributes,
-}
-
-impl LayerKind {
-    /// Returns the kind as the word `gpkg_contents` uses for it.
-    ///
-    /// This is the same string as the private `data_type`. It is public
-    /// because reporting a layer's kind and writing its catalogue row use the
-    /// same word.
-    pub fn as_str(self) -> &'static str {
-        self.data_type()
-    }
-
-    /// Returns the `gpkg_contents.data_type` string this kind requires.
-    fn data_type(self) -> &'static str {
-        match self {
-            Self::Feature => "features",
-            Self::Attributes => "attributes",
-        }
-    }
-}
-
-impl std::fmt::Display for LayerKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 /// A handle to one feature or attribute layer of a [`GeoPackage`].
 ///
 /// Get one from [`GeoPackage::layer`], [`GeoPackage::attributes`], or
@@ -189,137 +95,6 @@ struct Projection {
     value_columns: Vec<Column>,
     value_column_names: Arc<[String]>,
     geometry: bool,
-}
-
-impl std::fmt::Debug for Layer<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Layer")
-            .field("table_name", &self.table_name)
-            .field("kind", &self.kind)
-            .field("geometry_column", &self.geometry_column)
-            .field("primary_key", &self.pk_column)
-            .field("options", &self.options)
-            .finish_non_exhaustive()
-    }
-}
-
-impl GeoPackage {
-    /// Returns the feature layers: rows of `gpkg_contents` with
-    /// `data_type = 'features'` that also have a `gpkg_geometry_columns` row.
-    ///
-    /// The join is case-insensitive on the table name, so the layers of a file
-    /// whose catalogue tables disagree on case (see
-    /// [`GeoPackage::open_lenient`]) are still listed. Attribute-only files,
-    /// and files with no `gpkg_geometry_columns` table at all, return an empty
-    /// list.
-    pub fn layers(&self) -> Result<Vec<Layer<'_>>> {
-        self.layer_names()?.iter().map(|n| self.layer(n)).collect()
-    }
-
-    /// Returns the `gpkg_contents` name of every feature layer, without
-    /// opening the layers.
-    pub(crate) fn layer_names(&self) -> Result<Vec<String>> {
-        if !table_exists(self.connection(), "gpkg_geometry_columns")? {
-            return Ok(Vec::new());
-        }
-        let mut stmt = self.connection().prepare(
-            "SELECT DISTINCT c.table_name FROM gpkg_contents c \
-             JOIN gpkg_geometry_columns g ON g.table_name = c.table_name COLLATE NOCASE \
-             WHERE c.data_type = 'features' ORDER BY c.table_name",
-        )?;
-        let names = stmt
-            .query_map([], |r| r.get(0))?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(names)
-    }
-
-    /// Opens a feature layer by name.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::NoSuchLayer`] if `name` is not in `gpkg_contents`.
-    /// - [`Error::WrongDataType`] if it is registered but not as `features`
-    ///   (use [`GeoPackage::attributes`] for an attribute table).
-    /// - [`Error::NoSuchTable`] if the catalogue row has no backing table.
-    pub fn layer(&self, name: &str) -> Result<Layer<'_>> {
-        self.build_layer(name, LayerKind::Feature)
-    }
-
-    /// Opens an attribute layer (a non-spatial `data_type = 'attributes'`
-    /// table) by name.
-    ///
-    /// # Errors
-    ///
-    /// As [`GeoPackage::layer`], but requiring the `attributes` data type.
-    pub fn attributes(&self, name: &str) -> Result<Layer<'_>> {
-        self.build_layer(name, LayerKind::Attributes)
-    }
-
-    fn build_layer(&self, name: &str, kind: LayerKind) -> Result<Layer<'_>> {
-        let row = self
-            .connection()
-            .query_row(
-                "SELECT table_name, data_type FROM gpkg_contents \
-                 WHERE table_name = ?1 COLLATE NOCASE",
-                [name],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-            )
-            .optional()?;
-        let (declared_name, data_type) = row.ok_or_else(|| Error::NoSuchLayer {
-            table_name: name.to_owned(),
-        })?;
-        if data_type != kind.data_type() {
-            return Err(Error::WrongDataType {
-                table_name: declared_name,
-                expected: kind.data_type(),
-                found: data_type,
-            });
-        }
-        let table_name =
-            resolve_table_name(self.connection(), &declared_name)?.unwrap_or(declared_name);
-        let schema = self.table_schema(&table_name)?;
-        let geometry_column = match kind {
-            LayerKind::Feature => match &schema.geometry_column {
-                Some(g) => Some(g.clone()),
-                None => self.geometry_column_ci(&table_name)?,
-            },
-            LayerKind::Attributes => None,
-        };
-        let pk_column = schema.primary_key().map(|c| c.name.clone());
-        let geom_name = geometry_column.as_ref().map(|g| g.column_name.clone());
-        // Neither the geometry nor the primary key is a value column. Both are
-        // reached through their own accessors ([`Feature::geometry`] and
-        // [`Feature::fid`]), and the write path has always taken values without
-        // them, so including them here made the two sides of the API disagree
-        // about what a row's values are. Dropping the primary key also stops
-        // every query selecting it twice, once as the fid and once as a value.
-        let value_columns: Vec<Column> = schema
-            .columns
-            .iter()
-            .filter(|c| geom_name.as_deref() != Some(c.name.as_str()))
-            .filter(|c| pk_column.as_deref() != Some(c.name.as_str()))
-            .cloned()
-            .collect();
-        let value_column_names: Arc<[String]> =
-            value_columns.iter().map(|c| c.name.clone()).collect();
-        Ok(Layer {
-            gpkg: self,
-            table_name,
-            schema,
-            kind,
-            geometry_column,
-            pk_column,
-            value_columns,
-            value_column_names,
-            // `default`, not `strict`: strict `DATETIME` parsing, but a value a
-            // declared type does not strictly permit is still read rather than
-            // rejected. A layer read should not fail on a file every other
-            // implementation opens (see `StorageStrictness`).
-            options: ConversionOptions::default(),
-            validate_geometry_type: false,
-            projection: None,
-        })
-    }
 }
 
 impl<'a> Layer<'a> {
@@ -876,6 +651,291 @@ impl<'a> Layer<'a> {
     }
 }
 
+impl std::fmt::Debug for Layer<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Layer")
+            .field("table_name", &self.table_name)
+            .field("kind", &self.kind)
+            .field("geometry_column", &self.geometry_column)
+            .field("primary_key", &self.pk_column)
+            .field("options", &self.options)
+            .finish_non_exhaustive()
+    }
+}
+
+impl GeoPackage {
+    /// Returns the feature layers: rows of `gpkg_contents` with
+    /// `data_type = 'features'` that also have a `gpkg_geometry_columns` row.
+    ///
+    /// The join is case-insensitive on the table name, so the layers of a file
+    /// whose catalogue tables disagree on case (see
+    /// [`GeoPackage::open_lenient`]) are still listed. Attribute-only files,
+    /// and files with no `gpkg_geometry_columns` table at all, return an empty
+    /// list.
+    pub fn layers(&self) -> Result<Vec<Layer<'_>>> {
+        self.layer_names()?.iter().map(|n| self.layer(n)).collect()
+    }
+
+    /// Returns the `gpkg_contents` name of every feature layer, without
+    /// opening the layers.
+    pub(crate) fn layer_names(&self) -> Result<Vec<String>> {
+        if !table_exists(self.connection(), "gpkg_geometry_columns")? {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.connection().prepare(
+            "SELECT DISTINCT c.table_name FROM gpkg_contents c \
+             JOIN gpkg_geometry_columns g ON g.table_name = c.table_name COLLATE NOCASE \
+             WHERE c.data_type = 'features' ORDER BY c.table_name",
+        )?;
+        let names = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(names)
+    }
+
+    /// Opens a feature layer by name.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NoSuchLayer`] if `name` is not in `gpkg_contents`.
+    /// - [`Error::WrongDataType`] if it is registered but not as `features`
+    ///   (use [`GeoPackage::attributes`] for an attribute table).
+    /// - [`Error::NoSuchTable`] if the catalogue row has no backing table.
+    pub fn layer(&self, name: &str) -> Result<Layer<'_>> {
+        self.build_layer(name, LayerKind::Feature)
+    }
+
+    /// Opens an attribute layer (a non-spatial `data_type = 'attributes'`
+    /// table) by name.
+    ///
+    /// # Errors
+    ///
+    /// As [`GeoPackage::layer`], but requiring the `attributes` data type.
+    pub fn attributes(&self, name: &str) -> Result<Layer<'_>> {
+        self.build_layer(name, LayerKind::Attributes)
+    }
+
+    fn build_layer(&self, name: &str, kind: LayerKind) -> Result<Layer<'_>> {
+        let row = self
+            .connection()
+            .query_row(
+                "SELECT table_name, data_type FROM gpkg_contents \
+                 WHERE table_name = ?1 COLLATE NOCASE",
+                [name],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        let (declared_name, data_type) = row.ok_or_else(|| Error::NoSuchLayer {
+            table_name: name.to_owned(),
+        })?;
+        if data_type != kind.data_type() {
+            return Err(Error::WrongDataType {
+                table_name: declared_name,
+                expected: kind.data_type(),
+                found: data_type,
+            });
+        }
+        let table_name =
+            resolve_table_name(self.connection(), &declared_name)?.unwrap_or(declared_name);
+        let schema = self.table_schema(&table_name)?;
+        let geometry_column = match kind {
+            LayerKind::Feature => match &schema.geometry_column {
+                Some(g) => Some(g.clone()),
+                None => self.geometry_column_ci(&table_name)?,
+            },
+            LayerKind::Attributes => None,
+        };
+        let pk_column = schema.primary_key().map(|c| c.name.clone());
+        let geom_name = geometry_column.as_ref().map(|g| g.column_name.clone());
+        // Neither the geometry nor the primary key is a value column. Both are
+        // reached through their own accessors ([`Feature::geometry`] and
+        // [`Feature::fid`]), and the write path has always taken values without
+        // them, so including them here made the two sides of the API disagree
+        // about what a row's values are. Dropping the primary key also stops
+        // every query selecting it twice, once as the fid and once as a value.
+        let value_columns: Vec<Column> = schema
+            .columns
+            .iter()
+            .filter(|c| geom_name.as_deref() != Some(c.name.as_str()))
+            .filter(|c| pk_column.as_deref() != Some(c.name.as_str()))
+            .cloned()
+            .collect();
+        let value_column_names: Arc<[String]> =
+            value_columns.iter().map(|c| c.name.clone()).collect();
+        Ok(Layer {
+            gpkg: self,
+            table_name,
+            schema,
+            kind,
+            geometry_column,
+            pk_column,
+            value_columns,
+            value_column_names,
+            // `default`, not `strict`: strict `DATETIME` parsing, but a value a
+            // declared type does not strictly permit is still read rather than
+            // rejected. A layer read should not fail on a file every other
+            // implementation opens (see `StorageStrictness`).
+            options: ConversionOptions::default(),
+            validate_geometry_type: false,
+            projection: None,
+        })
+    }
+}
+
+/// Returns the parameters for the box placeholders of
+/// [`Layer::features_in_sql`].
+fn box_params(bbox: BoundingBox, uses_rtree: bool) -> Vec<rusqlite::types::Value> {
+    use rusqlite::types::Value as Sql;
+    if uses_rtree {
+        // SQLite's RTree coerces bound f64 constraints to f32, and at
+        // sub-normal magnitudes that coercion is not conservative: a
+        // truly-intersecting candidate can be excluded before the f64 re-test
+        // runs. Widen each bound one f32 ULP outward before binding; the exact
+        // f64 re-filter restores precision.
+        vec![
+            Sql::Real(widen_up(bbox.max_x)),
+            Sql::Real(widen_down(bbox.min_x)),
+            Sql::Real(widen_up(bbox.max_y)),
+            Sql::Real(widen_down(bbox.min_y)),
+        ]
+    } else {
+        vec![
+            Sql::Real(bbox.min_x),
+            Sql::Real(bbox.min_y),
+            Sql::Real(bbox.max_x),
+            Sql::Real(bbox.max_y),
+        ]
+    }
+}
+
+/// Qualifies an identifier with an optional table prefix, quoting it.
+fn qualified(name: &str, prefix: Option<&str>) -> Result<String> {
+    let quoted = quote(name)?;
+    Ok(match prefix {
+        Some(p) => format!("{p}.{quoted}"),
+        None => quoted,
+    })
+}
+
+/// Which kind of user table a [`Layer`] wraps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LayerKind {
+    /// A feature layer (`gpkg_contents.data_type = 'features'`) with a geometry
+    /// column.
+    Feature,
+    /// An attribute layer (`gpkg_contents.data_type = 'attributes'`), no
+    /// geometry.
+    Attributes,
+}
+
+impl LayerKind {
+    /// Returns the kind as the word `gpkg_contents` uses for it.
+    ///
+    /// This is the same string as the private `data_type`. It is public
+    /// because reporting a layer's kind and writing its catalogue row use the
+    /// same word.
+    pub fn as_str(self) -> &'static str {
+        self.data_type()
+    }
+
+    /// Returns the `gpkg_contents.data_type` string this kind requires.
+    fn data_type(self) -> &'static str {
+        match self {
+            Self::Feature => "features",
+            Self::Attributes => "attributes",
+        }
+    }
+}
+
+impl std::fmt::Display for LayerKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// An XY bounding box for spatial queries ([`Layer::features_in`]).
+///
+/// Fields are ordinary map coordinates in the layer's own spatial reference
+/// system. This crate never transforms coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoundingBox {
+    /// Minimum x (west edge).
+    pub min_x: f64,
+    /// Minimum y (south edge).
+    pub min_y: f64,
+    /// Maximum x (east edge).
+    pub max_x: f64,
+    /// Maximum y (north edge).
+    pub max_y: f64,
+}
+
+impl BoundingBox {
+    /// Creates a bounding box from its four edges.
+    pub fn new(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Self {
+        Self {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        }
+    }
+
+    /// Returns `true` if the box contains no point: an edge is NaN, or a
+    /// minimum is above its maximum.
+    pub(crate) fn contains_no_point(&self) -> bool {
+        !(self.min_x <= self.max_x && self.min_y <= self.max_y)
+    }
+
+    /// Returns the box a query binds: this box, or for a box that contains no
+    /// point, one that also contains none and that every path can bind. A NaN
+    /// binds as NULL, which `ST_EnvIntersects` rejects.
+    pub(crate) fn for_query(self) -> Self {
+        if self.contains_no_point() {
+            Self::new(
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            )
+        } else {
+            self
+        }
+    }
+
+    /// Returns `true` if this box intersects an envelope
+    /// `[min_x, max_x, min_y, max_y]`,
+    /// inclusive at the boundary (touching boxes intersect).
+    pub(crate) fn intersects_envelope(&self, env: [f64; 4]) -> bool {
+        env[0] <= self.max_x && env[1] >= self.min_x && env[2] <= self.max_y && env[3] >= self.min_y
+    }
+}
+
+/// A fallible iterator of [`Feature`]s from a layer read.
+///
+/// It yields a `Result<Feature>` per row. A geometry or value error returns
+/// `Err` for that row without ending iteration. Features are materialised
+/// rather than streamed lazily, because a row's values do not outlive the
+/// SQLite cursor. For streaming, use [`Layer::cursor`].
+#[derive(Debug)]
+pub struct Features {
+    inner: std::vec::IntoIter<Result<Feature>>,
+}
+
+impl Iterator for Features {
+    type Item = Result<Feature>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl ExactSizeIterator for Features {}
+
 /// A prepared streaming read over a layer, owning its statement.
 ///
 /// Get one from [`Layer::cursor`], [`Layer::cursor_in`] or
@@ -982,172 +1042,6 @@ impl Iterator for FeatureStream<'_> {
     }
 }
 
-/// Everything needed to turn a result row into an owned [`Feature`], owned
-/// rather than borrowed so it can be held by a [`FeatureCursor`].
-#[derive(Debug, Clone)]
-struct RowContext {
-    table_name: String,
-    value_columns: Vec<Column>,
-    value_column_names: Arc<[String]>,
-    options: ConversionOptions,
-    validate_geometry_type: bool,
-    geometry_column: Option<GeometryColumn>,
-    /// Whether a row keeps its geometry. This is false under a projection that
-    /// did not name the geometry. A filtered query then still selects the blob
-    /// to filter with, but no row stores it.
-    store_geometry: bool,
-    /// The non-geometry byte count of the last row built, used to size the next
-    /// row's buffer. It is a `Cell` because rows are built through a shared
-    /// reference. The value is only a hint, so a wrong one costs one growth.
-    value_bytes_hint: std::cell::Cell<usize>,
-}
-
-impl RowContext {
-    /// Builds one owned [`Feature`]. The materialising read methods and the
-    /// streaming cursor share this implementation.
-    #[hotpath::measure(label = "RowContext::feature_from_row")]
-    fn feature_from_row(
-        &self,
-        row: &rusqlite::Row<'_>,
-        geom_idx: Option<usize>,
-    ) -> Result<Feature> {
-        let fid: i64 = row.get(0)?;
-
-        // The geometry blob goes in first, so its range starts at zero and only
-        // its end has to be recorded.
-        let geometry = match geom_idx {
-            Some(gi) => match row.get_ref(gi)? {
-                SqlValueRef::Blob(bytes) => Some(bytes),
-                // NULL, or a non-blob value in the geometry column, reads as no
-                // geometry rather than an error.
-                _ => None,
-            },
-            None => None,
-        };
-        if self.validate_geometry_type
-            && let (Some(blob), Some(declared)) = (geometry, &self.geometry_column)
-        {
-            self.check_declared_type(blob, declared)?;
-        }
-
-        // Sized from the previous row rather than by measuring this one. A
-        // sizing pass would have to fetch every cell a second time, and fetching
-        // values is around half a scalar read's total cost, so paying it twice
-        // to save a reallocation is a bad trade: measured over three real
-        // datasets it cost 3% of the read on a four-column layer and over 30% on
-        // sixteen- and fifty-four-column ones. Rows in a layer are usually
-        // close in size, so the estimate is normally right, and being wrong
-        // costs a growth rather than a wrong answer.
-        // Storage comes from the spare pool when a previously read row has
-        // been dropped, so a drop-as-you-go scan allocates only until the
-        // capacities settle; `reserve` on a pooled buffer is then a no-op.
-        let (mut buf, mut slots) = SPARE_ROWS
-            .with(|pool| pool.borrow_mut().pop())
-            .unwrap_or_default();
-        buf.reserve(geometry.map_or(0, <[u8]>::len) + self.value_bytes_hint.get());
-        slots.reserve(self.value_columns.len());
-        let geometry_end = geometry.filter(|_| self.store_geometry).map(|blob| {
-            buf.extend_from_slice(blob);
-            // SQLite's own value length is an i32, so a row's bytes cannot
-            // reach the u32 ceiling.
-            u32::try_from(buf.len()).unwrap_or(u32::MAX)
-        });
-
-        for (i, column) in self.value_columns.iter().enumerate() {
-            let value = value_ref_from_sql(
-                row.get_ref(value_index(i, geom_idx))?,
-                column.column_type.as_ref(),
-                &column.name,
-                self.options,
-            )?;
-            slots.push(match value {
-                ValueRef::Null => Slot::Null,
-                ValueRef::Boolean(b) => Slot::Boolean(b),
-                ValueRef::Integer(i) => Slot::Integer(i),
-                ValueRef::Float(f) => Slot::Float(f),
-                ValueRef::Text(s) => {
-                    let (start, end) = push_bytes(&mut buf, s.as_bytes());
-                    Slot::Text { start, end }
-                }
-                ValueRef::Blob(b) => {
-                    let (start, end) = push_bytes(&mut buf, b);
-                    Slot::Blob { start, end }
-                }
-                ValueRef::Date(d) => Slot::Date(d),
-                ValueRef::DateTime(dt) => Slot::DateTime(dt),
-            });
-        }
-
-        // Carry this row's value bytes forward as the next row's estimate.
-        self.value_bytes_hint
-            .set(buf.len().saturating_sub(geometry_end.unwrap_or(0) as usize));
-        Ok(Feature {
-            fid,
-            buf,
-            geometry_end,
-            // A layer with no geometry column has had nothing projected away,
-            // so its rows answer `Ok(None)` as they always did; only a layer
-            // that has one and did not select it makes `geometry` an error.
-            geometry_projected: self.geometry_column.is_none() || self.store_geometry,
-            slots,
-            columns: Arc::clone(&self.value_column_names),
-        })
-    }
-
-    /// Runs the opt-in declared-type check on one geometry blob. It reads the
-    /// WKB type discriminator, but no coordinates, and tests it against the
-    /// declared `gpkg_geometry_columns` type.
-    fn check_declared_type(&self, blob: &[u8], declared: &GeometryColumn) -> Result<()> {
-        let (_, offset) = gpb::parse_header(blob).map_err(|e| Error::Core(e.into()))?;
-        // `parse_header` guarantees `offset <= blob.len()`; `get` keeps the
-        // slice panic-free.
-        let body = blob.get(offset..).unwrap_or_default();
-        let found = geometry::wkb_geometry_type(body).map_err(|e| Error::Core(e.into()))?;
-        if !geometry::geometry_type_matches(found, declared.geometry_type) {
-            return Err(Error::GeometryTypeMismatch {
-                table_name: self.table_name.clone(),
-                column_name: declared.column_name.clone(),
-                declared: declared.geometry_type,
-                found,
-            });
-        }
-        Ok(())
-    }
-}
-
-/// Returns the parameters for the box placeholders of
-/// [`Layer::features_in_sql`].
-fn box_params(bbox: BoundingBox, uses_rtree: bool) -> Vec<rusqlite::types::Value> {
-    use rusqlite::types::Value as Sql;
-    if uses_rtree {
-        // SQLite's RTree coerces bound f64 constraints to f32, and at
-        // sub-normal magnitudes that coercion is not conservative: a
-        // truly-intersecting candidate can be excluded before the f64 re-test
-        // runs. Widen each bound one f32 ULP outward before binding; the exact
-        // f64 re-filter restores precision.
-        vec![
-            Sql::Real(widen_up(bbox.max_x)),
-            Sql::Real(widen_down(bbox.min_x)),
-            Sql::Real(widen_up(bbox.max_y)),
-            Sql::Real(widen_down(bbox.min_y)),
-        ]
-    } else {
-        vec![
-            Sql::Real(bbox.min_x),
-            Sql::Real(bbox.min_y),
-            Sql::Real(bbox.max_x),
-            Sql::Real(bbox.max_y),
-        ]
-    }
-}
-
-/// Returns the index of value column `i` in a row selected by
-/// [`Layer::column_exprs`]: after the fid, and after the geometry if the
-/// geometry is selected before it.
-fn value_index(i: usize, geom_idx: Option<usize>) -> usize {
-    i + 1 + usize::from(geom_idx.is_some_and(|g| i + 1 >= g))
-}
-
 /// Returns `true` if the row's true `f64` geometry envelope, read straight
 /// from the raw blob, intersects `bbox`. A NULL geometry cell, or an empty
 /// geometry (no finite coordinate), never matches.
@@ -1191,43 +1085,6 @@ pub(crate) fn widen_down(v: f64) -> f64 {
     f64::from((v as f32).next_down())
 }
 
-/// Qualifies an identifier with an optional table prefix, quoting it.
-fn qualified(name: &str, prefix: Option<&str>) -> Result<String> {
-    let quoted = quote(name)?;
-    Ok(match prefix {
-        Some(p) => format!("{p}.{quoted}"),
-        None => quoted,
-    })
-}
-
-/// Appends `bytes` to `buf`, returning the range they occupy.
-fn push_bytes(buf: &mut Vec<u8>, bytes: &[u8]) -> (u32, u32) {
-    let start = u32::try_from(buf.len()).unwrap_or(u32::MAX);
-    buf.extend_from_slice(bytes);
-    (start, u32::try_from(buf.len()).unwrap_or(u32::MAX))
-}
-
-/// One value of a [`Feature`], with the variable-length cases stored as a
-/// range into the feature's byte buffer rather than as their own allocation.
-#[derive(Debug, Clone, Copy)]
-enum Slot {
-    Null,
-    Boolean(bool),
-    Integer(i64),
-    Float(f64),
-    /// UTF-8, checked when the row was read.
-    Text {
-        start: u32,
-        end: u32,
-    },
-    Blob {
-        start: u32,
-        end: u32,
-    },
-    Date(Date),
-    DateTime(DateTime),
-}
-
 /// A single row of a layer, owned so it outlives the SQLite cursor.
 ///
 /// The geometry is kept as the raw GPB blob and parsed lazily by
@@ -1264,63 +1121,6 @@ pub struct Feature {
     geometry_projected: bool,
     slots: Vec<Slot>,
     columns: Arc<[String]>,
-}
-
-/// How many retired row storages a thread keeps, and the largest byte buffer
-/// it keeps. The two bounds stop a burst of wide rows from pinning memory for
-/// the rest of the thread's life. An oversized buffer is freed rather than
-/// pooled, and the pool never holds more than a handful of entries.
-const SPARE_ROWS_MAX: usize = 8;
-const SPARE_BUF_BYTES_MAX: usize = 1 << 20;
-
-thread_local! {
-    /// Spare row storage reclaimed from dropped [`Feature`]s and reused by
-    /// [`RowContext::feature_from_row`]. The pool is thread-local, not shared.
-    /// A `Feature` can cross threads, and its storage then goes to the pool of
-    /// whichever thread drops it.
-    static SPARE_ROWS: std::cell::RefCell<Vec<(Vec<u8>, Vec<Slot>)>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-impl Drop for Feature {
-    /// Returns the row's storage to the thread's spare pool, so the next row
-    /// read on this thread starts from settled capacities instead of fresh
-    /// allocations.
-    fn drop(&mut self) {
-        if self.buf.capacity() > SPARE_BUF_BYTES_MAX
-            || (self.buf.capacity() == 0 && self.slots.capacity() == 0)
-        {
-            return;
-        }
-        let mut buf = std::mem::take(&mut self.buf);
-        let mut slots = std::mem::take(&mut self.slots);
-        buf.clear();
-        slots.clear();
-        // `try_with` fails only during thread teardown, when there is no pool
-        // left to put the spare in; it is then freed as normal.
-        SPARE_ROWS
-            .try_with(|pool| {
-                let mut pool = pool.borrow_mut();
-                if pool.len() < SPARE_ROWS_MAX {
-                    pool.push((buf, slots));
-                }
-            })
-            .unwrap_or_default();
-    }
-}
-
-impl std::fmt::Debug for Feature {
-    /// Prints the values, not the storage. The byte buffer and its ranges are
-    /// an implementation detail. Dumping them instead of the row's
-    /// `(column, value)` pairs would make a feature unreadable in a test
-    /// failure or a `dbg!`.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Feature")
-            .field("fid", &self.fid)
-            .field("geometry_bytes", &self.geometry_bytes().map(<[u8]>::len))
-            .field("values", &self.iter().collect::<Vec<_>>())
-            .finish()
-    }
 }
 
 impl Feature {
@@ -1446,27 +1246,229 @@ impl Feature {
     }
 }
 
-/// A fallible iterator of [`Feature`]s from a layer read.
-///
-/// It yields a `Result<Feature>` per row. A geometry or value error returns
-/// `Err` for that row without ending iteration. Features are materialised
-/// rather than streamed lazily, because a row's values do not outlive the
-/// SQLite cursor. For streaming, use [`Layer::cursor`].
-#[derive(Debug)]
-pub struct Features {
-    inner: std::vec::IntoIter<Result<Feature>>,
+impl Drop for Feature {
+    /// Returns the row's storage to the thread's spare pool, so the next row
+    /// read on this thread starts from settled capacities instead of fresh
+    /// allocations.
+    fn drop(&mut self) {
+        if self.buf.capacity() > SPARE_BUF_BYTES_MAX
+            || (self.buf.capacity() == 0 && self.slots.capacity() == 0)
+        {
+            return;
+        }
+        let mut buf = std::mem::take(&mut self.buf);
+        let mut slots = std::mem::take(&mut self.slots);
+        buf.clear();
+        slots.clear();
+        // `try_with` fails only during thread teardown, when there is no pool
+        // left to put the spare in; it is then freed as normal.
+        SPARE_ROWS
+            .try_with(|pool| {
+                let mut pool = pool.borrow_mut();
+                if pool.len() < SPARE_ROWS_MAX {
+                    pool.push((buf, slots));
+                }
+            })
+            .unwrap_or_default();
+    }
 }
 
-impl Iterator for Features {
-    type Item = Result<Feature>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
+impl std::fmt::Debug for Feature {
+    /// Prints the values, not the storage. The byte buffer and its ranges are
+    /// an implementation detail. Dumping them instead of the row's
+    /// `(column, value)` pairs would make a feature unreadable in a test
+    /// failure or a `dbg!`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Feature")
+            .field("fid", &self.fid)
+            .field("geometry_bytes", &self.geometry_bytes().map(<[u8]>::len))
+            .field("values", &self.iter().collect::<Vec<_>>())
+            .finish()
     }
 }
 
-impl ExactSizeIterator for Features {}
+/// One value of a [`Feature`], with the variable-length cases stored as a
+/// range into the feature's byte buffer rather than as their own allocation.
+#[derive(Debug, Clone, Copy)]
+enum Slot {
+    Null,
+    Boolean(bool),
+    Integer(i64),
+    Float(f64),
+    /// UTF-8, checked when the row was read.
+    Text {
+        start: u32,
+        end: u32,
+    },
+    Blob {
+        start: u32,
+        end: u32,
+    },
+    Date(Date),
+    DateTime(DateTime),
+}
+
+/// How many retired row storages a thread keeps, and the largest byte buffer
+/// it keeps. The two bounds stop a burst of wide rows from pinning memory for
+/// the rest of the thread's life. An oversized buffer is freed rather than
+/// pooled, and the pool never holds more than a handful of entries.
+const SPARE_ROWS_MAX: usize = 8;
+const SPARE_BUF_BYTES_MAX: usize = 1 << 20;
+
+thread_local! {
+    /// Spare row storage reclaimed from dropped [`Feature`]s and reused by
+    /// [`RowContext::feature_from_row`]. The pool is thread-local, not shared.
+    /// A `Feature` can cross threads, and its storage then goes to the pool of
+    /// whichever thread drops it.
+    static SPARE_ROWS: std::cell::RefCell<Vec<(Vec<u8>, Vec<Slot>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Everything needed to turn a result row into an owned [`Feature`], owned
+/// rather than borrowed so it can be held by a [`FeatureCursor`].
+#[derive(Debug, Clone)]
+struct RowContext {
+    table_name: String,
+    value_columns: Vec<Column>,
+    value_column_names: Arc<[String]>,
+    options: ConversionOptions,
+    validate_geometry_type: bool,
+    geometry_column: Option<GeometryColumn>,
+    /// Whether a row keeps its geometry. This is false under a projection that
+    /// did not name the geometry. A filtered query then still selects the blob
+    /// to filter with, but no row stores it.
+    store_geometry: bool,
+    /// The non-geometry byte count of the last row built, used to size the next
+    /// row's buffer. It is a `Cell` because rows are built through a shared
+    /// reference. The value is only a hint, so a wrong one costs one growth.
+    value_bytes_hint: std::cell::Cell<usize>,
+}
+
+impl RowContext {
+    /// Builds one owned [`Feature`]. The materialising read methods and the
+    /// streaming cursor share this implementation.
+    #[hotpath::measure(label = "RowContext::feature_from_row")]
+    fn feature_from_row(
+        &self,
+        row: &rusqlite::Row<'_>,
+        geom_idx: Option<usize>,
+    ) -> Result<Feature> {
+        let fid: i64 = row.get(0)?;
+
+        // The geometry blob goes in first, so its range starts at zero and only
+        // its end has to be recorded.
+        let geometry = match geom_idx {
+            Some(gi) => match row.get_ref(gi)? {
+                SqlValueRef::Blob(bytes) => Some(bytes),
+                // NULL, or a non-blob value in the geometry column, reads as no
+                // geometry rather than an error.
+                _ => None,
+            },
+            None => None,
+        };
+        if self.validate_geometry_type
+            && let (Some(blob), Some(declared)) = (geometry, &self.geometry_column)
+        {
+            self.check_declared_type(blob, declared)?;
+        }
+
+        // Sized from the previous row rather than by measuring this one. A
+        // sizing pass would have to fetch every cell a second time, and fetching
+        // values is around half a scalar read's total cost, so paying it twice
+        // to save a reallocation is a bad trade: measured over three real
+        // datasets it cost 3% of the read on a four-column layer and over 30% on
+        // sixteen- and fifty-four-column ones. Rows in a layer are usually
+        // close in size, so the estimate is normally right, and being wrong
+        // costs a growth rather than a wrong answer.
+        // Storage comes from the spare pool when a previously read row has
+        // been dropped, so a drop-as-you-go scan allocates only until the
+        // capacities settle; `reserve` on a pooled buffer is then a no-op.
+        let (mut buf, mut slots) = SPARE_ROWS
+            .with(|pool| pool.borrow_mut().pop())
+            .unwrap_or_default();
+        buf.reserve(geometry.map_or(0, <[u8]>::len) + self.value_bytes_hint.get());
+        slots.reserve(self.value_columns.len());
+        let geometry_end = if let Some(blob) = geometry.filter(|_| self.store_geometry) {
+            buf.extend_from_slice(blob);
+            // SQLite's own value length is an i32, so a row's bytes cannot
+            // reach the u32 ceiling.
+            Some(u32::try_from(buf.len()).unwrap_or(u32::MAX))
+        } else {
+            None
+        };
+
+        for (i, column) in self.value_columns.iter().enumerate() {
+            let value = value_ref_from_sql(
+                row.get_ref(value_index(i, geom_idx))?,
+                column.column_type.as_ref(),
+                &column.name,
+                self.options,
+            )?;
+            slots.push(match value {
+                ValueRef::Null => Slot::Null,
+                ValueRef::Boolean(b) => Slot::Boolean(b),
+                ValueRef::Integer(i) => Slot::Integer(i),
+                ValueRef::Float(f) => Slot::Float(f),
+                ValueRef::Text(s) => {
+                    let (start, end) = push_bytes(&mut buf, s.as_bytes());
+                    Slot::Text { start, end }
+                }
+                ValueRef::Blob(b) => {
+                    let (start, end) = push_bytes(&mut buf, b);
+                    Slot::Blob { start, end }
+                }
+                ValueRef::Date(d) => Slot::Date(d),
+                ValueRef::DateTime(dt) => Slot::DateTime(dt),
+            });
+        }
+
+        // Carry this row's value bytes forward as the next row's estimate.
+        self.value_bytes_hint
+            .set(buf.len().saturating_sub(geometry_end.unwrap_or(0) as usize));
+        Ok(Feature {
+            fid,
+            buf,
+            geometry_end,
+            // A layer with no geometry column has had nothing projected away,
+            // so its rows answer `Ok(None)` as they always did; only a layer
+            // that has one and did not select it makes `geometry` an error.
+            geometry_projected: self.geometry_column.is_none() || self.store_geometry,
+            slots,
+            columns: Arc::clone(&self.value_column_names),
+        })
+    }
+
+    /// Runs the opt-in declared-type check on one geometry blob. It reads the
+    /// WKB type discriminator, but no coordinates, and tests it against the
+    /// declared `gpkg_geometry_columns` type.
+    fn check_declared_type(&self, blob: &[u8], declared: &GeometryColumn) -> Result<()> {
+        let (_, offset) = gpb::parse_header(blob).map_err(|e| Error::Core(e.into()))?;
+        // `parse_header` guarantees `offset <= blob.len()`; `get` keeps the
+        // slice panic-free.
+        let body = blob.get(offset..).unwrap_or_default();
+        let found = geometry::wkb_geometry_type(body).map_err(|e| Error::Core(e.into()))?;
+        if !geometry::geometry_type_matches(found, declared.geometry_type) {
+            return Err(Error::GeometryTypeMismatch {
+                table_name: self.table_name.clone(),
+                column_name: declared.column_name.clone(),
+                declared: declared.geometry_type,
+                found,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Returns the index of value column `i` in a row selected by
+/// [`Layer::column_exprs`]: after the fid, and after the geometry if the
+/// geometry is selected before it.
+fn value_index(i: usize, geom_idx: Option<usize>) -> usize {
+    i + 1 + usize::from(geom_idx.is_some_and(|g| i + 1 >= g))
+}
+
+/// Appends `bytes` to `buf`, returning the range they occupy.
+fn push_bytes(buf: &mut Vec<u8>, bytes: &[u8]) -> (u32, u32) {
+    let start = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+    buf.extend_from_slice(bytes);
+    (start, u32::try_from(buf.len()).unwrap_or(u32::MAX))
+}

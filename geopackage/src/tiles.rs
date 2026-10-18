@@ -34,112 +34,6 @@ use crate::{
     BoundingBox, Error, ExtensionRow, GeoPackage, Result, resolve_table_name, table_exists,
 };
 
-/// A declarative builder for a tile pyramid.
-///
-/// You declare the pyramid's extent and spatial reference system
-/// ([`TileMatrixSet`]), its zoom levels ([`TileMatrix`]) and the catalogue
-/// metadata, then pass the builder to [`GeoPackage::create_tile_pyramid`].
-///
-/// You usually derive the zoom levels from the extent rather than writing them
-/// out. [`TileMatrixSet::ladder`] builds a power-of-two ladder whose pixel
-/// sizes span the extent exactly.
-///
-/// ```
-/// use geopackage::core::tiles::{TileMatrixSet, ZoomLadder};
-/// use geopackage::{GeoPackage, TilePyramidBuilder};
-///
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let dir = tempfile::tempdir()?;
-/// # let path = dir.path().join("basemap.gpkg");
-/// let gpkg = GeoPackage::create(path)?;
-/// gpkg.add_epsg_srs(3857)?;
-///
-/// let matrix_set = TileMatrixSet::web_mercator_quad();
-/// let matrices = matrix_set.ladder(ZoomLadder::new(0, 4))?;
-/// let tiles = gpkg.create_tile_pyramid(
-///     &TilePyramidBuilder::new("basemap", matrix_set).matrices(matrices),
-/// )?;
-///
-/// assert_eq!(tiles.zoom_levels(), vec![0, 1, 2, 3, 4]);
-/// assert_eq!(tiles.matrix(4).map(|m| m.matrix_width), Some(16));
-/// # Ok(()) }
-/// ```
-#[derive(Debug, Clone)]
-pub struct TilePyramidBuilder {
-    table_name: String,
-    identifier: Option<String>,
-    description: Option<String>,
-    matrix_set: TileMatrixSet,
-    matrices: Vec<TileMatrix>,
-    allow_zoom_other: bool,
-}
-
-impl TilePyramidBuilder {
-    /// Starts a builder for a pyramid of the given name over the given
-    /// extent.
-    ///
-    /// The name is validated when the builder reaches
-    /// [`GeoPackage::create_tile_pyramid`], not here.
-    pub fn new(table_name: impl Into<String>, matrix_set: TileMatrixSet) -> Self {
-        Self {
-            table_name: table_name.into(),
-            identifier: None,
-            description: None,
-            matrix_set,
-            matrices: Vec::new(),
-            allow_zoom_other: false,
-        }
-    }
-
-    /// Declares one zoom level.
-    #[must_use]
-    pub fn matrix(mut self, matrix: TileMatrix) -> Self {
-        self.matrices.push(matrix);
-        self
-    }
-
-    /// Declares a set of zoom levels, in any order.
-    #[must_use]
-    pub fn matrices(mut self, matrices: impl IntoIterator<Item = TileMatrix>) -> Self {
-        self.matrices.extend(matrices);
-        self
-    }
-
-    /// Sets `gpkg_contents.identifier` (a human-readable name). Defaults to
-    /// the table name when left unset.
-    #[must_use]
-    pub fn identifier(mut self, identifier: impl Into<String>) -> Self {
-        self.identifier = Some(identifier.into());
-        self
-    }
-
-    /// Sets `gpkg_contents.description`.
-    #[must_use]
-    pub fn description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    /// Allows zoom levels that do not step by factors of two, registering the
-    /// `gpkg_zoom_other` extension for the table.
-    ///
-    /// Off by default. Without it, such zoom levels are an error rather than a
-    /// silent registration, because a ladder that does not double is usually a
-    /// mistake in the pixel sizes, and readers of a file that quietly registers
-    /// an extension may not support it. Such a pyramid is always *read* whether
-    /// or not this was set, as it is for the file's original writer.
-    #[must_use]
-    pub fn allow_zoom_other(mut self, allow: bool) -> Self {
-        self.allow_zoom_other = allow;
-        self
-    }
-
-    /// Returns the table name.
-    pub fn table_name(&self) -> &str {
-        &self.table_name
-    }
-}
-
 /// A handle to one tile pyramid of a [`GeoPackage`].
 ///
 /// You get one from [`GeoPackage::create_tile_pyramid`], [`GeoPackage::tiles`]
@@ -167,364 +61,6 @@ pub struct TilePyramid<'a> {
     /// statements, it is read once, because `put_tile` is a per-tile call and a
     /// catalogue query inside it would be paid per tile.
     write_block: Option<ExtensionRow>,
-}
-
-/// The statement text a [`TilePyramid`] uses, built once at construction.
-#[derive(Debug, Clone)]
-struct TileSql {
-    get: String,
-    exists: String,
-    count: String,
-    count_at: String,
-    scan: String,
-    scan_at: String,
-    scan_in: String,
-    put: String,
-    delete: String,
-}
-
-impl TileSql {
-    /// Builds the statements for a table, whose name is quoted once here
-    /// rather than at every call.
-    fn new(table: &str) -> Result<Self> {
-        let table = quote(table)?;
-        // Matrix order, which is what a consumer walking a pyramid expects:
-        // zoom level, then north to south, then west to east.
-        let order = "ORDER BY zoom_level, tile_row, tile_column";
-        let columns = "zoom_level, tile_column, tile_row, tile_data";
-        let address = "zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3";
-        Ok(Self {
-            get: format!("SELECT tile_data FROM {table} WHERE {address}"),
-            exists: format!("SELECT 1 FROM {table} WHERE {address}"),
-            count: format!("SELECT count(*) FROM {table}"),
-            count_at: format!("SELECT count(*) FROM {table} WHERE zoom_level = ?1"),
-            scan: format!("SELECT {columns} FROM {table} {order}"),
-            scan_at: format!("SELECT {columns} FROM {table} WHERE zoom_level = ?1 {order}"),
-            scan_in: format!(
-                "SELECT {columns} FROM {table} \
-                 WHERE zoom_level = ?1 AND tile_column BETWEEN ?2 AND ?3 \
-                 AND tile_row BETWEEN ?4 AND ?5 {order}"
-            ),
-            put: format!(
-                "INSERT INTO {table} (zoom_level, tile_column, tile_row, tile_data) \
-                 VALUES (?1, ?2, ?3, ?4) \
-                 ON CONFLICT (zoom_level, tile_column, tile_row) \
-                 DO UPDATE SET tile_data = excluded.tile_data"
-            ),
-            delete: format!("DELETE FROM {table} WHERE {address}"),
-        })
-    }
-}
-
-/// One tile of a pyramid, borrowing its payload from the row it was read from.
-///
-/// The payload is the bytes as stored, in whatever format the table contains.
-/// This crate does not decode them. [`Tile::to_vec`] copies, and everything
-/// else here borrows.
-#[derive(Debug)]
-pub struct Tile<'a> {
-    coord: TileCoord,
-    data: &'a [u8],
-}
-
-impl Tile<'_> {
-    /// Returns where this tile sits in the pyramid.
-    pub fn coord(&self) -> TileCoord {
-        self.coord
-    }
-
-    /// Returns the stored payload, borrowed from SQLite's row buffer.
-    pub fn data(&self) -> &[u8] {
-        self.data
-    }
-
-    /// Returns the stored payload, copied into an owned buffer.
-    pub fn to_vec(&self) -> Vec<u8> {
-        self.data.to_vec()
-    }
-
-    /// Returns what the payload's header declares: its encoding and pixel
-    /// size.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Tile`] when the bytes are not a readable image header.
-    pub fn probe(&self) -> Result<TilePayload> {
-        Ok(tiles::probe(self.data)?)
-    }
-}
-
-impl std::fmt::Debug for TilePyramid<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TilePyramid")
-            .field("table_name", &self.table_name)
-            .field("matrix_set", &self.matrix_set)
-            .field("zoom_levels", &self.zoom_levels())
-            .finish()
-    }
-}
-
-/// The input for creating a tile table, for either kind of content.
-///
-/// A tile pyramid and a tiled gridded coverage have the same physical
-/// structure: the user table, the matrix set, the zoom levels and the
-/// `gpkg_contents` row. They differ in the `data_type` of that row, and in the
-/// other tables that they use. This struct is the shared part, so
-/// [`crate::Coverage`] does not duplicate it.
-pub(crate) struct PyramidSpec<'a> {
-    pub(crate) table_name: &'a str,
-    pub(crate) matrix_set: &'a TileMatrixSet,
-    pub(crate) matrices: &'a [TileMatrix],
-    pub(crate) identifier: Option<&'a str>,
-    pub(crate) description: Option<&'a str>,
-    /// `tiles`, or `2d-gridded-coverage` (Requirement 5).
-    pub(crate) data_type: &'static str,
-    pub(crate) allow_zoom_other: bool,
-}
-
-impl GeoPackage {
-    /// Creates a tile pyramid from a [`TilePyramidBuilder`].
-    ///
-    /// Writes the tile pyramid user table, a `gpkg_contents` row
-    /// (`data_type = 'tiles'`, bounded by the matrix set extent), the
-    /// `gpkg_tile_matrix_set` row and one `gpkg_tile_matrix` row per zoom
-    /// level, in one transaction, then returns a handle to the new pyramid.
-    /// `gpkg_tile_matrix_set` and `gpkg_tile_matrix` are created on first use,
-    /// as `gpkg_geometry_columns` is for feature layers.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::Core`] with
-    ///   [`InvalidIdentifier`](geopackage_core::Error::InvalidIdentifier) if
-    ///   the name is empty or contains NUL.
-    /// - [`Error::ReservedTablePrefix`] if the name begins `gpkg_` or
-    ///   `sqlite_`, in any case.
-    /// - [`Error::TableAlreadyExists`] if a table or view of that name exists.
-    /// - [`Error::UnknownSrs`] if the matrix set's `srs_id` is not registered
-    ///   in `gpkg_spatial_ref_sys`.
-    /// - [`Error::Tile`] if the pyramid breaks one of the spec's consistency
-    ///   rules (Requirements 45 to 53).
-    /// - [`Error::ZoomOtherNotEnabled`] if its zoom levels do not step by
-    ///   factors of two and [`TilePyramidBuilder::allow_zoom_other`] was not
-    ///   set.
-    pub fn create_tile_pyramid(&self, builder: &TilePyramidBuilder) -> Result<TilePyramid<'_>> {
-        let spec = PyramidSpec {
-            table_name: &builder.table_name,
-            matrix_set: &builder.matrix_set,
-            matrices: &builder.matrices,
-            identifier: builder.identifier.as_deref(),
-            description: builder.description.as_deref(),
-            data_type: "tiles",
-            allow_zoom_other: builder.allow_zoom_other,
-        };
-        let zoom_other = self.check_new_pyramid(&spec)?;
-        let tx = WriteTransaction::begin(self.connection())?;
-        self.write_pyramid(&spec, zoom_other)?;
-        tx.commit()?;
-        self.tiles(&builder.table_name)
-    }
-
-    /// Runs every check that is possible before a write. Returns `true` if the
-    /// pyramid needs `gpkg_zoom_other`.
-    ///
-    /// This is separate from [`Self::write_pyramid`] so that a failed check
-    /// happens outside the transaction and does not cause a rollback.
-    pub(crate) fn check_new_pyramid(&self, spec: &PyramidSpec<'_>) -> Result<bool> {
-        let name = spec.table_name;
-        // As with `create_layer`: a whole-GeoPackage extension we cannot
-        // identify covers a table that does not exist yet.
-        self.check_writable(name)?;
-        crate::create::check_new_table_name(name)?;
-        let conn = self.connection();
-        if table_exists(conn, name)? {
-            return Err(Error::TableAlreadyExists {
-                table_name: name.to_owned(),
-            });
-        }
-        if self.srs(spec.matrix_set.srs_id)?.is_none() {
-            return Err(Error::UnknownSrs {
-                srs_id: spec.matrix_set.srs_id,
-            });
-        }
-        spec.matrix_set.validate(spec.matrices)?;
-        let zoom_other = !tiles::is_power_of_two_ladder(spec.matrices);
-        if zoom_other && !spec.allow_zoom_other {
-            return Err(Error::ZoomOtherNotEnabled {
-                table_name: name.to_owned(),
-            });
-        }
-        Ok(zoom_other)
-    }
-
-    /// Writes the user table and the catalogue rows, in a transaction that the
-    /// caller owns.
-    pub(crate) fn write_pyramid(&self, spec: &PyramidSpec<'_>, zoom_other: bool) -> Result<()> {
-        let conn = self.connection();
-        let name = spec.table_name;
-        let set = spec.matrix_set;
-        let identifier = spec.identifier.unwrap_or(name);
-        let description = spec.description.unwrap_or("");
-
-        for (exists, sql) in [
-            (
-                table_exists(conn, "gpkg_tile_matrix_set")?,
-                ddl::CREATE_GPKG_TILE_MATRIX_SET,
-            ),
-            (
-                table_exists(conn, "gpkg_tile_matrix")?,
-                ddl::CREATE_GPKG_TILE_MATRIX,
-            ),
-        ] {
-            if !exists {
-                conn.execute_batch(sql)?;
-            }
-        }
-        conn.execute_batch(&tiles::create_tile_table_sql(name)?)?;
-        // The extent is the matrix set's, not a measurement: for tiles it is
-        // exact by Requirement 144, and gpkg_contents records the same box.
-        conn.execute(
-            "INSERT INTO gpkg_contents \
-             (table_name, data_type, identifier, description, min_x, min_y, max_x, max_y, srs_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            rusqlite::params![
-                name,
-                spec.data_type,
-                identifier,
-                description,
-                set.min_x,
-                set.min_y,
-                set.max_x,
-                set.max_y,
-                set.srs_id,
-            ],
-        )?;
-        conn.execute(
-            "INSERT INTO gpkg_tile_matrix_set (table_name, srs_id, min_x, min_y, max_x, max_y) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![name, set.srs_id, set.min_x, set.min_y, set.max_x, set.max_y],
-        )?;
-        {
-            let mut stmt = conn.prepare(
-                "INSERT INTO gpkg_tile_matrix \
-                 (table_name, zoom_level, matrix_width, matrix_height, tile_width, tile_height, \
-                  pixel_x_size, pixel_y_size) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            )?;
-            for matrix in spec.matrices {
-                stmt.execute(rusqlite::params![
-                    name,
-                    matrix.zoom_level,
-                    matrix.matrix_width,
-                    matrix.matrix_height,
-                    matrix.tile_width,
-                    matrix.tile_height,
-                    matrix.pixel_x_size,
-                    matrix.pixel_y_size,
-                ])?;
-            }
-        }
-        if zoom_other {
-            crate::extensions::register(
-                conn,
-                Some(name),
-                Some(tiles::TILE_DATA_COLUMN),
-                ZOOM_OTHER_EXTENSION_NAME,
-                ZOOM_OTHER_EXTENSION_DEFINITION,
-                tiles::TILE_EXTENSION_SCOPE,
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Opens a tile pyramid by name.
-    ///
-    /// Nothing is validated. The matrix set and zoom levels are reported as the
-    /// file records them.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::NoSuchLayer`] if `name` is not in `gpkg_contents`.
-    /// - [`Error::WrongDataType`] if it is registered but not as `tiles`.
-    /// - [`Error::NoTileMatrixSet`] if its `gpkg_tile_matrix_set` row is
-    ///   missing, which leaves its tiles unlocatable.
-    pub fn tiles(&self, name: &str) -> Result<TilePyramid<'_>> {
-        self.open_pyramid(name, "tiles")
-    }
-
-    /// Opens a pyramid for a `gpkg_contents` row of the given data type.
-    ///
-    /// The tile table, its matrix set and its zoom levels have the same
-    /// structure for images and for measurements, so a coverage
-    /// (`2d-gridded-coverage`, Requirement 5) uses all of them. A coverage
-    /// does not expose the pyramid handle publicly, though.
-    /// [`crate::Coverage`] keeps its [`TilePyramid`] private, so a coverage
-    /// never offers a writer that does not know about its ancillary rows.
-    pub(crate) fn open_pyramid(
-        &self,
-        name: &str,
-        expected_data_type: &'static str,
-    ) -> Result<TilePyramid<'_>> {
-        let conn = self.connection();
-        let row = conn
-            .query_row(
-                "SELECT table_name, data_type FROM gpkg_contents \
-                 WHERE table_name = ?1 COLLATE NOCASE",
-                [name],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-            )
-            .optional()?;
-        let (declared_name, data_type) = row.ok_or_else(|| Error::NoSuchLayer {
-            table_name: name.to_owned(),
-        })?;
-        if data_type != expected_data_type {
-            return Err(Error::WrongDataType {
-                table_name: declared_name,
-                expected: expected_data_type,
-                found: data_type,
-            });
-        }
-        let table_name = resolve_table_name(conn, &declared_name)?.unwrap_or(declared_name);
-        let matrix_set =
-            read_matrix_set(conn, &table_name)?.ok_or_else(|| Error::NoTileMatrixSet {
-                table_name: table_name.clone(),
-            })?;
-        let matrices = read_matrices(conn, &table_name)?;
-        let sql = TileSql::new(&table_name)?;
-        let write_block = self.blocking_extension(&table_name)?;
-        Ok(TilePyramid {
-            gpkg: self,
-            table_name,
-            matrix_set,
-            matrices,
-            sql,
-            write_block,
-        })
-    }
-
-    /// Returns every tile pyramid in the file, by `gpkg_contents` name.
-    pub fn tile_pyramids(&self) -> Result<Vec<TilePyramid<'_>>> {
-        self.tile_pyramid_names()?
-            .iter()
-            .map(|name| self.tiles(name))
-            .collect()
-    }
-
-    /// Returns the `gpkg_contents` name of every tile pyramid, without
-    /// opening the pyramids.
-    pub(crate) fn tile_pyramid_names(&self) -> Result<Vec<String>> {
-        if !table_exists(self.connection(), "gpkg_tile_matrix_set")? {
-            return Ok(Vec::new());
-        }
-        let mut stmt = self.connection().prepare(
-            "SELECT c.table_name FROM gpkg_contents c \
-             JOIN gpkg_tile_matrix_set s ON s.table_name = c.table_name COLLATE NOCASE \
-             WHERE c.data_type = 'tiles' ORDER BY c.table_name",
-        )?;
-        let names = stmt
-            .query_map([], |r| r.get(0))?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(names)
-    }
 }
 
 impl<'a> TilePyramid<'a> {
@@ -821,6 +357,432 @@ impl<'a> TilePyramid<'a> {
     }
 }
 
+impl std::fmt::Debug for TilePyramid<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TilePyramid")
+            .field("table_name", &self.table_name)
+            .field("matrix_set", &self.matrix_set)
+            .field("zoom_levels", &self.zoom_levels())
+            .finish()
+    }
+}
+
+/// The statement text a [`TilePyramid`] uses, built once at construction.
+#[derive(Debug, Clone)]
+struct TileSql {
+    get: String,
+    exists: String,
+    count: String,
+    count_at: String,
+    scan: String,
+    scan_at: String,
+    scan_in: String,
+    put: String,
+    delete: String,
+}
+
+impl TileSql {
+    /// Builds the statements for a table, whose name is quoted once here
+    /// rather than at every call.
+    fn new(table: &str) -> Result<Self> {
+        let table = quote(table)?;
+        // Matrix order, which is what a consumer walking a pyramid expects:
+        // zoom level, then north to south, then west to east.
+        let order = "ORDER BY zoom_level, tile_row, tile_column";
+        let columns = "zoom_level, tile_column, tile_row, tile_data";
+        let address = "zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3";
+        Ok(Self {
+            get: format!("SELECT tile_data FROM {table} WHERE {address}"),
+            exists: format!("SELECT 1 FROM {table} WHERE {address}"),
+            count: format!("SELECT count(*) FROM {table}"),
+            count_at: format!("SELECT count(*) FROM {table} WHERE zoom_level = ?1"),
+            scan: format!("SELECT {columns} FROM {table} {order}"),
+            scan_at: format!("SELECT {columns} FROM {table} WHERE zoom_level = ?1 {order}"),
+            scan_in: format!(
+                "SELECT {columns} FROM {table} \
+                 WHERE zoom_level = ?1 AND tile_column BETWEEN ?2 AND ?3 \
+                 AND tile_row BETWEEN ?4 AND ?5 {order}"
+            ),
+            put: format!(
+                "INSERT INTO {table} (zoom_level, tile_column, tile_row, tile_data) \
+                 VALUES (?1, ?2, ?3, ?4) \
+                 ON CONFLICT (zoom_level, tile_column, tile_row) \
+                 DO UPDATE SET tile_data = excluded.tile_data"
+            ),
+            delete: format!("DELETE FROM {table} WHERE {address}"),
+        })
+    }
+}
+
+/// The input for creating a tile table, for either kind of content.
+///
+/// A tile pyramid and a tiled gridded coverage have the same physical
+/// structure: the user table, the matrix set, the zoom levels and the
+/// `gpkg_contents` row. They differ in the `data_type` of that row, and in the
+/// other tables that they use. This struct is the shared part, so
+/// [`crate::Coverage`] does not duplicate it.
+pub(crate) struct PyramidSpec<'a> {
+    pub(crate) table_name: &'a str,
+    pub(crate) matrix_set: &'a TileMatrixSet,
+    pub(crate) matrices: &'a [TileMatrix],
+    pub(crate) identifier: Option<&'a str>,
+    pub(crate) description: Option<&'a str>,
+    /// `tiles`, or `2d-gridded-coverage` (Requirement 5).
+    pub(crate) data_type: &'static str,
+    pub(crate) allow_zoom_other: bool,
+}
+
+impl GeoPackage {
+    /// Creates a tile pyramid from a [`TilePyramidBuilder`].
+    ///
+    /// Writes the tile pyramid user table, a `gpkg_contents` row
+    /// (`data_type = 'tiles'`, bounded by the matrix set extent), the
+    /// `gpkg_tile_matrix_set` row and one `gpkg_tile_matrix` row per zoom
+    /// level, in one transaction, then returns a handle to the new pyramid.
+    /// `gpkg_tile_matrix_set` and `gpkg_tile_matrix` are created on first use,
+    /// as `gpkg_geometry_columns` is for feature layers.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::Core`] with
+    ///   [`InvalidIdentifier`](geopackage_core::Error::InvalidIdentifier) if
+    ///   the name is empty or contains NUL.
+    /// - [`Error::ReservedTablePrefix`] if the name begins `gpkg_` or
+    ///   `sqlite_`, in any case.
+    /// - [`Error::TableAlreadyExists`] if a table or view of that name exists.
+    /// - [`Error::UnknownSrs`] if the matrix set's `srs_id` is not registered
+    ///   in `gpkg_spatial_ref_sys`.
+    /// - [`Error::Tile`] if the pyramid breaks one of the spec's consistency
+    ///   rules (Requirements 45 to 53).
+    /// - [`Error::ZoomOtherNotEnabled`] if its zoom levels do not step by
+    ///   factors of two and [`TilePyramidBuilder::allow_zoom_other`] was not
+    ///   set.
+    pub fn create_tile_pyramid(&self, builder: &TilePyramidBuilder) -> Result<TilePyramid<'_>> {
+        let spec = PyramidSpec {
+            table_name: &builder.table_name,
+            matrix_set: &builder.matrix_set,
+            matrices: &builder.matrices,
+            identifier: builder.identifier.as_deref(),
+            description: builder.description.as_deref(),
+            data_type: "tiles",
+            allow_zoom_other: builder.allow_zoom_other,
+        };
+        let zoom_other = self.check_new_pyramid(&spec)?;
+        let tx = WriteTransaction::begin(self.connection())?;
+        self.write_pyramid(&spec, zoom_other)?;
+        tx.commit()?;
+        self.tiles(&builder.table_name)
+    }
+
+    /// Runs every check that is possible before a write. Returns `true` if the
+    /// pyramid needs `gpkg_zoom_other`.
+    ///
+    /// This is separate from [`Self::write_pyramid`] so that a failed check
+    /// happens outside the transaction and does not cause a rollback.
+    pub(crate) fn check_new_pyramid(&self, spec: &PyramidSpec<'_>) -> Result<bool> {
+        let name = spec.table_name;
+        // As with `create_layer`: a whole-GeoPackage extension we cannot
+        // identify covers a table that does not exist yet.
+        self.check_writable(name)?;
+        crate::create::check_new_table_name(name)?;
+        let conn = self.connection();
+        if table_exists(conn, name)? {
+            return Err(Error::TableAlreadyExists {
+                table_name: name.to_owned(),
+            });
+        }
+        if self.srs(spec.matrix_set.srs_id)?.is_none() {
+            return Err(Error::UnknownSrs {
+                srs_id: spec.matrix_set.srs_id,
+            });
+        }
+        spec.matrix_set.validate(spec.matrices)?;
+        let zoom_other = !tiles::is_power_of_two_ladder(spec.matrices);
+        if zoom_other && !spec.allow_zoom_other {
+            return Err(Error::ZoomOtherNotEnabled {
+                table_name: name.to_owned(),
+            });
+        }
+        Ok(zoom_other)
+    }
+
+    /// Writes the user table and the catalogue rows, in a transaction that the
+    /// caller owns.
+    pub(crate) fn write_pyramid(&self, spec: &PyramidSpec<'_>, zoom_other: bool) -> Result<()> {
+        let conn = self.connection();
+        let name = spec.table_name;
+        let set = spec.matrix_set;
+        let identifier = spec.identifier.unwrap_or(name);
+        let description = spec.description.unwrap_or("");
+
+        for (exists, sql) in [
+            (
+                table_exists(conn, "gpkg_tile_matrix_set")?,
+                ddl::CREATE_GPKG_TILE_MATRIX_SET,
+            ),
+            (
+                table_exists(conn, "gpkg_tile_matrix")?,
+                ddl::CREATE_GPKG_TILE_MATRIX,
+            ),
+        ] {
+            if !exists {
+                conn.execute_batch(sql)?;
+            }
+        }
+        conn.execute_batch(&tiles::create_tile_table_sql(name)?)?;
+        // The extent is the matrix set's, not a measurement: for tiles it is
+        // exact by Requirement 144, and gpkg_contents records the same box.
+        conn.execute(
+            "INSERT INTO gpkg_contents \
+             (table_name, data_type, identifier, description, min_x, min_y, max_x, max_y, srs_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                name,
+                spec.data_type,
+                identifier,
+                description,
+                set.min_x,
+                set.min_y,
+                set.max_x,
+                set.max_y,
+                set.srs_id,
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO gpkg_tile_matrix_set (table_name, srs_id, min_x, min_y, max_x, max_y) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![name, set.srs_id, set.min_x, set.min_y, set.max_x, set.max_y],
+        )?;
+        {
+            let mut stmt = conn.prepare(
+                "INSERT INTO gpkg_tile_matrix \
+                 (table_name, zoom_level, matrix_width, matrix_height, tile_width, tile_height, \
+                  pixel_x_size, pixel_y_size) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+            for matrix in spec.matrices {
+                stmt.execute(rusqlite::params![
+                    name,
+                    matrix.zoom_level,
+                    matrix.matrix_width,
+                    matrix.matrix_height,
+                    matrix.tile_width,
+                    matrix.tile_height,
+                    matrix.pixel_x_size,
+                    matrix.pixel_y_size,
+                ])?;
+            }
+        }
+        if zoom_other {
+            crate::extensions::register(
+                conn,
+                Some(name),
+                Some(tiles::TILE_DATA_COLUMN),
+                ZOOM_OTHER_EXTENSION_NAME,
+                ZOOM_OTHER_EXTENSION_DEFINITION,
+                tiles::TILE_EXTENSION_SCOPE,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Opens a tile pyramid by name.
+    ///
+    /// Nothing is validated. The matrix set and zoom levels are reported as the
+    /// file records them.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NoSuchLayer`] if `name` is not in `gpkg_contents`.
+    /// - [`Error::WrongDataType`] if it is registered but not as `tiles`.
+    /// - [`Error::NoTileMatrixSet`] if its `gpkg_tile_matrix_set` row is
+    ///   missing, which leaves its tiles unlocatable.
+    pub fn tiles(&self, name: &str) -> Result<TilePyramid<'_>> {
+        self.open_pyramid(name, "tiles")
+    }
+
+    /// Opens a pyramid for a `gpkg_contents` row of the given data type.
+    ///
+    /// The tile table, its matrix set and its zoom levels have the same
+    /// structure for images and for measurements, so a coverage
+    /// (`2d-gridded-coverage`, Requirement 5) uses all of them. A coverage
+    /// does not expose the pyramid handle publicly, though.
+    /// [`crate::Coverage`] keeps its [`TilePyramid`] private, so a coverage
+    /// never offers a writer that does not know about its ancillary rows.
+    pub(crate) fn open_pyramid(
+        &self,
+        name: &str,
+        expected_data_type: &'static str,
+    ) -> Result<TilePyramid<'_>> {
+        let conn = self.connection();
+        let row = conn
+            .query_row(
+                "SELECT table_name, data_type FROM gpkg_contents \
+                 WHERE table_name = ?1 COLLATE NOCASE",
+                [name],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        let (declared_name, data_type) = row.ok_or_else(|| Error::NoSuchLayer {
+            table_name: name.to_owned(),
+        })?;
+        if data_type != expected_data_type {
+            return Err(Error::WrongDataType {
+                table_name: declared_name,
+                expected: expected_data_type,
+                found: data_type,
+            });
+        }
+        let table_name = resolve_table_name(conn, &declared_name)?.unwrap_or(declared_name);
+        let matrix_set =
+            read_matrix_set(conn, &table_name)?.ok_or_else(|| Error::NoTileMatrixSet {
+                table_name: table_name.clone(),
+            })?;
+        let matrices = read_matrices(conn, &table_name)?;
+        let sql = TileSql::new(&table_name)?;
+        let write_block = self.blocking_extension(&table_name)?;
+        Ok(TilePyramid {
+            gpkg: self,
+            table_name,
+            matrix_set,
+            matrices,
+            sql,
+            write_block,
+        })
+    }
+
+    /// Returns every tile pyramid in the file, by `gpkg_contents` name.
+    pub fn tile_pyramids(&self) -> Result<Vec<TilePyramid<'_>>> {
+        self.tile_pyramid_names()?
+            .iter()
+            .map(|name| self.tiles(name))
+            .collect()
+    }
+
+    /// Returns the `gpkg_contents` name of every tile pyramid, without
+    /// opening the pyramids.
+    pub(crate) fn tile_pyramid_names(&self) -> Result<Vec<String>> {
+        if !table_exists(self.connection(), "gpkg_tile_matrix_set")? {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.connection().prepare(
+            "SELECT c.table_name FROM gpkg_contents c \
+             JOIN gpkg_tile_matrix_set s ON s.table_name = c.table_name COLLATE NOCASE \
+             WHERE c.data_type = 'tiles' ORDER BY c.table_name",
+        )?;
+        let names = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(names)
+    }
+}
+
+/// A declarative builder for a tile pyramid.
+///
+/// You declare the pyramid's extent and spatial reference system
+/// ([`TileMatrixSet`]), its zoom levels ([`TileMatrix`]) and the catalogue
+/// metadata, then pass the builder to [`GeoPackage::create_tile_pyramid`].
+///
+/// You usually derive the zoom levels from the extent rather than writing them
+/// out. [`TileMatrixSet::ladder`] builds a power-of-two ladder whose pixel
+/// sizes span the extent exactly.
+///
+/// ```
+/// use geopackage::core::tiles::{TileMatrixSet, ZoomLadder};
+/// use geopackage::{GeoPackage, TilePyramidBuilder};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let dir = tempfile::tempdir()?;
+/// # let path = dir.path().join("basemap.gpkg");
+/// let gpkg = GeoPackage::create(path)?;
+/// gpkg.add_epsg_srs(3857)?;
+///
+/// let matrix_set = TileMatrixSet::web_mercator_quad();
+/// let matrices = matrix_set.ladder(ZoomLadder::new(0, 4))?;
+/// let tiles = gpkg.create_tile_pyramid(
+///     &TilePyramidBuilder::new("basemap", matrix_set).matrices(matrices),
+/// )?;
+///
+/// assert_eq!(tiles.zoom_levels(), vec![0, 1, 2, 3, 4]);
+/// assert_eq!(tiles.matrix(4).map(|m| m.matrix_width), Some(16));
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone)]
+pub struct TilePyramidBuilder {
+    table_name: String,
+    identifier: Option<String>,
+    description: Option<String>,
+    matrix_set: TileMatrixSet,
+    matrices: Vec<TileMatrix>,
+    allow_zoom_other: bool,
+}
+
+impl TilePyramidBuilder {
+    /// Starts a builder for a pyramid of the given name over the given
+    /// extent.
+    ///
+    /// The name is validated when the builder reaches
+    /// [`GeoPackage::create_tile_pyramid`], not here.
+    pub fn new(table_name: impl Into<String>, matrix_set: TileMatrixSet) -> Self {
+        Self {
+            table_name: table_name.into(),
+            identifier: None,
+            description: None,
+            matrix_set,
+            matrices: Vec::new(),
+            allow_zoom_other: false,
+        }
+    }
+
+    /// Declares one zoom level.
+    #[must_use]
+    pub fn matrix(mut self, matrix: TileMatrix) -> Self {
+        self.matrices.push(matrix);
+        self
+    }
+
+    /// Declares a set of zoom levels, in any order.
+    #[must_use]
+    pub fn matrices(mut self, matrices: impl IntoIterator<Item = TileMatrix>) -> Self {
+        self.matrices.extend(matrices);
+        self
+    }
+
+    /// Sets `gpkg_contents.identifier` (a human-readable name). Defaults to
+    /// the table name when left unset.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<String>) -> Self {
+        self.identifier = Some(identifier.into());
+        self
+    }
+
+    /// Sets `gpkg_contents.description`.
+    #[must_use]
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Allows zoom levels that do not step by factors of two, registering the
+    /// `gpkg_zoom_other` extension for the table.
+    ///
+    /// Off by default. Without it, such zoom levels are an error rather than a
+    /// silent registration, because a ladder that does not double is usually a
+    /// mistake in the pixel sizes, and readers of a file that quietly registers
+    /// an extension may not support it. Such a pyramid is always *read* whether
+    /// or not this was set, as it is for the file's original writer.
+    #[must_use]
+    pub fn allow_zoom_other(mut self, allow: bool) -> Self {
+        self.allow_zoom_other = allow;
+        self
+    }
+
+    /// Returns the table name.
+    pub fn table_name(&self) -> &str {
+        &self.table_name
+    }
+}
+
 /// A transaction over one pyramid, with per-tile `put` and `delete`.
 ///
 /// You get one from [`TilePyramid::writer`]. Writes are staged in the
@@ -1014,14 +976,6 @@ pub struct TileCursor<'a> {
     params: Vec<rusqlite::types::Value>,
 }
 
-impl std::fmt::Debug for TileCursor<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TileCursor")
-            .field("parameters", &self.params.len())
-            .finish_non_exhaustive()
-    }
-}
-
 impl TileCursor<'_> {
     /// Runs the scan and walks its tiles.
     ///
@@ -1032,6 +986,14 @@ impl TileCursor<'_> {
             .stmt
             .query(rusqlite::params_from_iter(self.params.iter()))?;
         Ok(TileStream { rows })
+    }
+}
+
+impl std::fmt::Debug for TileCursor<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TileCursor")
+            .field("parameters", &self.params.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -1066,14 +1028,6 @@ pub struct TileStream<'c> {
     rows: rusqlite::Rows<'c>,
 }
 
-impl std::fmt::Debug for TileStream<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `rusqlite::Rows` is not `Debug`, and a scan mid-flight has no state
-        // worth printing beyond the query that produced it.
-        f.debug_struct("TileStream").finish_non_exhaustive()
-    }
-}
-
 impl TileStream<'_> {
     /// Returns the next tile of the scan, or `None` at its end.
     ///
@@ -1106,6 +1060,52 @@ impl TileStream<'_> {
             f(&tile)?;
         }
         Ok(())
+    }
+}
+
+impl std::fmt::Debug for TileStream<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `rusqlite::Rows` is not `Debug`, and a scan mid-flight has no state
+        // worth printing beyond the query that produced it.
+        f.debug_struct("TileStream").finish_non_exhaustive()
+    }
+}
+
+/// One tile of a pyramid, borrowing its payload from the row it was read from.
+///
+/// The payload is the bytes as stored, in whatever format the table contains.
+/// This crate does not decode them. [`Tile::to_vec`] copies, and everything
+/// else here borrows.
+#[derive(Debug)]
+pub struct Tile<'a> {
+    coord: TileCoord,
+    data: &'a [u8],
+}
+
+impl Tile<'_> {
+    /// Returns where this tile sits in the pyramid.
+    pub fn coord(&self) -> TileCoord {
+        self.coord
+    }
+
+    /// Returns the stored payload, borrowed from SQLite's row buffer.
+    pub fn data(&self) -> &[u8] {
+        self.data
+    }
+
+    /// Returns the stored payload, copied into an owned buffer.
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.data.to_vec()
+    }
+
+    /// Returns what the payload's header declares: its encoding and pixel
+    /// size.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Tile`] when the bytes are not a readable image header.
+    pub fn probe(&self) -> Result<TilePayload> {
+        Ok(tiles::probe(self.data)?)
     }
 }
 
