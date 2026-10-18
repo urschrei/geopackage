@@ -596,7 +596,6 @@ pub fn geopackage::GeoPackage::table_extensions(&self, &str) -> geopackage::Resu
 impl geopackage::GeoPackage
 pub fn geopackage::GeoPackage::close(self) -> geopackage::Result<()>
 pub fn geopackage::GeoPackage::connection(&self) -> &rusqlite::Connection
-pub fn geopackage::GeoPackage::contents(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::ContentsEntry>>
 pub fn geopackage::GeoPackage::create<P: core::convert::AsRef<std::path::Path>>(P) -> geopackage::Result<Self>
 pub fn geopackage::GeoPackage::from_connection(rusqlite::Connection) -> geopackage::Result<Self>
 pub fn geopackage::GeoPackage::into_connection(self) -> rusqlite::Connection
@@ -605,6 +604,8 @@ pub fn geopackage::GeoPackage::open_read_only<P: core::convert::AsRef<std::path:
 pub fn geopackage::GeoPackage::version(&self) -> geopackage_core::version::GpkgVersion
 impl geopackage::GeoPackage
 pub fn geopackage::GeoPackage::column_values(&self, &str, &str, geopackage::ConversionOptions) -> geopackage::Result<alloc::vec::Vec<geopackage::Value>>
+impl geopackage::GeoPackage
+pub fn geopackage::GeoPackage::contents(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::ContentsEntry>>
 impl geopackage::GeoPackage
 pub fn geopackage::GeoPackage::coverage(&self, &str) -> geopackage::Result<geopackage::Coverage<'_>>
 pub fn geopackage::GeoPackage::coverages(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::Coverage<'_>>>

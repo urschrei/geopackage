@@ -52,75 +52,30 @@
 //! ```
 
 use geopackage_core::coverage::{
-    COVERAGE_ANCILLARY_TABLE, COVERAGE_DATA_TYPE, COVERAGE_EXTENSION_DEFINITION,
-    COVERAGE_EXTENSION_NAME, COVERAGE_EXTENSION_SCOPE, CoverageDatatype, CoveragePayload,
+    COVERAGE_ANCILLARY_TABLE, COVERAGE_DATA_TYPE, CoverageDatatype, CoveragePayload,
     TILE_ANCILLARY_TABLE, coverage_payload,
 };
-use geopackage_core::ddl;
 use geopackage_core::ident::quote;
-use geopackage_core::tiles::{self, TileCoord, TileMatrix, TileMatrixSet};
-use rusqlite::{CachedStatement, Connection, OptionalExtension};
+use geopackage_core::tiles::{TileCoord, TileMatrix, TileMatrixSet};
+use rusqlite::OptionalExtension;
 
-use crate::tiles::{PyramidSpec, TileCursor, TilePyramid};
-use crate::transaction::{WriteTransaction, in_savepoint};
+use crate::tiles::{TileCursor, TilePyramid};
 use crate::{BoundingBox, Error, GeoPackage, Result, table_exists};
 
+mod ancillary;
+mod create;
 #[cfg(feature = "coverage-samples")]
 mod samples;
+mod write;
+
 #[cfg(feature = "coverage-samples")]
 pub use geopackage_core::coverage::{Interpolation, SampleStatistics, TileSamples};
 #[cfg(feature = "coverage-samples")]
 pub use samples::CoverageSampler;
 
+pub use create::CoverageBuilder;
 pub use geopackage_core::coverage::{CoverageAncillary, TileAncillary};
-
-impl GeoPackage {
-    /// Opens an existing tiled gridded coverage by `gpkg_contents` name.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::NoSuchLayer`] if `name` is not in `gpkg_contents`.
-    /// - [`Error::WrongDataType`] if its `data_type` is not
-    ///   `2d-gridded-coverage`. Use [`GeoPackage::tiles`] for a tile pyramid.
-    /// - [`Error::NoTileMatrixSet`] if its `gpkg_tile_matrix_set` row is
-    ///   missing. Without the row, the tiles have no location.
-    /// - [`Error::NoCoverageAncillary`] if its
-    ///   `gpkg_2d_gridded_coverage_ancillary` row is missing. Without the row,
-    ///   the samples have no meaning.
-    pub fn coverage(&self, name: &str) -> Result<Coverage<'_>> {
-        let pyramid = self.open_pyramid(name, COVERAGE_DATA_TYPE)?;
-        let ancillary = read_coverage_ancillary(self, pyramid.table_name())?.ok_or_else(|| {
-            Error::NoCoverageAncillary {
-                table_name: pyramid.table_name().to_owned(),
-            }
-        })?;
-        Ok(Coverage { pyramid, ancillary })
-    }
-
-    /// Returns all tiled gridded coverages in the file, in order of
-    /// `gpkg_contents` name.
-    ///
-    /// Returns coverages only. [`GeoPackage::tile_pyramids`] returns tile
-    /// pyramids, and neither function returns the tables of the other.
-    ///
-    /// # Errors
-    ///
-    /// [`Error`] if the catalogue cannot be read, or if a coverage in the
-    /// catalogue cannot be opened.
-    pub fn coverages(&self) -> Result<Vec<Coverage<'_>>> {
-        if !table_exists(self.connection(), COVERAGE_ANCILLARY_TABLE)? {
-            return Ok(Vec::new());
-        }
-        let names: Vec<String> = {
-            let mut stmt = self.connection().prepare(
-                "SELECT table_name FROM gpkg_contents WHERE data_type = ?1 ORDER BY table_name",
-            )?;
-            stmt.query_map([COVERAGE_DATA_TYPE], |row| row.get(0))?
-                .collect::<rusqlite::Result<_>>()?
-        };
-        names.iter().map(|name| self.coverage(name)).collect()
-    }
-}
+pub use write::CoverageWriter;
 
 /// An open tiled gridded coverage.
 ///
@@ -370,6 +325,54 @@ impl std::fmt::Debug for Coverage<'_> {
     }
 }
 
+impl GeoPackage {
+    /// Opens an existing tiled gridded coverage by `gpkg_contents` name.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NoSuchLayer`] if `name` is not in `gpkg_contents`.
+    /// - [`Error::WrongDataType`] if its `data_type` is not
+    ///   `2d-gridded-coverage`. Use [`GeoPackage::tiles`] for a tile pyramid.
+    /// - [`Error::NoTileMatrixSet`] if its `gpkg_tile_matrix_set` row is
+    ///   missing. Without the row, the tiles have no location.
+    /// - [`Error::NoCoverageAncillary`] if its
+    ///   `gpkg_2d_gridded_coverage_ancillary` row is missing. Without the row,
+    ///   the samples have no meaning.
+    pub fn coverage(&self, name: &str) -> Result<Coverage<'_>> {
+        let pyramid = self.open_pyramid(name, COVERAGE_DATA_TYPE)?;
+        let ancillary = read_coverage_ancillary(self, pyramid.table_name())?.ok_or_else(|| {
+            Error::NoCoverageAncillary {
+                table_name: pyramid.table_name().to_owned(),
+            }
+        })?;
+        Ok(Coverage { pyramid, ancillary })
+    }
+
+    /// Returns all tiled gridded coverages in the file, in order of
+    /// `gpkg_contents` name.
+    ///
+    /// Returns coverages only. [`GeoPackage::tile_pyramids`] returns tile
+    /// pyramids, and neither function returns the tables of the other.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] if the catalogue cannot be read, or if a coverage in the
+    /// catalogue cannot be opened.
+    pub fn coverages(&self) -> Result<Vec<Coverage<'_>>> {
+        if !table_exists(self.connection(), COVERAGE_ANCILLARY_TABLE)? {
+            return Ok(Vec::new());
+        }
+        let names: Vec<String> = {
+            let mut stmt = self.connection().prepare(
+                "SELECT table_name FROM gpkg_contents WHERE data_type = ?1 ORDER BY table_name",
+            )?;
+            stmt.query_map([COVERAGE_DATA_TYPE], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        names.iter().map(|name| self.coverage(name)).collect()
+    }
+}
+
 /// Reads the `gpkg_2d_gridded_coverage_ancillary` row of a coverage.
 fn read_coverage_ancillary(
     gpkg: &GeoPackage,
@@ -402,691 +405,4 @@ fn read_coverage_ancillary(
             },
         )
         .optional()?)
-}
-
-/// A declarative builder for a tiled gridded coverage.
-///
-/// Declares the grid, as [`crate::TilePyramidBuilder`] does, and what the
-/// samples mean: the `datatype` (Requirement 9), the scale and offset that
-/// convert a stored sample to a value, and the sentinel for "no data".
-///
-/// ```
-/// use geopackage::core::coverage::CoverageDatatype;
-/// use geopackage::core::tiles::{TileMatrixSet, ZoomLadder};
-/// use geopackage::{CoverageBuilder, GeoPackage};
-///
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let dir = tempfile::tempdir()?;
-/// let gpkg = GeoPackage::create(dir.path().join("dem.gpkg"))?;
-/// gpkg.add_epsg_srs(3857)?;
-///
-/// let matrix_set = TileMatrixSet::web_mercator_quad();
-/// let matrices = matrix_set.ladder(ZoomLadder::new(0, 2))?;
-/// let coverage = gpkg.create_coverage(
-///     &CoverageBuilder::new("elevation", matrix_set, CoverageDatatype::Float)
-///         .matrices(matrices)
-///         .data_null(-9999.0)
-///         .uom("m"),
-/// )?;
-///
-/// assert_eq!(coverage.datatype(), Some(CoverageDatatype::Float));
-/// assert_eq!(coverage.ancillary().data_null, Some(-9999.0));
-/// # Ok(()) }
-/// ```
-#[derive(Debug, Clone)]
-pub struct CoverageBuilder {
-    table_name: String,
-    matrix_set: TileMatrixSet,
-    matrices: Vec<TileMatrix>,
-    identifier: Option<String>,
-    description: Option<String>,
-    datatype: CoverageDatatype,
-    scale: f64,
-    offset: f64,
-    precision: Option<f64>,
-    data_null: Option<f64>,
-    grid_cell_encoding: Option<String>,
-    uom: Option<String>,
-    field_name: Option<String>,
-    quantity_definition: Option<String>,
-    allow_zoom_other: bool,
-}
-
-impl CoverageBuilder {
-    /// Starts a coverage over `matrix_set`, with samples of type `datatype`.
-    ///
-    /// The scale and offset are 1.0 and 0.0 by default. Requirement 11
-    /// specifies these values for a `float` coverage. An `integer` coverage
-    /// uses them until [`CoverageBuilder::scale`] sets other values.
-    pub fn new(
-        table_name: impl Into<String>,
-        matrix_set: TileMatrixSet,
-        datatype: CoverageDatatype,
-    ) -> Self {
-        Self {
-            table_name: table_name.into(),
-            matrix_set,
-            matrices: Vec::new(),
-            identifier: None,
-            description: None,
-            datatype,
-            scale: 1.0,
-            offset: 0.0,
-            precision: None,
-            data_null: None,
-            grid_cell_encoding: None,
-            uom: None,
-            field_name: None,
-            quantity_definition: None,
-            allow_zoom_other: false,
-        }
-    }
-
-    /// Adds one zoom level.
-    #[must_use]
-    pub fn matrix(mut self, matrix: TileMatrix) -> Self {
-        self.matrices.push(matrix);
-        self
-    }
-
-    /// Adds zoom levels, as [`TileMatrixSet::ladder`] produces them.
-    #[must_use]
-    pub fn matrices(mut self, matrices: impl IntoIterator<Item = TileMatrix>) -> Self {
-        self.matrices.extend(matrices);
-        self
-    }
-
-    /// Sets the `gpkg_contents.identifier`, which defaults to the table name.
-    #[must_use]
-    pub fn identifier(mut self, identifier: impl Into<String>) -> Self {
-        self.identifier = Some(identifier.into());
-        self
-    }
-
-    /// Sets the `gpkg_contents.description`.
-    #[must_use]
-    pub fn description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    /// Sets the scale and offset for the coverage.
-    ///
-    /// For a `float` coverage, [`GeoPackage::create_coverage`] rejects values
-    /// other than the defaults (Requirement 11).
-    #[must_use]
-    pub fn scale(mut self, scale: f64, offset: f64) -> Self {
-        self.scale = scale;
-        self.offset = offset;
-        self
-    }
-
-    /// Sets the smallest difference between two values that the coverage
-    /// distinguishes.
-    #[must_use]
-    pub fn precision(mut self, precision: f64) -> Self {
-        self.precision = Some(precision);
-        self
-    }
-
-    /// Sets the stored sample that means "no data".
-    ///
-    /// The value cannot be NaN: SQLite stores NaN as NULL, which in this column
-    /// means that there is no such sample, so [`GeoPackage::create_coverage`]
-    /// rejects it.
-    #[must_use]
-    pub fn data_null(mut self, data_null: f64) -> Self {
-        self.data_null = Some(data_null);
-        self
-    }
-
-    /// Sets the position of the value in a cell, for example
-    /// `grid-value-is-center`.
-    #[must_use]
-    pub fn grid_cell_encoding(mut self, encoding: impl Into<String>) -> Self {
-        self.grid_cell_encoding = Some(encoding.into());
-        self
-    }
-
-    /// Sets the unit of measure.
-    #[must_use]
-    pub fn uom(mut self, uom: impl Into<String>) -> Self {
-        self.uom = Some(uom.into());
-        self
-    }
-
-    /// Sets the field name, which the table definition defaults to `Height`.
-    #[must_use]
-    pub fn field_name(mut self, field_name: impl Into<String>) -> Self {
-        self.field_name = Some(field_name.into());
-        self
-    }
-
-    /// Sets the definition of the quantity that the field measures.
-    #[must_use]
-    pub fn quantity_definition(mut self, definition: impl Into<String>) -> Self {
-        self.quantity_definition = Some(definition.into());
-        self
-    }
-
-    /// Allows zoom levels that do not step by factors of two, and registers
-    /// `gpkg_zoom_other` (Annex F.6).
-    #[must_use]
-    pub fn allow_zoom_other(mut self, allow: bool) -> Self {
-        self.allow_zoom_other = allow;
-        self
-    }
-
-    /// Returns the table name of the coverage that this builder creates.
-    pub fn table_name(&self) -> &str {
-        &self.table_name
-    }
-}
-
-impl GeoPackage {
-    /// Creates a tiled gridded coverage from a [`CoverageBuilder`].
-    ///
-    /// Writes the same rows as a tile pyramid, with the `data_type`
-    /// `2d-gridded-coverage` (Requirement 5). Also writes the two ancillary
-    /// tables (Requirements 1 and 2), the ancillary row of the coverage
-    /// (Requirement 7) and the three `gpkg_extensions` rows (Requirement 6), in
-    /// one transaction.
-    ///
-    /// Adds the EPSG:4979 row that Requirement 3 specifies, if the file does not
-    /// have it. A geographic 3D CRS has no WKT1 form, so this also adds the
-    /// `gpkg_crs_wkt` extension column.
-    ///
-    /// # Per-tile statistics
-    ///
-    /// The file contains per-tile statistics only if they are written. `min`,
-    /// `max`, `mean` and `std_dev` come from the samples, and the table
-    /// definition makes all four optional. Supply them through
-    /// [`CoverageWriter::put_with_ancillary`], or, with the `coverage-samples`
-    /// feature, have [`CoverageWriter::put_with_statistics`] calculate them.
-    ///
-    /// # Errors
-    ///
-    /// Those of [`GeoPackage::create_tile_pyramid`],
-    /// [`Error::FloatCoverageScaled`] if a `float` coverage has a scale or
-    /// offset other than the defaults (Requirement 11), and
-    /// [`Error::NanAncillaryValue`] if the scale, offset, precision or
-    /// `data_null` is NaN.
-    pub fn create_coverage(&self, builder: &CoverageBuilder) -> Result<Coverage<'_>> {
-        let spec = PyramidSpec {
-            table_name: &builder.table_name,
-            matrix_set: &builder.matrix_set,
-            matrices: &builder.matrices,
-            identifier: builder.identifier.as_deref(),
-            description: builder.description.as_deref(),
-            data_type: COVERAGE_DATA_TYPE,
-            allow_zoom_other: builder.allow_zoom_other,
-        };
-        let zoom_other = self.check_new_pyramid(&spec)?;
-        check_float_defaults(
-            builder.datatype,
-            builder.scale,
-            builder.offset,
-            &builder.table_name,
-        )?;
-        check_not_nan(
-            &builder.table_name,
-            &[
-                (
-                    "gpkg_2d_gridded_coverage_ancillary.scale",
-                    Some(builder.scale),
-                ),
-                (
-                    "gpkg_2d_gridded_coverage_ancillary.offset",
-                    Some(builder.offset),
-                ),
-                (
-                    "gpkg_2d_gridded_coverage_ancillary.precision",
-                    builder.precision,
-                ),
-                (
-                    "gpkg_2d_gridded_coverage_ancillary.data_null",
-                    builder.data_null,
-                ),
-            ],
-        )?;
-
-        let conn = self.connection();
-        let tx = WriteTransaction::begin(conn)?;
-        self.write_pyramid(&spec, zoom_other)?;
-        // Requirement 3: a file that complies with this extension contains the
-        // EPSG:4979 row, whether or not a coverage uses it. The requirement is
-        // about the file, so the creation of a coverage adds the row. 4979 is
-        // geographic 3D and has no WKT1 form, so the registration also adds
-        // the `gpkg_crs_wkt` extension column. GDAL writes the same row and
-        // column.
-        self.add_epsg_srs(COVERAGE_VERTICAL_SRS_ID)?;
-        for (exists, sql) in [
-            (
-                table_exists(conn, COVERAGE_ANCILLARY_TABLE)?,
-                ddl::CREATE_GPKG_2D_GRIDDED_COVERAGE_ANCILLARY,
-            ),
-            (
-                table_exists(conn, TILE_ANCILLARY_TABLE)?,
-                ddl::CREATE_GPKG_2D_GRIDDED_TILE_ANCILLARY,
-            ),
-        ] {
-            if !exists {
-                conn.execute_batch(sql)?;
-            }
-        }
-        conn.execute(
-            &format!(
-                "INSERT INTO {COVERAGE_ANCILLARY_TABLE} \
-                 (tile_matrix_set_name, datatype, scale, offset, precision, data_null, \
-                  grid_cell_encoding, uom, field_name, quantity_definition) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
-            ),
-            rusqlite::params![
-                builder.table_name,
-                builder.datatype.as_str(),
-                builder.scale,
-                builder.offset,
-                builder.precision,
-                builder.data_null,
-                builder.grid_cell_encoding,
-                builder.uom,
-                builder.field_name,
-                builder.quantity_definition,
-            ],
-        )?;
-        // Requirement 6: one row for each ancillary table, and one for the
-        // payload column of the coverage.
-        for (table, column) in [
-            (COVERAGE_ANCILLARY_TABLE, None),
-            (TILE_ANCILLARY_TABLE, None),
-            (builder.table_name.as_str(), Some(tiles::TILE_DATA_COLUMN)),
-        ] {
-            crate::extensions::register_if_absent(
-                conn,
-                Some(table),
-                column,
-                COVERAGE_EXTENSION_NAME,
-                COVERAGE_EXTENSION_DEFINITION,
-                COVERAGE_EXTENSION_SCOPE,
-            )?;
-        }
-        tx.commit()?;
-        self.coverage(&builder.table_name)
-    }
-}
-
-/// The EPSG code that Requirement 3 specifies for every coverage file: WGS 84
-/// 3D, the geographic 3D CRS that vertical values refer to.
-const COVERAGE_VERTICAL_SRS_ID: i32 = 4979;
-
-/// Requirement 11: "When the datatype of the corresponding
-/// `gpkg_2d_gridded_coverage_ancillary` row is _float_, the `scale` and
-/// `offset` values _SHALL_ be set to the defaults."
-#[expect(
-    clippy::float_cmp,
-    reason = "the requirement says \"set to the defaults\", which is exactly 1.0 and 0.0; a tolerance would accept values it does not"
-)]
-fn check_float_defaults(
-    datatype: CoverageDatatype,
-    scale: f64,
-    offset: f64,
-    table_name: &str,
-) -> Result<()> {
-    if datatype == CoverageDatatype::Float && (scale != 1.0 || offset != 0.0) {
-        return Err(Error::FloatCoverageScaled {
-            table_name: table_name.to_owned(),
-            scale,
-            offset,
-        });
-    }
-    Ok(())
-}
-
-/// Rejects a NaN in an ancillary row, which SQLite would store as NULL.
-/// `values` pairs each column, qualified by its table, with its value.
-fn check_not_nan(table_name: &str, values: &[(&'static str, Option<f64>)]) -> Result<()> {
-    for &(column, value) in values {
-        if value.is_some_and(f64::is_nan) {
-            return Err(Error::NanAncillaryValue {
-                table_name: table_name.to_owned(),
-                column,
-            });
-        }
-    }
-    Ok(())
-}
-
-impl<'a> Coverage<'a> {
-    /// Writes one tile and its ancillary row, in a separate transaction.
-    ///
-    /// The ancillary row has the default scale and offset, and no statistics.
-    /// Use [`CoverageWriter::put_with_ancillary`] to supply them.
-    ///
-    /// # Errors
-    ///
-    /// As [`CoverageWriter::put`].
-    pub fn put_tile(&self, coord: TileCoord, data: &[u8]) -> Result<()> {
-        let mut writer = self.writer()?;
-        writer.put(coord, data)?;
-        writer.commit()
-    }
-
-    /// Deletes one tile and its ancillary row. Returns `true` if there was a
-    /// tile to delete.
-    ///
-    /// # Errors
-    ///
-    /// [`Error`] if the rows cannot be deleted.
-    pub fn delete_tile(&self, coord: TileCoord) -> Result<bool> {
-        let mut writer = self.writer()?;
-        let deleted = writer.delete(coord)?;
-        writer.commit()?;
-        Ok(deleted)
-    }
-
-    /// Opens a [`CoverageWriter`]: one transaction, prepared statements, and
-    /// per-tile `put` and `delete` operations that keep the two tables
-    /// consistent.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::UnsupportedExtension`] if an extension this crate cannot
-    /// identify covers the coverage ([`GeoPackage::blocking_extension`]), and
-    /// [`Error`] if the transaction cannot be opened or the statements
-    /// prepared.
-    pub fn writer(&self) -> Result<CoverageWriter<'a>> {
-        CoverageWriter::new(self)
-    }
-}
-
-/// A transaction over one coverage, with per-tile `put` and `delete`
-/// operations that maintain the ancillary rows of Requirement 10.
-///
-/// You get one from [`Coverage::writer`]. The writer writes a tile and its
-/// ancillary row together, and deletes them together. The normative table
-/// definition has no `ON DELETE CASCADE`, so the database does not delete the
-/// row. A tile without its row loses the scale and offset that give its samples
-/// a meaning.
-pub struct CoverageWriter<'conn> {
-    tx: WriteTransaction<'conn>,
-    conn: &'conn Connection,
-    table_name: String,
-    datatype: Option<CoverageDatatype>,
-    /// The coverage row, for the statistics of
-    /// [`CoverageWriter::put_with_statistics`], which are in values and so
-    /// need the scale, offset and `data_null` of the coverage.
-    #[cfg(feature = "coverage-samples")]
-    ancillary: CoverageAncillary,
-    /// See [`crate::OpenOptions::max_decoded_samples`].
-    #[cfg(feature = "coverage-samples")]
-    max_decoded_samples: usize,
-    /// The zoom levels of the coverage, ascending. Copied as
-    /// [`crate::TileWriter`] copies the zoom levels of a pyramid, for the same
-    /// reason.
-    matrices: Vec<TileMatrix>,
-    put_stmt: CachedStatement<'conn>,
-    tile_id_stmt: CachedStatement<'conn>,
-    put_ancillary_stmt: CachedStatement<'conn>,
-    delete_stmt: CachedStatement<'conn>,
-    delete_ancillary_stmt: CachedStatement<'conn>,
-    dirty: bool,
-}
-
-impl<'conn> CoverageWriter<'conn> {
-    /// Returns the zoom level of `coord`, after checking that the address is
-    /// inside its grid.
-    fn matrix_at(&self, coord: TileCoord) -> Result<&TileMatrix> {
-        let matrix = self
-            .matrices
-            .binary_search_by_key(&coord.zoom_level, |matrix| matrix.zoom_level)
-            .ok()
-            .and_then(|index| self.matrices.get(index))
-            .ok_or_else(|| Error::UnknownZoomLevel {
-                table_name: self.table_name.clone(),
-                zoom_level: coord.zoom_level,
-            })?;
-        matrix.check_contains(coord.column, coord.row)?;
-        Ok(matrix)
-    }
-
-    fn new(coverage: &Coverage<'conn>) -> Result<Self> {
-        coverage.gpkg().check_writable(coverage.table_name())?;
-        let conn = coverage.gpkg().connection();
-        let table = quote(coverage.table_name())?;
-        let address = "zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3";
-        let tx = WriteTransaction::begin(conn)?;
-        Ok(Self {
-            tx,
-            conn,
-            table_name: coverage.table_name().to_owned(),
-            datatype: coverage.datatype(),
-            #[cfg(feature = "coverage-samples")]
-            ancillary: coverage.ancillary().clone(),
-            #[cfg(feature = "coverage-samples")]
-            max_decoded_samples: coverage.gpkg().max_decoded_samples(),
-            matrices: coverage.matrices().to_vec(),
-            put_stmt: conn.prepare_cached(&format!(
-                "INSERT INTO {table} (zoom_level, tile_column, tile_row, tile_data) \
-                 VALUES (?1, ?2, ?3, ?4) \
-                 ON CONFLICT (zoom_level, tile_column, tile_row) \
-                 DO UPDATE SET tile_data = excluded.tile_data"
-            ))?,
-            // The id of the tile, read back with a SELECT and not returned by
-            // the insert. `RETURNING` needs SQLite 3.35, and this crate links
-            // the system SQLite by default (D1), so `RETURNING` would add a
-            // runtime requirement that nothing else in the workspace has.
-            // `last_insert_rowid` does not change when `ON CONFLICT DO UPDATE`
-            // updates a row, so it is not an alternative.
-            tile_id_stmt: conn
-                .prepare_cached(&format!("SELECT id FROM {table} WHERE {address}"))?,
-            put_ancillary_stmt: conn.prepare_cached(&format!(
-                "INSERT INTO {TILE_ANCILLARY_TABLE} \
-                 (tpudt_name, tpudt_id, scale, offset, min, max, mean, std_dev) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
-                 ON CONFLICT (tpudt_name, tpudt_id) DO UPDATE SET \
-                 scale = excluded.scale, offset = excluded.offset, min = excluded.min, \
-                 max = excluded.max, mean = excluded.mean, std_dev = excluded.std_dev"
-            ))?,
-            delete_stmt: conn.prepare_cached(&format!("DELETE FROM {table} WHERE {address}"))?,
-            delete_ancillary_stmt: conn.prepare_cached(&format!(
-                "DELETE FROM {TILE_ANCILLARY_TABLE} WHERE tpudt_name = ?1 COLLATE NOCASE \
-                 AND tpudt_id IN (SELECT id FROM {table} WHERE {address2})",
-                address2 = "zoom_level = ?2 AND tile_column = ?3 AND tile_row = ?4"
-            ))?,
-            dirty: false,
-        })
-    }
-
-    /// Writes one tile with a default ancillary row: scale 1.0, offset 0.0,
-    /// and no statistics.
-    ///
-    /// # Errors
-    ///
-    /// As [`CoverageWriter::put_with_ancillary`].
-    pub fn put(&mut self, coord: TileCoord, data: &[u8]) -> Result<()> {
-        self.put_with_ancillary(coord, data, &TileAncillary::defaults())
-    }
-
-    /// Writes one tile with the ancillary row you supply.
-    ///
-    /// If you decoded the samples, supply the statistics here. The table
-    /// definition makes the four statistics optional, and this function does
-    /// not decode samples, so it cannot calculate them.
-    /// [`CoverageWriter::put_with_statistics`], with the `coverage-samples`
-    /// feature, does.
-    ///
-    /// # Checks
-    ///
-    /// The payload is checked against the encoding profile (Requirements 15 to
-    /// 20, or 13 for PNG), the `datatype` of the coverage (Requirements 13 and
-    /// 14), and the pixel size of its zoom level. The writer rejects Deflate,
-    /// although a read accepts it, because Requirement 15 specifies baseline
-    /// TIFF and Deflate is not baseline.
-    ///
-    /// **This function does not check Requirement 21** ("all pixels … set with
-    /// a valid component value … NaN and Inf SHALL NOT be used"). That
-    /// requirement is about samples, and this function does not decode
-    /// samples. If you write a payload from another source, you are responsible
-    /// for it, or, with the `coverage-samples` feature,
-    /// [`CoverageWriter::put_with_statistics`] checks it.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::UnknownZoomLevel`] if the coverage declares no such level.
-    /// - [`Error::Tile`] if the address is outside the grid, or the payload
-    ///   breaks the profile, contradicts the `datatype`, or is the wrong size.
-    /// - [`Error::UnwritableCoveragePayload`] for a payload that a read accepts
-    ///   but a write does not.
-    /// - [`Error::FloatCoverageScaled`] if the ancillary row has a scale or
-    ///   offset other than the defaults on a `float` coverage (Requirement 11).
-    /// - [`Error::NanAncillaryValue`] if a value in the ancillary row is NaN.
-    pub fn put_with_ancillary(
-        &mut self,
-        coord: TileCoord,
-        data: &[u8],
-        ancillary: &TileAncillary,
-    ) -> Result<()> {
-        let matrix = self.matrix_at(coord)?;
-        let payload = coverage_payload(data)?;
-        if let Some(datatype) = self.datatype {
-            datatype.check_payload(&payload)?;
-        }
-        if let CoveragePayload::Tiff(tiff) = payload
-            && !tiff.compression.is_baseline()
-        {
-            return Err(Error::UnwritableCoveragePayload {
-                table_name: self.table_name.clone(),
-                reason: format!(
-                    "{:?} compression is a TIFF extension, and Requirement 15 specifies baseline TIFF",
-                    tiff.compression
-                ),
-            });
-        }
-        matrix.check_payload(&payload.tile_payload())?;
-        check_float_defaults(
-            self.datatype.unwrap_or(CoverageDatatype::Integer),
-            ancillary.scale,
-            ancillary.offset,
-            &self.table_name,
-        )?;
-        check_not_nan(
-            &self.table_name,
-            &[
-                (
-                    "gpkg_2d_gridded_tile_ancillary.scale",
-                    Some(ancillary.scale),
-                ),
-                (
-                    "gpkg_2d_gridded_tile_ancillary.offset",
-                    Some(ancillary.offset),
-                ),
-                ("gpkg_2d_gridded_tile_ancillary.min", ancillary.min),
-                ("gpkg_2d_gridded_tile_ancillary.max", ancillary.max),
-                ("gpkg_2d_gridded_tile_ancillary.mean", ancillary.mean),
-                ("gpkg_2d_gridded_tile_ancillary.std_dev", ancillary.std_dev),
-            ],
-        )?;
-
-        // The tile row and its ancillary row are written together or not at
-        // all, so a failed put leaves no tile without its row.
-        in_savepoint(self.conn, "coverage_put", || -> Result<()> {
-            self.put_stmt.execute(rusqlite::params![
-                coord.zoom_level,
-                coord.column,
-                coord.row,
-                data
-            ])?;
-            // Requirement 10: the ancillary row of the tile, with the id of the
-            // tile as its key.
-            let tile_id: i64 = self.tile_id_stmt.query_row(
-                rusqlite::params![coord.zoom_level, coord.column, coord.row],
-                |row| row.get(0),
-            )?;
-            self.put_ancillary_stmt.execute(rusqlite::params![
-                self.table_name,
-                tile_id,
-                ancillary.scale,
-                ancillary.offset,
-                ancillary.min,
-                ancillary.max,
-                ancillary.mean,
-                ancillary.std_dev,
-            ])?;
-            Ok(())
-        })?;
-        self.dirty = true;
-        Ok(())
-    }
-
-    /// Deletes one tile and its ancillary row. Returns `true` if there was a
-    /// tile to delete.
-    ///
-    /// Deletes the ancillary row first, because the delete finds that row
-    /// through the tile.
-    ///
-    /// # Errors
-    ///
-    /// [`Error`] if either delete fails.
-    pub fn delete(&mut self, coord: TileCoord) -> Result<bool> {
-        self.delete_ancillary_stmt.execute(rusqlite::params![
-            self.table_name,
-            coord.zoom_level,
-            coord.column,
-            coord.row
-        ])?;
-        let deleted = self.delete_stmt.execute(rusqlite::params![
-            coord.zoom_level,
-            coord.column,
-            coord.row
-        ])?;
-        self.dirty |= deleted > 0;
-        Ok(deleted > 0)
-    }
-
-    /// Updates `gpkg_contents.last_change` and commits.
-    ///
-    /// Behaves as [`crate::TileWriter::commit`] does, also when the caller owns
-    /// the transaction.
-    ///
-    /// # Errors
-    ///
-    /// [`Error`] if the commit fails.
-    pub fn commit(self) -> Result<()> {
-        let Self {
-            tx,
-            conn,
-            table_name,
-            dirty,
-            put_stmt,
-            tile_id_stmt,
-            put_ancillary_stmt,
-            delete_stmt,
-            delete_ancillary_stmt,
-            ..
-        } = self;
-        drop(put_stmt);
-        drop(tile_id_stmt);
-        drop(put_ancillary_stmt);
-        drop(delete_stmt);
-        drop(delete_ancillary_stmt);
-        if dirty {
-            conn.execute(
-                "UPDATE gpkg_contents \
-                 SET last_change = strftime('%Y-%m-%dT%H:%M:%fZ','now') \
-                 WHERE table_name = ?1",
-                [&table_name],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-}
-
-impl std::fmt::Debug for CoverageWriter<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CoverageWriter")
-            .field("table_name", &self.table_name)
-            .field("datatype", &self.datatype)
-            .finish_non_exhaustive()
-    }
 }
