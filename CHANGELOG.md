@@ -60,6 +60,13 @@ While the version is below 1.0 the API may change in any release.
   `#[non_exhaustive]`, so code outside the crates builds them with `new` and
   field assignment rather than a struct literal.
 
+### Fixed
+
+- `geopackage-ffi` no longer exports the Rust methods of its handle types,
+  other than `Container::gpkg`. Safe Rust could use them to drop a
+  `Container` while a `LayerHandle` or `TilesHandle` still pointed into it.
+  The C ABI does not change.
+
 ## [0.12.0] - 2026-10-16
 
 ### Added
