@@ -440,11 +440,11 @@ pub fn geopackage::ConversionOptions::with_storage(self, geopackage::StorageStri
 pub struct geopackage::Coverage<'a>
 impl<'a> geopackage::Coverage<'a>
 pub fn geopackage::Coverage<'a>::ancillary(&self) -> &geopackage_core::coverage::ancillary::CoverageAncillary
-pub fn geopackage::Coverage<'a>::check_payload(&self, &[u8]) -> geopackage::Result<geopackage_core::coverage::CoveragePayload>
+pub fn geopackage::Coverage<'a>::check_payload(&self, &[u8]) -> geopackage::Result<geopackage_core::coverage::payload::CoveragePayload>
 pub fn geopackage::Coverage<'a>::cursor(&self) -> geopackage::Result<geopackage::TileCursor<'_>>
 pub fn geopackage::Coverage<'a>::cursor_at(&self, i64) -> geopackage::Result<geopackage::TileCursor<'_>>
 pub fn geopackage::Coverage<'a>::cursor_in(&self, i64, geopackage::BoundingBox) -> geopackage::Result<geopackage::TileCursor<'_>>
-pub fn geopackage::Coverage<'a>::datatype(&self) -> core::option::Option<geopackage_core::coverage::CoverageDatatype>
+pub fn geopackage::Coverage<'a>::datatype(&self) -> core::option::Option<geopackage_core::coverage::payload::CoverageDatatype>
 pub fn geopackage::Coverage<'a>::get_tile(&self, geopackage_core::tiles::TileCoord) -> geopackage::Result<core::option::Option<alloc::vec::Vec<u8>>>
 pub fn geopackage::Coverage<'a>::get_tile_into(&self, geopackage_core::tiles::TileCoord, &mut alloc::vec::Vec<u8>) -> geopackage::Result<bool>
 pub fn geopackage::Coverage<'a>::gpkg(&self) -> &'a geopackage::GeoPackage
@@ -483,7 +483,7 @@ pub fn geopackage::CoverageBuilder::grid_cell_encoding(self, impl core::convert:
 pub fn geopackage::CoverageBuilder::identifier(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn geopackage::CoverageBuilder::matrices(self, impl core::iter::traits::collect::IntoIterator<Item = geopackage_core::tiles::TileMatrix>) -> Self
 pub fn geopackage::CoverageBuilder::matrix(self, geopackage_core::tiles::TileMatrix) -> Self
-pub fn geopackage::CoverageBuilder::new(impl core::convert::Into<alloc::string::String>, geopackage_core::tiles::TileMatrixSet, geopackage_core::coverage::CoverageDatatype) -> Self
+pub fn geopackage::CoverageBuilder::new(impl core::convert::Into<alloc::string::String>, geopackage_core::tiles::TileMatrixSet, geopackage_core::coverage::payload::CoverageDatatype) -> Self
 pub fn geopackage::CoverageBuilder::precision(self, f64) -> Self
 pub fn geopackage::CoverageBuilder::quantity_definition(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn geopackage::CoverageBuilder::scale(self, f64, f64) -> Self
