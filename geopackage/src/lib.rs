@@ -501,6 +501,17 @@
 // `geopackage-ffi` crate is the sole exception, and opts out of the workspace
 // lints rather than relaxing them here.
 
+// The documentation links to the API that `coverage-samples` adds. Without the
+// feature those items do not exist, so the links cannot resolve. CI and docs.rs
+// build the documentation with every feature, which checks each link.
+#![cfg_attr(
+    not(feature = "coverage-samples"),
+    expect(
+        rustdoc::broken_intra_doc_links,
+        reason = "links to the coverage-samples API resolve only with that feature"
+    )
+)]
+
 #[cfg(feature = "arrow")]
 pub mod arrow;
 #[cfg(doctest)]
