@@ -10,12 +10,15 @@
 //!   lookups.
 //! - **Per-tile statistics**: [`Coverage::statistics`], and
 //!   [`CoverageWriter::put_with_statistics`], which records them on write.
-//! - **Requirement 21** (no NaN or infinite samples): [`Coverage::check_samples`],
-//!   the writer above, and [`GeoPackage::validate`](crate::GeoPackage::validate).
+//! - **[Requirement 21]** (no NaN or infinite samples):
+//!   [`Coverage::check_samples`], the writer above, and
+//!   [`GeoPackage::validate`](crate::GeoPackage::validate).
 //!
 //! The decode, the statistics and the arithmetic of a lookup are format rules,
 //! and are in [`geopackage_core::coverage`], whose feature of the same name
 //! this one turns on. This module reads the tiles they need.
+//!
+//! [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
 
 use std::collections::VecDeque;
 
@@ -85,7 +88,7 @@ impl<'a> Coverage<'a> {
         )?)
     }
 
-    /// Checks Requirement 21: "Special floating point values such as NaN and
+    /// Checks [Requirement 21]: "Special floating point values such as NaN and
     /// Inf SHALL NOT be used".
     ///
     /// Integer samples cannot break the requirement, so only a `float`
@@ -96,6 +99,8 @@ impl<'a> Coverage<'a> {
     /// [`Error::Tile`] with
     /// [`TileError::CoverageProfileViolation`](crate::core::TileError::CoverageProfileViolation) for Requirement 21, naming the
     /// first sample that breaks it.
+    ///
+    /// [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
     pub fn check_samples(&self, samples: &TileSamples) -> Result<()> {
         Ok(samples.check_finite()?)
     }
@@ -277,7 +282,7 @@ impl std::fmt::Debug for CoverageSampler<'_> {
 
 impl CoverageWriter<'_> {
     /// Writes one tile with statistics calculated from its samples, after
-    /// checking Requirement 21.
+    /// checking [Requirement 21].
     ///
     /// Checks the payload's size against its zoom level, decodes it, rejects
     /// a NaN or infinite sample, and records the
@@ -293,6 +298,8 @@ impl CoverageWriter<'_> {
     ///   Requirement 21.
     /// - [`Error::Tile`] with [`TileError::UnreadablePayload`](crate::core::TileError::UnreadablePayload) or
     ///   [`TileError::PayloadTooLarge`](crate::core::TileError::PayloadTooLarge), as for [`Coverage::decode`].
+    ///
+    /// [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
     pub fn put_with_statistics(
         &mut self,
         coord: TileCoord,

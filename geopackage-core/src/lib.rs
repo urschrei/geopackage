@@ -67,8 +67,10 @@
 //!   a parsed geometry to a `geo-types` geometry. The [`geo_traits`]
 //!   implementation doesn't need it
 //! - **`coverage-samples`**: Decodes the samples of tiled gridded coverage
-//!   tiles, for Requirement 21, per-tile statistics and value lookups. Adds
+//!   tiles, for [Requirement 21], per-tile statistics and value lookups. Adds
 //!   dependencies on `tiff` and `png`. Image tiles are never decoded
+//!
+//! [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
 
 // `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
 // workspace lints table (root Cargo.toml). This crate never uses `unsafe`; the

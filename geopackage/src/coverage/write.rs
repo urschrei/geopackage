@@ -168,8 +168,8 @@ impl<'conn> CoverageWriter<'conn> {
     /// although a read accepts it, because Requirement 15 specifies baseline
     /// TIFF and Deflate is not baseline.
     ///
-    /// **This function does not check Requirement 21** ("all pixels … set with
-    /// a valid component value … NaN and Inf SHALL NOT be used"). That
+    /// **This function does not check [Requirement 21]** ("all pixels … set
+    /// with a valid component value … NaN and Inf SHALL NOT be used"). That
     /// requirement is about samples, and this function does not decode
     /// samples. If you write a payload from another source, you are responsible
     /// for it, or, with the `coverage-samples` feature,
@@ -185,6 +185,8 @@ impl<'conn> CoverageWriter<'conn> {
     /// - [`Error::FloatCoverageScaled`] if the ancillary row has a scale or
     ///   offset other than the defaults on a `float` coverage (Requirement 11).
     /// - [`Error::NanAncillaryValue`] if a value in the ancillary row is NaN.
+    ///
+    /// [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
     pub fn put_with_ancillary(
         &mut self,
         coord: TileCoord,

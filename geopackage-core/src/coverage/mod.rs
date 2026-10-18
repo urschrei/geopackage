@@ -26,8 +26,8 @@
 //! [`CoverageDatatype::check_payload`] compares a payload with the `datatype`
 //! of its coverage.
 //!
-//! **The header checks do not check Requirement 21.** "All pixels in a tile of
-//! coverage data _SHALL_ be set with a valid component value … Special
+//! **The header checks do not check [Requirement 21].** "All pixels in a tile
+//! of coverage data _SHALL_ be set with a valid component value … Special
 //! floating point values such as NaN and Inf SHALL NOT be used" is a statement
 //! about samples, and checking samples needs a decoder. A payload that the
 //! header checks accept satisfies the structural requirements only.
@@ -56,6 +56,8 @@
 //! followed. A tag whose value does not fit in its entry is not read. This does
 //! not change any result, because each tag that the profile constrains is a
 //! single number.
+//!
+//! [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
 
 mod ancillary;
 mod extension;

@@ -80,7 +80,7 @@ pub struct CoverageTiff {
 ///
 /// Reads the file header and the first IFD, and no pixel data. The result
 /// contains the values that the payload *declares*. This function does not
-/// check Requirement 21, which applies to the samples.
+/// check [Requirement 21], which applies to the samples.
 ///
 /// The checks run in the order 15, 19, 20, 16, 17, 18. The structure is
 /// checked before the sample description, so a payload with the wrong
@@ -109,6 +109,8 @@ pub struct CoverageTiff {
 ///     Err(TileError::CoverageProfileViolation { requirement: 15, .. })
 /// ));
 /// ```
+///
+/// [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
 pub fn coverage_tiff(bytes: &[u8]) -> Result<CoverageTiff, TileError> {
     // Requirement 15 first. BigTIFF has a 16-byte header and 20-byte entries,
     // so it is a different format. The walk below cannot read it, and the

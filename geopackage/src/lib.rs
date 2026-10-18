@@ -231,7 +231,7 @@
 //! decoded yourself. With the `coverage-samples` feature,
 //! [`Coverage::value_at`] returns the value at a position, with nearest or
 //! bilinear interpolation, [`Coverage::statistics`] calculates a tile's
-//! statistics, and [`Coverage::check_samples`] checks Requirement 21 (no NaN
+//! statistics, and [`Coverage::check_samples`] checks [Requirement 21] (no NaN
 //! or infinite samples).
 //!
 //! # Arrow
@@ -471,7 +471,7 @@
 //! - **`arrow`**: Arrow record batch I/O. Adds dependencies on `arrow-array`
 //!   and `arrow-schema`
 //! - **`coverage-samples`**: Decode the samples of tiled gridded coverage
-//!   tiles, for value lookups, per-tile statistics and Requirement 21. Turns
+//!   tiles, for value lookups, per-tile statistics and [Requirement 21]. Turns
 //!   on `geopackage-core`'s feature of the same name, which holds the decode
 //!   and adds dependencies on `tiff` and `png`
 //! - **`bundled`**: Compile and statically link a vendored SQLite instead of
@@ -495,6 +495,8 @@
 //! Debian and Ubuntu; macOS includes them), and SQLite must be built with the
 //! RTree module. Opening a file checks this, and returns
 //! [`Error::RtreeUnavailable`] if the module is missing.
+//!
+//! [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
 
 // `unsafe_code = "forbid"` and `missing_docs = "warn"` come from the
 // workspace lints table (root Cargo.toml). This crate never uses `unsafe`; the

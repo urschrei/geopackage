@@ -125,8 +125,10 @@ Only `geopackage-ffi` uses `unsafe`.
   offset and null value can be applied to samples you decode yourself. The
   `coverage-samples` feature adds the decode, for value lookups at a position
   (nearest or bilinear, in the coverage's own CRS), calculated per-tile
-  statistics, and Requirement 21 (no NaN or infinite values). The decode is
-  in `geopackage-core`, so it's available without SQLite.
+  statistics, and
+  [Requirement 21](https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21)
+  (no NaN or infinite values). The decode is in `geopackage-core`, so it's
+  available without SQLite.
 - Curved geometry types (`CIRCULARSTRING` and others) can be written, indexed
   and queried by extent, but can't be read back as geometry objects.
   `Feature::geometry_bytes` returns their WKB.

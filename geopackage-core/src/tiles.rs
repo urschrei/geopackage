@@ -1054,7 +1054,9 @@ pub enum TileError {
     /// of the tiled gridded coverage extension (OGC 17-066r2).
     ///
     /// The header checks in [`crate::coverage`] read the header of a payload
-    /// and not its samples, so they do not check Requirement 21.
+    /// and not its samples, so they do not check [Requirement 21].
+    ///
+    /// [Requirement 21]: https://urschrei.github.io/geopackage/explanation/coverages.html#requirement-21
     #[error(
         "coverage tile payload breaks tiled gridded coverage Requirement {requirement}: {detail}"
     )]
