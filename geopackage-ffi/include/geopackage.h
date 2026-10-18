@@ -1686,62 +1686,6 @@ gpkg_status gpkg_tiles_get(const gpkg_tiles_t *tiles,
                            gpkg_error_t *error);
 
 /**
- * Stores bytes at a tile address.
- *
- * The call checks the address against the zoom level's grid, and the
- * payload's header against the tile size the level declares. Only the header
- * is read, and the image is not decoded. The check catches a tile of the
- * wrong pixel size, or one in a format the table may not hold.
- *
- * ```c
- * if (gpkg_tiles_put(tiles, 1, 0, 0, png, png_len, &error) != GPKG_STATUS_OK) {
- *     return fail("gpkg_tiles_put", &error);
- * }
- * ```
- *
- * The call copies the bytes into the file, so the buffer is yours again when
- * it returns. Writing where a tile is already stored replaces that tile.
- *
- * A zoom level the pyramid does not declare returns `GPKG_STATUS_NOT_FOUND`,
- * and a format the table may not hold returns `GPKG_STATUS_UNSUPPORTED`. A
- * column or row outside the level's grid, or bytes that are not a readable
- * image, return `GPKG_STATUS_INVALID_ARGUMENT`. A payload whose header
- * disagrees with the declared tile size returns `GPKG_STATUS_CONSTRAINT`.
- *
- * # Safety
- *
- * `tiles` must be a live handle, `data` must point at `len` readable bytes,
- * and `error` NULL or writable.
- */
-gpkg_status gpkg_tiles_put(const gpkg_tiles_t *tiles,
-                           int64_t zoom_level,
-                           int64_t column,
-                           int64_t row,
-                           const uint8_t *data,
-                           size_t len,
-                           gpkg_error_t *error);
-
-/**
- * Deletes the tile at an address, reporting through `out_deleted` whether one
- * was there. `out_deleted` may be NULL.
- *
- * Deleting where there is no tile succeeds, with `out_deleted` false, because
- * the address is empty either way. The zoom level's `gpkg_tile_matrix` row is
- * left alone, so the level keeps its declared grid.
- *
- * # Safety
- *
- * `tiles` must be a live handle; `out_deleted` NULL or writable; `error` NULL
- * or writable.
- */
-gpkg_status gpkg_tiles_delete(const gpkg_tiles_t *tiles,
-                              int64_t zoom_level,
-                              int64_t column,
-                              int64_t row,
-                              bool *out_deleted,
-                              gpkg_error_t *error);
-
-/**
  * Frees a byte buffer this library returned.
  *
  * Only `gpkg_tiles_get` returns one. Pass its `out_len` as `len`. Passing a
@@ -1810,6 +1754,62 @@ gpkg_status gpkg_tiles_get_into(const gpkg_tiles_t *tiles,
                                 size_t capacity,
                                 size_t *out_len,
                                 gpkg_error_t *error);
+
+/**
+ * Stores bytes at a tile address.
+ *
+ * The call checks the address against the zoom level's grid, and the
+ * payload's header against the tile size the level declares. Only the header
+ * is read, and the image is not decoded. The check catches a tile of the
+ * wrong pixel size, or one in a format the table may not hold.
+ *
+ * ```c
+ * if (gpkg_tiles_put(tiles, 1, 0, 0, png, png_len, &error) != GPKG_STATUS_OK) {
+ *     return fail("gpkg_tiles_put", &error);
+ * }
+ * ```
+ *
+ * The call copies the bytes into the file, so the buffer is yours again when
+ * it returns. Writing where a tile is already stored replaces that tile.
+ *
+ * A zoom level the pyramid does not declare returns `GPKG_STATUS_NOT_FOUND`,
+ * and a format the table may not hold returns `GPKG_STATUS_UNSUPPORTED`. A
+ * column or row outside the level's grid, or bytes that are not a readable
+ * image, return `GPKG_STATUS_INVALID_ARGUMENT`. A payload whose header
+ * disagrees with the declared tile size returns `GPKG_STATUS_CONSTRAINT`.
+ *
+ * # Safety
+ *
+ * `tiles` must be a live handle, `data` must point at `len` readable bytes,
+ * and `error` NULL or writable.
+ */
+gpkg_status gpkg_tiles_put(const gpkg_tiles_t *tiles,
+                           int64_t zoom_level,
+                           int64_t column,
+                           int64_t row,
+                           const uint8_t *data,
+                           size_t len,
+                           gpkg_error_t *error);
+
+/**
+ * Deletes the tile at an address, reporting through `out_deleted` whether one
+ * was there. `out_deleted` may be NULL.
+ *
+ * Deleting where there is no tile succeeds, with `out_deleted` false, because
+ * the address is empty either way. The zoom level's `gpkg_tile_matrix` row is
+ * left alone, so the level keeps its declared grid.
+ *
+ * # Safety
+ *
+ * `tiles` must be a live handle; `out_deleted` NULL or writable; `error` NULL
+ * or writable.
+ */
+gpkg_status gpkg_tiles_delete(const gpkg_tiles_t *tiles,
+                              int64_t zoom_level,
+                              int64_t column,
+                              int64_t row,
+                              bool *out_deleted,
+                              gpkg_error_t *error);
 
 /**
  * Opens a cursor over every stored tile, in matrix order.

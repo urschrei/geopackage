@@ -80,7 +80,7 @@ use std::ffi::c_char;
 
 use geopackage::SpatialIndexStatus;
 
-use crate::error::{Status, gpkg_error_t, set_error, set_library_error};
+use crate::error::{Status, gpkg_error_t, report, set_error, set_library_error};
 use crate::handle::LayerHandle;
 use crate::util::out_string;
 
@@ -557,20 +557,4 @@ unsafe fn checked<'a>(
     }
     // SAFETY: the caller guarantees a live layer handle.
     Some(unsafe { &*layer })
-}
-
-/// Turns a unit-returning library call into a status, filling in `error`.
-///
-/// # Safety
-///
-/// `error` must be NULL or point at a writable `gpkg_error_t`.
-unsafe fn report(result: geopackage::Result<()>, error: *mut gpkg_error_t) -> Status {
-    match result {
-        Ok(()) => Status::Ok,
-        Err(err) => {
-            // SAFETY: forwarded to the caller's guarantee on `error`.
-            unsafe { set_library_error(error, &err) };
-            Status::from(&err)
-        }
-    }
 }
