@@ -33,35 +33,6 @@ use crate::{
     SpatialIndexStatus, table_exists,
 };
 
-/// How much a [`Finding`] matters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Severity {
-    /// A remark rather than a defect.
-    Advisory,
-    /// The file is out of step with the current spec, but reads correctly.
-    Warning,
-    /// A reader can get a wrong answer from this file.
-    Error,
-}
-
-impl Severity {
-    /// Returns the severity as a lowercase word: `advisory`, `warning` or
-    /// `error`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Advisory => "advisory",
-            Self::Warning => "warning",
-            Self::Error => "error",
-        }
-    }
-}
-
-impl fmt::Display for Severity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 /// Something [`GeoPackage::validate`] found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -526,6 +497,35 @@ impl fmt::Display for Finding {
                 )
             }
         }
+    }
+}
+
+/// How much a [`Finding`] matters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Severity {
+    /// A remark rather than a defect.
+    Advisory,
+    /// The file is out of step with the current spec, but reads correctly.
+    Warning,
+    /// A reader can get a wrong answer from this file.
+    Error,
+}
+
+impl Severity {
+    /// Returns the severity as a lowercase word: `advisory`, `warning` or
+    /// `error`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Advisory => "advisory",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+}
+
+impl fmt::Display for Severity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

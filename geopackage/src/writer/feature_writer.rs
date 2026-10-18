@@ -2,6 +2,7 @@ use geo_traits::{Dimensions, GeometryTrait};
 use geopackage_core::extensions::{Extension, GEOM_TYPE_EXTENSION_DEFINITION};
 use geopackage_core::geometry::encode_gpb;
 use geopackage_core::geometry::encode_gpb_from_wkb;
+use geopackage_core::ident::quote;
 use geopackage_core::types::{GeometryTypeSet, ZmFlag};
 use rusqlite::types::{ToSqlOutput, Value as SqlValue, ValueRef};
 use rusqlite::{CachedStatement, Connection, Params, params_from_iter};
@@ -9,10 +10,9 @@ use rusqlite::{CachedStatement, Connection, Params, params_from_iter};
 use crate::extensions;
 use crate::transaction::WriteTransaction;
 use crate::value::{value_ref_to_bind, value_to_bind};
-use crate::{Error, Result, Value, ValueRef as CellRef};
+use crate::{Error, Layer, Result, Value, ValueRef as CellRef};
 
 use super::constraints::{AsCheckable, Checkable, ColumnConstraints};
-use super::write_all::{BboxFold, GeomTarget};
 
 /// A prepared-statement writer over one layer, owning a transaction.
 ///
@@ -53,19 +53,19 @@ pub struct FeatureWriter<'conn> {
     /// Opened by [`crate::Layer::writer`], or inherited from the caller. Only
     /// the commit tells them apart. Every statement is issued against `conn`,
     /// which is the same connection either way.
-    pub(crate) tx: WriteTransaction<'conn>,
+    tx: WriteTransaction<'conn>,
     /// The connection the transaction runs on, for preparing the statement a
     /// partial update needs, whose shape is not known until it is called.
-    pub(crate) conn: &'conn Connection,
-    pub(crate) table_name: String,
-    pub(crate) quoted_table: String,
+    conn: &'conn Connection,
+    table_name: String,
+    quoted_table: String,
     /// The primary-key expression: the quoted pk column, or `rowid`.
-    pub(crate) pk_expr: String,
+    pk_expr: String,
     /// The value columns, in value order. They exclude the geometry and the
     /// primary key.
-    pub(crate) value_columns: Vec<ValueColumn>,
-    pub(crate) geometry: Option<GeomTarget>,
-    pub(crate) bbox: BboxFold,
+    value_columns: Vec<ValueColumn>,
+    geometry: Option<GeomTarget>,
+    bbox: BboxFold,
     /// The four possible `INSERT` statements, by whether the row has an
     /// explicit feature id and whether it has a geometry.
     ///
@@ -80,16 +80,16 @@ pub struct FeatureWriter<'conn> {
     /// borrow what the transaction borrows instead of the transaction itself.
     /// They still run inside it, because a SQLite transaction belongs to the
     /// connection, not to the statements prepared against it.
-    pub(crate) insert_stmts: [CachedStatement<'conn>; 4],
+    insert_stmts: [CachedStatement<'conn>; 4],
     /// The two possible `UPDATE` statements, by whether the row has a
     /// geometry. A writer's update sets every value column, so there are only
     /// these two shapes.
-    pub(crate) update_stmts: [CachedStatement<'conn>; 2],
+    update_stmts: [CachedStatement<'conn>; 2],
     /// The `DELETE`, likewise fixed for the writer's lifetime.
-    pub(crate) delete_stmt: CachedStatement<'conn>,
+    delete_stmt: CachedStatement<'conn>,
     /// The `gpkg_schema` constraints to check written values against, resolved
     /// once here. Empty unless the file was opened with enforcement turned on.
-    pub(crate) constraints: ColumnConstraints<'conn>,
+    constraints: ColumnConstraints<'conn>,
     /// The value columns named by the most recent [`Self::update_columns`]
     /// call, in the order given, and the statement prepared for them.
     ///
@@ -99,18 +99,18 @@ pub struct FeatureWriter<'conn> {
     /// alternating between two sets of columns re-prepares on each change.
     /// The starting state names no columns, which is still a valid statement
     /// (it assigns the primary key to itself), so the slot is never empty.
-    pub(crate) partial_columns: Vec<String>,
-    pub(crate) partial_stmt: CachedStatement<'conn>,
+    partial_columns: Vec<String>,
+    partial_stmt: CachedStatement<'conn>,
     /// Set by any insert, or by any update or delete that changed a row.
     /// Drives `last_change`.
-    pub(crate) dirty: bool,
+    dirty: bool,
     /// A geometry was written (drives the bounding-box flush).
-    pub(crate) bbox_dirty: bool,
+    bbox_dirty: bool,
     /// Whether the fold covers the whole layer, and so may be recorded. False
     /// when the writer started with no usable recorded box over a table that
     /// already contained rows, which makes the fold a lower bound rather than
     /// the extent.
-    pub(crate) bbox_covers_layer: bool,
+    bbox_covers_layer: bool,
     /// The non-linear geometry types written through this writer, which the
     /// flush registers as `gpkg_geom_<TYPE>` rows.
     ///
@@ -120,7 +120,108 @@ pub struct FeatureWriter<'conn> {
     /// registration instead of a million lookups. They are registered at the
     /// flush, so a writer dropped without committing registers nothing,
     /// matching the rows it also did not write.
-    pub(crate) geometry_types: GeometryTypeSet,
+    geometry_types: GeometryTypeSet,
+}
+
+impl<'a> Layer<'a> {
+    /// Begins a write transaction over this layer, returning a
+    /// [`FeatureWriter`].
+    ///
+    /// The writer owns the transaction. Stage rows with its `insert`/`update`/
+    /// `delete` methods, then call [`FeatureWriter::commit`]. Dropping the
+    /// writer without committing rolls the transaction back.
+    ///
+    /// The exception is when a transaction is already open on the connection.
+    /// The writer then joins that transaction, and committing and rolling back
+    /// are up to whoever began it. [`FeatureWriter::commit`] describes what
+    /// changes.
+    pub fn writer(&self) -> Result<FeatureWriter<'a>> {
+        self.gpkg().check_writable(self.table_name())?;
+        let conn: &Connection = self.gpkg().connection();
+        let tx = WriteTransaction::begin(conn)?;
+        let existing = self.stored_extent()?;
+        // An unusable recorded box over a table that already contains rows
+        // makes the fold a lower bound: it can be grown and used, but not
+        // recorded.
+        let bbox_covers_layer = existing.is_some() || !self.has_rows()?;
+
+        let pk_name = self.primary_key_column();
+        let pk_expr = match pk_name {
+            Some(pk) => quote(pk)?,
+            None => "rowid".to_owned(),
+        };
+        // The same set the read path yields: the layer's value columns exclude
+        // both the geometry and the primary key, which are written through
+        // their own arguments.
+        let value_columns = self
+            .value_columns()
+            .iter()
+            .map(|c| {
+                Ok(ValueColumn {
+                    quoted: quote(&c.name)?,
+                    name: c.name.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let geometry = match self.geometry_column() {
+            Some(g) => Some(GeomTarget {
+                name: g.column_name.clone(),
+                quoted_name: quote(&g.column_name)?,
+                srs_id: g.srs_id,
+                z: g.z,
+                m: g.m,
+            }),
+            None => None,
+        };
+        let mut bbox = BboxFold::new();
+        bbox.seed(existing.map(|b| [b.min_x, b.max_x, b.min_y, b.max_y]));
+        let quoted_table = quote(self.table_name())?;
+
+        // Compose every statement the writer can issue, then prepare them all,
+        // before anything moves into the writer.
+        let shape = Shape {
+            table_name: self.table_name(),
+            quoted_table: &quoted_table,
+            pk_expr: &pk_expr,
+            value_columns: &value_columns,
+            geometry: geometry.as_ref(),
+        };
+        let insert_stmts = [
+            conn.prepare_cached(&build_insert_sql(&shape, false, false))?,
+            conn.prepare_cached(&build_insert_sql(&shape, true, false))?,
+            conn.prepare_cached(&build_insert_sql(&shape, false, true))?,
+            conn.prepare_cached(&build_insert_sql(&shape, true, true))?,
+        ];
+        let update_stmts = [
+            conn.prepare_cached(&build_update_sql(&shape, false))?,
+            conn.prepare_cached(&build_update_sql(&shape, true))?,
+        ];
+        let delete_stmt =
+            conn.prepare_cached(&format!("DELETE FROM {quoted_table} WHERE {pk_expr} = ?1"))?;
+        let partial_stmt = conn.prepare_cached(&build_partial_update_sql(&shape, &[])?)?;
+        let constraints = ColumnConstraints::read(self, conn, &value_columns)?;
+
+        Ok(FeatureWriter {
+            tx,
+            conn,
+            table_name: self.table_name().to_owned(),
+            quoted_table,
+            pk_expr,
+            value_columns,
+            geometry,
+            bbox,
+            insert_stmts,
+            update_stmts,
+            delete_stmt,
+            partial_columns: Vec::new(),
+            partial_stmt,
+            dirty: false,
+            bbox_dirty: false,
+            bbox_covers_layer,
+            constraints,
+            geometry_types: GeometryTypeSet::new(),
+        })
+    }
 }
 
 impl<'conn> FeatureWriter<'conn> {
@@ -931,15 +1032,73 @@ impl<'conn> FeatureWriter<'conn> {
     }
 }
 
+/// The geometry column a [`FeatureWriter`] targets.
+#[derive(Debug)]
+struct GeomTarget {
+    name: String,
+    quoted_name: String,
+    srs_id: i32,
+    z: ZmFlag,
+    m: ZmFlag,
+}
+
+/// A running union of written XY envelopes, seeded from the existing
+/// `gpkg_contents` bounding box. Bounds are stored as
+/// `[min_x, max_x, min_y, max_y]` (the shape
+/// [`encode_gpb`](geopackage_core::geometry::encode_gpb) returns).
+#[derive(Debug, Clone, Copy)]
+struct BboxFold {
+    min_x: f64,
+    max_x: f64,
+    min_y: f64,
+    max_y: f64,
+    seen: bool,
+}
+
+impl BboxFold {
+    fn new() -> Self {
+        Self {
+            min_x: f64::INFINITY,
+            max_x: f64::NEG_INFINITY,
+            min_y: f64::INFINITY,
+            max_y: f64::NEG_INFINITY,
+            seen: false,
+        }
+    }
+
+    fn seed(&mut self, existing: Option<[f64; 4]>) {
+        if let Some([min_x, max_x, min_y, max_y]) = existing {
+            self.min_x = min_x;
+            self.max_x = max_x;
+            self.min_y = min_y;
+            self.max_y = max_y;
+            self.seen = true;
+        }
+    }
+
+    fn add(&mut self, [min_x, max_x, min_y, max_y]: [f64; 4]) {
+        self.min_x = self.min_x.min(min_x);
+        self.max_x = self.max_x.max(max_x);
+        self.min_y = self.min_y.min(min_y);
+        self.max_y = self.max_y.max(max_y);
+        self.seen = true;
+    }
+
+    fn bounds(&self) -> Option<[f64; 4]> {
+        self.seen
+            .then_some([self.min_x, self.max_x, self.min_y, self.max_y])
+    }
+}
+
 /// The pieces of a layer's shape that its statement text is composed from,
 /// borrowed while [`crate::Layer::writer`] builds them and before they move
 /// into the writer.
-pub(crate) struct Shape<'s> {
-    pub(crate) table_name: &'s str,
-    pub(crate) quoted_table: &'s str,
-    pub(crate) pk_expr: &'s str,
-    pub(crate) value_columns: &'s [ValueColumn],
-    pub(crate) geometry: Option<&'s GeomTarget>,
+struct Shape<'s> {
+    table_name: &'s str,
+    quoted_table: &'s str,
+    pk_expr: &'s str,
+    value_columns: &'s [ValueColumn],
+    geometry: Option<&'s GeomTarget>,
 }
 
 /// One value column of the layer being written: its name as declared, and the
@@ -950,7 +1109,7 @@ pub(crate) struct ValueColumn {
 }
 
 /// Composes one of the four `INSERT` statements. Called once per writer.
-pub(crate) fn build_insert_sql(shape: &Shape<'_>, with_fid: bool, with_geometry: bool) -> String {
+fn build_insert_sql(shape: &Shape<'_>, with_fid: bool, with_geometry: bool) -> String {
     let mut columns: Vec<&str> = Vec::with_capacity(shape.value_columns.len() + 2);
     if with_fid {
         columns.push(shape.pk_expr);
@@ -977,7 +1136,7 @@ pub(crate) fn build_insert_sql(shape: &Shape<'_>, with_fid: bool, with_geometry:
 
 /// Composes one of the two `UPDATE ... WHERE <pk> = ?` statements. Called
 /// once per writer.
-pub(crate) fn build_update_sql(shape: &Shape<'_>, with_geometry: bool) -> String {
+fn build_update_sql(shape: &Shape<'_>, with_geometry: bool) -> String {
     let mut assignments: Vec<String> = Vec::with_capacity(shape.value_columns.len() + 1);
     let mut index = 1;
     for column in shape.value_columns {
@@ -1005,10 +1164,7 @@ pub(crate) fn build_update_sql(shape: &Shape<'_>, with_geometry: bool) -> String
 /// Composes the `UPDATE` for a named subset of the value columns, assigning
 /// them in the order given. Called only when [`FeatureWriter::update_columns`]
 /// is called with a set of columns other than the one it last prepared.
-pub(crate) fn build_partial_update_sql(
-    shape: &Shape<'_>,
-    columns: &[(&str, CellRef<'_>)],
-) -> Result<String> {
+fn build_partial_update_sql(shape: &Shape<'_>, columns: &[(&str, CellRef<'_>)]) -> Result<String> {
     let mut assignments: Vec<String> = Vec::with_capacity(columns.len());
     for (position, (name, _)) in columns.iter().enumerate() {
         if columns
@@ -1053,7 +1209,7 @@ pub(crate) fn build_partial_update_sql(
 /// is the copy those bindings exist to avoid. An owned binding is therefore
 /// re-borrowed rather than duplicated.
 #[cfg(feature = "arrow")]
-pub(crate) fn borrow_bind<'a>(bind: &'a ToSqlOutput<'_>) -> ToSqlOutput<'a> {
+fn borrow_bind<'a>(bind: &'a ToSqlOutput<'_>) -> ToSqlOutput<'a> {
     match bind {
         ToSqlOutput::Borrowed(value) => ToSqlOutput::Borrowed(*value),
         ToSqlOutput::Owned(value) => ToSqlOutput::Borrowed(ValueRef::from(value)),

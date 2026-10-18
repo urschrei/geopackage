@@ -12,83 +12,6 @@ use super::schema::{
     EXTENSION_METADATA_KEY, EXTENSION_NAME_KEY, GEOARROW_WKB, data_type_for, epsg_code,
 };
 
-/// Where each of a layer's columns sits in a batch, shared by all its rows.
-struct RowLayout {
-    fid: Option<usize>,
-    geometry: Option<usize>,
-    /// Batch column index for each of the layer's value columns, in order.
-    /// `None` for a column the batch does not include, which is written as
-    /// NULL.
-    values: Vec<Option<usize>>,
-}
-
-/// One row of a [`RecordBatch`], as a view instead of a copy.
-///
-/// Holding the batch and an index, instead of owned values, lets the write
-/// path bind strings and blobs directly from the Arrow arrays. Both handles are
-/// `Arc`, so a row costs two reference-count increments. Owned values would
-/// cost an allocation per text cell plus a copy of the geometry.
-struct ArrowRow {
-    batch: Arc<RecordBatch>,
-    layout: Arc<RowLayout>,
-    row: usize,
-}
-
-/// A row, or the error that prevented it being built.
-///
-/// Batches are split into rows lazily, so an error has to travel with the rows
-/// instead of leaving the iterator by a separate route. Writing an error value
-/// fails the write, which rolls back the transaction like any other write
-/// error.
-enum ArrowRowResult {
-    Row(ArrowRow),
-    Failed(Error),
-}
-
-impl crate::writer::WritableRow for ArrowRowResult {
-    fn write(self, writer: &mut crate::FeatureWriter<'_>) -> Result<(i64, Option<[f64; 4]>)> {
-        match self {
-            Self::Row(row) => row.write(writer),
-            Self::Failed(error) => Err(error),
-        }
-    }
-}
-
-impl crate::writer::WritableRow for ArrowRow {
-    #[hotpath::measure(label = "arrow::ArrowRow::write")]
-    fn write(self, writer: &mut crate::FeatureWriter<'_>) -> Result<(i64, Option<[f64; 4]>)> {
-        let fid = match self
-            .layout
-            .fid
-            .and_then(|index| self.batch.columns().get(index))
-        {
-            Some(column) => read_i64(column, self.row)?,
-            None => None,
-        };
-
-        let mut values = Vec::with_capacity(self.layout.values.len());
-        for (position, index) in self.layout.values.iter().enumerate() {
-            let bound = match index.and_then(|index| self.batch.columns().get(index)) {
-                Some(column) => bind_value(column, self.row, position, &self.batch)?,
-                None => rusqlite::types::ToSqlOutput::Borrowed(rusqlite::types::ValueRef::Null),
-            };
-            values.push(bound);
-        }
-
-        let geometry = self
-            .layout
-            .geometry
-            .and_then(|index| self.batch.columns().get(index));
-        match geometry {
-            Some(column) if !column.is_null(self.row) => {
-                let wkb = binary_at(column, self.row)?;
-                writer.insert_wkb_bound(fid, wkb, &values)
-            }
-            _ => writer.insert_row_bound(fid, &values).map(|fid| (fid, None)),
-        }
-    }
-}
-
 impl Layer<'_> {
     /// Writes Arrow [`RecordBatch`]es into this layer.
     ///
@@ -200,6 +123,165 @@ impl Layer<'_> {
                 .chain(error.into_iter().map(ArrowRowResult::Failed))
         });
         self.write_all_impl(rows, batch_size, options, crate::bulk::no_fault)
+    }
+}
+
+impl crate::TableSchemaBuilder {
+    /// Derives a layer definition from an Arrow schema.
+    ///
+    /// This is the inverse of [`Layer::arrow_schema`], for creating a layer to
+    /// receive [`Layer::write_arrow`]. You can still override anything the
+    /// builder normally takes afterwards.
+    ///
+    /// The mapping is the read mapping in reverse, with three points to note:
+    ///
+    /// - **Integer widths are kept here, but not when reading.** `Int8`
+    ///   becomes `TINYINT`, `Int16` `SMALLINT`, `Int32` `MEDIUMINT`, and
+    ///   `Int64` `INTEGER`. Reading collapses all four to `Int64`, because
+    ///   SQLite doesn't enforce a declared width. A layer round-tripped through
+    ///   Arrow therefore comes back with every integer column widened to
+    ///   `INTEGER`. The data is unchanged, but the declared type is not.
+    /// - **The geometry column is found by its `geoarrow.wkb` extension name**,
+    ///   not by position or by name. Its declared type is `GEOMETRY`, which
+    ///   accepts any geometry, because WKB doesn't say what it will contain.
+    ///   The SRS comes from the field's CRS metadata if that is an
+    ///   `EPSG:<code>` authority code, and is otherwise `0`, the spec's
+    ///   undefined value.
+    /// - **A field named as the primary key is skipped**, not made an attribute
+    ///   column, because the builder creates the key itself. Call
+    ///   [`crate::TableSchemaBuilder::primary_key`] before this if the key is
+    ///   not named `fid`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedArrowType`] for a field whose type has no GeoPackage
+    /// equivalent.
+    pub fn from_arrow_schema(self, schema: &Schema) -> Result<Self> {
+        let mut builder = self;
+        for field in schema.fields() {
+            if *field.name() == builder.primary_key_name() {
+                continue;
+            }
+            if field.metadata().get(EXTENSION_NAME_KEY).map(String::as_str) == Some(GEOARROW_WKB) {
+                let srs_id = field
+                    .metadata()
+                    .get(EXTENSION_METADATA_KEY)
+                    .and_then(|json| epsg_code(json))
+                    .unwrap_or(0);
+                builder = builder.geometry(
+                    crate::GeometrySpec::new(GeometryType::Geometry, srs_id)
+                        .column_name(field.name()),
+                );
+                continue;
+            }
+            let column_type = column_type_for(field.data_type())?;
+            let mut column = crate::ColumnSpec::new(field.name(), column_type);
+            if !field.is_nullable() {
+                column = column.not_null();
+            }
+            builder = builder.column(column);
+        }
+        Ok(builder)
+    }
+}
+
+/// Returns the GeoPackage column type for an Arrow type, the inverse of the
+/// mapping in the [module documentation](super).
+fn column_type_for(data_type: &DataType) -> Result<ColumnType> {
+    Ok(match data_type {
+        DataType::Boolean => ColumnType::Boolean,
+        DataType::Int8 | DataType::UInt8 => ColumnType::TinyInt,
+        DataType::Int16 | DataType::UInt16 => ColumnType::SmallInt,
+        DataType::Int32 | DataType::UInt32 => ColumnType::MediumInt,
+        DataType::Int64 | DataType::UInt64 => ColumnType::Integer,
+        DataType::Float32 => ColumnType::Float,
+        DataType::Float64 => ColumnType::Double,
+        DataType::Utf8 | DataType::LargeUtf8 => ColumnType::Text(None),
+        DataType::Binary | DataType::LargeBinary => ColumnType::Blob(None),
+        DataType::Date32 => ColumnType::Date,
+        DataType::Timestamp(_, _) => ColumnType::DateTime,
+        other => {
+            return Err(Error::UnsupportedArrowType {
+                data_type: other.to_string(),
+            });
+        }
+    })
+}
+
+/// Where each of a layer's columns sits in a batch, shared by all its rows.
+struct RowLayout {
+    fid: Option<usize>,
+    geometry: Option<usize>,
+    /// Batch column index for each of the layer's value columns, in order.
+    /// `None` for a column the batch does not include, which is written as
+    /// NULL.
+    values: Vec<Option<usize>>,
+}
+
+/// One row of a [`RecordBatch`], as a view instead of a copy.
+///
+/// Holding the batch and an index, instead of owned values, lets the write
+/// path bind strings and blobs directly from the Arrow arrays. Both handles are
+/// `Arc`, so a row costs two reference-count increments. Owned values would
+/// cost an allocation per text cell plus a copy of the geometry.
+struct ArrowRow {
+    batch: Arc<RecordBatch>,
+    layout: Arc<RowLayout>,
+    row: usize,
+}
+
+/// A row, or the error that prevented it being built.
+///
+/// Batches are split into rows lazily, so an error has to travel with the rows
+/// instead of leaving the iterator by a separate route. Writing an error value
+/// fails the write, which rolls back the transaction like any other write
+/// error.
+enum ArrowRowResult {
+    Row(ArrowRow),
+    Failed(Error),
+}
+
+impl crate::writer::WritableRow for ArrowRow {
+    #[hotpath::measure(label = "arrow::ArrowRow::write")]
+    fn write(self, writer: &mut crate::FeatureWriter<'_>) -> Result<(i64, Option<[f64; 4]>)> {
+        let fid = match self
+            .layout
+            .fid
+            .and_then(|index| self.batch.columns().get(index))
+        {
+            Some(column) => read_i64(column, self.row)?,
+            None => None,
+        };
+
+        let mut values = Vec::with_capacity(self.layout.values.len());
+        for (position, index) in self.layout.values.iter().enumerate() {
+            let bound = match index.and_then(|index| self.batch.columns().get(index)) {
+                Some(column) => bind_value(column, self.row, position, &self.batch)?,
+                None => rusqlite::types::ToSqlOutput::Borrowed(rusqlite::types::ValueRef::Null),
+            };
+            values.push(bound);
+        }
+
+        let geometry = self
+            .layout
+            .geometry
+            .and_then(|index| self.batch.columns().get(index));
+        match geometry {
+            Some(column) if !column.is_null(self.row) => {
+                let wkb = binary_at(column, self.row)?;
+                writer.insert_wkb_bound(fid, wkb, &values)
+            }
+            _ => writer.insert_row_bound(fid, &values).map(|fid| (fid, None)),
+        }
+    }
+}
+
+impl crate::writer::WritableRow for ArrowRowResult {
+    fn write(self, writer: &mut crate::FeatureWriter<'_>) -> Result<(i64, Option<[f64; 4]>)> {
+        match self {
+            Self::Row(row) => row.write(writer),
+            Self::Failed(error) => Err(error),
+        }
     }
 }
 
@@ -515,86 +597,4 @@ fn bind_value<'a>(
             data_type: other.to_string(),
         }),
     }
-}
-
-impl crate::TableSchemaBuilder {
-    /// Derives a layer definition from an Arrow schema.
-    ///
-    /// This is the inverse of [`Layer::arrow_schema`], for creating a layer to
-    /// receive [`Layer::write_arrow`]. You can still override anything the
-    /// builder normally takes afterwards.
-    ///
-    /// The mapping is the read mapping in reverse, with three points to note:
-    ///
-    /// - **Integer widths are kept here, but not when reading.** `Int8`
-    ///   becomes `TINYINT`, `Int16` `SMALLINT`, `Int32` `MEDIUMINT`, and
-    ///   `Int64` `INTEGER`. Reading collapses all four to `Int64`, because
-    ///   SQLite doesn't enforce a declared width. A layer round-tripped through
-    ///   Arrow therefore comes back with every integer column widened to
-    ///   `INTEGER`. The data is unchanged, but the declared type is not.
-    /// - **The geometry column is found by its `geoarrow.wkb` extension name**,
-    ///   not by position or by name. Its declared type is `GEOMETRY`, which
-    ///   accepts any geometry, because WKB doesn't say what it will contain.
-    ///   The SRS comes from the field's CRS metadata if that is an
-    ///   `EPSG:<code>` authority code, and is otherwise `0`, the spec's
-    ///   undefined value.
-    /// - **A field named as the primary key is skipped**, not made an attribute
-    ///   column, because the builder creates the key itself. Call
-    ///   [`crate::TableSchemaBuilder::primary_key`] before this if the key is
-    ///   not named `fid`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::UnsupportedArrowType`] for a field whose type has no GeoPackage
-    /// equivalent.
-    pub fn from_arrow_schema(self, schema: &Schema) -> Result<Self> {
-        let mut builder = self;
-        for field in schema.fields() {
-            if *field.name() == builder.primary_key_name() {
-                continue;
-            }
-            if field.metadata().get(EXTENSION_NAME_KEY).map(String::as_str) == Some(GEOARROW_WKB) {
-                let srs_id = field
-                    .metadata()
-                    .get(EXTENSION_METADATA_KEY)
-                    .and_then(|json| epsg_code(json))
-                    .unwrap_or(0);
-                builder = builder.geometry(
-                    crate::GeometrySpec::new(GeometryType::Geometry, srs_id)
-                        .column_name(field.name()),
-                );
-                continue;
-            }
-            let column_type = column_type_for(field.data_type())?;
-            let mut column = crate::ColumnSpec::new(field.name(), column_type);
-            if !field.is_nullable() {
-                column = column.not_null();
-            }
-            builder = builder.column(column);
-        }
-        Ok(builder)
-    }
-}
-
-/// Returns the GeoPackage column type for an Arrow type, the inverse of the
-/// mapping in the [module documentation](super).
-fn column_type_for(data_type: &DataType) -> Result<ColumnType> {
-    Ok(match data_type {
-        DataType::Boolean => ColumnType::Boolean,
-        DataType::Int8 | DataType::UInt8 => ColumnType::TinyInt,
-        DataType::Int16 | DataType::UInt16 => ColumnType::SmallInt,
-        DataType::Int32 | DataType::UInt32 => ColumnType::MediumInt,
-        DataType::Int64 | DataType::UInt64 => ColumnType::Integer,
-        DataType::Float32 => ColumnType::Float,
-        DataType::Float64 => ColumnType::Double,
-        DataType::Utf8 | DataType::LargeUtf8 => ColumnType::Text(None),
-        DataType::Binary | DataType::LargeBinary => ColumnType::Blob(None),
-        DataType::Date32 => ColumnType::Date,
-        DataType::Timestamp(_, _) => ColumnType::DateTime,
-        other => {
-            return Err(Error::UnsupportedArrowType {
-                data_type: other.to_string(),
-            });
-        }
-    })
 }

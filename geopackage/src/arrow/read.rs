@@ -28,27 +28,6 @@ const KEY_ALIAS: &str = "__gpkg_key";
 /// reads matter, produces mostly such gaps.
 const SEGMENT_GAP: i64 = 64;
 
-/// Folds sorted candidate ids into closed key ranges, bridging gaps of up to
-/// [`SEGMENT_GAP`].
-fn segment_runs(ids: &[i64]) -> Vec<(i64, i64)> {
-    let mut runs = Vec::new();
-    let mut ids = ids.iter().copied();
-    let Some(first) = ids.next() else {
-        return runs;
-    };
-    let (mut lo, mut hi) = (first, first);
-    for id in ids {
-        if id.saturating_sub(hi) <= SEGMENT_GAP {
-            hi = id;
-        } else {
-            runs.push((lo, hi));
-            (lo, hi) = (id, id);
-        }
-    }
-    runs.push((lo, hi));
-    runs
-}
-
 impl Layer<'_> {
     /// Reads this layer as a stream of Arrow [`RecordBatch`](arrow_array::RecordBatch)es.
     ///
@@ -542,4 +521,25 @@ impl Layer<'_> {
             mmap_size: u64::try_from(mmap_size).unwrap_or(0),
         })))
     }
+}
+
+/// Folds sorted candidate ids into closed key ranges, bridging gaps of up to
+/// [`SEGMENT_GAP`].
+fn segment_runs(ids: &[i64]) -> Vec<(i64, i64)> {
+    let mut runs = Vec::new();
+    let mut ids = ids.iter().copied();
+    let Some(first) = ids.next() else {
+        return runs;
+    };
+    let (mut lo, mut hi) = (first, first);
+    for id in ids {
+        if id.saturating_sub(hi) <= SEGMENT_GAP {
+            hi = id;
+        } else {
+            runs.push((lo, hi));
+            (lo, hi) = (id, id);
+        }
+    }
+    runs.push((lo, hi));
+    runs
 }

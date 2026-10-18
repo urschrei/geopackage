@@ -8,37 +8,6 @@ use crate::{Error, Result};
 use super::BatchSource;
 use super::options::ArrowReadOptions;
 
-/// Returns the file behind a connection's `main` database, or `None` if it has
-/// no file. A `:memory:` or temporary database has none, and no other
-/// connection can open it.
-pub(crate) fn database_path(conn: &Connection) -> Result<Option<std::path::PathBuf>> {
-    let file: String = conn.query_row(
-        "SELECT file FROM pragma_database_list WHERE name = 'main'",
-        [],
-        |row| row.get(0),
-    )?;
-    if file.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(std::path::PathBuf::from(file)))
-}
-
-/// Returns the smallest and largest value of `key` in `table`, or `None` if
-/// the table is empty. Each is one index lookup, because `key` is the
-/// table's integer primary key.
-pub(crate) fn key_span(conn: &Connection, table: &str, key: &str) -> Result<Option<(i64, i64)>> {
-    let (table, key) = (quote(table)?, quote(key)?);
-    let first: Option<i64> =
-        conn.query_row(&format!("SELECT min({key}) FROM {table}"), [], |row| {
-            row.get(0)
-        })?;
-    let last: Option<i64> =
-        conn.query_row(&format!("SELECT max({key}) FROM {table}"), [], |row| {
-            row.get(0)
-        })?;
-    Ok(first.zip(last))
-}
-
 /// One layer's batches read by a pool of worker threads.
 ///
 /// The key span is cut into windows of `batch_size` consecutive keys. Worker
@@ -56,34 +25,6 @@ pub(crate) struct ParallelBatches {
     workers: Vec<WorkerHandle>,
     threads: Vec<std::thread::JoinHandle<()>>,
     done: bool,
-}
-
-/// The consumer's view of one worker.
-struct WorkerHandle {
-    receiver: std::sync::mpsc::Receiver<std::result::Result<WorkerMessage, ArrowError>>,
-    /// A message received but not yet passed on.
-    held: Option<WorkerMessage>,
-    /// The lowest window this worker can still send.
-    floor: u64,
-    finished: bool,
-}
-
-/// What the workers share: where the database is and how its key windows are
-/// laid out.
-#[derive(Clone)]
-pub(crate) struct WorkerPlan {
-    pub(crate) path: std::path::PathBuf,
-    pub(crate) table: String,
-    pub(crate) key: String,
-    pub(crate) conversion: crate::ConversionOptions,
-    pub(crate) first: i64,
-    pub(crate) last: i64,
-    pub(crate) batch_size: usize,
-    pub(crate) max_batch_bytes: usize,
-    pub(crate) threads: usize,
-    /// The reading connection's map size, which each worker's connection
-    /// takes too.
-    pub(crate) mmap_size: u64,
 }
 
 impl ParallelBatches {
@@ -196,6 +137,65 @@ impl Drop for ParallelBatches {
             drop(thread.join());
         }
     }
+}
+
+/// The consumer's view of one worker.
+struct WorkerHandle {
+    receiver: std::sync::mpsc::Receiver<std::result::Result<WorkerMessage, ArrowError>>,
+    /// A message received but not yet passed on.
+    held: Option<WorkerMessage>,
+    /// The lowest window this worker can still send.
+    floor: u64,
+    finished: bool,
+}
+
+/// What the workers share: where the database is and how its key windows are
+/// laid out.
+#[derive(Clone)]
+pub(crate) struct WorkerPlan {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) table: String,
+    pub(crate) key: String,
+    pub(crate) conversion: crate::ConversionOptions,
+    pub(crate) first: i64,
+    pub(crate) last: i64,
+    pub(crate) batch_size: usize,
+    pub(crate) max_batch_bytes: usize,
+    pub(crate) threads: usize,
+    /// The reading connection's map size, which each worker's connection
+    /// takes too.
+    pub(crate) mmap_size: u64,
+}
+
+/// Returns the file behind a connection's `main` database, or `None` if it has
+/// no file. A `:memory:` or temporary database has none, and no other
+/// connection can open it.
+pub(crate) fn database_path(conn: &Connection) -> Result<Option<std::path::PathBuf>> {
+    let file: String = conn.query_row(
+        "SELECT file FROM pragma_database_list WHERE name = 'main'",
+        [],
+        |row| row.get(0),
+    )?;
+    if file.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(std::path::PathBuf::from(file)))
+}
+
+/// Returns the smallest and largest value of `key` in `table`, or `None` if
+/// the table is empty. Each is one index lookup, because `key` is the
+/// table's integer primary key.
+pub(crate) fn key_span(conn: &Connection, table: &str, key: &str) -> Result<Option<(i64, i64)>> {
+    let (table, key) = (quote(table)?, quote(key)?);
+    let first: Option<i64> =
+        conn.query_row(&format!("SELECT min({key}) FROM {table}"), [], |row| {
+            row.get(0)
+        })?;
+    let last: Option<i64> =
+        conn.query_row(&format!("SELECT max({key}) FROM {table}"), [], |row| {
+            row.get(0)
+        })?;
+    Ok(first.zip(last))
 }
 
 /// Runs one worker. It opens its own read-only connection and reads its

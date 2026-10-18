@@ -655,6 +655,7 @@ pub fn geopackage::Layer<'_>::create_spatial_index_with(&self, geopackage::BulkI
 pub fn geopackage::Layer<'_>::drop_spatial_index(&self) -> geopackage::Result<()>
 pub fn geopackage::Layer<'_>::rebuild_spatial_index(&self) -> geopackage::Result<()>
 pub fn geopackage::Layer<'_>::repair_spatial_index(&self) -> geopackage::Result<()>
+pub fn geopackage::Layer<'_>::spatial_index_status(&self) -> geopackage::Result<geopackage::SpatialIndexStatus>
 impl geopackage::Layer<'_>
 pub fn geopackage::Layer<'_>::extensions(&self) -> geopackage::Result<alloc::vec::Vec<geopackage::extensions::ExtensionRow>>
 impl geopackage::Layer<'_>
@@ -665,8 +666,6 @@ pub fn geopackage::Layer<'_>::read_arrow(&self, geopackage::arrow::ArrowReadOpti
 pub fn geopackage::Layer<'_>::read_arrow_in(&self, geopackage::BoundingBox, geopackage::arrow::ArrowReadOptions) -> geopackage::Result<geopackage::arrow::ArrowBatches<'_>>
 pub fn geopackage::Layer<'_>::read_arrow_in_where(&self, geopackage::BoundingBox, &str, &[geopackage::ValueRef<'_>], geopackage::arrow::ArrowReadOptions) -> geopackage::Result<geopackage::arrow::ArrowBatches<'_>>
 pub fn geopackage::Layer<'_>::read_arrow_where(&self, &str, &[geopackage::ValueRef<'_>], geopackage::arrow::ArrowReadOptions) -> geopackage::Result<geopackage::arrow::ArrowBatches<'_>>
-impl geopackage::Layer<'_>
-pub fn geopackage::Layer<'_>::spatial_index_status(&self) -> geopackage::Result<geopackage::SpatialIndexStatus>
 impl geopackage::Layer<'_>
 pub fn geopackage::Layer<'_>::write_arrow<R>(&self, R, usize) -> geopackage::Result<alloc::vec::Vec<i64>> where R: core::iter::traits::collect::IntoIterator<Item = core::result::Result<arrow_array::record_batch::RecordBatch, arrow_schema::error::ArrowError>>
 pub fn geopackage::Layer<'_>::write_arrow_with<R>(&self, R, usize, geopackage::BulkIndexOptions) -> geopackage::Result<alloc::vec::Vec<i64>> where R: core::iter::traits::collect::IntoIterator<Item = core::result::Result<arrow_array::record_batch::RecordBatch, arrow_schema::error::ArrowError>>
@@ -693,6 +692,7 @@ pub fn geopackage::Layer<'a>::without_geometry(self) -> Self
 impl<'a> geopackage::Layer<'a>
 pub fn geopackage::Layer<'a>::write_all<G, I>(&self, I, usize) -> geopackage::Result<alloc::vec::Vec<i64>> where G: geo_traits::geometry::GeometryTrait<T = f64>, I: core::iter::traits::collect::IntoIterator<Item = geopackage::NewFeature<G>>
 pub fn geopackage::Layer<'a>::write_all_with<G, I>(&self, I, usize, geopackage::BulkIndexOptions) -> geopackage::Result<alloc::vec::Vec<i64>> where G: geo_traits::geometry::GeometryTrait<T = f64>, I: core::iter::traits::collect::IntoIterator<Item = geopackage::NewFeature<G>>
+impl<'a> geopackage::Layer<'a>
 pub fn geopackage::Layer<'a>::writer(&self) -> geopackage::Result<geopackage::FeatureWriter<'a>>
 impl core::fmt::Debug for geopackage::Layer<'_>
 pub fn geopackage::Layer<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result

@@ -58,18 +58,15 @@ pub(crate) struct SequentialBatches<'a> {
     pub(crate) aggregate: Option<AggregateState>,
 }
 
-impl Drop for SequentialBatches<'_> {
-    fn drop(&mut self) {
-        if let Some(state) = &self.aggregate {
-            // Best effort: the reader is going away either way, and a failure
-            // here would only leave an unused function registered on the
-            // connection under a name nothing else uses.
-            drop(
-                self.conn
-                    .remove_function(state.name.as_str(), state.arg_count),
-            );
-        }
-    }
+/// The exact re-filter that `read_arrow_in` applies.
+///
+/// The index stores `f32` envelopes and is queried with outward-widened
+/// bounds, and a candidate segment also folds in small key gaps. The fetched
+/// rows are therefore a superset for two reasons. Each one has to be re-tested
+/// against its true `f64` envelope, or a filtered columnar read would return
+/// rows that `features_in` doesn't.
+pub(crate) struct SpatialFilter {
+    pub(crate) bbox: BoundingBox,
 }
 
 impl SequentialBatches<'_> {
@@ -356,27 +353,6 @@ impl SequentialBatches<'_> {
     }
 }
 
-/// The exact re-filter that `read_arrow_in` applies.
-///
-/// The index stores `f32` envelopes and is queried with outward-widened
-/// bounds, and a candidate segment also folds in small key gaps. The fetched
-/// rows are therefore a superset for two reasons. Each one has to be re-tested
-/// against its true `f64` envelope, or a filtered columnar read would return
-/// rows that `features_in` doesn't.
-pub(crate) struct SpatialFilter {
-    pub(crate) bbox: BoundingBox,
-}
-
-/// What one page of candidates produced.
-enum Page {
-    /// A batch with at least one row in it.
-    Batch(RecordBatch),
-    /// Nothing left to read.
-    Exhausted,
-    /// Candidates were read and all were filtered out. There may be more.
-    AllFiltered,
-}
-
 impl Iterator for SequentialBatches<'_> {
     type Item = std::result::Result<RecordBatch, ArrowError>;
 
@@ -395,4 +371,28 @@ impl Iterator for SequentialBatches<'_> {
             }
         }
     }
+}
+
+impl Drop for SequentialBatches<'_> {
+    fn drop(&mut self) {
+        if let Some(state) = &self.aggregate {
+            // Best effort: the reader is going away either way, and a failure
+            // here would only leave an unused function registered on the
+            // connection under a name nothing else uses.
+            drop(
+                self.conn
+                    .remove_function(state.name.as_str(), state.arg_count),
+            );
+        }
+    }
+}
+
+/// What one page of candidates produced.
+enum Page {
+    /// A batch with at least one row in it.
+    Batch(RecordBatch),
+    /// Nothing left to read.
+    Exhausted,
+    /// Candidates were read and all were filtered out. There may be more.
+    AllFiltered,
 }

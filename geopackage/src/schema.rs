@@ -69,6 +69,89 @@ fn zm_flag(table_name: &str, column: &'static str, value: i64) -> Result<ZmFlag>
         })
 }
 
+/// Metadata for one column of a user table, from `PRAGMA table_info`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Column {
+    /// Column name.
+    pub name: String,
+    /// The declared type exactly as stored in the schema (e.g. `"TEXT(64)"`,
+    /// `"VARCHAR(20)"`, or the empty string for a column declared without a
+    /// type). It is kept verbatim even when it is outside the spec vocabulary.
+    pub declared_type: String,
+    /// The declared type parsed into the spec vocabulary, or `None` when
+    /// [`Column::declared_type`] is outside it (lenient readers keep the raw
+    /// string).
+    pub column_type: Option<ColumnType>,
+    /// Whether the column has a `NOT NULL` constraint.
+    pub not_null: bool,
+    /// The column default as SQL source text, or `None` for no default.
+    pub default_value: Option<String>,
+    /// Position of the column within the primary key: `0` if it is not part of
+    /// the key, otherwise its 1-based position. SQLite reports a composite key
+    /// as `1, 2, …`. A conformant GeoPackage feature or attribute table has a
+    /// single `INTEGER` primary key column, reported as `1`.
+    pub primary_key: u32,
+    /// The column's `gpkg_data_columns` row, for a file with the
+    /// `gpkg_schema` extension: a human-readable name and title, a
+    /// description, a MIME type, and the name of any constraint its values are
+    /// subject to.
+    ///
+    /// `None` for a file without the extension, or a column it does not
+    /// describe. Resolve [`DataColumn::constraint_name`] with
+    /// [`GeoPackage::column_constraint`].
+    pub data_column: Option<DataColumn>,
+}
+
+impl Column {
+    /// Returns `true` if this column participates in the table's primary key.
+    pub fn is_primary_key(&self) -> bool {
+        self.primary_key != 0
+    }
+}
+
+/// The introspected schema of a user table: its columns and, for feature
+/// tables, the attached [`GeometryColumn`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableSchema {
+    /// Table name.
+    pub table_name: String,
+    /// Columns in declaration order (as `PRAGMA table_info` reports them).
+    pub columns: Vec<Column>,
+    /// The `gpkg_geometry_columns` row for this table, if any.
+    pub geometry_column: Option<GeometryColumn>,
+}
+
+impl TableSchema {
+    /// Returns the column with the given name, if present.
+    pub fn column(&self, name: &str) -> Option<&Column> {
+        self.columns.iter().find(|c| c.name == name)
+    }
+
+    /// Returns the primary-key columns, ordered by their position within the
+    /// key.
+    ///
+    /// Empty when the table has no primary key. A composite key returns more
+    /// than one column. That is not valid for a GeoPackage feature or attribute
+    /// table, but this method returns it rather than rejecting it.
+    pub fn primary_key_columns(&self) -> Vec<&Column> {
+        let mut pk: Vec<&Column> = self.columns.iter().filter(|c| c.is_primary_key()).collect();
+        pk.sort_by_key(|c| c.primary_key);
+        pk
+    }
+
+    /// Returns the single primary-key column, or `None` when the table has no
+    /// primary key or a composite one. This is usually the `fid` column of a
+    /// GeoPackage feature or attribute table, but the name is read from the
+    /// schema and never assumed.
+    pub fn primary_key(&self) -> Option<&Column> {
+        let pk = self.primary_key_columns();
+        match pk.as_slice() {
+            [single] => Some(single),
+            _ => None,
+        }
+    }
+}
+
 const GEOMETRY_COLUMNS_SELECT: &str =
     "SELECT table_name, column_name, geometry_type_name, srs_id, z, m FROM gpkg_geometry_columns";
 
@@ -211,88 +294,5 @@ impl GeoPackage {
             columns,
             geometry_column: self.geometry_column(table_name)?,
         })
-    }
-}
-
-/// Metadata for one column of a user table, from `PRAGMA table_info`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Column {
-    /// Column name.
-    pub name: String,
-    /// The declared type exactly as stored in the schema (e.g. `"TEXT(64)"`,
-    /// `"VARCHAR(20)"`, or the empty string for a column declared without a
-    /// type). It is kept verbatim even when it is outside the spec vocabulary.
-    pub declared_type: String,
-    /// The declared type parsed into the spec vocabulary, or `None` when
-    /// [`Column::declared_type`] is outside it (lenient readers keep the raw
-    /// string).
-    pub column_type: Option<ColumnType>,
-    /// Whether the column has a `NOT NULL` constraint.
-    pub not_null: bool,
-    /// The column default as SQL source text, or `None` for no default.
-    pub default_value: Option<String>,
-    /// Position of the column within the primary key: `0` if it is not part of
-    /// the key, otherwise its 1-based position. SQLite reports a composite key
-    /// as `1, 2, …`. A conformant GeoPackage feature or attribute table has a
-    /// single `INTEGER` primary key column, reported as `1`.
-    pub primary_key: u32,
-    /// The column's `gpkg_data_columns` row, for a file with the
-    /// `gpkg_schema` extension: a human-readable name and title, a
-    /// description, a MIME type, and the name of any constraint its values are
-    /// subject to.
-    ///
-    /// `None` for a file without the extension, or a column it does not
-    /// describe. Resolve [`DataColumn::constraint_name`] with
-    /// [`GeoPackage::column_constraint`].
-    pub data_column: Option<DataColumn>,
-}
-
-impl Column {
-    /// Returns `true` if this column participates in the table's primary key.
-    pub fn is_primary_key(&self) -> bool {
-        self.primary_key != 0
-    }
-}
-
-/// The introspected schema of a user table: its columns and, for feature
-/// tables, the attached [`GeometryColumn`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct TableSchema {
-    /// Table name.
-    pub table_name: String,
-    /// Columns in declaration order (as `PRAGMA table_info` reports them).
-    pub columns: Vec<Column>,
-    /// The `gpkg_geometry_columns` row for this table, if any.
-    pub geometry_column: Option<GeometryColumn>,
-}
-
-impl TableSchema {
-    /// Returns the column with the given name, if present.
-    pub fn column(&self, name: &str) -> Option<&Column> {
-        self.columns.iter().find(|c| c.name == name)
-    }
-
-    /// Returns the primary-key columns, ordered by their position within the
-    /// key.
-    ///
-    /// Empty when the table has no primary key. A composite key returns more
-    /// than one column. That is not valid for a GeoPackage feature or attribute
-    /// table, but this method returns it rather than rejecting it.
-    pub fn primary_key_columns(&self) -> Vec<&Column> {
-        let mut pk: Vec<&Column> = self.columns.iter().filter(|c| c.is_primary_key()).collect();
-        pk.sort_by_key(|c| c.primary_key);
-        pk
-    }
-
-    /// Returns the single primary-key column, or `None` when the table has no
-    /// primary key or a composite one. This is usually the `fid` column of a
-    /// GeoPackage feature or attribute table, but the name is read from the
-    /// schema and never assumed.
-    pub fn primary_key(&self) -> Option<&Column> {
-        let pk = self.primary_key_columns();
-        match pk.as_slice() {
-            [single] => Some(single),
-            _ => None,
-        }
     }
 }

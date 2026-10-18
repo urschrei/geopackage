@@ -80,16 +80,6 @@ pub struct ArrowReadOptions {
     pub threads: usize,
 }
 
-impl Default for ArrowReadOptions {
-    fn default() -> Self {
-        Self {
-            batch_size: DEFAULT_BATCH_SIZE,
-            max_batch_bytes: default_max_batch_bytes(),
-            threads: 0,
-        }
-    }
-}
-
 impl ArrowReadOptions {
     /// Returns options with an explicit batch size. A size of `0` is raised
     /// to `1`.
@@ -129,6 +119,16 @@ impl ArrowReadOptions {
             .map(std::num::NonZeroUsize::get)
             .unwrap_or(1)
             .min(DEFAULT_MAX_THREADS)
+    }
+}
+
+impl Default for ArrowReadOptions {
+    fn default() -> Self {
+        Self {
+            batch_size: DEFAULT_BATCH_SIZE,
+            max_batch_bytes: default_max_batch_bytes(),
+            threads: 0,
+        }
     }
 }
 

@@ -68,97 +68,6 @@ pub struct Srs {
     pub epoch: Option<f64>,
 }
 
-/// The six columns every `gpkg_spatial_ref_sys` has, in the order
-/// [`row_to_srs`] reads them.
-const BASE_COLUMNS: &str =
-    "srs_name, srs_id, organization, organization_coordsys_id, definition, description";
-
-/// Which of the `gpkg_crs_wkt` extension's columns a file has.
-///
-/// This crate and GDAL add the two together, but they arrived in different
-/// versions of the extension. A file can therefore have `definition_12_063`
-/// without `epoch`, so the two are checked separately instead of inferred
-/// from each other.
-#[derive(Debug, Clone, Copy)]
-struct CrsWktColumns {
-    definition_12_063: bool,
-    epoch: bool,
-}
-
-impl CrsWktColumns {
-    /// Reads both with one `PRAGMA table_info`, instead of one per column.
-    fn read(conn: &Connection) -> Result<Self> {
-        let mut stmt = conn.prepare("PRAGMA table_info(gpkg_spatial_ref_sys)")?;
-        let mut rows = stmt.query([])?;
-        let mut columns = Self {
-            definition_12_063: false,
-            epoch: false,
-        };
-        while let Some(row) = rows.next()? {
-            let name: String = row.get(1)?;
-            if name.eq_ignore_ascii_case("definition_12_063") {
-                columns.definition_12_063 = true;
-            } else if name.eq_ignore_ascii_case("epoch") {
-                columns.epoch = true;
-            }
-        }
-        Ok(columns)
-    }
-
-    /// Returns the select list: the base columns, then whichever extension
-    /// columns the file has, so the reader can index by position either way.
-    fn select_list(self) -> String {
-        let mut list = BASE_COLUMNS.to_owned();
-        if self.definition_12_063 {
-            list.push_str(", definition_12_063");
-        }
-        if self.epoch {
-            list.push_str(", epoch");
-        }
-        list
-    }
-}
-
-/// Reads one row of [`CrsWktColumns::select_list`].
-fn row_to_srs(row: &rusqlite::Row<'_>, columns: CrsWktColumns) -> rusqlite::Result<Srs> {
-    // The extension columns follow the six base ones, in the order
-    // `select_list` appends them, so an absent column shifts the next one down
-    // rather than leaving a hole.
-    let mut next = 6;
-    let mut take = |present: bool| {
-        present.then(|| {
-            let index = next;
-            next += 1;
-            index
-        })
-    };
-    let wkt2_index = take(columns.definition_12_063);
-    let epoch_index = take(columns.epoch);
-    Ok(Srs {
-        name: row.get(0)?,
-        srs_id: row.get(1)?,
-        organization: row.get(2)?,
-        organization_coordsys_id: row.get(3)?,
-        definition: row.get(4)?,
-        description: row.get(5)?,
-        // `undefined` is the spec's own "no definition here" value
-        // (Requirement 117), and the default this crate and GDAL give the
-        // column, so it reads back as absent rather than as a definition.
-        definition_wkt2: match wkt2_index {
-            Some(index) => row.get::<_, Option<String>>(index)?.filter(is_defined),
-            None => None,
-        },
-        epoch: match epoch_index {
-            Some(index) => row.get(index)?,
-            None => None,
-        },
-    })
-}
-
-fn is_defined(definition: &String) -> bool {
-    definition != "undefined"
-}
-
 impl GeoPackage {
     /// Looks up the SRS row with the given `srs_id`, if present.
     pub fn srs(&self, srs_id: i32) -> Result<Option<Srs>> {
@@ -321,6 +230,97 @@ impl GeoPackage {
             epoch: None,
         })
     }
+}
+
+/// The six columns every `gpkg_spatial_ref_sys` has, in the order
+/// [`row_to_srs`] reads them.
+const BASE_COLUMNS: &str =
+    "srs_name, srs_id, organization, organization_coordsys_id, definition, description";
+
+/// Which of the `gpkg_crs_wkt` extension's columns a file has.
+///
+/// This crate and GDAL add the two together, but they arrived in different
+/// versions of the extension. A file can therefore have `definition_12_063`
+/// without `epoch`, so the two are checked separately instead of inferred
+/// from each other.
+#[derive(Debug, Clone, Copy)]
+struct CrsWktColumns {
+    definition_12_063: bool,
+    epoch: bool,
+}
+
+impl CrsWktColumns {
+    /// Reads both with one `PRAGMA table_info`, instead of one per column.
+    fn read(conn: &Connection) -> Result<Self> {
+        let mut stmt = conn.prepare("PRAGMA table_info(gpkg_spatial_ref_sys)")?;
+        let mut rows = stmt.query([])?;
+        let mut columns = Self {
+            definition_12_063: false,
+            epoch: false,
+        };
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name.eq_ignore_ascii_case("definition_12_063") {
+                columns.definition_12_063 = true;
+            } else if name.eq_ignore_ascii_case("epoch") {
+                columns.epoch = true;
+            }
+        }
+        Ok(columns)
+    }
+
+    /// Returns the select list: the base columns, then whichever extension
+    /// columns the file has, so the reader can index by position either way.
+    fn select_list(self) -> String {
+        let mut list = BASE_COLUMNS.to_owned();
+        if self.definition_12_063 {
+            list.push_str(", definition_12_063");
+        }
+        if self.epoch {
+            list.push_str(", epoch");
+        }
+        list
+    }
+}
+
+/// Reads one row of [`CrsWktColumns::select_list`].
+fn row_to_srs(row: &rusqlite::Row<'_>, columns: CrsWktColumns) -> rusqlite::Result<Srs> {
+    // The extension columns follow the six base ones, in the order
+    // `select_list` appends them, so an absent column shifts the next one down
+    // rather than leaving a hole.
+    let mut next = 6;
+    let mut take = |present: bool| {
+        present.then(|| {
+            let index = next;
+            next += 1;
+            index
+        })
+    };
+    let wkt2_index = take(columns.definition_12_063);
+    let epoch_index = take(columns.epoch);
+    Ok(Srs {
+        name: row.get(0)?,
+        srs_id: row.get(1)?,
+        organization: row.get(2)?,
+        organization_coordsys_id: row.get(3)?,
+        definition: row.get(4)?,
+        description: row.get(5)?,
+        // `undefined` is the spec's own "no definition here" value
+        // (Requirement 117), and the default this crate and GDAL give the
+        // column, so it reads back as absent rather than as a definition.
+        definition_wkt2: match wkt2_index {
+            Some(index) => row.get::<_, Option<String>>(index)?.filter(is_defined),
+            None => None,
+        },
+        epoch: match epoch_index {
+            Some(index) => row.get(index)?,
+            None => None,
+        },
+    })
+}
+
+fn is_defined(definition: &String) -> bool {
+    definition != "undefined"
 }
 
 /// Adds the `gpkg_crs_wkt_1_1` columns and registers the extension, if the

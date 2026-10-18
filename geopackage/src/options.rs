@@ -18,68 +18,6 @@ use rusqlite::OpenFlags;
 
 use crate::{GeoPackage, Result};
 
-/// SQLite journal mode for a GeoPackage connection.
-///
-/// The default favours interchange. If you don't set a journal mode, the file
-/// keeps the one it has, and a newly created file uses [`JournalMode::Delete`]
-/// (SQLite's own default), so a `.gpkg` you hand over is a single file.
-/// [`JournalMode::Wal`] is opt-in, for concurrent read/write throughput. A
-/// handle that opted into WAL checkpoints and resets the file to `Delete` on
-/// [`GeoPackage::close`] and on drop, so no `-wal`/`-shm` sidecars are left
-/// behind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum JournalMode {
-    /// The rollback journal (`PRAGMA journal_mode = DELETE`). It keeps the
-    /// database in a single file, and is the interchange default.
-    Delete,
-    /// Write-ahead logging (`PRAGMA journal_mode = WAL`). Faster concurrent
-    /// read/write, at the cost of `-wal`/`-shm` sidecar files while the
-    /// connection is open. A WAL handle is reset to `Delete` on close or drop.
-    Wal,
-}
-
-impl JournalMode {
-    /// Returns the `PRAGMA journal_mode` keyword.
-    pub(crate) fn keyword(self) -> &'static str {
-        match self {
-            Self::Delete => "DELETE",
-            Self::Wal => "WAL",
-        }
-    }
-}
-
-/// SQLite `synchronous` durability level (`PRAGMA synchronous`).
-///
-/// Trades write throughput against how much recent work a power loss or OS
-/// crash can undo. [`Synchronous::Full`] is SQLite's default in rollback-journal
-/// mode, and [`Synchronous::Normal`] is the usual choice under
-/// [`JournalMode::Wal`]. If you leave it unset, SQLite's own default applies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Synchronous {
-    /// `PRAGMA synchronous = OFF` (0). No syncing: fastest and least durable.
-    Off,
-    /// `PRAGMA synchronous = NORMAL` (1).
-    Normal,
-    /// `PRAGMA synchronous = FULL` (2).
-    Full,
-    /// `PRAGMA synchronous = EXTRA` (3).
-    Extra,
-}
-
-impl Synchronous {
-    /// Returns the numeric `PRAGMA synchronous` code (0–3).
-    pub(crate) fn code(self) -> i32 {
-        match self {
-            Self::Off => 0,
-            Self::Normal => 1,
-            Self::Full => 2,
-            Self::Extra => 3,
-        }
-    }
-}
-
 /// How long a statement waits for another connection's lock before failing,
 /// unless [`OpenOptions::busy_timeout`] says otherwise.
 ///
@@ -331,5 +269,67 @@ impl OpenOptions {
     /// responsible for making sure the connection is writable.
     pub fn from_connection(self, conn: rusqlite::Connection) -> Result<GeoPackage> {
         GeoPackage::from_connection_configured(conn, self, true)
+    }
+}
+
+/// SQLite journal mode for a GeoPackage connection.
+///
+/// The default favours interchange. If you don't set a journal mode, the file
+/// keeps the one it has, and a newly created file uses [`JournalMode::Delete`]
+/// (SQLite's own default), so a `.gpkg` you hand over is a single file.
+/// [`JournalMode::Wal`] is opt-in, for concurrent read/write throughput. A
+/// handle that opted into WAL checkpoints and resets the file to `Delete` on
+/// [`GeoPackage::close`] and on drop, so no `-wal`/`-shm` sidecars are left
+/// behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum JournalMode {
+    /// The rollback journal (`PRAGMA journal_mode = DELETE`). It keeps the
+    /// database in a single file, and is the interchange default.
+    Delete,
+    /// Write-ahead logging (`PRAGMA journal_mode = WAL`). Faster concurrent
+    /// read/write, at the cost of `-wal`/`-shm` sidecar files while the
+    /// connection is open. A WAL handle is reset to `Delete` on close or drop.
+    Wal,
+}
+
+impl JournalMode {
+    /// Returns the `PRAGMA journal_mode` keyword.
+    pub(crate) fn keyword(self) -> &'static str {
+        match self {
+            Self::Delete => "DELETE",
+            Self::Wal => "WAL",
+        }
+    }
+}
+
+/// SQLite `synchronous` durability level (`PRAGMA synchronous`).
+///
+/// Trades write throughput against how much recent work a power loss or OS
+/// crash can undo. [`Synchronous::Full`] is SQLite's default in rollback-journal
+/// mode, and [`Synchronous::Normal`] is the usual choice under
+/// [`JournalMode::Wal`]. If you leave it unset, SQLite's own default applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Synchronous {
+    /// `PRAGMA synchronous = OFF` (0). No syncing: fastest and least durable.
+    Off,
+    /// `PRAGMA synchronous = NORMAL` (1).
+    Normal,
+    /// `PRAGMA synchronous = FULL` (2).
+    Full,
+    /// `PRAGMA synchronous = EXTRA` (3).
+    Extra,
+}
+
+impl Synchronous {
+    /// Returns the numeric `PRAGMA synchronous` code (0–3).
+    pub(crate) fn code(self) -> i32 {
+        match self {
+            Self::Off => 0,
+            Self::Normal => 1,
+            Self::Full => 2,
+            Self::Extra => 3,
+        }
     }
 }
