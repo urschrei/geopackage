@@ -45,25 +45,24 @@ reads seven tags, and checks the encoding requirements against them.
 
 ## The limits of a header check
 
-A header check cannot check one requirement. Requirement 21 says that every
-pixel in a tile must have a valid value, and that NaN and Inf must not occur.
-That is a statement about samples, and a check of the samples needs a decoder.
-By default, a payload that this library accepts conforms in structure only, and
-the check says nothing about its contents.
+A header check cannot check one requirement, [Requirement 21](#requirement-21),
+because it is a statement about samples, and a check of the samples needs a
+decoder. By default, a payload that this library accepts conforms in structure
+only, and the check says nothing about its contents.
 
 The decoder is behind the `coverage-samples` feature, which adds the `tiff` and
-`png` crates. With it, the library checks Requirement 21, looks up values at a
-position, and calculates per-tile statistics. [How to read values from a
-coverage](../how-to/coverage-values.md) shows each of these. The feature stays
-off by default because a reader that only copies or serves tiles never needs a
-sample.
+`png` crates. With it, the library checks [Requirement 21](#requirement-21),
+looks up values at a position, and calculates per-tile statistics. [How to read
+values from a coverage](../how-to/coverage-values.md) shows each of these. The
+feature stays off by default because a reader that only copies or serves tiles
+never needs a sample.
 
 The decode is in `geopackage-core`, behind a feature of the same name that
 `geopackage` turns on. A coverage's samples are its data, and the rules about
-them (Requirement 21, the scale and offset, `data_null`, `grid_cell_encoding`,
-what the statistics columns mean) are part of the format, which is what the
-core crate holds. Image tiles are different: the spec says nothing about their
-pixels, so neither crate decodes them.
+them ([Requirement 21](#requirement-21), the scale and offset, `data_null`,
+`grid_cell_encoding`, what the statistics columns mean) are part of the format,
+which is what the core crate holds. Image tiles are different: the spec says
+nothing about their pixels, so neither crate decodes them.
 
 Without the feature, the same limit applies to the write path. The four
 per-tile statistics come from the samples, so they are `None` unless you supply
@@ -87,6 +86,38 @@ writer.put_with_ancillary(
 writer.commit()?;
 # Ok(()) }
 ```
+
+## Requirement 21
+
+The extension numbers its rules, and the library's errors, findings and
+documentation cite them by number. Requirement 21 of [OGC
+17-066r2](https://docs.ogc.org/is/17-066r2/17-066r2.html) is the only one
+about the samples of a tile, not the structure of its payload:
+
+> All pixels in a tile of coverage data *SHALL* be set with a valid component
+> value … Special floating point values such as NaN and Inf SHALL NOT be used.
+
+Only a `float` coverage can break it, because an integer sample cannot hold NaN
+or an infinity. A cell with no data holds the coverage's `data_null` value, not
+NaN. Many raster tools mark a missing float cell with NaN, so a tile converted
+from another format can break the requirement although its header is correct.
+
+What checks it, and what does not:
+
+- `Coverage::put_tile`, `CoverageWriter::put` and
+  `CoverageWriter::put_with_ancillary` check the header only, so they do not
+  check Requirement 21. If you write payloads from another source, their
+  samples are your responsibility.
+- With the `coverage-samples` feature, `CoverageWriter::put_with_statistics`
+  decodes the payload and refuses a tile with a NaN or infinite sample.
+- With the feature, `GeoPackage::validate` decodes every coverage tile and
+  reports such a tile as a breach of Requirement 21. A tile whose header
+  declares more samples than `OpenOptions::max_decoded_samples` allows is not
+  decoded, so its samples are not checked. Without the feature, `validate`
+  does not check the requirement.
+- With the feature, `Coverage::check_samples` checks one decoded tile.
+  [How to read values from a
+  coverage](../how-to/coverage-values.md#check-a-coverages-samples) shows it.
 
 ## Why a coverage has a separate handle
 
