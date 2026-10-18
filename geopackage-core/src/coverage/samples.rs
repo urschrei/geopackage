@@ -16,6 +16,7 @@
 
 use std::io::Cursor;
 
+use super::payload::unreadable;
 use super::{CoverageAncillary, CoveragePayload, TileAncillary, coverage_payload};
 use crate::tiles::{TileCoord, TileError, TileMatrix, TileMatrixSet};
 
@@ -326,10 +327,6 @@ fn decode_png(bytes: &[u8], max_samples: usize) -> Result<(usize, usize, Vec<f64
 
 fn widen<T: Into<f64>>(samples: Vec<T>) -> Vec<f64> {
     samples.into_iter().map(Into::into).collect()
-}
-
-fn unreadable(reason: String) -> TileError {
-    TileError::UnreadablePayload { reason }
 }
 
 /// How a [`SampleLookup`] derives a value from the samples around a position.
