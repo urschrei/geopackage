@@ -160,178 +160,6 @@ use crate::handle::{ChildToken, Container, LayerHandle};
 use crate::util::borrow_str;
 use crate::value::{borrow_values, gpkg_value_t};
 
-/// The C stream interface's `struct ArrowArrayStream`, field for field as the
-/// Arrow specification defines it.
-///
-/// `FFI_ArrowArrayStream` has the same layout, but its fields are private.
-/// The assertions below check that the two agree in size and alignment. Field
-/// order is fixed by the specification, which both follow.
-#[repr(C)]
-struct RawStream {
-    get_schema: Option<unsafe extern "C" fn(*mut RawStream, *mut FFI_ArrowSchema) -> c_int>,
-    get_next: Option<unsafe extern "C" fn(*mut RawStream, *mut FFI_ArrowArray) -> c_int>,
-    get_last_error: Option<unsafe extern "C" fn(*mut RawStream) -> *const c_char>,
-    release: Option<unsafe extern "C" fn(*mut RawStream)>,
-    private_data: *mut c_void,
-}
-
-const _: () = assert!(size_of::<RawStream>() == size_of::<FFI_ArrowArrayStream>());
-const _: () = assert!(align_of::<RawStream>() == align_of::<FFI_ArrowArrayStream>());
-
-/// What a stream owns for as long as C holds it.
-///
-/// `batches` has had its borrow of the container erased. `_token` makes that
-/// sound: it counts against the container's child count until the stream is
-/// released.
-struct StreamState {
-    batches: ArrowBatches<'static>,
-    last_error: Option<CString>,
-    _token: ChildToken,
-}
-
-/// Drops the stream's state and blanks the stream, as the C Data Interface
-/// requires of a release callback.
-///
-/// # Safety
-///
-/// `stream` must be a stream this module produced, not already released.
-unsafe extern "C" fn release(stream: *mut RawStream) {
-    if stream.is_null() {
-        return;
-    }
-    // SAFETY: the caller guarantees a live stream this module produced.
-    let stream = unsafe { &mut *stream };
-    stream.get_schema = None;
-    stream.get_next = None;
-    stream.get_last_error = None;
-    if !stream.private_data.is_null() {
-        // SAFETY: `private_data` was produced by `Box::into_raw` in
-        // `export_batches` and has not been freed; releasing a stream twice is
-        // prevented by clearing `release` below, which is what the C Data
-        // Interface tells consumers to check.
-        drop(unsafe { Box::from_raw(stream.private_data.cast::<StreamState>()) });
-        stream.private_data = std::ptr::null_mut();
-    }
-    // Cleared last: a consumer treats a NULL release as "already released".
-    stream.release = None;
-}
-
-/// Returns the stream's private state, or `None` when it has been released.
-///
-/// # Safety
-///
-/// `stream` must be a stream this module produced.
-unsafe fn state<'a>(stream: *mut RawStream) -> Option<&'a mut StreamState> {
-    if stream.is_null() {
-        return None;
-    }
-    // SAFETY: the caller guarantees a live stream this module produced.
-    let private = unsafe { (*stream).private_data };
-    if private.is_null() {
-        return None;
-    }
-    // SAFETY: `private_data` is a `StreamState` this module boxed, and the
-    // stream is used from one thread at a time by the crate's threading rule.
-    Some(unsafe { &mut *private.cast::<StreamState>() })
-}
-
-/// Writes the stream's schema into `out`.
-///
-/// # Safety
-///
-/// `stream` must be a stream this module produced and `out` must be writable.
-unsafe extern "C" fn get_schema(stream: *mut RawStream, out: *mut FFI_ArrowSchema) -> c_int {
-    // SAFETY: forwarded to this callback's contract.
-    let Some(state) = (unsafe { state(stream) }) else {
-        return EINVAL;
-    };
-    match FFI_ArrowSchema::try_from(state.batches.schema().as_ref()) {
-        Ok(schema) => {
-            // SAFETY: the caller guarantees `out` is writable and uninitialised
-            // from the consumer's point of view, which is what the C Data
-            // Interface specifies for an out-parameter.
-            unsafe { std::ptr::write_unaligned(out, schema) };
-            0
-        }
-        Err(error) => {
-            state.last_error = CString::new(error.to_string()).ok();
-            EIO
-        }
-    }
-}
-
-/// Writes the next batch into `out`, or a released array at end of stream.
-///
-/// # Safety
-///
-/// As [`get_schema`].
-unsafe extern "C" fn get_next(stream: *mut RawStream, out: *mut FFI_ArrowArray) -> c_int {
-    // SAFETY: forwarded to this callback's contract.
-    let Some(state) = (unsafe { state(stream) }) else {
-        return EINVAL;
-    };
-    match state.batches.next() {
-        // A released array is how the interface spells end of stream.
-        None => {
-            // SAFETY: the caller guarantees `out` is writable.
-            unsafe { std::ptr::write_unaligned(out, FFI_ArrowArray::empty()) };
-            0
-        }
-        Some(Ok(batch)) => {
-            let array = FFI_ArrowArray::new(&StructArray::from(batch).to_data());
-            // SAFETY: the caller guarantees `out` is writable.
-            unsafe { std::ptr::write_unaligned(out, array) };
-            0
-        }
-        Some(Err(error)) => {
-            state.last_error = CString::new(error.to_string()).ok();
-            EIO
-        }
-    }
-}
-
-/// Returns the message from the last failing callback, or NULL.
-///
-/// The consumer borrows the message. It stays valid until the next call on the
-/// stream.
-///
-/// # Safety
-///
-/// As [`get_schema`].
-unsafe extern "C" fn get_last_error(stream: *mut RawStream) -> *const c_char {
-    // SAFETY: forwarded to this callback's contract.
-    let Some(state) = (unsafe { state(stream) }) else {
-        return std::ptr::null();
-    };
-    match &state.last_error {
-        Some(message) => message.as_ptr(),
-        None => std::ptr::null(),
-    }
-}
-
-/// The errno values `EINVAL` and `EIO`, which the C Data Interface suggests
-/// for a misused and a failing stream. They are defined here rather than taken
-/// from libc, which this crate does not otherwise depend on.
-const EINVAL: c_int = 22;
-const EIO: c_int = 5;
-
-/// Builds a stream over `batches`, holding `token` to keep the container
-/// alive.
-fn export_batches(batches: ArrowBatches<'static>, token: ChildToken) -> RawStream {
-    let state = Box::new(StreamState {
-        batches,
-        last_error: None,
-        _token: token,
-    });
-    RawStream {
-        get_schema: Some(get_schema),
-        get_next: Some(get_next),
-        get_last_error: Some(get_last_error),
-        release: Some(release),
-        private_data: Box::into_raw(state).cast::<c_void>(),
-    }
-}
-
 /// Reads a layer as an Arrow C Data Interface stream.
 ///
 /// Fills in `out` with a stream that you own and must release through its own
@@ -823,3 +651,175 @@ pub unsafe extern "C" fn gpkg_add_epsg_srs(
         }
     }
 }
+
+/// Builds a stream over `batches`, holding `token` to keep the container
+/// alive.
+fn export_batches(batches: ArrowBatches<'static>, token: ChildToken) -> RawStream {
+    let state = Box::new(StreamState {
+        batches,
+        last_error: None,
+        _token: token,
+    });
+    RawStream {
+        get_schema: Some(get_schema),
+        get_next: Some(get_next),
+        get_last_error: Some(get_last_error),
+        release: Some(release),
+        private_data: Box::into_raw(state).cast::<c_void>(),
+    }
+}
+
+/// What a stream owns for as long as C holds it.
+///
+/// `batches` has had its borrow of the container erased. `_token` makes that
+/// sound: it counts against the container's child count until the stream is
+/// released.
+struct StreamState {
+    batches: ArrowBatches<'static>,
+    last_error: Option<CString>,
+    _token: ChildToken,
+}
+
+/// The C stream interface's `struct ArrowArrayStream`, field for field as the
+/// Arrow specification defines it.
+///
+/// `FFI_ArrowArrayStream` has the same layout, but its fields are private.
+/// The assertions below check that the two agree in size and alignment. Field
+/// order is fixed by the specification, which both follow.
+#[repr(C)]
+struct RawStream {
+    get_schema: Option<unsafe extern "C" fn(*mut RawStream, *mut FFI_ArrowSchema) -> c_int>,
+    get_next: Option<unsafe extern "C" fn(*mut RawStream, *mut FFI_ArrowArray) -> c_int>,
+    get_last_error: Option<unsafe extern "C" fn(*mut RawStream) -> *const c_char>,
+    release: Option<unsafe extern "C" fn(*mut RawStream)>,
+    private_data: *mut c_void,
+}
+
+const _: () = assert!(size_of::<RawStream>() == size_of::<FFI_ArrowArrayStream>());
+const _: () = assert!(align_of::<RawStream>() == align_of::<FFI_ArrowArrayStream>());
+
+/// Drops the stream's state and blanks the stream, as the C Data Interface
+/// requires of a release callback.
+///
+/// # Safety
+///
+/// `stream` must be a stream this module produced, not already released.
+unsafe extern "C" fn release(stream: *mut RawStream) {
+    if stream.is_null() {
+        return;
+    }
+    // SAFETY: the caller guarantees a live stream this module produced.
+    let stream = unsafe { &mut *stream };
+    stream.get_schema = None;
+    stream.get_next = None;
+    stream.get_last_error = None;
+    if !stream.private_data.is_null() {
+        // SAFETY: `private_data` was produced by `Box::into_raw` in
+        // `export_batches` and has not been freed; releasing a stream twice is
+        // prevented by clearing `release` below, which is what the C Data
+        // Interface tells consumers to check.
+        drop(unsafe { Box::from_raw(stream.private_data.cast::<StreamState>()) });
+        stream.private_data = std::ptr::null_mut();
+    }
+    // Cleared last: a consumer treats a NULL release as "already released".
+    stream.release = None;
+}
+
+/// Returns the stream's private state, or `None` when it has been released.
+///
+/// # Safety
+///
+/// `stream` must be a stream this module produced.
+unsafe fn state<'a>(stream: *mut RawStream) -> Option<&'a mut StreamState> {
+    if stream.is_null() {
+        return None;
+    }
+    // SAFETY: the caller guarantees a live stream this module produced.
+    let private = unsafe { (*stream).private_data };
+    if private.is_null() {
+        return None;
+    }
+    // SAFETY: `private_data` is a `StreamState` this module boxed, and the
+    // stream is used from one thread at a time by the crate's threading rule.
+    Some(unsafe { &mut *private.cast::<StreamState>() })
+}
+
+/// Writes the stream's schema into `out`.
+///
+/// # Safety
+///
+/// `stream` must be a stream this module produced and `out` must be writable.
+unsafe extern "C" fn get_schema(stream: *mut RawStream, out: *mut FFI_ArrowSchema) -> c_int {
+    // SAFETY: forwarded to this callback's contract.
+    let Some(state) = (unsafe { state(stream) }) else {
+        return EINVAL;
+    };
+    match FFI_ArrowSchema::try_from(state.batches.schema().as_ref()) {
+        Ok(schema) => {
+            // SAFETY: the caller guarantees `out` is writable and uninitialised
+            // from the consumer's point of view, which is what the C Data
+            // Interface specifies for an out-parameter.
+            unsafe { std::ptr::write_unaligned(out, schema) };
+            0
+        }
+        Err(error) => {
+            state.last_error = CString::new(error.to_string()).ok();
+            EIO
+        }
+    }
+}
+
+/// Writes the next batch into `out`, or a released array at end of stream.
+///
+/// # Safety
+///
+/// As [`get_schema`].
+unsafe extern "C" fn get_next(stream: *mut RawStream, out: *mut FFI_ArrowArray) -> c_int {
+    // SAFETY: forwarded to this callback's contract.
+    let Some(state) = (unsafe { state(stream) }) else {
+        return EINVAL;
+    };
+    match state.batches.next() {
+        // A released array is how the interface spells end of stream.
+        None => {
+            // SAFETY: the caller guarantees `out` is writable.
+            unsafe { std::ptr::write_unaligned(out, FFI_ArrowArray::empty()) };
+            0
+        }
+        Some(Ok(batch)) => {
+            let array = FFI_ArrowArray::new(&StructArray::from(batch).to_data());
+            // SAFETY: the caller guarantees `out` is writable.
+            unsafe { std::ptr::write_unaligned(out, array) };
+            0
+        }
+        Some(Err(error)) => {
+            state.last_error = CString::new(error.to_string()).ok();
+            EIO
+        }
+    }
+}
+
+/// Returns the message from the last failing callback, or NULL.
+///
+/// The consumer borrows the message. It stays valid until the next call on the
+/// stream.
+///
+/// # Safety
+///
+/// As [`get_schema`].
+unsafe extern "C" fn get_last_error(stream: *mut RawStream) -> *const c_char {
+    // SAFETY: forwarded to this callback's contract.
+    let Some(state) = (unsafe { state(stream) }) else {
+        return std::ptr::null();
+    };
+    match &state.last_error {
+        Some(message) => message.as_ptr(),
+        None => std::ptr::null(),
+    }
+}
+
+/// The errno values `EINVAL` and `EIO`, which the C Data Interface suggests
+/// for a misused and a failing stream. They are defined here rather than taken
+/// from libc, which this crate does not otherwise depend on.
+const EINVAL: c_int = 22;
+const EIO: c_int = 5;

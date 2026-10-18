@@ -181,6 +181,117 @@ impl From<&Error> for Status {
     }
 }
 
+/// The status code and message of a failed call.
+///
+/// Initialise one as `{GPKG_STATUS_OK, NULL}` and pass its address to any call
+/// that takes a `gpkg_error_t *`. A successful call leaves it alone. A failing
+/// call sets `code` and stores a NUL-terminated UTF-8 `message` that you own.
+/// Release it with `gpkg_error_clear` before you reuse the variable.
+#[repr(C)]
+pub struct gpkg_error_t {
+    /// What kind of failure occurred.
+    pub code: Status,
+    /// A human-readable description, or NULL. Owned by the caller once set.
+    pub message: *mut c_char,
+}
+
+/// Fills an error out-parameter, if the caller supplied one.
+///
+/// # Safety
+///
+/// `slot`, when non-NULL, must point at a writable `gpkg_error_t` that does not
+/// already hold a message. Every entry point in this crate satisfies that by
+/// only writing into a slot it has not written before during the call.
+pub(crate) unsafe fn set_error(slot: *mut gpkg_error_t, code: Status, message: &str) {
+    if slot.is_null() {
+        return;
+    }
+    // A message with an interior NUL cannot be a C string. That can only come
+    // from a table or column name a file itself contains, so it is reported as
+    // a message rather than dropped.
+    let owned = CString::new(message).unwrap_or_else(|_| {
+        CString::new("error message contained an interior NUL").unwrap_or_default()
+    });
+    // SAFETY: the caller guarantees `slot` points at a writable `gpkg_error_t`,
+    // so taking a mutable reference to it is sound. One reference rather than
+    // two raw dereferences, so the block does a single unsafe operation.
+    let slot = unsafe { &mut *slot };
+    slot.code = code;
+    slot.message = owned.into_raw();
+}
+
+/// Fills an error out-parameter from a library error.
+///
+/// # Safety
+///
+/// As [`set_error`].
+pub(crate) unsafe fn set_library_error(slot: *mut gpkg_error_t, error: &Error) {
+    // SAFETY: forwarded to the caller's guarantee on `slot`.
+    unsafe { set_error(slot, Status::from(error), &error.to_string()) }
+}
+
+/// Fills an error out-parameter from a library error and returns its status.
+///
+/// # Safety
+///
+/// As [`set_error`].
+pub(crate) unsafe fn failed(error: &Error, slot: *mut gpkg_error_t) -> Status {
+    // SAFETY: forwarded to the caller's guarantee on `slot`.
+    unsafe { set_library_error(slot, error) };
+    Status::from(error)
+}
+
+/// Turns a unit-returning library call into a status, filling in `slot` on
+/// failure.
+///
+/// # Safety
+///
+/// As [`set_error`].
+pub(crate) unsafe fn report(result: Result<(), Error>, slot: *mut gpkg_error_t) -> Status {
+    match result {
+        Ok(()) => Status::Ok,
+        // SAFETY: forwarded to the caller's guarantee on `slot`.
+        Err(err) => unsafe { failed(&err, slot) },
+    }
+}
+
+/// Frees an error's message and resets its code to `GPKG_STATUS_OK`.
+///
+/// You can call this on an error that was never filled in, and you can call it
+/// twice, because it sets the message pointer to NULL when it frees it.
+/// Passing NULL does nothing.
+///
+/// ```c
+/// gpkg_error_t error = {GPKG_STATUS_OK, NULL};
+/// gpkg_t *gpkg = gpkg_open("places.gpkg", &error);
+/// if (!gpkg) {
+///     fprintf(stderr, "%s\n", error.message ? error.message : "(no message)");
+///     gpkg_error_clear(&error);   // the message is freed here
+/// }
+/// // `error` is now back to {GPKG_STATUS_OK, NULL} and ready for reuse.
+/// ```
+///
+/// # Safety
+///
+/// `error`, when non-NULL, must point at a `gpkg_error_t` this library filled
+/// in, and its `message` must not have been freed by any other means.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_error_clear(error: *mut gpkg_error_t) {
+    if error.is_null() {
+        return;
+    }
+    // SAFETY: the caller guarantees a valid, writable `gpkg_error_t`.
+    let error = unsafe { &mut *error };
+    if !error.message.is_null() {
+        // SAFETY: `message` was produced by `CString::into_raw` in `set_error`
+        // and has not been freed, by the caller's guarantee. Retaking it as a
+        // `CString` frees it with the allocator that made it.
+        drop(unsafe { CString::from_raw(error.message) });
+        error.message = std::ptr::null_mut();
+    }
+    error.code = Status::Ok;
+}
+
 /// Classifies an Arrow failure. One reaches this crate when a stream that the
 /// caller supplied to `gpkg_layer_write_arrow` fails part-way through.
 ///
@@ -308,92 +419,6 @@ fn tile_status(error: &TileError) -> Status {
         // until it is given a category, exactly as for `Error` above.
         _ => Status::Other,
     }
-}
-
-/// The status code and message of a failed call.
-///
-/// Initialise one as `{GPKG_STATUS_OK, NULL}` and pass its address to any call
-/// that takes a `gpkg_error_t *`. A successful call leaves it alone. A failing
-/// call sets `code` and stores a NUL-terminated UTF-8 `message` that you own.
-/// Release it with `gpkg_error_clear` before you reuse the variable.
-#[repr(C)]
-pub struct gpkg_error_t {
-    /// What kind of failure occurred.
-    pub code: Status,
-    /// A human-readable description, or NULL. Owned by the caller once set.
-    pub message: *mut c_char,
-}
-
-/// Fills an error out-parameter, if the caller supplied one.
-///
-/// # Safety
-///
-/// `slot`, when non-NULL, must point at a writable `gpkg_error_t` that does not
-/// already hold a message. Every entry point in this crate satisfies that by
-/// only writing into a slot it has not written before during the call.
-pub(crate) unsafe fn set_error(slot: *mut gpkg_error_t, code: Status, message: &str) {
-    if slot.is_null() {
-        return;
-    }
-    // A message with an interior NUL cannot be a C string. That can only come
-    // from a table or column name a file itself contains, so it is reported as
-    // a message rather than dropped.
-    let owned = CString::new(message).unwrap_or_else(|_| {
-        CString::new("error message contained an interior NUL").unwrap_or_default()
-    });
-    // SAFETY: the caller guarantees `slot` points at a writable `gpkg_error_t`,
-    // so taking a mutable reference to it is sound. One reference rather than
-    // two raw dereferences, so the block does a single unsafe operation.
-    let slot = unsafe { &mut *slot };
-    slot.code = code;
-    slot.message = owned.into_raw();
-}
-
-/// Fills an error out-parameter from a library error.
-///
-/// # Safety
-///
-/// As [`set_error`].
-pub(crate) unsafe fn set_library_error(slot: *mut gpkg_error_t, error: &Error) {
-    // SAFETY: forwarded to the caller's guarantee on `slot`.
-    unsafe { set_error(slot, Status::from(error), &error.to_string()) }
-}
-
-/// Frees an error's message and resets its code to `GPKG_STATUS_OK`.
-///
-/// You can call this on an error that was never filled in, and you can call it
-/// twice, because it sets the message pointer to NULL when it frees it.
-/// Passing NULL does nothing.
-///
-/// ```c
-/// gpkg_error_t error = {GPKG_STATUS_OK, NULL};
-/// gpkg_t *gpkg = gpkg_open("places.gpkg", &error);
-/// if (!gpkg) {
-///     fprintf(stderr, "%s\n", error.message ? error.message : "(no message)");
-///     gpkg_error_clear(&error);   // the message is freed here
-/// }
-/// // `error` is now back to {GPKG_STATUS_OK, NULL} and ready for reuse.
-/// ```
-///
-/// # Safety
-///
-/// `error`, when non-NULL, must point at a `gpkg_error_t` this library filled
-/// in, and its `message` must not have been freed by any other means.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn gpkg_error_clear(error: *mut gpkg_error_t) {
-    if error.is_null() {
-        return;
-    }
-    // SAFETY: the caller guarantees a valid, writable `gpkg_error_t`.
-    let error = unsafe { &mut *error };
-    if !error.message.is_null() {
-        // SAFETY: `message` was produced by `CString::into_raw` in `set_error`
-        // and has not been freed, by the caller's guarantee. Retaking it as a
-        // `CString` frees it with the allocator that made it.
-        drop(unsafe { CString::from_raw(error.message) });
-        error.message = std::ptr::null_mut();
-    }
-    error.code = Status::Ok;
 }
 
 #[cfg(test)]

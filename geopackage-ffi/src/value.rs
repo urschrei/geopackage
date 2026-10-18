@@ -36,6 +36,20 @@ use geopackage::core::datetime::{Date, DateTime};
 use crate::error::{Status, gpkg_error_t, set_error};
 use crate::util::borrow_str;
 
+/// One cell of a row: a tag and a payload.
+///
+/// The library owns none of it. Text and binary point at your memory and are
+/// read during the call that takes them.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct gpkg_value_t {
+    /// Which case `value` contains.
+    pub kind: ValueKind,
+    /// The payload, read according to `kind`. It is not read at all for
+    /// [`ValueKind::Null`].
+    pub value: gpkg_value_payload,
+}
+
 /// Which case a [`gpkg_value_t`] holds.
 ///
 /// The enum is `#[repr(i32)]`, so cbindgen emits a plain C enum with stable
@@ -62,6 +76,27 @@ pub enum ValueKind {
     DateTime = 7,
 }
 
+/// The payload of a [`gpkg_value_t`]. The accompanying [`ValueKind`] says
+/// which member is live.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union gpkg_value_payload {
+    /// Live for [`ValueKind::Boolean`].
+    pub boolean: bool,
+    /// Live for [`ValueKind::Integer`].
+    pub integer: i64,
+    /// Live for [`ValueKind::Float`].
+    pub real: f64,
+    /// Live for [`ValueKind::Text`]: NUL-terminated UTF-8.
+    pub text: *const c_char,
+    /// Live for [`ValueKind::Blob`].
+    pub blob: gpkg_blob_t,
+    /// Live for [`ValueKind::Date`].
+    pub date: gpkg_date_t,
+    /// Live for [`ValueKind::DateTime`].
+    pub datetime: gpkg_datetime_t,
+}
+
 /// A calendar date: year 0 to 9999, month 1 to 12, day 1 to the month's length.
 ///
 /// The library checks the date when it reads the value, so an impossible date
@@ -75,6 +110,18 @@ pub struct gpkg_date_t {
     pub month: u8,
     /// Day, 1 to the length of the month.
     pub day: u8,
+}
+
+impl gpkg_date_t {
+    /// Validates this into a [`Date`].
+    fn to_date(self) -> Result<Date, String> {
+        Date::new(self.year, self.month, self.day).map_err(|source| {
+            format!(
+                "{:04}-{:02}-{:02} is not a date: {source}",
+                self.year, self.month, self.day
+            )
+        })
+    }
 }
 
 /// A date and time, with an optional UTC offset.
@@ -100,65 +147,6 @@ pub struct gpkg_datetime_t {
     pub offset_minutes: i16,
 }
 
-/// Binary data the caller owns: a pointer and a length.
-///
-/// A length of zero is an empty blob, for which `data` may be NULL.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct gpkg_blob_t {
-    /// The bytes, read during the call that takes them.
-    pub data: *const u8,
-    /// How many bytes.
-    pub len: usize,
-}
-
-/// The payload of a [`gpkg_value_t`]. The accompanying [`ValueKind`] says
-/// which member is live.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub union gpkg_value_payload {
-    /// Live for [`ValueKind::Boolean`].
-    pub boolean: bool,
-    /// Live for [`ValueKind::Integer`].
-    pub integer: i64,
-    /// Live for [`ValueKind::Float`].
-    pub real: f64,
-    /// Live for [`ValueKind::Text`]: NUL-terminated UTF-8.
-    pub text: *const c_char,
-    /// Live for [`ValueKind::Blob`].
-    pub blob: gpkg_blob_t,
-    /// Live for [`ValueKind::Date`].
-    pub date: gpkg_date_t,
-    /// Live for [`ValueKind::DateTime`].
-    pub datetime: gpkg_datetime_t,
-}
-
-/// One cell of a row: a tag and a payload.
-///
-/// The library owns none of it. Text and binary point at your memory and are
-/// read during the call that takes them.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct gpkg_value_t {
-    /// Which case `value` contains.
-    pub kind: ValueKind,
-    /// The payload, read according to `kind`. It is not read at all for
-    /// [`ValueKind::Null`].
-    pub value: gpkg_value_payload,
-}
-
-impl gpkg_date_t {
-    /// Validates this into a [`Date`].
-    fn to_date(self) -> Result<Date, String> {
-        Date::new(self.year, self.month, self.day).map_err(|source| {
-            format!(
-                "{:04}-{:02}-{:02} is not a date: {source}",
-                self.year, self.month, self.day
-            )
-        })
-    }
-}
-
 impl gpkg_datetime_t {
     /// Validates this into a [`DateTime`].
     fn to_datetime(self) -> Result<DateTime, String> {
@@ -181,6 +169,18 @@ impl gpkg_datetime_t {
             offset_minutes: self.has_offset.then_some(self.offset_minutes),
         })
     }
+}
+
+/// Binary data the caller owns: a pointer and a length.
+///
+/// A length of zero is an empty blob, for which `data` may be NULL.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct gpkg_blob_t {
+    /// The bytes, read during the call that takes them.
+    pub data: *const u8,
+    /// How many bytes.
+    pub len: usize,
 }
 
 /// Converts one caller-supplied value into the borrowed form the write path

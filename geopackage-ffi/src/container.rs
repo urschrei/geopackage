@@ -97,7 +97,7 @@ use geopackage::{GeoPackage, OpenOptions};
 
 use crate::error::{Status, gpkg_error_t, set_error, set_library_error};
 use crate::handle::Container;
-use crate::util::{borrow_str, out_string};
+use crate::util::{borrow_str, out_string, write_out_strings};
 
 /// An opaque handle to an open GeoPackage. Create one with `gpkg_open`,
 /// `gpkg_open_read_only` or `gpkg_create`, and destroy it with `gpkg_close`.
@@ -106,44 +106,6 @@ use crate::util::{borrow_str, out_string};
     reason = "the C name is the type's name; cbindgen emits it verbatim"
 )]
 pub type gpkg_t = Container;
-
-/// How a container was asked to be opened.
-enum How {
-    Open,
-    ReadOnly,
-    Create,
-}
-
-/// The shared body of the three entry points below.
-///
-/// # Safety
-///
-/// As the entry points: `path` must be a valid NUL-terminated UTF-8 string, and
-/// `error` must be NULL or point at a writable `gpkg_error_t`.
-unsafe fn open_with(path: *const c_char, error: *mut gpkg_error_t, how: How) -> *mut gpkg_t {
-    // SAFETY: forwarded to the caller's guarantee on `path`.
-    let Some(path) = (unsafe { borrow_str(path, error, "path") }) else {
-        return std::ptr::null_mut();
-    };
-
-    let opened = match how {
-        How::Open => GeoPackage::open(path),
-        // Lenient as well as read-only: a reader that turns away the files
-        // worth reading is not much of a reader, and the warnings it collects
-        // are reachable through `gpkg_open_warning_count`.
-        How::ReadOnly => GeoPackage::open_read_only_lenient(path),
-        How::Create => OpenOptions::new().create(path),
-    };
-
-    match opened {
-        Ok(gpkg) => Box::into_raw(Box::new(Container::new(gpkg))),
-        Err(err) => {
-            // SAFETY: forwarded to the caller's guarantee on `error`.
-            unsafe { set_library_error(error, &err) };
-            std::ptr::null_mut()
-        }
-    }
-}
 
 /// Opens an existing GeoPackage read-write.
 ///
@@ -216,6 +178,44 @@ pub unsafe extern "C" fn gpkg_open_read_only(
 pub unsafe extern "C" fn gpkg_create(path: *const c_char, error: *mut gpkg_error_t) -> *mut gpkg_t {
     // SAFETY: forwarded to this function's own contract.
     unsafe { open_with(path, error, How::Create) }
+}
+
+/// How a container was asked to be opened.
+enum How {
+    Open,
+    ReadOnly,
+    Create,
+}
+
+/// The shared body of the three entry points above.
+///
+/// # Safety
+///
+/// As the entry points: `path` must be a valid NUL-terminated UTF-8 string, and
+/// `error` must be NULL or point at a writable `gpkg_error_t`.
+unsafe fn open_with(path: *const c_char, error: *mut gpkg_error_t, how: How) -> *mut gpkg_t {
+    // SAFETY: forwarded to the caller's guarantee on `path`.
+    let Some(path) = (unsafe { borrow_str(path, error, "path") }) else {
+        return std::ptr::null_mut();
+    };
+
+    let opened = match how {
+        How::Open => GeoPackage::open(path),
+        // Lenient as well as read-only: a reader that turns away the files
+        // worth reading is not much of a reader, and the warnings it collects
+        // are reachable through `gpkg_open_warning_count`.
+        How::ReadOnly => GeoPackage::open_read_only_lenient(path),
+        How::Create => OpenOptions::new().create(path),
+    };
+
+    match opened {
+        Ok(gpkg) => Box::into_raw(Box::new(Container::new(gpkg))),
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// Closes a GeoPackage and releases its handle.
@@ -394,50 +394,6 @@ pub unsafe extern "C" fn gpkg_open_warning(
     unsafe { out_string(&warning.to_string(), error) }
 }
 
-/// Runs one statement on the handle's connection, reporting through `error`.
-///
-/// The three transaction calls differ only in their statement, the state they
-/// require, and the message they give when that state is wrong.
-///
-/// # Safety
-///
-/// `gpkg` must be a live handle and `error` NULL or writable.
-unsafe fn transaction_statement(
-    gpkg: *mut gpkg_t,
-    error: *mut gpkg_error_t,
-    name: &str,
-    sql: &str,
-    want_open: bool,
-) -> Status {
-    if gpkg.is_null() {
-        let message = format!("{name}: handle is NULL");
-        // SAFETY: forwarded to the caller's guarantee on `error`.
-        unsafe { set_error(error, Status::BadArgument, &message) };
-        return Status::BadArgument;
-    }
-    // SAFETY: the caller guarantees a live handle.
-    let conn = unsafe { (*gpkg).gpkg().connection() };
-    if conn.is_autocommit() == want_open {
-        let message = if want_open {
-            format!("{name}: no transaction is open")
-        } else {
-            format!("{name}: a transaction is already open; SQLite does not nest them")
-        };
-        // SAFETY: forwarded to the caller's guarantee on `error`.
-        unsafe { set_error(error, Status::InvalidArgument, &message) };
-        return Status::InvalidArgument;
-    }
-    match conn.execute_batch(sql) {
-        Ok(()) => Status::Ok,
-        Err(source) => {
-            let err = geopackage::Error::from(source);
-            // SAFETY: forwarded to the caller's guarantee on `error`.
-            unsafe { set_library_error(error, &err) };
-            Status::from(&err)
-        }
-    }
-}
-
 /// Returns whether a transaction is open on this handle.
 ///
 /// `gpkg_begin`, `gpkg_commit` and `gpkg_rollback` each fail when the
@@ -546,6 +502,50 @@ pub unsafe extern "C" fn gpkg_rollback(gpkg: *mut gpkg_t, error: *mut gpkg_error
     unsafe { transaction_statement(gpkg, error, "gpkg_rollback", "ROLLBACK", true) }
 }
 
+/// Runs one statement on the handle's connection, reporting through `error`.
+///
+/// The three transaction calls differ only in their statement, the state they
+/// require, and the message they give when that state is wrong.
+///
+/// # Safety
+///
+/// `gpkg` must be a live handle and `error` NULL or writable.
+unsafe fn transaction_statement(
+    gpkg: *mut gpkg_t,
+    error: *mut gpkg_error_t,
+    name: &str,
+    sql: &str,
+    want_open: bool,
+) -> Status {
+    if gpkg.is_null() {
+        let message = format!("{name}: handle is NULL");
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::BadArgument, &message) };
+        return Status::BadArgument;
+    }
+    // SAFETY: the caller guarantees a live handle.
+    let conn = unsafe { (*gpkg).gpkg().connection() };
+    if conn.is_autocommit() == want_open {
+        let message = if want_open {
+            format!("{name}: no transaction is open")
+        } else {
+            format!("{name}: a transaction is already open; SQLite does not nest them")
+        };
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::InvalidArgument, &message) };
+        return Status::InvalidArgument;
+    }
+    match conn.execute_batch(sql) {
+        Ok(()) => Status::Ok,
+        Err(source) => {
+            let err = geopackage::Error::from(source);
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            Status::from(&err)
+        }
+    }
+}
+
 /// Reads a spatial reference system's definition and identity.
 ///
 /// Reports what the file's `gpkg_spatial_ref_sys` row records for `srs_id`,
@@ -617,39 +617,16 @@ pub unsafe extern "C" fn gpkg_srs(
         }
     };
 
-    // Every string is converted before anything is written, so a failure
-    // writes nothing and the caller has nothing partial to free.
-    let mut strings = [
+    let strings = [
         (out_name, Some(srs.name)),
         (out_organization, Some(srs.organization)),
         (out_definition, Some(srs.definition)),
         (out_definition_wkt2, srs.definition_wkt2),
-    ]
-    .map(|(out, text)| (out, text, std::ptr::null_mut::<c_char>()));
-    for (out, text, converted) in &mut strings {
-        if let (false, Some(text)) = (out.is_null(), text.as_deref()) {
-            // SAFETY: forwarded to the caller's guarantee on `error`.
-            let owned = unsafe { out_string(text, error) };
-            if owned.is_null() {
-                for (_, _, earlier) in &strings {
-                    if !earlier.is_null() {
-                        // SAFETY: `earlier` came from `CString::into_raw` in
-                        // `out_string` above and has not been handed out.
-                        drop(unsafe { std::ffi::CString::from_raw(*earlier) });
-                    }
-                }
-                return Status::InvalidArgument;
-            }
-            *converted = owned;
-        }
-    }
-    for (out, _, converted) in &strings {
-        if !out.is_null() {
-            // SAFETY: the caller guarantees non-NULL out-parameters are
-            // writable. An absent optional writes NULL, which the caller may
-            // free harmlessly.
-            unsafe { *(*out) = *converted };
-        }
+    ];
+    // SAFETY: the caller guarantees that non-NULL out-parameters are writable
+    // and that `error` is NULL or writable.
+    if !unsafe { write_out_strings(&strings, error) } {
+        return Status::InvalidArgument;
     }
     if !out_organization_coordsys_id.is_null() {
         // SAFETY: the caller guarantees a writable out-parameter.

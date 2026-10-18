@@ -118,7 +118,7 @@ use std::ffi::c_char;
 use geopackage::core::tiles::{TileCoord, TileMatrixSet, ZoomLadder};
 use geopackage::{BoundingBox, TilePyramidBuilder};
 
-use crate::error::{Status, gpkg_error_t, set_error, set_library_error};
+use crate::error::{Status, gpkg_error_t, report, set_error, set_library_error};
 use crate::handle::{Container, CursorScan, TileCursorHandle, TilesHandle};
 use crate::util::{borrow_str, out_string};
 
@@ -616,105 +616,6 @@ pub unsafe extern "C" fn gpkg_tiles_get(
     Status::Ok
 }
 
-/// Stores bytes at a tile address.
-///
-/// The call checks the address against the zoom level's grid, and the
-/// payload's header against the tile size the level declares. Only the header
-/// is read, and the image is not decoded. The check catches a tile of the
-/// wrong pixel size, or one in a format the table may not hold.
-///
-/// ```c
-/// if (gpkg_tiles_put(tiles, 1, 0, 0, png, png_len, &error) != GPKG_STATUS_OK) {
-///     return fail("gpkg_tiles_put", &error);
-/// }
-/// ```
-///
-/// The call copies the bytes into the file, so the buffer is yours again when
-/// it returns. Writing where a tile is already stored replaces that tile.
-///
-/// A zoom level the pyramid does not declare returns `GPKG_STATUS_NOT_FOUND`,
-/// and a format the table may not hold returns `GPKG_STATUS_UNSUPPORTED`. A
-/// column or row outside the level's grid, or bytes that are not a readable
-/// image, return `GPKG_STATUS_INVALID_ARGUMENT`. A payload whose header
-/// disagrees with the declared tile size returns `GPKG_STATUS_CONSTRAINT`.
-///
-/// # Safety
-///
-/// `tiles` must be a live handle, `data` must point at `len` readable bytes,
-/// and `error` NULL or writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn gpkg_tiles_put(
-    tiles: *const gpkg_tiles_t,
-    zoom_level: i64,
-    column: i64,
-    row: i64,
-    data: *const u8,
-    len: usize,
-    error: *mut gpkg_error_t,
-) -> Status {
-    if data.is_null() {
-        // SAFETY: forwarded to the caller's guarantee on `error`.
-        unsafe { set_error(error, Status::BadArgument, "data is NULL") };
-        return Status::BadArgument;
-    }
-    // SAFETY: forwarded to this function's contract.
-    let Some(handle) = (unsafe { checked(tiles, error, "gpkg_tiles_put") }) else {
-        return Status::BadArgument;
-    };
-    // SAFETY: the caller guarantees `data` points at `len` readable bytes,
-    // which stay valid and unmodified for the duration of this call.
-    let payload = unsafe { std::slice::from_raw_parts(data, len) };
-    let result = handle
-        .pyramid()
-        .put_tile(TileCoord::new(zoom_level, column, row), payload);
-    // SAFETY: forwarded to the caller's guarantee on `error`.
-    unsafe { report(result, error) }
-}
-
-/// Deletes the tile at an address, reporting through `out_deleted` whether one
-/// was there. `out_deleted` may be NULL.
-///
-/// Deleting where there is no tile succeeds, with `out_deleted` false, because
-/// the address is empty either way. The zoom level's `gpkg_tile_matrix` row is
-/// left alone, so the level keeps its declared grid.
-///
-/// # Safety
-///
-/// `tiles` must be a live handle; `out_deleted` NULL or writable; `error` NULL
-/// or writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn gpkg_tiles_delete(
-    tiles: *const gpkg_tiles_t,
-    zoom_level: i64,
-    column: i64,
-    row: i64,
-    out_deleted: *mut bool,
-    error: *mut gpkg_error_t,
-) -> Status {
-    // SAFETY: forwarded to this function's contract.
-    let Some(handle) = (unsafe { checked(tiles, error, "gpkg_tiles_delete") }) else {
-        return Status::BadArgument;
-    };
-    match handle
-        .pyramid()
-        .delete_tile(TileCoord::new(zoom_level, column, row))
-    {
-        Ok(deleted) => {
-            if !out_deleted.is_null() {
-                // SAFETY: the caller guarantees a writable out-parameter when
-                // it is not NULL.
-                unsafe { *out_deleted = deleted };
-            }
-            Status::Ok
-        }
-        Err(err) => {
-            // SAFETY: forwarded to the caller's guarantee on `error`.
-            unsafe { set_library_error(error, &err) };
-            Status::from(&err)
-        }
-    }
-}
-
 /// Frees a byte buffer this library returned.
 ///
 /// Only `gpkg_tiles_get` returns one. Pass its `out_len` as `len`. Passing a
@@ -744,47 +645,6 @@ pub unsafe extern "C" fn gpkg_bytes_free(data: *mut u8, len: usize) {
     // A boxed slice's capacity equals its length, so reconstructing it from the
     // pointer and that length frees exactly what was allocated.
     drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(data, len)) });
-}
-
-/// Borrows a pyramid handle, reporting a NULL one.
-///
-/// # Safety
-///
-/// `tiles` must be NULL or a live handle; `error` NULL or writable.
-unsafe fn checked<'a>(
-    tiles: *const gpkg_tiles_t,
-    error: *mut gpkg_error_t,
-    what: &str,
-) -> Option<&'a TilesHandle> {
-    if tiles.is_null() {
-        // SAFETY: forwarded to the caller's guarantee on `error`.
-        unsafe {
-            set_error(
-                error,
-                Status::BadArgument,
-                &format!("{what}: tiles handle is NULL"),
-            );
-        }
-        return None;
-    }
-    // SAFETY: the caller guarantees a live pyramid handle.
-    Some(unsafe { &*tiles })
-}
-
-/// Turns a unit-returning library call into a status, filling in `error`.
-///
-/// # Safety
-///
-/// `error` must be NULL or point at a writable `gpkg_error_t`.
-unsafe fn report(result: geopackage::Result<()>, error: *mut gpkg_error_t) -> Status {
-    match result {
-        Ok(()) => Status::Ok,
-        Err(err) => {
-            // SAFETY: forwarded to the caller's guarantee on `error`.
-            unsafe { set_library_error(error, &err) };
-            Status::from(&err)
-        }
-    }
 }
 
 /// Reads the bytes at a tile address into a buffer you own.
@@ -891,6 +751,105 @@ pub unsafe extern "C" fn gpkg_tiles_get_into(
     // distinct allocation, so the two cannot overlap.
     unsafe { std::ptr::copy_nonoverlapping(scratch.as_ptr(), buffer, len) };
     Status::Ok
+}
+
+/// Stores bytes at a tile address.
+///
+/// The call checks the address against the zoom level's grid, and the
+/// payload's header against the tile size the level declares. Only the header
+/// is read, and the image is not decoded. The check catches a tile of the
+/// wrong pixel size, or one in a format the table may not hold.
+///
+/// ```c
+/// if (gpkg_tiles_put(tiles, 1, 0, 0, png, png_len, &error) != GPKG_STATUS_OK) {
+///     return fail("gpkg_tiles_put", &error);
+/// }
+/// ```
+///
+/// The call copies the bytes into the file, so the buffer is yours again when
+/// it returns. Writing where a tile is already stored replaces that tile.
+///
+/// A zoom level the pyramid does not declare returns `GPKG_STATUS_NOT_FOUND`,
+/// and a format the table may not hold returns `GPKG_STATUS_UNSUPPORTED`. A
+/// column or row outside the level's grid, or bytes that are not a readable
+/// image, return `GPKG_STATUS_INVALID_ARGUMENT`. A payload whose header
+/// disagrees with the declared tile size returns `GPKG_STATUS_CONSTRAINT`.
+///
+/// # Safety
+///
+/// `tiles` must be a live handle, `data` must point at `len` readable bytes,
+/// and `error` NULL or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_tiles_put(
+    tiles: *const gpkg_tiles_t,
+    zoom_level: i64,
+    column: i64,
+    row: i64,
+    data: *const u8,
+    len: usize,
+    error: *mut gpkg_error_t,
+) -> Status {
+    if data.is_null() {
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::BadArgument, "data is NULL") };
+        return Status::BadArgument;
+    }
+    // SAFETY: forwarded to this function's contract.
+    let Some(handle) = (unsafe { checked(tiles, error, "gpkg_tiles_put") }) else {
+        return Status::BadArgument;
+    };
+    // SAFETY: the caller guarantees `data` points at `len` readable bytes,
+    // which stay valid and unmodified for the duration of this call.
+    let payload = unsafe { std::slice::from_raw_parts(data, len) };
+    let result = handle
+        .pyramid()
+        .put_tile(TileCoord::new(zoom_level, column, row), payload);
+    // SAFETY: forwarded to the caller's guarantee on `error`.
+    unsafe { report(result, error) }
+}
+
+/// Deletes the tile at an address, reporting through `out_deleted` whether one
+/// was there. `out_deleted` may be NULL.
+///
+/// Deleting where there is no tile succeeds, with `out_deleted` false, because
+/// the address is empty either way. The zoom level's `gpkg_tile_matrix` row is
+/// left alone, so the level keeps its declared grid.
+///
+/// # Safety
+///
+/// `tiles` must be a live handle; `out_deleted` NULL or writable; `error` NULL
+/// or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gpkg_tiles_delete(
+    tiles: *const gpkg_tiles_t,
+    zoom_level: i64,
+    column: i64,
+    row: i64,
+    out_deleted: *mut bool,
+    error: *mut gpkg_error_t,
+) -> Status {
+    // SAFETY: forwarded to this function's contract.
+    let Some(handle) = (unsafe { checked(tiles, error, "gpkg_tiles_delete") }) else {
+        return Status::BadArgument;
+    };
+    match handle
+        .pyramid()
+        .delete_tile(TileCoord::new(zoom_level, column, row))
+    {
+        Ok(deleted) => {
+            if !out_deleted.is_null() {
+                // SAFETY: the caller guarantees a writable out-parameter when
+                // it is not NULL.
+                unsafe { *out_deleted = deleted };
+            }
+            Status::Ok
+        }
+        Err(err) => {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe { set_library_error(error, &err) };
+            Status::from(&err)
+        }
+    }
 }
 
 /// One scan over a pyramid's stored tiles. Opaque; created by
@@ -1262,4 +1221,29 @@ unsafe fn create_pyramid(
             std::ptr::null_mut()
         }
     }
+}
+
+/// Borrows a pyramid handle, reporting a NULL one.
+///
+/// # Safety
+///
+/// `tiles` must be NULL or a live handle; `error` NULL or writable.
+unsafe fn checked<'a>(
+    tiles: *const gpkg_tiles_t,
+    error: *mut gpkg_error_t,
+    what: &str,
+) -> Option<&'a TilesHandle> {
+    if tiles.is_null() {
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe {
+            set_error(
+                error,
+                Status::BadArgument,
+                &format!("{what}: tiles handle is NULL"),
+            );
+        }
+        return None;
+    }
+    // SAFETY: the caller guarantees a live pyramid handle.
+    Some(unsafe { &*tiles })
 }

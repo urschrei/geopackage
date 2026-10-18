@@ -68,7 +68,7 @@
 
 use std::ffi::c_char;
 
-use crate::error::{Status, gpkg_error_t, set_error, set_library_error};
+use crate::error::{Status, failed, gpkg_error_t, set_error, set_library_error};
 use crate::handle::{LayerHandle, WriterHandle};
 use crate::util::borrow_str;
 use crate::value::{borrow_values, gpkg_value_t};
@@ -81,66 +81,6 @@ use crate::value::{borrow_values, gpkg_value_t};
     reason = "the C name is the type's name; cbindgen emits it verbatim"
 )]
 pub type gpkg_writer_t = WriterHandle;
-
-/// Borrows a live writer, or reports a NULL handle.
-///
-/// # Safety
-///
-/// `writer` must be NULL or a live writer handle, and `error` NULL or writable.
-unsafe fn writer_mut<'a>(
-    writer: *mut gpkg_writer_t,
-    what: &str,
-    error: *mut gpkg_error_t,
-) -> Option<&'a mut WriterHandle> {
-    if writer.is_null() {
-        let message = format!("{what}: writer is NULL");
-        // SAFETY: forwarded to the caller's guarantee on `error`.
-        unsafe { set_error(error, Status::BadArgument, &message) };
-        return None;
-    }
-    // SAFETY: the caller guarantees a live writer handle, which came from
-    // `Box::into_raw` and has not been freed.
-    Some(unsafe { &mut *writer })
-}
-
-/// Reads a caller-supplied geometry. `NULL` with a length of zero means none.
-///
-/// # Safety
-///
-/// `wkb` must be NULL or readable for `wkb_len` bytes.
-unsafe fn borrow_wkb<'a>(
-    wkb: *const u8,
-    wkb_len: usize,
-    error: *mut gpkg_error_t,
-) -> Option<Option<&'a [u8]>> {
-    if wkb.is_null() {
-        if wkb_len != 0 {
-            // SAFETY: forwarded to the caller's guarantee on `error`.
-            unsafe {
-                set_error(
-                    error,
-                    Status::BadArgument,
-                    "geometry is NULL with a non-zero length",
-                );
-            }
-            return None;
-        }
-        return Some(None);
-    }
-    // SAFETY: the caller guarantees `wkb` is readable for `wkb_len`.
-    Some(Some(unsafe { std::slice::from_raw_parts(wkb, wkb_len) }))
-}
-
-/// Reports a library error and returns its status.
-///
-/// # Safety
-///
-/// `error` must be NULL or writable.
-unsafe fn failed(err: &geopackage::Error, error: *mut gpkg_error_t) -> Status {
-    // SAFETY: forwarded to the caller's guarantee on `error`.
-    unsafe { set_library_error(error, err) };
-    Status::from(err)
-}
 
 /// Begins a write transaction over `layer`.
 ///
@@ -412,6 +352,55 @@ pub unsafe extern "C" fn gpkg_writer_delete(
     let deleted = handle.writer_mut().delete(fid);
     // SAFETY: forwarded to this function's own contract.
     unsafe { report_matched(deleted, out_matched, error) }
+}
+
+/// Borrows a live writer, or reports a NULL handle.
+///
+/// # Safety
+///
+/// `writer` must be NULL or a live writer handle, and `error` NULL or writable.
+unsafe fn writer_mut<'a>(
+    writer: *mut gpkg_writer_t,
+    what: &str,
+    error: *mut gpkg_error_t,
+) -> Option<&'a mut WriterHandle> {
+    if writer.is_null() {
+        let message = format!("{what}: writer is NULL");
+        // SAFETY: forwarded to the caller's guarantee on `error`.
+        unsafe { set_error(error, Status::BadArgument, &message) };
+        return None;
+    }
+    // SAFETY: the caller guarantees a live writer handle, which came from
+    // `Box::into_raw` and has not been freed.
+    Some(unsafe { &mut *writer })
+}
+
+/// Reads a caller-supplied geometry. `NULL` with a length of zero means none.
+///
+/// # Safety
+///
+/// `wkb` must be NULL or readable for `wkb_len` bytes.
+unsafe fn borrow_wkb<'a>(
+    wkb: *const u8,
+    wkb_len: usize,
+    error: *mut gpkg_error_t,
+) -> Option<Option<&'a [u8]>> {
+    if wkb.is_null() {
+        if wkb_len != 0 {
+            // SAFETY: forwarded to the caller's guarantee on `error`.
+            unsafe {
+                set_error(
+                    error,
+                    Status::BadArgument,
+                    "geometry is NULL with a non-zero length",
+                );
+            }
+            return None;
+        }
+        return Some(None);
+    }
+    // SAFETY: the caller guarantees `wkb` is readable for `wkb_len`.
+    Some(Some(unsafe { std::slice::from_raw_parts(wkb, wkb_len) }))
 }
 
 /// Reports the outcome of an update or delete through `out_matched`.

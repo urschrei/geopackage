@@ -383,16 +383,6 @@ pub struct TilesHandle {
     _token: ChildToken,
 }
 
-/// Which stored-tile scan a cursor runs.
-pub(crate) enum CursorScan {
-    /// Every stored tile, in matrix order.
-    All,
-    /// One zoom level.
-    At(i64),
-    /// One zoom level, within a bounding box in the pyramid's own SRS.
-    In(i64, BoundingBox),
-}
-
 impl TilesHandle {
     /// Returns the pyramid, borrowed for as long as the caller holds the
     /// handle.
@@ -450,6 +440,16 @@ impl TilesHandle {
             _token: self.token(),
         })
     }
+}
+
+/// Which stored-tile scan a cursor runs.
+pub(crate) enum CursorScan {
+    /// Every stored tile, in matrix order.
+    All,
+    /// One zoom level.
+    At(i64),
+    /// One zoom level, within a bounding box in the pyramid's own SRS.
+    In(i64, BoundingBox),
 }
 
 /// A `gpkg_tile_cursor_t`: one scan over a pyramid's stored tiles.
