@@ -17,6 +17,21 @@
 //! This module parses and encodes the header only. It treats the WKB body as
 //! opaque, and the `geopackage` crate delegates the body to georust `wkb`.
 
+/// A parsed GPB header.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpbHeader {
+    /// Spatial reference system identifier.
+    pub srs_id: i32,
+    /// Optional geometry envelope.
+    pub envelope: Envelope,
+    /// Empty-geometry flag (flags bit 4).
+    pub empty: bool,
+    /// Extended GeoPackage Binary flag (flags bit 5).
+    pub extended: bool,
+    /// Byte order the header was encoded with.
+    pub byte_order: ByteOrder,
+}
+
 /// Byte order of the GPB header integers and envelope doubles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ByteOrder {
@@ -74,21 +89,6 @@ impl Envelope {
     }
 }
 
-/// A parsed GPB header.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GpbHeader {
-    /// Spatial reference system identifier.
-    pub srs_id: i32,
-    /// Optional geometry envelope.
-    pub envelope: Envelope,
-    /// Empty-geometry flag (flags bit 4).
-    pub empty: bool,
-    /// Extended GeoPackage Binary flag (flags bit 5).
-    pub extended: bool,
-    /// Byte order the header was encoded with.
-    pub byte_order: ByteOrder,
-}
-
 /// Errors from GPB header parsing.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[non_exhaustive]
@@ -114,54 +114,6 @@ pub enum GpbError {
 
 const MAGIC: [u8; 2] = [0x47, 0x50]; // "GP"
 const HEADER_BASE_LEN: usize = 8;
-
-/// Returns the byte offset of the WKB body within a GPB blob, without
-/// decoding the envelope.
-///
-/// [`parse_header`] also decodes the envelope's doubles, but you don't need
-/// them to locate the body. The offset follows from the envelope indicator in
-/// the flags byte alone. Reading a whole geometry column as WKB needs only the
-/// offset, and would otherwise decode the envelope once per row. This function
-/// still validates the magic, version and indicator, so a malformed blob is an
-/// error here just as it is in the full parse.
-///
-/// # Errors
-///
-/// [`GpbError`] for a blob too short to hold the header it declares, a bad magic
-/// or version, or an envelope indicator outside 0-4.
-#[hotpath::measure(label = "gpb::body_offset")]
-pub fn body_offset(blob: &[u8]) -> Result<usize, GpbError> {
-    // The whole fixed header, as `parse_header` requires, so that a blob too
-    // short for it is `Truncated` in both functions.
-    let &[m0, m1, version, flags, _, _, _, _, ..] = blob else {
-        return Err(GpbError::Truncated {
-            expected: HEADER_BASE_LEN,
-            actual: blob.len(),
-        });
-    };
-    if [m0, m1] != MAGIC {
-        return Err(GpbError::BadMagic(m0, m1));
-    }
-    if version != 0 {
-        return Err(GpbError::UnsupportedVersion(version));
-    }
-    // The count of doubles each indicator implies, matching `Envelope::values`.
-    let doubles = match (flags >> 1) & 0b111 {
-        0 => 0,
-        1 => 4,
-        2 | 3 => 6,
-        4 => 8,
-        other => return Err(GpbError::InvalidEnvelopeIndicator(other)),
-    };
-    let offset = HEADER_BASE_LEN + doubles * 8;
-    if blob.len() < offset {
-        return Err(GpbError::Truncated {
-            expected: offset,
-            actual: blob.len(),
-        });
-    }
-    Ok(offset)
-}
 
 /// Parses a GPB header from `blob`.
 ///
@@ -233,6 +185,54 @@ pub fn parse_header(blob: &[u8]) -> Result<(GpbHeader, usize), GpbError> {
         },
         body_offset,
     ))
+}
+
+/// Returns the byte offset of the WKB body within a GPB blob, without
+/// decoding the envelope.
+///
+/// [`parse_header`] also decodes the envelope's doubles, but you don't need
+/// them to locate the body. The offset follows from the envelope indicator in
+/// the flags byte alone. Reading a whole geometry column as WKB needs only the
+/// offset, and would otherwise decode the envelope once per row. This function
+/// still validates the magic, version and indicator, so a malformed blob is an
+/// error here just as it is in the full parse.
+///
+/// # Errors
+///
+/// [`GpbError`] for a blob too short to hold the header it declares, a bad magic
+/// or version, or an envelope indicator outside 0-4.
+#[hotpath::measure(label = "gpb::body_offset")]
+pub fn body_offset(blob: &[u8]) -> Result<usize, GpbError> {
+    // The whole fixed header, as `parse_header` requires, so that a blob too
+    // short for it is `Truncated` in both functions.
+    let &[m0, m1, version, flags, _, _, _, _, ..] = blob else {
+        return Err(GpbError::Truncated {
+            expected: HEADER_BASE_LEN,
+            actual: blob.len(),
+        });
+    };
+    if [m0, m1] != MAGIC {
+        return Err(GpbError::BadMagic(m0, m1));
+    }
+    if version != 0 {
+        return Err(GpbError::UnsupportedVersion(version));
+    }
+    // The count of doubles each indicator implies, matching `Envelope::values`.
+    let doubles = match (flags >> 1) & 0b111 {
+        0 => 0,
+        1 => 4,
+        2 | 3 => 6,
+        4 => 8,
+        other => return Err(GpbError::InvalidEnvelopeIndicator(other)),
+    };
+    let offset = HEADER_BASE_LEN + doubles * 8;
+    if blob.len() < offset {
+        return Err(GpbError::Truncated {
+            expected: offset,
+            actual: blob.len(),
+        });
+    }
+    Ok(offset)
 }
 
 /// Reads `N` big-/little-endian `f64` envelope values from the start of the

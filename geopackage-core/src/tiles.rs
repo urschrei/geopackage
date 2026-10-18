@@ -54,59 +54,6 @@ pub const WEBP_EXTENSION_DEFINITION: &str =
 /// `gpkg_extensions.scope` value both tile extensions use.
 pub const TILE_EXTENSION_SCOPE: &str = "read-write";
 
-/// Returns `true` if these zoom levels form the spec's default ladder, in
-/// which each level's pixel size is exactly half that of the level below it.
-///
-/// Any other pyramid is legal, but only with `gpkg_zoom_other` registered
-/// against its table. The comparison uses the same relative tolerance as
-/// Requirement 45 because a halved pixel size is usually derived rather than
-/// written down. A pyramid of fewer than two levels has no interval that could
-/// differ from a factor of two, so it counts as a ladder.
-pub fn is_power_of_two_ladder(matrices: &[TileMatrix]) -> bool {
-    let mut sorted: Vec<&TileMatrix> = matrices.iter().collect();
-    sorted.sort_unstable_by_key(|matrix| matrix.zoom_level);
-    sorted.windows(2).all(|pair| {
-        let [lower, upper] = pair else {
-            return true;
-        };
-        [
-            (lower.pixel_x_size, upper.pixel_x_size),
-            (lower.pixel_y_size, upper.pixel_y_size),
-        ]
-        .iter()
-        .all(|(lower, upper)| {
-            let halved = lower / 2.0;
-            (halved - upper).abs() <= EXTENT_TOLERANCE * halved.abs().max(upper.abs())
-        })
-    })
-}
-
-/// Returns the `CREATE TABLE` statement for a tile pyramid user data table.
-///
-/// The statement takes the form Annex C gives (Requirement 54): an
-/// `INTEGER PRIMARY KEY` acting as the rowid alias, the zoom/column/row index,
-/// the payload, and the uniqueness constraint over the three index columns.
-///
-/// You cannot configure the column names. A feature table names its geometry
-/// column in `gpkg_geometry_columns`, but the spec fixes a tile table's shape,
-/// and every reader assumes it.
-///
-/// # Errors
-///
-/// [`Error::InvalidIdentifier`] if `table` cannot be quoted.
-pub fn create_tile_table_sql(table: &str) -> Result<String, Error> {
-    Ok(format!(
-        "CREATE TABLE {} (\
-         id INTEGER PRIMARY KEY AUTOINCREMENT, \
-         zoom_level INTEGER NOT NULL, \
-         tile_column INTEGER NOT NULL, \
-         tile_row INTEGER NOT NULL, \
-         tile_data BLOB NOT NULL, \
-         UNIQUE (zoom_level, tile_column, tile_row))",
-        quote(table)?
-    ))
-}
-
 /// A `gpkg_tile_matrix_set` row: the exact extent of a tile pyramid, and the
 /// spatial reference system its coordinates are in.
 ///
@@ -126,418 +73,6 @@ pub struct TileMatrixSet {
     pub max_x: f64,
     /// Maximum y (north edge).
     pub max_y: f64,
-}
-
-/// A `gpkg_tile_matrix` row: one zoom level of a pyramid.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TileMatrix {
-    /// Zoom level, ascending with resolution.
-    pub zoom_level: i64,
-    /// Number of tile columns at this zoom level.
-    pub matrix_width: i64,
-    /// Number of tile rows at this zoom level.
-    pub matrix_height: i64,
-    /// Tile width in pixels.
-    pub tile_width: i64,
-    /// Tile height in pixels.
-    pub tile_height: i64,
-    /// Ground units per pixel in x.
-    pub pixel_x_size: f64,
-    /// Ground units per pixel in y.
-    pub pixel_y_size: f64,
-}
-
-/// A tile pyramid that does not satisfy the spec's consistency rules.
-///
-/// Returned by [`TileMatrixSet::validate`], which the container layer runs
-/// before writing a pyramid. Reading never validates, so a file written by
-/// someone else is reported as it is.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum TileError {
-    /// The matrix set extent is not a well-ordered, finite box.
-    #[error(
-        "tile matrix set extent [{min_x}, {min_y}, {max_x}, {max_y}] is not a finite box with min < max on both axes"
-    )]
-    InvalidExtent {
-        /// Minimum x of the offending extent.
-        min_x: f64,
-        /// Minimum y.
-        min_y: f64,
-        /// Maximum x.
-        max_x: f64,
-        /// Maximum y.
-        max_y: f64,
-    },
-    /// A negative `zoom_level` (Requirement 46).
-    #[error("zoom level {zoom_level} is negative")]
-    NegativeZoomLevel {
-        /// The offending zoom level.
-        zoom_level: i64,
-    },
-    /// A `matrix_width`, `matrix_height`, `tile_width` or `tile_height` that is
-    /// not greater than zero (Requirements 47 to 50).
-    #[error("zoom level {zoom_level} has {field} {value}, which must be greater than 0")]
-    NonPositiveDimension {
-        /// Zoom level of the offending tile matrix.
-        zoom_level: i64,
-        /// Which column: `matrix_width`, `matrix_height`, `tile_width` or
-        /// `tile_height`.
-        field: &'static str,
-        /// The offending value.
-        value: i64,
-    },
-    /// A `pixel_x_size` or `pixel_y_size` that is not greater than zero
-    /// (Requirements 51 and 52).
-    #[error("zoom level {zoom_level} has {field} {value}, which must be greater than 0")]
-    NonPositivePixelSize {
-        /// Zoom level of the offending tile matrix.
-        zoom_level: i64,
-        /// Which column: `pixel_x_size` or `pixel_y_size`.
-        field: &'static str,
-        /// The offending value.
-        value: f64,
-    },
-    /// Pixel sizes that do not decrease as zoom level increases
-    /// (Requirement 53).
-    #[error(
-        "zoom level {zoom_level} has {field} {value}, which is not smaller than the {previous_value} of zoom level {previous_zoom_level}"
-    )]
-    PixelSizeNotDescending {
-        /// Zoom level of the offending tile matrix.
-        zoom_level: i64,
-        /// The next lower zoom level present.
-        previous_zoom_level: i64,
-        /// Which column: `pixel_x_size` or `pixel_y_size`.
-        field: &'static str,
-        /// The offending value.
-        value: f64,
-        /// The value at `previous_zoom_level`.
-        previous_value: f64,
-    },
-    /// A zoom level whose tile grid does not span the matrix set extent
-    /// (Requirement 45).
-    #[error(
-        "zoom level {zoom_level} spans {actual} in {axis}, but the tile matrix set extent is {expected}"
-    )]
-    ExtentMismatch {
-        /// Zoom level of the offending tile matrix.
-        zoom_level: i64,
-        /// Which axis: `x` or `y`.
-        axis: &'static str,
-        /// The extent implied by the matrix set.
-        expected: f64,
-        /// The extent the tile grid spans.
-        actual: f64,
-    },
-    /// Two tile matrices for the same zoom level (the `gpkg_tile_matrix`
-    /// primary key is `(table_name, zoom_level)`).
-    #[error("zoom level {zoom_level} appears more than once")]
-    DuplicateZoomLevel {
-        /// The repeated zoom level.
-        zoom_level: i64,
-    },
-    /// A tile index outside the grid its zoom level declares.
-    #[error(
-        "tile ({column}, {row}) is outside the {matrix_width} by {matrix_height} grid of zoom level {zoom_level}"
-    )]
-    CoordOutsideMatrix {
-        /// Zoom level the tile was addressed at.
-        zoom_level: i64,
-        /// The offending column index.
-        column: i64,
-        /// The offending row index.
-        row: i64,
-        /// Columns the zoom level has.
-        matrix_width: i64,
-        /// Rows the zoom level has.
-        matrix_height: i64,
-    },
-    /// An XYZ conversion requested on a pyramid whose grid is not the standard
-    /// web mercator quad, where GeoPackage and XYZ indices do not coincide.
-    #[error(
-        "zoom level {zoom_level} is not addressed as an XYZ grid: that needs a web mercator quad extent and a 2^zoom square matrix"
-    )]
-    NotAnXyzGrid {
-        /// Zoom level the conversion was requested for.
-        zoom_level: i64,
-    },
-    /// A tile payload whose header could not be read.
-    #[error("tile payload is not a readable image: {reason}")]
-    UnreadablePayload {
-        /// The header reader's error message.
-        reason: String,
-    },
-    /// A coverage tile payload that does not conform to an encoding requirement
-    /// of the tiled gridded coverage extension (OGC 17-066r2).
-    ///
-    /// The header checks in [`crate::coverage`] read the header of a payload
-    /// and not its samples, so they do not check Requirement 21.
-    #[error(
-        "coverage tile payload breaks tiled gridded coverage Requirement {requirement}: {detail}"
-    )]
-    CoverageProfileViolation {
-        /// The requirement number, in the numbering of OGC 17-066r2.
-        requirement: u8,
-        /// What the payload declares, and what the requirement specifies.
-        detail: String,
-    },
-    /// A coverage tile whose header declares more samples than this crate
-    /// decodes. The payload is not known to be wrong; it is not decoded.
-    #[error(
-        "coverage tile payload declares {width} by {height} samples, more than the {limit} this crate decodes"
-    )]
-    PayloadTooLarge {
-        /// Width the payload's header declares.
-        width: i64,
-        /// Height the payload's header declares.
-        height: i64,
-        /// The most samples a decode accepts.
-        limit: usize,
-    },
-    /// A tile payload whose pixel dimensions are not the ones its zoom level
-    /// declares.
-    #[error(
-        "tile is {actual_width} by {actual_height} pixels, but zoom level {zoom_level} declares {expected_width} by {expected_height}"
-    )]
-    PayloadSizeMismatch {
-        /// Zoom level the tile was written at.
-        zoom_level: i64,
-        /// `tile_width` of that zoom level.
-        expected_width: i64,
-        /// `tile_height` of that zoom level.
-        expected_height: i64,
-        /// Width the payload's header declares.
-        actual_width: i64,
-        /// Height the payload's header declares.
-        actual_height: i64,
-    },
-    /// A zoom ladder whose range is empty, negative, or too wide for the grid
-    /// to stay representable.
-    #[error(
-        "zoom range {min_zoom} to {max_zoom} is not usable: it must be non-negative, ascending, and narrow enough for the doubled grid to fit an i64"
-    )]
-    InvalidZoomRange {
-        /// Lowest zoom level requested.
-        min_zoom: i64,
-        /// Highest zoom level requested.
-        max_zoom: i64,
-    },
-}
-
-/// The encoding of a tile payload, as its first bytes declare it.
-///
-/// The base tiles requirement class allows PNG (Requirement 36) and JPEG
-/// (Requirement 37), mixed freely within one table. WebP is allowed under the
-/// `gpkg_webp` extension, and TIFF only inside the tiled gridded coverage
-/// extension. The container, not the format, therefore decides whether a
-/// given payload may be written. This enum
-/// only says what the bytes are.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum TileFormat {
-    /// `image/png`.
-    Png,
-    /// `image/jpeg`.
-    Jpeg,
-    /// WebP, which needs the `gpkg_webp` extension registered.
-    Webp,
-    /// TIFF, which appears only in tiled gridded coverages.
-    Tiff,
-    /// An image this crate recognises but no tile table may hold.
-    Other,
-}
-
-impl TileFormat {
-    /// Returns whether the base tiles requirement class permits this encoding
-    /// with no extension registered.
-    pub fn is_core(self) -> bool {
-        matches!(self, Self::Png | Self::Jpeg)
-    }
-
-    /// Returns the MIME type the spec names for this encoding, if it names one.
-    pub fn mime_type(self) -> Option<&'static str> {
-        match self {
-            Self::Png => Some("image/png"),
-            Self::Jpeg => Some("image/jpeg"),
-            Self::Webp => Some("image/webp"),
-            Self::Tiff => Some("image/tiff"),
-            Self::Other => None,
-        }
-    }
-}
-
-/// What a tile payload's header declares: its encoding and its pixel size.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TilePayload {
-    /// The encoding identified from the payload's magic bytes.
-    pub format: TileFormat,
-    /// Width in pixels.
-    pub width: i64,
-    /// Height in pixels.
-    pub height: i64,
-}
-
-/// Reads the encoding and pixel dimensions from a tile payload's header.
-///
-/// Only the header is read. No pixel data is decoded, nothing is copied, and
-/// the slice is borrowed throughout. The size is returned with the format
-/// because magic-byte sniffing cannot catch a tile whose dimensions disagree
-/// with its zoom level's `tile_width`/`tile_height`
-/// ([`TileMatrix::check_payload`]).
-///
-/// The dimensions of a TIFF come from [`crate::coverage`], which reads the
-/// first IFD for the coverage profile check. The crate has one parser for each
-/// format, because two readers of the same bytes can disagree on a malformed
-/// payload.
-///
-/// # Errors
-///
-/// [`TileError::UnreadablePayload`] when the bytes are not a recognisable
-/// image, or are truncated before the header ends.
-pub fn probe(bytes: &[u8]) -> Result<TilePayload, TileError> {
-    let unreadable = |error: imagesize::ImageError| TileError::UnreadablePayload {
-        reason: error.to_string(),
-    };
-    let format = match imagesize::image_type(bytes).map_err(unreadable)? {
-        imagesize::ImageType::Png => TileFormat::Png,
-        imagesize::ImageType::Jpeg => TileFormat::Jpeg,
-        imagesize::ImageType::Webp => TileFormat::Webp,
-        imagesize::ImageType::Tiff => TileFormat::Tiff,
-        _ => TileFormat::Other,
-    };
-    if format == TileFormat::Tiff {
-        let (width, height) = crate::coverage::dimensions(bytes)?;
-        return Ok(TilePayload {
-            format,
-            width,
-            height,
-        });
-    }
-    let size = imagesize::blob_size(bytes).map_err(unreadable)?;
-    let (Ok(width), Ok(height)) = (i64::try_from(size.width), i64::try_from(size.height)) else {
-        return Err(TileError::UnreadablePayload {
-            reason: format!("header declares {} by {} pixels", size.width, size.height),
-        });
-    };
-    Ok(TilePayload {
-        format,
-        width,
-        height,
-    })
-}
-
-/// A tile's address within a pyramid.
-///
-/// Rows count downwards from the **top** of the tile matrix set, so `(0, 0)`
-/// is the tile whose upper-left corner is the matrix set's `(min_x, max_y)`.
-/// This matches WMTS and XYZ, and is the opposite of TMS, which counts rows up
-/// from the bottom. [`TileMatrix::flip_row`] converts between the two.
-///
-/// The indices are relative to the tile matrix set's own extent, not to a
-/// global grid, so they equal XYZ indices only for a pyramid over the standard
-/// web mercator quad. [`TileMatrixSet::xyz_to_tile`] checks this instead of
-/// assuming it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TileCoord {
-    /// Zoom level, matching a `gpkg_tile_matrix` row.
-    pub zoom_level: i64,
-    /// Column index, counting east from `min_x`.
-    pub column: i64,
-    /// Row index, counting south from `max_y`.
-    pub row: i64,
-}
-
-impl TileCoord {
-    /// Creates a tile address from its zoom level, column and row.
-    pub fn new(zoom_level: i64, column: i64, row: i64) -> Self {
-        Self {
-            zoom_level,
-            column,
-            row,
-        }
-    }
-}
-
-/// The ground extent of a single tile.
-///
-/// The fields are named rather than held in an array because this crate's
-/// other envelope convention ([`crate::gpb::Envelope`]) orders its four values
-/// differently, and a bare `[f64; 4]` would make the two easy to mix up.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TileBounds {
-    /// Minimum x (west edge).
-    pub min_x: f64,
-    /// Minimum y (south edge).
-    pub min_y: f64,
-    /// Maximum x (east edge).
-    pub max_x: f64,
-    /// Maximum y (north edge).
-    pub max_y: f64,
-}
-
-/// A rectangle of tile indices within one zoom level, inclusive at both ends.
-///
-/// The container turns a bounding-box query into one range predicate over
-/// this rather than a tile-by-tile lookup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TileRange {
-    /// Westmost column.
-    pub min_column: i64,
-    /// Eastmost column.
-    pub max_column: i64,
-    /// Northmost row.
-    pub min_row: i64,
-    /// Southmost row.
-    pub max_row: i64,
-}
-
-/// The shape of a power-of-two zoom ladder, the spec's default arrangement, in
-/// which each level doubles the grid of the one below it.
-///
-/// The grid at the lowest zoom level defaults to a single tile, the web
-/// mercator convention. By convention, a geographic (EPSG:4326) pyramid starts
-/// two tiles wide and one tall, which you can set with [`Self::base_grid`].
-/// Tiles default to 256 pixels square.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ZoomLadder {
-    min_zoom: i64,
-    max_zoom: i64,
-    base_matrix_width: i64,
-    base_matrix_height: i64,
-    tile_width: i64,
-    tile_height: i64,
-}
-
-impl ZoomLadder {
-    /// Creates a ladder over the inclusive zoom range, with one 256-pixel tile
-    /// at `min_zoom`.
-    pub fn new(min_zoom: i64, max_zoom: i64) -> Self {
-        Self {
-            min_zoom,
-            max_zoom,
-            base_matrix_width: 1,
-            base_matrix_height: 1,
-            tile_width: 256,
-            tile_height: 256,
-        }
-    }
-
-    /// Sets the grid at `min_zoom`, in tiles (default `1` by `1`).
-    #[must_use]
-    pub fn base_grid(mut self, columns: i64, rows: i64) -> Self {
-        self.base_matrix_width = columns;
-        self.base_matrix_height = rows;
-        self
-    }
-
-    /// Sets the tile size in pixels (default `256` by `256`).
-    #[must_use]
-    pub fn tile_size(mut self, width: i64, height: i64) -> Self {
-        self.tile_width = width;
-        self.tile_height = height;
-        self
-    }
 }
 
 impl TileMatrixSet {
@@ -613,6 +148,25 @@ impl TileMatrixSet {
                 max_y: self.max_y,
             })
         }
+    }
+
+    /// Checks Requirement 45: the tile grid at each zoom level spans the matrix
+    /// set extent exactly, within [`EXTENT_TOLERANCE`].
+    fn validate_span(&self, matrix: &TileMatrix) -> Result<(), TileError> {
+        for (axis, expected, actual) in [
+            ("x", self.width(), matrix.span_x()),
+            ("y", self.height(), matrix.span_y()),
+        ] {
+            if (expected - actual).abs() > EXTENT_TOLERANCE * expected.abs().max(actual.abs()) {
+                return Err(TileError::ExtentMismatch {
+                    zoom_level: matrix.zoom_level,
+                    axis,
+                    expected,
+                    actual,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Returns the ground extent of one tile.
@@ -890,25 +444,6 @@ impl TileMatrixSet {
         matrix.check_contains(coord.column, coord.row)?;
         Ok((coord.zoom_level, coord.column, coord.row))
     }
-
-    /// Checks Requirement 45: the tile grid at each zoom level spans the matrix
-    /// set extent exactly, within [`EXTENT_TOLERANCE`].
-    fn validate_span(&self, matrix: &TileMatrix) -> Result<(), TileError> {
-        for (axis, expected, actual) in [
-            ("x", self.width(), matrix.span_x()),
-            ("y", self.height(), matrix.span_y()),
-        ] {
-            if (expected - actual).abs() > EXTENT_TOLERANCE * expected.abs().max(actual.abs()) {
-                return Err(TileError::ExtentMismatch {
-                    zoom_level: matrix.zoom_level,
-                    axis,
-                    expected,
-                    actual,
-                });
-            }
-        }
-        Ok(())
-    }
 }
 
 /// Returns the first index in `0..count` at which `predicate` holds, or
@@ -927,6 +462,25 @@ fn first_index(count: i64, predicate: impl Fn(i64) -> bool) -> i64 {
         }
     }
     low
+}
+
+/// A `gpkg_tile_matrix` row: one zoom level of a pyramid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TileMatrix {
+    /// Zoom level, ascending with resolution.
+    pub zoom_level: i64,
+    /// Number of tile columns at this zoom level.
+    pub matrix_width: i64,
+    /// Number of tile rows at this zoom level.
+    pub matrix_height: i64,
+    /// Tile width in pixels.
+    pub tile_width: i64,
+    /// Tile height in pixels.
+    pub tile_height: i64,
+    /// Ground units per pixel in x.
+    pub pixel_x_size: f64,
+    /// Ground units per pixel in y.
+    pub pixel_y_size: f64,
 }
 
 impl TileMatrix {
@@ -1105,6 +659,452 @@ impl TileMatrix {
         }
         Ok(())
     }
+}
+
+/// Returns `true` if these zoom levels form the spec's default ladder, in
+/// which each level's pixel size is exactly half that of the level below it.
+///
+/// Any other pyramid is legal, but only with `gpkg_zoom_other` registered
+/// against its table. The comparison uses the same relative tolerance as
+/// Requirement 45 because a halved pixel size is usually derived rather than
+/// written down. A pyramid of fewer than two levels has no interval that could
+/// differ from a factor of two, so it counts as a ladder.
+pub fn is_power_of_two_ladder(matrices: &[TileMatrix]) -> bool {
+    let mut sorted: Vec<&TileMatrix> = matrices.iter().collect();
+    sorted.sort_unstable_by_key(|matrix| matrix.zoom_level);
+    sorted.windows(2).all(|pair| {
+        let [lower, upper] = pair else {
+            return true;
+        };
+        [
+            (lower.pixel_x_size, upper.pixel_x_size),
+            (lower.pixel_y_size, upper.pixel_y_size),
+        ]
+        .iter()
+        .all(|(lower, upper)| {
+            let halved = lower / 2.0;
+            (halved - upper).abs() <= EXTENT_TOLERANCE * halved.abs().max(upper.abs())
+        })
+    })
+}
+
+/// Returns the `CREATE TABLE` statement for a tile pyramid user data table.
+///
+/// The statement takes the form Annex C gives (Requirement 54): an
+/// `INTEGER PRIMARY KEY` acting as the rowid alias, the zoom/column/row index,
+/// the payload, and the uniqueness constraint over the three index columns.
+///
+/// You cannot configure the column names. A feature table names its geometry
+/// column in `gpkg_geometry_columns`, but the spec fixes a tile table's shape,
+/// and every reader assumes it.
+///
+/// # Errors
+///
+/// [`Error::InvalidIdentifier`] if `table` cannot be quoted.
+pub fn create_tile_table_sql(table: &str) -> Result<String, Error> {
+    Ok(format!(
+        "CREATE TABLE {} (\
+         id INTEGER PRIMARY KEY AUTOINCREMENT, \
+         zoom_level INTEGER NOT NULL, \
+         tile_column INTEGER NOT NULL, \
+         tile_row INTEGER NOT NULL, \
+         tile_data BLOB NOT NULL, \
+         UNIQUE (zoom_level, tile_column, tile_row))",
+        quote(table)?
+    ))
+}
+
+/// The shape of a power-of-two zoom ladder, the spec's default arrangement, in
+/// which each level doubles the grid of the one below it.
+///
+/// The grid at the lowest zoom level defaults to a single tile, the web
+/// mercator convention. By convention, a geographic (EPSG:4326) pyramid starts
+/// two tiles wide and one tall, which you can set with [`Self::base_grid`].
+/// Tiles default to 256 pixels square.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZoomLadder {
+    min_zoom: i64,
+    max_zoom: i64,
+    base_matrix_width: i64,
+    base_matrix_height: i64,
+    tile_width: i64,
+    tile_height: i64,
+}
+
+impl ZoomLadder {
+    /// Creates a ladder over the inclusive zoom range, with one 256-pixel tile
+    /// at `min_zoom`.
+    pub fn new(min_zoom: i64, max_zoom: i64) -> Self {
+        Self {
+            min_zoom,
+            max_zoom,
+            base_matrix_width: 1,
+            base_matrix_height: 1,
+            tile_width: 256,
+            tile_height: 256,
+        }
+    }
+
+    /// Sets the grid at `min_zoom`, in tiles (default `1` by `1`).
+    #[must_use]
+    pub fn base_grid(mut self, columns: i64, rows: i64) -> Self {
+        self.base_matrix_width = columns;
+        self.base_matrix_height = rows;
+        self
+    }
+
+    /// Sets the tile size in pixels (default `256` by `256`).
+    #[must_use]
+    pub fn tile_size(mut self, width: i64, height: i64) -> Self {
+        self.tile_width = width;
+        self.tile_height = height;
+        self
+    }
+}
+
+/// A tile's address within a pyramid.
+///
+/// Rows count downwards from the **top** of the tile matrix set, so `(0, 0)`
+/// is the tile whose upper-left corner is the matrix set's `(min_x, max_y)`.
+/// This matches WMTS and XYZ, and is the opposite of TMS, which counts rows up
+/// from the bottom. [`TileMatrix::flip_row`] converts between the two.
+///
+/// The indices are relative to the tile matrix set's own extent, not to a
+/// global grid, so they equal XYZ indices only for a pyramid over the standard
+/// web mercator quad. [`TileMatrixSet::xyz_to_tile`] checks this instead of
+/// assuming it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TileCoord {
+    /// Zoom level, matching a `gpkg_tile_matrix` row.
+    pub zoom_level: i64,
+    /// Column index, counting east from `min_x`.
+    pub column: i64,
+    /// Row index, counting south from `max_y`.
+    pub row: i64,
+}
+
+impl TileCoord {
+    /// Creates a tile address from its zoom level, column and row.
+    pub fn new(zoom_level: i64, column: i64, row: i64) -> Self {
+        Self {
+            zoom_level,
+            column,
+            row,
+        }
+    }
+}
+
+/// The ground extent of a single tile.
+///
+/// The fields are named rather than held in an array because this crate's
+/// other envelope convention ([`crate::gpb::Envelope`]) orders its four values
+/// differently, and a bare `[f64; 4]` would make the two easy to mix up.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TileBounds {
+    /// Minimum x (west edge).
+    pub min_x: f64,
+    /// Minimum y (south edge).
+    pub min_y: f64,
+    /// Maximum x (east edge).
+    pub max_x: f64,
+    /// Maximum y (north edge).
+    pub max_y: f64,
+}
+
+/// A rectangle of tile indices within one zoom level, inclusive at both ends.
+///
+/// The container turns a bounding-box query into one range predicate over
+/// this rather than a tile-by-tile lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TileRange {
+    /// Westmost column.
+    pub min_column: i64,
+    /// Eastmost column.
+    pub max_column: i64,
+    /// Northmost row.
+    pub min_row: i64,
+    /// Southmost row.
+    pub max_row: i64,
+}
+
+/// The encoding of a tile payload, as its first bytes declare it.
+///
+/// The base tiles requirement class allows PNG (Requirement 36) and JPEG
+/// (Requirement 37), mixed freely within one table. WebP is allowed under the
+/// `gpkg_webp` extension, and TIFF only inside the tiled gridded coverage
+/// extension. The container, not the format, therefore decides whether a
+/// given payload may be written. This enum
+/// only says what the bytes are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TileFormat {
+    /// `image/png`.
+    Png,
+    /// `image/jpeg`.
+    Jpeg,
+    /// WebP, which needs the `gpkg_webp` extension registered.
+    Webp,
+    /// TIFF, which appears only in tiled gridded coverages.
+    Tiff,
+    /// An image this crate recognises but no tile table may hold.
+    Other,
+}
+
+impl TileFormat {
+    /// Returns whether the base tiles requirement class permits this encoding
+    /// with no extension registered.
+    pub fn is_core(self) -> bool {
+        matches!(self, Self::Png | Self::Jpeg)
+    }
+
+    /// Returns the MIME type the spec names for this encoding, if it names one.
+    pub fn mime_type(self) -> Option<&'static str> {
+        match self {
+            Self::Png => Some("image/png"),
+            Self::Jpeg => Some("image/jpeg"),
+            Self::Webp => Some("image/webp"),
+            Self::Tiff => Some("image/tiff"),
+            Self::Other => None,
+        }
+    }
+}
+
+/// What a tile payload's header declares: its encoding and its pixel size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TilePayload {
+    /// The encoding identified from the payload's magic bytes.
+    pub format: TileFormat,
+    /// Width in pixels.
+    pub width: i64,
+    /// Height in pixels.
+    pub height: i64,
+}
+
+/// Reads the encoding and pixel dimensions from a tile payload's header.
+///
+/// Only the header is read. No pixel data is decoded, nothing is copied, and
+/// the slice is borrowed throughout. The size is returned with the format
+/// because magic-byte sniffing cannot catch a tile whose dimensions disagree
+/// with its zoom level's `tile_width`/`tile_height`
+/// ([`TileMatrix::check_payload`]).
+///
+/// The dimensions of a TIFF come from [`crate::coverage`], which reads the
+/// first IFD for the coverage profile check. The crate has one parser for each
+/// format, because two readers of the same bytes can disagree on a malformed
+/// payload.
+///
+/// # Errors
+///
+/// [`TileError::UnreadablePayload`] when the bytes are not a recognisable
+/// image, or are truncated before the header ends.
+pub fn probe(bytes: &[u8]) -> Result<TilePayload, TileError> {
+    let unreadable = |error: imagesize::ImageError| TileError::UnreadablePayload {
+        reason: error.to_string(),
+    };
+    let format = match imagesize::image_type(bytes).map_err(unreadable)? {
+        imagesize::ImageType::Png => TileFormat::Png,
+        imagesize::ImageType::Jpeg => TileFormat::Jpeg,
+        imagesize::ImageType::Webp => TileFormat::Webp,
+        imagesize::ImageType::Tiff => TileFormat::Tiff,
+        _ => TileFormat::Other,
+    };
+    if format == TileFormat::Tiff {
+        let (width, height) = crate::coverage::dimensions(bytes)?;
+        return Ok(TilePayload {
+            format,
+            width,
+            height,
+        });
+    }
+    let size = imagesize::blob_size(bytes).map_err(unreadable)?;
+    let (Ok(width), Ok(height)) = (i64::try_from(size.width), i64::try_from(size.height)) else {
+        return Err(TileError::UnreadablePayload {
+            reason: format!("header declares {} by {} pixels", size.width, size.height),
+        });
+    };
+    Ok(TilePayload {
+        format,
+        width,
+        height,
+    })
+}
+
+/// A tile pyramid that does not satisfy the spec's consistency rules.
+///
+/// Returned by [`TileMatrixSet::validate`], which the container layer runs
+/// before writing a pyramid. Reading never validates, so a file written by
+/// someone else is reported as it is.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum TileError {
+    /// The matrix set extent is not a well-ordered, finite box.
+    #[error(
+        "tile matrix set extent [{min_x}, {min_y}, {max_x}, {max_y}] is not a finite box with min < max on both axes"
+    )]
+    InvalidExtent {
+        /// Minimum x of the offending extent.
+        min_x: f64,
+        /// Minimum y.
+        min_y: f64,
+        /// Maximum x.
+        max_x: f64,
+        /// Maximum y.
+        max_y: f64,
+    },
+    /// A negative `zoom_level` (Requirement 46).
+    #[error("zoom level {zoom_level} is negative")]
+    NegativeZoomLevel {
+        /// The offending zoom level.
+        zoom_level: i64,
+    },
+    /// A `matrix_width`, `matrix_height`, `tile_width` or `tile_height` that is
+    /// not greater than zero (Requirements 47 to 50).
+    #[error("zoom level {zoom_level} has {field} {value}, which must be greater than 0")]
+    NonPositiveDimension {
+        /// Zoom level of the offending tile matrix.
+        zoom_level: i64,
+        /// Which column: `matrix_width`, `matrix_height`, `tile_width` or
+        /// `tile_height`.
+        field: &'static str,
+        /// The offending value.
+        value: i64,
+    },
+    /// A `pixel_x_size` or `pixel_y_size` that is not greater than zero
+    /// (Requirements 51 and 52).
+    #[error("zoom level {zoom_level} has {field} {value}, which must be greater than 0")]
+    NonPositivePixelSize {
+        /// Zoom level of the offending tile matrix.
+        zoom_level: i64,
+        /// Which column: `pixel_x_size` or `pixel_y_size`.
+        field: &'static str,
+        /// The offending value.
+        value: f64,
+    },
+    /// Pixel sizes that do not decrease as zoom level increases
+    /// (Requirement 53).
+    #[error(
+        "zoom level {zoom_level} has {field} {value}, which is not smaller than the {previous_value} of zoom level {previous_zoom_level}"
+    )]
+    PixelSizeNotDescending {
+        /// Zoom level of the offending tile matrix.
+        zoom_level: i64,
+        /// The next lower zoom level present.
+        previous_zoom_level: i64,
+        /// Which column: `pixel_x_size` or `pixel_y_size`.
+        field: &'static str,
+        /// The offending value.
+        value: f64,
+        /// The value at `previous_zoom_level`.
+        previous_value: f64,
+    },
+    /// A zoom level whose tile grid does not span the matrix set extent
+    /// (Requirement 45).
+    #[error(
+        "zoom level {zoom_level} spans {actual} in {axis}, but the tile matrix set extent is {expected}"
+    )]
+    ExtentMismatch {
+        /// Zoom level of the offending tile matrix.
+        zoom_level: i64,
+        /// Which axis: `x` or `y`.
+        axis: &'static str,
+        /// The extent implied by the matrix set.
+        expected: f64,
+        /// The extent the tile grid spans.
+        actual: f64,
+    },
+    /// Two tile matrices for the same zoom level (the `gpkg_tile_matrix`
+    /// primary key is `(table_name, zoom_level)`).
+    #[error("zoom level {zoom_level} appears more than once")]
+    DuplicateZoomLevel {
+        /// The repeated zoom level.
+        zoom_level: i64,
+    },
+    /// A tile index outside the grid its zoom level declares.
+    #[error(
+        "tile ({column}, {row}) is outside the {matrix_width} by {matrix_height} grid of zoom level {zoom_level}"
+    )]
+    CoordOutsideMatrix {
+        /// Zoom level the tile was addressed at.
+        zoom_level: i64,
+        /// The offending column index.
+        column: i64,
+        /// The offending row index.
+        row: i64,
+        /// Columns the zoom level has.
+        matrix_width: i64,
+        /// Rows the zoom level has.
+        matrix_height: i64,
+    },
+    /// An XYZ conversion requested on a pyramid whose grid is not the standard
+    /// web mercator quad, where GeoPackage and XYZ indices do not coincide.
+    #[error(
+        "zoom level {zoom_level} is not addressed as an XYZ grid: that needs a web mercator quad extent and a 2^zoom square matrix"
+    )]
+    NotAnXyzGrid {
+        /// Zoom level the conversion was requested for.
+        zoom_level: i64,
+    },
+    /// A tile payload whose header could not be read.
+    #[error("tile payload is not a readable image: {reason}")]
+    UnreadablePayload {
+        /// The header reader's error message.
+        reason: String,
+    },
+    /// A coverage tile payload that does not conform to an encoding requirement
+    /// of the tiled gridded coverage extension (OGC 17-066r2).
+    ///
+    /// The header checks in [`crate::coverage`] read the header of a payload
+    /// and not its samples, so they do not check Requirement 21.
+    #[error(
+        "coverage tile payload breaks tiled gridded coverage Requirement {requirement}: {detail}"
+    )]
+    CoverageProfileViolation {
+        /// The requirement number, in the numbering of OGC 17-066r2.
+        requirement: u8,
+        /// What the payload declares, and what the requirement specifies.
+        detail: String,
+    },
+    /// A coverage tile whose header declares more samples than this crate
+    /// decodes. The payload is not known to be wrong; it is not decoded.
+    #[error(
+        "coverage tile payload declares {width} by {height} samples, more than the {limit} this crate decodes"
+    )]
+    PayloadTooLarge {
+        /// Width the payload's header declares.
+        width: i64,
+        /// Height the payload's header declares.
+        height: i64,
+        /// The most samples a decode accepts.
+        limit: usize,
+    },
+    /// A tile payload whose pixel dimensions are not the ones its zoom level
+    /// declares.
+    #[error(
+        "tile is {actual_width} by {actual_height} pixels, but zoom level {zoom_level} declares {expected_width} by {expected_height}"
+    )]
+    PayloadSizeMismatch {
+        /// Zoom level the tile was written at.
+        zoom_level: i64,
+        /// `tile_width` of that zoom level.
+        expected_width: i64,
+        /// `tile_height` of that zoom level.
+        expected_height: i64,
+        /// Width the payload's header declares.
+        actual_width: i64,
+        /// Height the payload's header declares.
+        actual_height: i64,
+    },
+    /// A zoom ladder whose range is empty, negative, or too wide for the grid
+    /// to stay representable.
+    #[error(
+        "zoom range {min_zoom} to {max_zoom} is not usable: it must be non-negative, ascending, and narrow enough for the doubled grid to fit an i64"
+    )]
+    InvalidZoomRange {
+        /// Lowest zoom level requested.
+        min_zoom: i64,
+        /// Highest zoom level requested.
+        max_zoom: i64,
+    },
 }
 
 #[cfg(test)]
