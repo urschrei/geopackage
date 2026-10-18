@@ -76,8 +76,9 @@ An encoding the extension does not define is read as the default.
 ## Write tiles with their statistics
 
 `CoverageWriter::put_with_statistics` decodes a payload before it writes it,
-refuses one that contains NaN or an infinity (Requirement 21), and records the
-minimum, maximum, mean and standard deviation in the tile's ancillary row:
+refuses one that contains NaN or an infinity
+([Requirement 21](../explanation/coverages.md#requirement-21)), and records
+the minimum, maximum, mean and standard deviation in the tile's ancillary row:
 
 ```rust,no_run
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -100,7 +101,8 @@ way.
 ## Check a coverage's samples
 
 With the feature enabled, `GeoPackage::validate` decodes every coverage tile
-and reports tiles with a NaN or infinite sample as Requirement 21, and tiles
+and reports tiles with a NaN or infinite sample as
+[Requirement 21](../explanation/coverages.md#requirement-21), and tiles
 whose data does not decode as the requirement of their encoding. To check one
 tile yourself, decode it and call `check_samples`:
 
