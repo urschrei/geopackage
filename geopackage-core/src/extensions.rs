@@ -20,60 +20,12 @@ use std::fmt;
 
 use crate::types::GeometryType;
 
-/// `gpkg_extensions.scope`: what an extension affects (Requirement 64).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExtensionScope {
-    /// `read-write`: the extension affects both readers and writers.
-    ReadWrite,
-    /// `write-only`: the extension affects only writers.
-    ///
-    /// The spec's example is an extension that defines a trigger calling a
-    /// non-standard SQL function. Triggers fire only on write, so read-only
-    /// access can safely ignore it.
-    WriteOnly,
-    /// A value Requirement 64 does not allow, kept as written.
-    Other(String),
-}
+/// The `definition` column value for an Annex F.1 `gpkg_geom_<TYPE>` row.
+pub const GEOM_TYPE_EXTENSION_DEFINITION: &str =
+    "http://www.geopackage.org/spec140/#extension_geometry_types";
 
-impl ExtensionScope {
-    /// Classifies a `scope` column value.
-    ///
-    /// Requirement 64 fixes the two valid values as lowercase. Anything else
-    /// becomes [`ExtensionScope::Other`] rather than an error, because the
-    /// value comes from a file someone else wrote.
-    pub fn parse(value: &str) -> Self {
-        match value {
-            "read-write" => Self::ReadWrite,
-            "write-only" => Self::WriteOnly,
-            other => Self::Other(other.to_owned()),
-        }
-    }
-
-    /// Returns the `scope` column value.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::ReadWrite => "read-write",
-            Self::WriteOnly => "write-only",
-            Self::Other(value) => value,
-        }
-    }
-
-    /// Returns `true` if a reader must understand the extension to read the
-    /// affected data correctly.
-    ///
-    /// This is true for an unrecognised scope value too, because a value the
-    /// spec does not define says nothing about what can be ignored.
-    pub fn affects_readers(&self) -> bool {
-        !matches!(self, Self::WriteOnly)
-    }
-
-    /// Returns `true` if a writer must understand the extension to write the
-    /// affected data correctly. True for every scope, including an
-    /// unrecognised one.
-    pub fn affects_writers(&self) -> bool {
-        true
-    }
-}
+/// The prefix of an Annex F.1 geometry type extension name.
+const GEOM_PREFIX: &str = "gpkg_geom_";
 
 /// An extension name this workspace can identify.
 ///
@@ -156,13 +108,6 @@ pub enum Extension {
     /// name.
     Other(String),
 }
-
-/// The prefix of an Annex F.1 geometry type extension name.
-const GEOM_PREFIX: &str = "gpkg_geom_";
-
-/// The `definition` column value for an Annex F.1 `gpkg_geom_<TYPE>` row.
-pub const GEOM_TYPE_EXTENSION_DEFINITION: &str =
-    "http://www.geopackage.org/spec140/#extension_geometry_types";
 
 impl Extension {
     /// Identifies an `extension_name` column value.
@@ -274,6 +219,67 @@ impl Extension {
     }
 }
 
+/// `gpkg_extensions.scope`: what an extension affects (Requirement 64).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtensionScope {
+    /// `read-write`: the extension affects both readers and writers.
+    ReadWrite,
+    /// `write-only`: the extension affects only writers.
+    ///
+    /// The spec's example is an extension that defines a trigger calling a
+    /// non-standard SQL function. Triggers fire only on write, so read-only
+    /// access can safely ignore it.
+    WriteOnly,
+    /// A value Requirement 64 does not allow, kept as written.
+    Other(String),
+}
+
+impl ExtensionScope {
+    /// Classifies a `scope` column value.
+    ///
+    /// Requirement 64 fixes the two valid values as lowercase. Anything else
+    /// becomes [`ExtensionScope::Other`] rather than an error, because the
+    /// value comes from a file someone else wrote.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "read-write" => Self::ReadWrite,
+            "write-only" => Self::WriteOnly,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+
+    /// Returns the `scope` column value.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::ReadWrite => "read-write",
+            Self::WriteOnly => "write-only",
+            Self::Other(value) => value,
+        }
+    }
+
+    /// Returns `true` if a reader must understand the extension to read the
+    /// affected data correctly.
+    ///
+    /// This is true for an unrecognised scope value too, because a value the
+    /// spec does not define says nothing about what can be ignored.
+    pub fn affects_readers(&self) -> bool {
+        !matches!(self, Self::WriteOnly)
+    }
+
+    /// Returns `true` if a writer must understand the extension to write the
+    /// affected data correctly. True for every scope, including an
+    /// unrecognised one.
+    pub fn affects_writers(&self) -> bool {
+        true
+    }
+}
+
+impl fmt::Display for ExtensionScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// What this workspace can do with a registered extension.
 ///
 /// This describes the implementation, not the extension. An extension is
@@ -316,12 +322,6 @@ impl ExtensionSupport {
 }
 
 impl fmt::Display for ExtensionSupport {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl fmt::Display for ExtensionScope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }

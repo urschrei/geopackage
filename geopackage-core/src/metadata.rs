@@ -211,18 +211,6 @@ pub enum ReferenceScope {
     RowCol,
 }
 
-/// Which of a reference's target columns Requirements 97 to 99 require to be
-/// set, for a given [`ReferenceScope`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReferenceTargets {
-    /// Whether `table_name` is set. False only for the whole-GeoPackage scope.
-    pub table_name: bool,
-    /// Whether `column_name` is set.
-    pub column_name: bool,
-    /// Whether `row_id_value` is set.
-    pub row_id_value: bool,
-}
-
 impl ReferenceScope {
     /// Identifies a `reference_scope` value, or `None` when it is not one of
     /// the five (Requirement 96).
@@ -270,6 +258,18 @@ impl fmt::Display for ReferenceScope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
+}
+
+/// Which of a reference's target columns Requirements 97 to 99 require to be
+/// set, for a given [`ReferenceScope`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReferenceTargets {
+    /// Whether `table_name` is set. False only for the whole-GeoPackage scope.
+    pub table_name: bool,
+    /// Whether `column_name` is set.
+    pub column_name: bool,
+    /// Whether `row_id_value` is set.
+    pub row_id_value: bool,
 }
 
 #[cfg(test)]

@@ -345,41 +345,6 @@ pub enum Interpolation {
     Bilinear,
 }
 
-/// Where a sample sits in its cell (`grid_cell_encoding`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CellEncoding {
-    /// `grid-value-is-center`, the default.
-    Center,
-    /// `grid-value-is-area`: the value holds across the whole cell.
-    Area,
-    /// `grid-value-is-corner`. The extension does not say which corner. This
-    /// crate reads the lower-left, as NGA's implementation does, after the CDB
-    /// elevation mesh the extension cites.
-    Corner,
-}
-
-impl CellEncoding {
-    /// Parses the column. A missing value is the default of the table
-    /// definition, and an unknown one is read as the default too, as NGA's
-    /// implementation does, because a read does not reject a file.
-    fn parse(value: Option<&str>) -> Self {
-        match value {
-            Some("grid-value-is-area") => Self::Area,
-            Some("grid-value-is-corner") => Self::Corner,
-            _ => Self::Center,
-        }
-    }
-
-    /// The position of sample (0, 0) in pixels, right and down from the
-    /// top-left corner of the grid.
-    fn origin(self) -> (f64, f64) {
-        match self {
-            Self::Center | Self::Area => (0.5, 0.5),
-            Self::Corner => (0.0, 1.0),
-        }
-    }
-}
-
 /// One sample a [`SampleLookup`] reads, and its weight.
 ///
 /// The column and row count samples across the whole zoom level, from the
@@ -586,6 +551,41 @@ impl SampleLookup {
                 }
                 Ok(Some(value))
             }
+        }
+    }
+}
+
+/// Where a sample sits in its cell (`grid_cell_encoding`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CellEncoding {
+    /// `grid-value-is-center`, the default.
+    Center,
+    /// `grid-value-is-area`: the value holds across the whole cell.
+    Area,
+    /// `grid-value-is-corner`. The extension does not say which corner. This
+    /// crate reads the lower-left, as NGA's implementation does, after the CDB
+    /// elevation mesh the extension cites.
+    Corner,
+}
+
+impl CellEncoding {
+    /// Parses the column. A missing value is the default of the table
+    /// definition, and an unknown one is read as the default too, as NGA's
+    /// implementation does, because a read does not reject a file.
+    fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("grid-value-is-area") => Self::Area,
+            Some("grid-value-is-corner") => Self::Corner,
+            _ => Self::Center,
+        }
+    }
+
+    /// The position of sample (0, 0) in pixels, right and down from the
+    /// top-left corner of the grid.
+    fn origin(self) -> (f64, f64) {
+        match self {
+            Self::Center | Self::Area => (0.5, 0.5),
+            Self::Corner => (0.0, 1.0),
         }
     }
 }

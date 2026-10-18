@@ -379,15 +379,6 @@ fn read_coords(
     Ok(())
 }
 
-/// Decodes one 8-byte word as an `f64` of the monomorphised byte order.
-fn read_word<const LITTLE_ENDIAN: bool>(word: [u8; 8]) -> f64 {
-    if LITTLE_ENDIAN {
-        f64::from_le_bytes(word)
-    } else {
-        f64::from_be_bytes(word)
-    }
-}
-
 /// Word count at or above which [`add_coords`] folds with
 /// [`XyzBounds::add_branchless`] rather than [`XyzBounds::add`].
 ///
@@ -471,6 +462,15 @@ fn fold_coords<const LITTLE_ENDIAN: bool>(
                 );
             }
         }
+    }
+}
+
+/// Decodes one 8-byte word as an `f64` of the monomorphised byte order.
+fn read_word<const LITTLE_ENDIAN: bool>(word: [u8; 8]) -> f64 {
+    if LITTLE_ENDIAN {
+        f64::from_le_bytes(word)
+    } else {
+        f64::from_be_bytes(word)
     }
 }
 

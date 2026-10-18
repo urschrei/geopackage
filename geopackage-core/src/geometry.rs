@@ -30,90 +30,6 @@ use wkb::reader::{
 };
 use wkb::writer::{WriteOptions, geometry_wkb_size, write_geometry};
 
-/// Errors from constructing or reading a [`GpbGeometry`].
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum GeometryError {
-    /// The GPB header could not be parsed.
-    #[error(transparent)]
-    Header(#[from] gpb::GpbError),
-    /// The ISO WKB body could not be read. This covers structurally malformed
-    /// bodies and the non-linear curve types (`CIRCULARSTRING`,
-    /// `CURVEPOLYGON`, …) that the `wkb` crate does not yet support.
-    ///
-    /// Code that reads a body through the `wkb` reader, such as
-    /// [`GpbGeometry`], returns this variant. [`encode_gpb_from_wkb`] reads
-    /// bodies with [`crate::curve`] instead, and reports structural problems
-    /// with that scanner's variants.
-    #[error("WKB body is unreadable (unsupported curve type or malformed geometry)")]
-    Body(#[from] wkb::error::WkbError),
-    /// A body of a core type that contains a non-linear member, such as a
-    /// `GEOMETRYCOLLECTION` containing a `CIRCULARSTRING`.
-    ///
-    /// The byte scanner can read such a body. Reading it back as a geometry
-    /// goes through the `wkb` reader, which is chosen by the body's own type
-    /// code and cannot read the member. Writing one would produce a blob that
-    /// this crate's own read path cannot return, so the write path rejects it.
-    #[error(
-        "a {container} containing a {member} cannot be written: a non-linear geometry is writable only as a body's own type"
-    )]
-    NonLinearMember {
-        /// The body's own type.
-        container: GeometryType,
-        /// The first non-linear type found inside it.
-        member: GeometryType,
-    },
-    /// A polygon, at any depth, with interior rings and an empty exterior
-    /// ring.
-    ///
-    /// The `wkb` writer (0.9) writes the ring count of such a polygon as zero
-    /// and then writes the interior rings. A reader then returns an empty
-    /// polygon, and the envelope, which includes the interior rings,
-    /// contradicts the body. [`encode_gpb`] rejects the geometry rather than
-    /// write that body.
-    #[error("a polygon has interior rings but an empty exterior ring, which cannot be encoded")]
-    InteriorRingsWithoutExterior,
-    /// The WKB body was too short to contain the one-byte order marker and
-    /// four-byte geometry type code.
-    #[error("WKB body truncated: need at least 5 bytes for the geometry type code")]
-    TruncatedWkb,
-    /// The WKB geometry type code is not one of the GeoPackage geometry types
-    /// (Annex G).
-    #[error("unknown WKB geometry type code {0}")]
-    UnknownWkbType(u32),
-    /// The WKB body declares one of the abstract supertypes (`GEOMETRY`,
-    /// `CURVE`, `SURFACE`), which cannot be instantiated and so cannot appear
-    /// as a body.
-    #[error("WKB geometry type code {0} is an abstract supertype and has no encoding")]
-    AbstractWkbType(u32),
-    /// The WKB body ended before a count, coordinate, or nested geometry its
-    /// structure requires.
-    #[error("WKB body truncated at byte {offset}")]
-    TruncatedAt {
-        /// Byte offset into the body at which the read ran out of bytes.
-        offset: usize,
-    },
-    /// A WKB geometry opened with a byte-order marker that is neither 0 (big
-    /// endian) nor 1 (little endian).
-    #[error("invalid WKB byte order marker at byte {offset}")]
-    InvalidByteOrder {
-        /// Byte offset into the body of the offending marker.
-        offset: usize,
-    },
-    /// Nested geometry containers exceeded the walk's depth limit of 32
-    /// levels below the body's own geometry.
-    ///
-    /// [`encode_gpb`] returns it too, for a geometry nested deeper than the
-    /// walk reads, because the `ST_*` functions and the spatial index could
-    /// not read the blob it would write.
-    #[error("WKB geometry nesting is too deep")]
-    NestingTooDeep,
-    /// The georust `wkb` writer could not encode the geometry, for example
-    /// because it has a coordinate dimension the writer cannot serialise.
-    #[error("failed to encode geometry to WKB")]
-    EncodeWkb(#[source] wkb::error::WkbError),
-}
-
 /// A GeoPackage geometry: a parsed GPB header plus its ISO WKB body.
 ///
 /// Construct one with [`GpbGeometry::parse`]. The wrapper borrows the source
@@ -234,6 +150,156 @@ impl<'a> GpbGeometry<'a> {
     }
 }
 
+impl<'a> GeometryTrait for GpbGeometry<'a> {
+    type T = f64;
+    type PointType<'b>
+        = Point<'a>
+    where
+        Self: 'b;
+    type LineStringType<'b>
+        = LineString<'a>
+    where
+        Self: 'b;
+    type PolygonType<'b>
+        = Polygon<'a>
+    where
+        Self: 'b;
+    type MultiPointType<'b>
+        = MultiPoint<'a>
+    where
+        Self: 'b;
+    type MultiLineStringType<'b>
+        = MultiLineString<'a>
+    where
+        Self: 'b;
+    type MultiPolygonType<'b>
+        = MultiPolygon<'a>
+    where
+        Self: 'b;
+    type GeometryCollectionType<'b>
+        = GeometryCollection<'a>
+    where
+        Self: 'b;
+    type RectType<'b>
+        = geo_traits::UnimplementedRect<f64>
+    where
+        Self: 'b;
+    type TriangleType<'b>
+        = geo_traits::UnimplementedTriangle<f64>
+    where
+        Self: 'b;
+    type LineType<'b>
+        = geo_traits::UnimplementedLine<f64>
+    where
+        Self: 'b;
+
+    fn dim(&self) -> Dimensions {
+        self.wkb.dim()
+    }
+
+    fn as_type(
+        &self,
+    ) -> geo_traits::GeometryType<
+        '_,
+        Self::PointType<'_>,
+        Self::LineStringType<'_>,
+        Self::PolygonType<'_>,
+        Self::MultiPointType<'_>,
+        Self::MultiLineStringType<'_>,
+        Self::MultiPolygonType<'_>,
+        Self::GeometryCollectionType<'_>,
+        Self::RectType<'_>,
+        Self::TriangleType<'_>,
+        Self::LineType<'_>,
+    > {
+        self.wkb.as_type()
+    }
+}
+
+/// Errors from constructing or reading a [`GpbGeometry`].
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum GeometryError {
+    /// The GPB header could not be parsed.
+    #[error(transparent)]
+    Header(#[from] gpb::GpbError),
+    /// The ISO WKB body could not be read. This covers structurally malformed
+    /// bodies and the non-linear curve types (`CIRCULARSTRING`,
+    /// `CURVEPOLYGON`, …) that the `wkb` crate does not yet support.
+    ///
+    /// Code that reads a body through the `wkb` reader, such as
+    /// [`GpbGeometry`], returns this variant. [`encode_gpb_from_wkb`] reads
+    /// bodies with [`crate::curve`] instead, and reports structural problems
+    /// with that scanner's variants.
+    #[error("WKB body is unreadable (unsupported curve type or malformed geometry)")]
+    Body(#[from] wkb::error::WkbError),
+    /// A body of a core type that contains a non-linear member, such as a
+    /// `GEOMETRYCOLLECTION` containing a `CIRCULARSTRING`.
+    ///
+    /// The byte scanner can read such a body. Reading it back as a geometry
+    /// goes through the `wkb` reader, which is chosen by the body's own type
+    /// code and cannot read the member. Writing one would produce a blob that
+    /// this crate's own read path cannot return, so the write path rejects it.
+    #[error(
+        "a {container} containing a {member} cannot be written: a non-linear geometry is writable only as a body's own type"
+    )]
+    NonLinearMember {
+        /// The body's own type.
+        container: GeometryType,
+        /// The first non-linear type found inside it.
+        member: GeometryType,
+    },
+    /// A polygon, at any depth, with interior rings and an empty exterior
+    /// ring.
+    ///
+    /// The `wkb` writer (0.9) writes the ring count of such a polygon as zero
+    /// and then writes the interior rings. A reader then returns an empty
+    /// polygon, and the envelope, which includes the interior rings,
+    /// contradicts the body. [`encode_gpb`] rejects the geometry rather than
+    /// write that body.
+    #[error("a polygon has interior rings but an empty exterior ring, which cannot be encoded")]
+    InteriorRingsWithoutExterior,
+    /// The WKB body was too short to contain the one-byte order marker and
+    /// four-byte geometry type code.
+    #[error("WKB body truncated: need at least 5 bytes for the geometry type code")]
+    TruncatedWkb,
+    /// The WKB geometry type code is not one of the GeoPackage geometry types
+    /// (Annex G).
+    #[error("unknown WKB geometry type code {0}")]
+    UnknownWkbType(u32),
+    /// The WKB body declares one of the abstract supertypes (`GEOMETRY`,
+    /// `CURVE`, `SURFACE`), which cannot be instantiated and so cannot appear
+    /// as a body.
+    #[error("WKB geometry type code {0} is an abstract supertype and has no encoding")]
+    AbstractWkbType(u32),
+    /// The WKB body ended before a count, coordinate, or nested geometry its
+    /// structure requires.
+    #[error("WKB body truncated at byte {offset}")]
+    TruncatedAt {
+        /// Byte offset into the body at which the read ran out of bytes.
+        offset: usize,
+    },
+    /// A WKB geometry opened with a byte-order marker that is neither 0 (big
+    /// endian) nor 1 (little endian).
+    #[error("invalid WKB byte order marker at byte {offset}")]
+    InvalidByteOrder {
+        /// Byte offset into the body of the offending marker.
+        offset: usize,
+    },
+    /// Nested geometry containers exceeded the walk's depth limit of 32
+    /// levels below the body's own geometry.
+    ///
+    /// [`encode_gpb`] returns it too, for a geometry nested deeper than the
+    /// walk reads, because the `ST_*` functions and the spatial index could
+    /// not read the blob it would write.
+    #[error("WKB geometry nesting is too deep")]
+    NestingTooDeep,
+    /// The georust `wkb` writer could not encode the geometry, for example
+    /// because it has a coordinate dimension the writer cannot serialise.
+    #[error("failed to encode geometry to WKB")]
+    EncodeWkb(#[source] wkb::error::WkbError),
+}
+
 /// Returns `true` if the WKB geometry type `actual` satisfies a column
 /// declared as `declared`, per the GeoPackage instantiable-type rules.
 ///
@@ -266,21 +332,6 @@ pub fn geometry_type_matches(actual: GeometryType, declared: GeometryType) -> bo
         );
     }
     false
-}
-
-/// Traverses a GPB blob's body for its XY bounds, non-linear types included.
-///
-/// [`crate::curve`] walks every body. It reads all the Annex G types directly
-/// from the WKB bytes and is the faster reader over coordinate runs. As a
-/// result, a core-typed container holding a non-linear member still yields its
-/// bounds here, so you can index a file that another tool wrote that way. This
-/// crate's writer refuses such a container, and the `wkb`-reader read path
-/// cannot return it.
-fn body_xy_bounds(blob: &[u8]) -> Result<Option<[f64; 4]>, GeometryError> {
-    let (_, offset) = gpb::parse_header(blob)?;
-    // `parse_header` guarantees `offset <= blob.len()`.
-    let body = blob.get(offset..).unwrap_or_default();
-    crate::curve::xy_envelope(body)
 }
 
 /// Returns the XY bounds `[min_x, max_x, min_y, max_y]` of a GPB blob, or
@@ -343,6 +394,21 @@ pub fn blob_envelope_and_empty(blob: &[u8]) -> Result<(Option<[f64; 4]>, bool), 
         None => body_bounds,
     };
     Ok((Some(bounds), false))
+}
+
+/// Traverses a GPB blob's body for its XY bounds, non-linear types included.
+///
+/// [`crate::curve`] walks every body. It reads all the Annex G types directly
+/// from the WKB bytes and is the faster reader over coordinate runs. As a
+/// result, a core-typed container holding a non-linear member still yields its
+/// bounds here, so you can index a file that another tool wrote that way. This
+/// crate's writer refuses such a container, and the `wkb`-reader read path
+/// cannot return it.
+fn body_xy_bounds(blob: &[u8]) -> Result<Option<[f64; 4]>, GeometryError> {
+    let (_, offset) = gpb::parse_header(blob)?;
+    // `parse_header` guarantees `offset <= blob.len()`.
+    let body = blob.get(offset..).unwrap_or_default();
+    crate::curve::xy_envelope(body)
 }
 
 /// Reads the geometry type discriminator from the start of an ISO WKB body,
@@ -538,6 +604,49 @@ pub fn encode_gpb<G: GeometryTrait<T = f64>>(
     Ok((blob, xy))
 }
 
+/// Walks a geometry through the `geo-traits` interface, passing every
+/// coordinate's `(x, y, z?)` to `visit`. Recurses into geometry collections.
+/// The read-path envelope accumulates only X and Y and ignores the third
+/// argument. The write-path envelope uses it.
+/// Returns `true` if `geom`, at nesting `depth`, has a member deeper than
+/// [`crate::curve::scan`] reads. Like the scan, it counts each member of a
+/// collection or multi-geometry as one level deeper, and it stops descending
+/// at the limit, so a deeply nested input cannot overflow the stack.
+fn nested_deeper_than_the_scan_reads<G: GeometryTrait<T = f64>>(geom: &G, depth: u32) -> bool {
+    if depth > crate::curve::MAX_DEPTH {
+        return true;
+    }
+    let member_depth = depth + 1;
+    let members_too_deep = |count: usize| count > 0 && member_depth > crate::curve::MAX_DEPTH;
+    match geom.as_type() {
+        GtGeometryType::MultiPoint(m) => members_too_deep(m.num_points()),
+        GtGeometryType::MultiLineString(m) => members_too_deep(m.num_line_strings()),
+        GtGeometryType::MultiPolygon(m) => members_too_deep(m.num_polygons()),
+        GtGeometryType::GeometryCollection(collection) => collection
+            .geometries()
+            .any(|member| nested_deeper_than_the_scan_reads(&member, member_depth)),
+        _ => false,
+    }
+}
+
+/// Returns `true` if a polygon in `geom`, at any depth, has interior rings and
+/// an empty exterior ring. See [`GeometryError::InteriorRingsWithoutExterior`].
+fn has_interior_rings_without_exterior<G: GeometryTrait<T = f64>>(geom: &G) -> bool {
+    fn polygon<P: PolygonTrait<T = f64>>(polygon: &P) -> bool {
+        polygon.exterior().is_none() && polygon.num_interiors() > 0
+    }
+    match geom.as_type() {
+        GtGeometryType::Polygon(p) => polygon(p),
+        GtGeometryType::MultiPolygon(multi_polygon) => {
+            multi_polygon.polygons().any(|p| polygon(&p))
+        }
+        GtGeometryType::GeometryCollection(collection) => collection
+            .geometries()
+            .any(|member| has_interior_rings_without_exterior(&member)),
+        _ => false,
+    }
+}
+
 /// Accumulator for an XY bounding box over visited coordinates.
 ///
 /// Shared with [`crate::curve`], which walks WKB bytes directly rather than
@@ -665,90 +774,6 @@ impl XyzBounds {
     }
 }
 
-/// Reads a coordinate's X and Y and, when it has a Z dimension, its Z.
-///
-/// Only [`Dimensions::Xyz`] and [`Dimensions::Xyzm`] place Z at index 2;
-/// [`Dimensions::Xym`] puts M there, so Z reads as `None` for it.
-fn coord_xyz(coord: &impl CoordTrait<T = f64>) -> (f64, f64, Option<f64>) {
-    let z = match coord.dim() {
-        Dimensions::Xyz | Dimensions::Xyzm => coord.nth(2),
-        _ => None,
-    };
-    (coord.x(), coord.y(), z)
-}
-
-fn visit_point(point: &impl PointTrait<T = f64>, visit: &mut impl FnMut(f64, f64, Option<f64>)) {
-    if let Some(coord) = point.coord() {
-        let (x, y, z) = coord_xyz(&coord);
-        visit(x, y, z);
-    }
-}
-
-fn visit_line_string(
-    line_string: &impl LineStringTrait<T = f64>,
-    visit: &mut impl FnMut(f64, f64, Option<f64>),
-) {
-    for coord in line_string.coords() {
-        let (x, y, z) = coord_xyz(&coord);
-        visit(x, y, z);
-    }
-}
-
-fn visit_polygon(
-    polygon: &impl PolygonTrait<T = f64>,
-    visit: &mut impl FnMut(f64, f64, Option<f64>),
-) {
-    if let Some(exterior) = polygon.exterior() {
-        visit_line_string(&exterior, visit);
-    }
-    for interior in polygon.interiors() {
-        visit_line_string(&interior, visit);
-    }
-}
-
-/// Walks a geometry through the `geo-traits` interface, passing every
-/// coordinate's `(x, y, z?)` to `visit`. Recurses into geometry collections.
-/// The read-path envelope accumulates only X and Y and ignores the third
-/// argument. The write-path envelope uses it.
-/// Returns `true` if `geom`, at nesting `depth`, has a member deeper than
-/// [`crate::curve::scan`] reads. Like the scan, it counts each member of a
-/// collection or multi-geometry as one level deeper, and it stops descending
-/// at the limit, so a deeply nested input cannot overflow the stack.
-fn nested_deeper_than_the_scan_reads<G: GeometryTrait<T = f64>>(geom: &G, depth: u32) -> bool {
-    if depth > crate::curve::MAX_DEPTH {
-        return true;
-    }
-    let member_depth = depth + 1;
-    let members_too_deep = |count: usize| count > 0 && member_depth > crate::curve::MAX_DEPTH;
-    match geom.as_type() {
-        GtGeometryType::MultiPoint(m) => members_too_deep(m.num_points()),
-        GtGeometryType::MultiLineString(m) => members_too_deep(m.num_line_strings()),
-        GtGeometryType::MultiPolygon(m) => members_too_deep(m.num_polygons()),
-        GtGeometryType::GeometryCollection(collection) => collection
-            .geometries()
-            .any(|member| nested_deeper_than_the_scan_reads(&member, member_depth)),
-        _ => false,
-    }
-}
-
-/// Returns `true` if a polygon in `geom`, at any depth, has interior rings and
-/// an empty exterior ring. See [`GeometryError::InteriorRingsWithoutExterior`].
-fn has_interior_rings_without_exterior<G: GeometryTrait<T = f64>>(geom: &G) -> bool {
-    fn polygon<P: PolygonTrait<T = f64>>(polygon: &P) -> bool {
-        polygon.exterior().is_none() && polygon.num_interiors() > 0
-    }
-    match geom.as_type() {
-        GtGeometryType::Polygon(p) => polygon(p),
-        GtGeometryType::MultiPolygon(multi_polygon) => {
-            multi_polygon.polygons().any(|p| polygon(&p))
-        }
-        GtGeometryType::GeometryCollection(collection) => collection
-            .geometries()
-            .any(|member| has_interior_rings_without_exterior(&member)),
-        _ => false,
-    }
-}
-
 fn visit_coords<G: GeometryTrait<T = f64>>(
     geom: &G,
     visit: &mut impl FnMut(f64, f64, Option<f64>),
@@ -801,70 +826,45 @@ fn visit_coords<G: GeometryTrait<T = f64>>(
     }
 }
 
-impl<'a> GeometryTrait for GpbGeometry<'a> {
-    type T = f64;
-    type PointType<'b>
-        = Point<'a>
-    where
-        Self: 'b;
-    type LineStringType<'b>
-        = LineString<'a>
-    where
-        Self: 'b;
-    type PolygonType<'b>
-        = Polygon<'a>
-    where
-        Self: 'b;
-    type MultiPointType<'b>
-        = MultiPoint<'a>
-    where
-        Self: 'b;
-    type MultiLineStringType<'b>
-        = MultiLineString<'a>
-    where
-        Self: 'b;
-    type MultiPolygonType<'b>
-        = MultiPolygon<'a>
-    where
-        Self: 'b;
-    type GeometryCollectionType<'b>
-        = GeometryCollection<'a>
-    where
-        Self: 'b;
-    type RectType<'b>
-        = geo_traits::UnimplementedRect<f64>
-    where
-        Self: 'b;
-    type TriangleType<'b>
-        = geo_traits::UnimplementedTriangle<f64>
-    where
-        Self: 'b;
-    type LineType<'b>
-        = geo_traits::UnimplementedLine<f64>
-    where
-        Self: 'b;
-
-    fn dim(&self) -> Dimensions {
-        self.wkb.dim()
+fn visit_point(point: &impl PointTrait<T = f64>, visit: &mut impl FnMut(f64, f64, Option<f64>)) {
+    if let Some(coord) = point.coord() {
+        let (x, y, z) = coord_xyz(&coord);
+        visit(x, y, z);
     }
+}
 
-    fn as_type(
-        &self,
-    ) -> geo_traits::GeometryType<
-        '_,
-        Self::PointType<'_>,
-        Self::LineStringType<'_>,
-        Self::PolygonType<'_>,
-        Self::MultiPointType<'_>,
-        Self::MultiLineStringType<'_>,
-        Self::MultiPolygonType<'_>,
-        Self::GeometryCollectionType<'_>,
-        Self::RectType<'_>,
-        Self::TriangleType<'_>,
-        Self::LineType<'_>,
-    > {
-        self.wkb.as_type()
+fn visit_line_string(
+    line_string: &impl LineStringTrait<T = f64>,
+    visit: &mut impl FnMut(f64, f64, Option<f64>),
+) {
+    for coord in line_string.coords() {
+        let (x, y, z) = coord_xyz(&coord);
+        visit(x, y, z);
     }
+}
+
+fn visit_polygon(
+    polygon: &impl PolygonTrait<T = f64>,
+    visit: &mut impl FnMut(f64, f64, Option<f64>),
+) {
+    if let Some(exterior) = polygon.exterior() {
+        visit_line_string(&exterior, visit);
+    }
+    for interior in polygon.interiors() {
+        visit_line_string(&interior, visit);
+    }
+}
+
+/// Reads a coordinate's X and Y and, when it has a Z dimension, its Z.
+///
+/// Only [`Dimensions::Xyz`] and [`Dimensions::Xyzm`] place Z at index 2;
+/// [`Dimensions::Xym`] puts M there, so Z reads as `None` for it.
+fn coord_xyz(coord: &impl CoordTrait<T = f64>) -> (f64, f64, Option<f64>) {
+    let z = match coord.dim() {
+        Dimensions::Xyz | Dimensions::Xyzm => coord.nth(2),
+        _ => None,
+    };
+    (coord.x(), coord.y(), z)
 }
 
 #[cfg(test)]
