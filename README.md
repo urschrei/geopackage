@@ -16,9 +16,13 @@ Until 1.0, the API may change between minor versions.
 - [Changelog](CHANGELOG.md)
 
 > [!NOTE]
-> These crates are a testbed for LLM-assisted Rust development and have been
+> These crates are a testbed for LLM-**assisted** Rust development and have been
 > produced with the substantial assistance of Claude's Fable and Opus 5 models.
-> Issues will be answered by the author.
+> Notwithstanding the test suite details below, you should consider the current
+> state of these crates as "research preview":
+> you should NOT use them for critical data – anything might happen. Please open
+> an issue if you encounter an error or see bad perf. Issues are answered by me (human).
+> Pull requests are currently not welcome.
 
 ## Install
 
