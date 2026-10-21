@@ -189,6 +189,12 @@ jobs:
       # allocations alive by design, so LeakSanitizer reports it rather than
       # anything this crate does. Turning it on wants those suppressed first.
       ASAN_OPTIONS: "detect_leaks=0"
+      # From cc 1.9.0, cc gives `-fsanitize=address` to the C compiler, so the
+      # bundled SQLite is instrumented too. SQLite has two identical static
+      # `aiOff` tables, one for FTS3 and one for FTS5. GCC at -O2 merges them,
+      # and ASan then registers the one address twice and reports an ODR
+      # violation. This flag stops GCC from merging them.
+      CFLAGS: "-fno-ipa-icf"
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
