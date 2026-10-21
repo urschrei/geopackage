@@ -1059,10 +1059,11 @@ The items the sense-check produced, in rough order of consumer value:
 - [ ] Full-corpus soak: every file opened, fully read, indexes rebuilt and
       compared, weekly CI.
 - [ ] Performance regression CI (criterion plus threshold alerts), and the
-      allocation benches with it: #28 for the index build and #31 for the tile
-      paths, both needing a Linux runner because Valgrind has no macOS arm64
-      port. Deciding where that runner comes from is the blocking part of both
-      issues, not the benches themselves.
+      allocation benches with it, which need a Linux runner because Valgrind
+      has no macOS arm64 port. The index-build bench
+      (`geopackage/benches/alloc.rs`, from #28) is merged but not in CI; the
+      tile paths are #31. Deciding where that runner comes from is the blocking
+      part, not the benches themselves.
 - [ ] The QGIS interop job (#6), which also includes M4's undelivered acceptance
       criterion 2: a pyramid written here rendering correctly in QGIS.
 - [ ] Docs: book-style guide (mdBook), cookbook for the ten common tasks,
