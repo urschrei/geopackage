@@ -99,7 +99,7 @@ geopackage.workspace = true
 # The build script of `hegeltest` builds a cdylib, which miri cannot. The
 # miri job runs only `tests/boundary.rs`, which does not use it.
 [target.'cfg(not(miri))'.dev-dependencies]
-hegeltest = "0.49.11"
+hegeltest = "0.50.2"
 
 # `cargo cbuild` / `cargo cinstall` packaging: a pkg-config file and a versioned
 # soname, so a C consumer links against it the way it links against any other

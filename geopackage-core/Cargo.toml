@@ -31,7 +31,7 @@ png = { workspace = true, optional = true }
 tiff = { workspace = true, optional = true }
 
 [dev-dependencies]
-hegeltest = "0.49.11"
+hegeltest = "0.50.2"
 # The sample tests encode their own payloads, so that a decode is checked
 # against an encoder other than the one under test. Already optional
 # dependencies, so this adds no build cost.
