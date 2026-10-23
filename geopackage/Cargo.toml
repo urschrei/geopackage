@@ -89,7 +89,7 @@ criterion = "0.8"
 # Drives the `alloc` bench. Pinned: the benchmark macros it exports are not
 # stable across minor versions. Needs Valgrind at run time, which does not
 # exist for macOS on arm64, so the bench builds everywhere but runs on Linux.
-gungraun = "=0.19.2"
+gungraun = "=0.20.0"
 
 [[test]]
 name = "coverage_samples"
