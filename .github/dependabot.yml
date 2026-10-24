@@ -1,15 +1,19 @@
 version: 2
 updates:
-  - package-ecosystem: cargo
+  - package-ecosystem: "cargo"
     directory: "/"
     schedule:
-      interval: weekly
+      interval: "weekly"
     groups:
       # arrow-array and arrow-schema must move together.
       arrow:
         patterns: ["arrow-*"]
-      cargo-minor-and-patch:
-        update-types: [minor, patch]
+      cargo:
+        applies-to: version-updates
+        patterns: ["*"]
+      cargo-security:
+        applies-to: security-updates
+        patterns: ["*"]
     ignore:
       # From 0.26, hotpath exports a symbol per label whose name contains a
       # `"`, which breaks the linker's version script for the geopackage-ffi
@@ -18,10 +22,16 @@ updates:
       - dependency-name: hotpath
         versions: [">=0.26"]
 
-  - package-ecosystem: github-actions
+  - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: weekly
+      interval: "weekly"
     groups:
       github-actions:
-        patterns: ["*"]
+        applies-to: version-updates
+        patterns:
+          - "*"
+      github-actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
