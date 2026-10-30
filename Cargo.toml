@@ -25,7 +25,7 @@ thiserror = "2"
 # function argument per column, so it has to know when a table is too wide.
 # `bundled` is deliberately absent: the default links the system SQLite, and
 # each crate's `bundled` feature opts into the vendored amalgamation instead.
-rusqlite = { version = "0.40", features = ["functions", "limits"] }
+rusqlite = { version = "0.41", features = ["functions", "limits"] }
 tempfile = "3"
 wkb = "0.9.3"
 geo-traits = "0.3"
