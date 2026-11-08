@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Package the QGIS plugin, with the native module for each platform inside.
 
-    scripts/package_qgis_plugin.py WHEEL [WHEEL ...] [--out DIR]
+    scripts/package_qgis_plugin.py WHEEL [WHEEL ...] [--native DIR] [--out DIR]
 
 Each WHEEL is a geopackage-rs abi3 wheel (from `maturin build`). Its
 `geopackage_rs` package is unpacked into `gpkg_toolkit/ext-libs/<tag>/`, where
 `gpkg_toolkit/native.py` looks for it, with `<tag>` derived from the wheel's
 platform tag. The result is `<out>/gpkg_toolkit-<version>.zip`, which installs
 through QGIS's "Install from ZIP".
+
+`--native DIR` adds builds of the native data provider (`geopackage-qgis`),
+laid out as `DIR/<tag>/qgis-<major>.<minor>/<library>`, at the same place
+under `ext-libs`, where `gpkg_toolkit/native_provider.py` looks for the one
+matching the running QGIS.
 
 A QGIS plugin cannot pip-install its dependencies, so shipping every platform
 in one zip is the price of a one-step install. Each native module is a few
@@ -22,6 +27,8 @@ import sys
 import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# What `cargo build` names the native provider on Linux, macOS and Windows.
+NATIVE_LIBRARIES = {"libgeopackage_qgis.so", "libgeopackage_qgis.dylib", "geopackage_qgis.dll"}
 PLUGIN = ROOT / "qgis-plugin" / "gpkg_toolkit"
 
 
@@ -52,6 +59,7 @@ def platform_dir(wheel_name):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("wheels", nargs="+", type=pathlib.Path)
+    parser.add_argument("--native", type=pathlib.Path, help="native provider builds, by platform and QGIS version")
     parser.add_argument("--out", type=pathlib.Path, default=ROOT / "target" / "qgis-plugin")
     args = parser.parse_args()
 
@@ -85,6 +93,22 @@ def main():
                     destination = f"gpkg_toolkit/ext-libs/{platform}/{name}"
                     out.writestr(destination, source.read(name))
             print(f"{wheel.name} -> ext-libs/{platform}")
+        if args.native is not None:
+            libraries = sorted(
+                path
+                for path in args.native.glob("*/qgis-*/*")
+                if path.name in NATIVE_LIBRARIES and path.is_file()
+            )
+            if not libraries:
+                sys.exit(f"{args.native}: no native provider builds as <platform>/qgis-<M.m>/<library>")
+            for library in libraries:
+                platform, version = library.parent.parent.name, library.parent.name
+                if platform not in seen:
+                    sys.exit(f"{library}: no wheel for {platform}, whose plugin would lack its module")
+                if not re.fullmatch(r"qgis-\d+\.\d+", version):
+                    sys.exit(f"{library}: {version} is not qgis-<major>.<minor>")
+                out.write(library, f"gpkg_toolkit/ext-libs/{platform}/{version}/{library.name}")
+                print(f"{library} -> ext-libs/{platform}/{version}")
     print(target)
 
 

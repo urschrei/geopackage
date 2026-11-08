@@ -53,20 +53,28 @@ form on the way in. Adding, deleting and renaming fields aren't offered,
 because the crate has no schema changes yet (F5 in
 `roadmap/09-c-api-sense-check.md`).
 
-**Speed.** On 200,000 points, the provider takes 3 to 4 times OGR's time for
-a full scan, and about 3 times for a bounding-box read of 2,000 features. The
-cost is building each `QgsFeature` in Python, not the crate: streaming the
-same rows through the bindings alone takes about a quarter of the provider's
-time (363 ms of 1,416 ms). Use it where what the crate does is the point (its
-validation, its index maintenance, its handling of curves), and OGR for heavy
-rendering.
+**Two implementations, one key.** On QGIS 4, when the plugin ships a build
+of the native provider (`geopackage-qgis`, Rust behind a C++ shim) for the
+running QGIS minor version, that serves `geopackage_rs`. Otherwise the Python
+provider here does. They behave the same, and the provider tests run against
+both, so a project opens with either. QGIS's message log says when the
+Python provider is used, and why. `GPKG_TOOLKIT_NATIVE_PROVIDER` names a
+native build to load instead, or `0` turns it off.
+
+**Speed.** On 200,000 points the native provider reads in a half to a third
+of OGR's time. The Python provider takes 3 to 4 times OGR's time for a full
+scan, and about 3 times for a bounding-box read of 2,000 features. That cost
+is building each `QgsFeature` in Python, not the crate: streaming the same
+rows through the bindings alone takes about a quarter of the provider's time
+(363 ms of 1,416 ms).
 
 ## Install
 
 From a release: download `gpkg_toolkit-<version>.zip` and use *Plugins →
 Manage and Install Plugins → Install from ZIP*. The zip holds the native
 module for Linux x86_64 and aarch64, macOS (universal2) and Windows x86_64,
-in `ext-libs/`.
+in `ext-libs/`, and the native provider for QGIS 4.0 and 4.2 on each (on
+Windows, 4.2 only), in `ext-libs/<platform>/qgis-<version>/`.
 
 Supports QGIS 3.28 and later, including QGIS 4. The `compat` module resolves
 the enums that moved between them.
@@ -98,5 +106,5 @@ importable from QGIS's Python, `ext-libs/` isn't needed.
   the crate has them.
 - Coverage writing from a raster layer, once the crate has a TIFF encoder path
   exposed for float coverages.
-- A faster read path. The ceiling for a Python provider is the per-feature
-  cost of building a `QgsFeature`; a native provider would avoid it.
+- Native provider builds for each new QGIS minor version, and for Windows on
+  QGIS 4.0 (see `geopackage-qgis/README.md`).

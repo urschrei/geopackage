@@ -57,8 +57,15 @@ While the version is below 1.0 the API may change in any release.
   edits as the Python provider does, each edit call in one transaction. The
   plugin loads it, under the same `geopackage_rs` key, when it ships a build
   for the running QGIS minor version, and otherwise falls back to the
-  Python provider. The provider tests run against both, the native one in a
-  new CI job that takes QGIS 4.2 from conda-forge.
+  Python provider. On Linux and macOS a build needs QGIS's and Qt's headers
+  only, taking their symbols from the QGIS it loads into, so it serves any
+  patch release of its QGIS minor version. `scripts/qgis_headers.py` makes
+  those headers from QGIS's source, for a QGIS without them, such as the
+  macOS app. The provider tests run against both providers, the native one
+  in a new CI job on Linux, macOS and Windows with QGIS 4.2 from
+  conda-forge. The plugin zip carries native builds for QGIS 4.0 and 4.2 on
+  Linux (x86_64 and aarch64, glibc 2.28 or later), macOS (universal2) and
+  Windows (4.2 only).
 
 - `geopackage_core::triggers::missing_triggers` returns the 1.4 suffixes of
   the trigger jobs that a set of trigger names leaves undone. Its result is

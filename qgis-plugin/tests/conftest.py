@@ -16,16 +16,6 @@ HERE = os.path.dirname(__file__)
 sys.path.insert(0, os.path.dirname(HERE))  # the gpkg_toolkit package
 sys.path.insert(0, HERE)  # helpers
 
-# Processing ships as a core plugin; find it beside the QGIS install.
-for candidate in (
-    os.environ.get("QGIS_PLUGINPATH", ""),
-    "/usr/share/qgis/python/plugins",
-    "/usr/lib/qgis/python/plugins",
-):
-    if candidate and os.path.isdir(os.path.join(candidate, "processing")):
-        sys.path.append(candidate)
-        break
-
 from qgis.core import QgsApplication  # noqa: E402
 
 _app = QgsApplication([], False)
@@ -35,6 +25,20 @@ _app.initQgis()
 # (which the comparisons with OGR fill) during Qt's exit-time cleanup, after
 # QGIS's own statics are gone, and segfaults once the tests have passed.
 atexit.register(_app.exitQgis)
+
+# Processing ships as a core plugin, in QGIS's data directory: under /usr
+# for a distribution's QGIS, under the environment for conda's (Library on
+# Windows).
+for candidate in (
+    os.environ.get("QGIS_PLUGINPATH", ""),
+    os.path.join(QgsApplication.pkgDataPath(), "python", "plugins"),
+    "/usr/share/qgis/python/plugins",
+    os.path.join(sys.prefix, "share", "qgis", "python", "plugins"),
+    os.path.join(sys.prefix, "Library", "python", "plugins"),
+):
+    if candidate and os.path.isdir(os.path.join(candidate, "processing")):
+        sys.path.append(candidate)
+        break
 
 from processing.core.Processing import Processing  # noqa: E402
 

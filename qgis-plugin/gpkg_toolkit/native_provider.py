@@ -55,6 +55,37 @@ def library_path():
     return candidate if os.path.isfile(candidate) else None
 
 
+def _share_qgis_symbols():
+    """Makes the loaded QGIS core and Qt libraries' symbols visible to
+    libraries loaded after them.
+
+    On Linux the native library links neither, and takes their symbols from
+    the process instead (see geopackage-qgis/build.rs). In the QGIS
+    application they are visible already: the executable links them. In a
+    Python that imported ``qgis.core`` they are not, since Python loads
+    extension modules, and so their dependencies, with ``RTLD_LOCAL``.
+    Opening an already loaded library again with ``RTLD_GLOBAL |
+    RTLD_NOLOAD`` promotes it without loading anything new.
+    """
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        with open("/proc/self/maps") as maps:
+            paths = {
+                fields[5]
+                for fields in (line.split(maxsplit=5) for line in maps)
+                if len(fields) == 6
+                and os.path.basename(fields[5]).startswith(("libqgis_core.so", "libQt6"))
+            }
+    except OSError:
+        return
+    for library in sorted(paths):
+        try:
+            ctypes.CDLL(library.strip(), mode=os.RTLD_GLOBAL | os.RTLD_NOLOAD)
+        except OSError:
+            pass
+
+
 def load(path=None):
     """Loads the library at `path` (by default, :func:`library_path`) and
     checks it was built for the running QGIS. Returns the library, or
@@ -66,11 +97,12 @@ def load(path=None):
     if path is None:
         LOAD_ERROR = "no native provider build for QGIS {}.{}".format(*running_version())
         return None
+    _share_qgis_symbols()
     try:
         library = ctypes.CDLL(path)
     except OSError as error:
-        # Built against another QGIS's libraries, typically: their sonames
-        # carry the version, so the loader refuses the mismatch here.
+        # Not a library, or one built against a QGIS whose symbols this one
+        # lacks.
         LOAD_ERROR = f"cannot load {path}: {error}"
         return None
     library.geopackage_qgis_qgis_version.restype = ctypes.c_int32
