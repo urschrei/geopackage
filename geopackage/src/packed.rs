@@ -337,6 +337,8 @@ impl Cell {
 /// index without reading it: every entry lies within its leaf cell, every
 /// cell within its parent's, and the root's cells within their union. The
 /// format is the one [`encode_node_into`] writes, and the RTree module's own.
+/// Only the Arrow read uses it.
+#[cfg(feature = "arrow")]
 pub(crate) fn node_bounds(blob: &[u8]) -> Option<[f32; 4]> {
     let count = usize::from(u16::from_be_bytes(blob.get(2..4)?.try_into().ok()?));
     let mut union: Option<[f32; 4]> = None;
@@ -489,6 +491,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "arrow")]
     fn node_bounds_is_the_union_of_a_nodes_cells() {
         let cells = [
             Cell {
