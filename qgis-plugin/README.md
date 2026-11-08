@@ -1,8 +1,9 @@
 # GeoPackage Toolkit for QGIS
 
-QGIS Processing algorithms built on the `geopackage` crate, through the
-[`geopackage-rs`](../geopackage-py) bindings. QGIS already reads and writes
-GeoPackage through GDAL, so the plugin covers what this crate does that GDAL
+A vector data provider and Processing algorithms built on the `geopackage`
+crate, through the [`geopackage-rs`](../geopackage-py) bindings. QGIS already
+reads and writes GeoPackage through GDAL. The provider lets a layer use the
+crate instead, and the algorithms cover what the crate does that GDAL
 doesn't.
 
 It's experimental, as the crate is. Work on copies.
@@ -18,6 +19,47 @@ It's experimental, as the crate is. Work on copies.
 | Export layer to GeoPackage | Import and export | Bulk-writes any vector layer through the crate's writer and bulk RTree build, into a new file or a new table in an existing one. |
 
 The first three are also on the Plugins menu.
+
+## Data provider
+
+The plugin registers a vector data provider, `geopackage_rs`. Its URIs are
+OGR's, `/path/to/file.gpkg|layername=roads`, so a layer moves between the two
+providers by changing only the provider key. To add a layer through it, use
+*Plugins → GeoPackage Toolkit → Add GeoPackage layer (geopackage crate)*, or
+from Python:
+
+```python
+QgsVectorLayer("/data/roads.gpkg|layername=roads", "roads", "geopackage_rs")
+```
+
+How it serves QGIS's requests:
+
+| Request | How |
+|---|---|
+| Bounding box | The crate's RTree query, plus QGIS's exact-intersection test when asked |
+| One feature id (Identify, attribute edits) | One synchronous lookup on the provider's connection |
+| Several ids | `fid IN (...)` |
+| Subset string | An SQLite `WHERE` clause, run by SQLite, as OGR's GeoPackage subset strings are. An invalid one is rejected when it's set |
+| Attribute subset, no geometry | A column projection: unread columns and geometry blobs are never fetched |
+| Filter expression | Evaluated by the provider on the rows it reads |
+| Destination CRS, limit, order by, distance within | As QGIS's core providers do them |
+
+Every read but the single-id lookup streams from its own read-only connection
+on its own thread, so iterators are safe on QGIS's rendering threads. Edit
+sessions can add, delete and change features and their geometries; a commit
+writes through the crate, so the spatial index, the extent and the file's
+validity stay right. Geometries are converted to the column's multi and Z/M
+form on the way in. Adding, deleting and renaming fields aren't offered,
+because the crate has no schema changes yet (F5 in
+`roadmap/09-c-api-sense-check.md`).
+
+**Speed.** On 200,000 points, the provider takes 3 to 4 times OGR's time for
+a full scan, and about 3 times for a bounding-box read of 2,000 features. The
+cost is building each `QgsFeature` in Python, not the crate: streaming the
+same rows through the bindings alone takes about a quarter of the provider's
+time (363 ms of 1,416 ms). Use it where what the crate does is the point (its
+validation, its index maintenance, its handling of curves), and OGR for heavy
+rendering.
 
 ## Install
 
@@ -52,11 +94,9 @@ importable from QGIS's Python, `ext-libs/` isn't needed.
 
 ## Next
 
-- **A vector data provider** (`QgsVectorDataProvider` in Python) so QGIS
-  renders and edits layers through the crate rather than OGR. The bindings
-  already have what it needs: bbox, attribute and column-projected streaming
-  reads, feature lookup by id, and batched inserts, updates and deletes. The
-  gaps are on the crate side: schema changes (F5 in
-  `roadmap/09-c-api-sense-check.md`) and layer deletion (F6).
+- Schema edits in the provider (adding, deleting and renaming fields), once
+  the crate has them.
 - Coverage writing from a raster layer, once the crate has a TIFF encoder path
   exposed for float coverages.
+- A faster read path. The ceiling for a Python provider is the per-feature
+  cost of building a `QgsFeature`; a native provider would avoid it.

@@ -103,6 +103,52 @@ def to_value(value):
     return str(value)
 
 
+def from_value(value):
+    """A geopackage_rs value as a QGIS attribute value.
+
+    Dates and datetimes become ``QDate`` and ``QDateTime`` explicitly, with
+    the time zone kept, rather than relying on how sip converts a Python
+    ``datetime``, which drops the zone.
+    """
+    if isinstance(value, datetime.datetime):
+        from qgis.PyQt.QtCore import QDate, QDateTime, QTime, QTimeZone
+
+        date = QDate(value.year, value.month, value.day)
+        time = QTime(value.hour, value.minute, value.second, value.microsecond // 1000)
+        if value.tzinfo is None:
+            return QDateTime(date, time)
+        offset = int(value.utcoffset().total_seconds())
+        return QDateTime(date, time, QTimeZone(offset))
+    if isinstance(value, datetime.date):
+        from qgis.PyQt.QtCore import QDate
+
+        return QDate(value.year, value.month, value.day)
+    return value
+
+
+def wkb_type(geometry_column):
+    """The QGIS WKB type for a geopackage_rs ``GeometryColumn``."""
+    name = geometry_column.geometry_type.title().replace("string", "String")
+    # GeoPackage spells the abstract supertype GEOMETRY; QGIS calls it Unknown.
+    name = {
+        "Geometry": "Unknown",
+        "Geometrycollection": "GeometryCollection",
+        "Multipoint": "MultiPoint",
+        "Multilinestring": "MultiLineString",
+        "Multipolygon": "MultiPolygon",
+        "Circularstring": "CircularString",
+        "Compoundcurve": "CompoundCurve",
+        "Curvepolygon": "CurvePolygon",
+        "Multicurve": "MultiCurve",
+        "Multisurface": "MultiSurface",
+    }.get(name, name)
+    if geometry_column.z != "prohibited":
+        name += "Z"
+    if geometry_column.m != "prohibited":
+        name += "M"
+    return QgsWkbTypes.parseType(name)
+
+
 def crs_for_srs(srs):
     """A ``QgsCoordinateReferenceSystem`` for a geopackage_rs ``Srs``, or an
     invalid one for an undefined SRS."""

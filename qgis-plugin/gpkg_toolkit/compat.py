@@ -51,6 +51,39 @@ WKT2_2019 = _pick(
 )
 WKB_UNKNOWN = _pick((Qgis, "WkbType.Unknown"), (QgsWkbTypes, "Unknown"))
 
+# Feature requests and provider capabilities, for the data provider. QGIS
+# 3.36 moved these into `Qgis` enums; 3.34 has only the class-scoped names.
+from qgis.core import QgsFeatureRequest, QgsVectorDataProvider  # noqa: E402
+
+FILTER_FID = _pick((Qgis, "FeatureRequestFilterType.Fid"), (QgsFeatureRequest, "FilterFid"))
+FILTER_FIDS = _pick((Qgis, "FeatureRequestFilterType.Fids"), (QgsFeatureRequest, "FilterFids"))
+FILTER_EXPRESSION = _pick(
+    (Qgis, "FeatureRequestFilterType.Expression"), (QgsFeatureRequest, "FilterExpression")
+)
+REQUEST_NO_GEOMETRY = _pick((Qgis, "FeatureRequestFlag.NoGeometry"), (QgsFeatureRequest, "NoGeometry"))
+REQUEST_SUBSET_OF_ATTRIBUTES = _pick(
+    (Qgis, "FeatureRequestFlag.SubsetOfAttributes"), (QgsFeatureRequest, "SubsetOfAttributes")
+)
+REQUEST_EXACT_INTERSECT = _pick(
+    (Qgis, "FeatureRequestFlag.ExactIntersect"), (QgsFeatureRequest, "ExactIntersect")
+)
+SPATIAL_DISTANCE_WITHIN = _pick(
+    (Qgis, "SpatialFilterType.DistanceWithin"), (Qgis, "SpatialFilterType.DistanceWithin")
+)
+
+
+def _capability(name):
+    return _pick((Qgis, f"VectorProviderCapability.{name}"), (QgsVectorDataProvider, name))
+
+
+CAP_ADD_FEATURES = _capability("AddFeatures")
+CAP_DELETE_FEATURES = _capability("DeleteFeatures")
+CAP_CHANGE_ATTRIBUTES = _capability("ChangeAttributeValues")
+CAP_CHANGE_GEOMETRIES = _capability("ChangeGeometries")
+CAP_SELECT_AT_ID = _capability("SelectAtId")
+CAP_CIRCULAR_GEOMETRIES = _capability("CircularGeometries")
+CAP_NONE = _capability("NoCapabilities")
+
 # `QgsField` takes `QMetaType.Type` from 3.38, and only that in QGIS 4.
 _METATYPE_FIELDS = Qgis.QGIS_VERSION_INT >= 33800
 
