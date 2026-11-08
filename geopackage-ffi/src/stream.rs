@@ -149,7 +149,7 @@ use arrow_array::Array;
 use arrow_array::RecordBatchReader;
 use arrow_array::array::StructArray;
 use arrow_array::ffi::FFI_ArrowArray;
-use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use arrow_array::ffi_stream::{FFI_ArrowArrayStream, RecordBatchStreamReader};
 use arrow_schema::Schema;
 use arrow_schema::ffi::FFI_ArrowSchema;
 use geopackage::arrow::{ArrowBatches, ArrowReadOptions};
@@ -495,7 +495,7 @@ pub unsafe extern "C" fn gpkg_layer_write_arrow(
     // SAFETY: the caller guarantees a stream they own and have not released.
     // `from_raw` performs the interface's move: the caller's struct is left
     // released, so releasing it again is a no-op rather than a double free.
-    let reader = match unsafe { ArrowArrayStreamReader::from_raw(stream) } {
+    let reader = match unsafe { RecordBatchStreamReader::from_raw(stream) } {
         Ok(reader) => reader,
         Err(err) => {
             // SAFETY: forwarded to the caller's guarantee on `error`.

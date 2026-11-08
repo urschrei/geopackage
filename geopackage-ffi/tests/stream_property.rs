@@ -13,7 +13,7 @@ use std::ffi::{CString, c_char};
 use std::path::Path;
 
 use arrow_array::ffi::FFI_ArrowSchema;
-use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use arrow_array::ffi_stream::{FFI_ArrowArrayStream, RecordBatchStreamReader};
 use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
 use geopackage::arrow::{ArrowBatches, ArrowReadOptions};
 use geopackage::core::types::{ColumnType, GeometryType};
@@ -248,7 +248,7 @@ fn read_c(
     match check(status, error) {
         Status::Ok => {
             // SAFETY: a stream this library exported, consumed once.
-            let reader = unsafe { ArrowArrayStreamReader::from_raw(&raw mut stream) }
+            let reader = unsafe { RecordBatchStreamReader::from_raw(&raw mut stream) }
                 .map_err(|_import| Status::Other)?;
             Ok(drain(reader))
         }

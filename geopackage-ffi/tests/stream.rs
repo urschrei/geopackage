@@ -9,7 +9,7 @@ use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 
 use arrow_array::RecordBatchReader;
-use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use arrow_array::ffi_stream::{FFI_ArrowArrayStream, RecordBatchStreamReader};
 use geopackage_ffi::{
     Status, ValueKind, gpkg_close, gpkg_error_clear, gpkg_error_t, gpkg_layer_free,
     gpkg_layer_open, gpkg_layer_open_with_columns, gpkg_layer_read_arrow,
@@ -58,7 +58,7 @@ fn open() -> (*mut gpkg_t, gpkg_error_t) {
 fn drain(stream: FFI_ArrowArrayStream) -> (usize, Vec<String>) {
     // SAFETY: `stream` was produced by this library and is handed over here,
     // which is the move the C Data Interface specifies.
-    let reader = unsafe { ArrowArrayStreamReader::from_raw(&mut { stream }) }
+    let reader = unsafe { RecordBatchStreamReader::from_raw(&mut { stream }) }
         .expect("the exported stream should import");
     let names = reader
         .schema()
@@ -132,7 +132,7 @@ fn a_live_stream_blocks_a_close_just_as_a_layer_handle_does() {
     // Releasing the stream is what finally permits it.
     // SAFETY: the stream is live and released exactly once, which is what
     // dropping the imported reader does.
-    drop(unsafe { ArrowArrayStreamReader::from_raw(&raw mut stream) });
+    drop(unsafe { RecordBatchStreamReader::from_raw(&raw mut stream) });
 
     // SAFETY: nothing borrows the container now.
     let closed = unsafe { gpkg_close(gpkg, &raw mut error) };
