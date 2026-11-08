@@ -7,6 +7,45 @@ use rusqlite::types::ValueRef;
 
 use crate::{BoundingBox, Result};
 
+/// One stretch of a bounding-box read's candidates, read as one or more pages.
+///
+/// The candidates are the RTree's ids for the box, sorted. A dense stretch,
+/// whose ids fill at least half of the keys from `lo` to `hi`, is read as that
+/// key range, and the exact re-test drops the keys that are not candidates. A
+/// sparse one is read by its explicit `ids`, bound through `rarray`, so that a
+/// box over spatially scattered rows costs one query per page of candidates
+/// rather than one per run of consecutive keys, which on such data is nearly
+/// one per row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Segment {
+    pub(crate) lo: i64,
+    pub(crate) hi: i64,
+    /// The candidate ids, for a sparse stretch; `None` reads `lo..=hi`.
+    pub(crate) ids: Option<Vec<i64>>,
+}
+
+impl Segment {
+    /// Splits sorted candidate ids into stretches of at most `per_page` ids.
+    pub(crate) fn plan(ids: &[i64], per_page: usize) -> Vec<Self> {
+        ids.chunks(per_page.max(1))
+            .filter_map(|chunk| {
+                let (&lo, &hi) = (chunk.first()?, chunk.last()?);
+                // The keys a range read of the stretch would visit. Saturating:
+                // keys can span the whole of i64.
+                let span = u64::try_from(hi.saturating_sub(lo))
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1);
+                let dense = span <= 2 * chunk.len() as u64;
+                Some(Self {
+                    lo,
+                    hi,
+                    ids: (!dense).then(|| chunk.to_vec()),
+                })
+            })
+            .collect()
+    }
+}
+
 use super::aggregate::AggregateState;
 use super::builder::ColumnBuilder;
 use super::options::DEFAULT_BATCH_SIZE;
@@ -36,9 +75,12 @@ pub(crate) struct SequentialBatches<'a> {
     /// parallel worker's window ([`Self::read_window`]).
     pub(crate) upper_key: i64,
     pub(crate) exhausted: bool,
-    /// The candidate key ranges from the one-time rtree scan, walked in
+    /// The candidate stretches from the one-time rtree scan, walked in
     /// order. `None` for an unfiltered read or the indexless full scan.
-    pub(crate) segments: Option<Vec<(i64, i64)>>,
+    pub(crate) segments: Option<Vec<Segment>>,
+    /// The query for a sparse segment: [`Self::sql`] with the page's
+    /// candidate ids bound through `rarray` as one more parameter.
+    pub(crate) ids_sql: String,
     /// Index into [`Self::segments`] of the range being walked.
     pub(crate) segment: usize,
     /// The caller's `WHERE` parameters, bound first (`?1` to `?N`) on every
@@ -166,6 +208,12 @@ impl SequentialBatches<'_> {
             Some(next) if self.segments.is_none() && next > self.upper_key => {
                 self.exhausted = true;
             }
+            // A full page that reaches the end of its segment moves straight
+            // to the next one, rather than spending a query to find the
+            // segment empty.
+            Some(next) if self.current_segment().is_some_and(|s| next > s.hi) => {
+                self.next_segment();
+            }
             Some(next) => self.next_key = next,
             // The key space is exhausted at i64::MAX; there can be no next
             // row in this segment, nor a later segment to hold one.
@@ -184,9 +232,13 @@ impl SequentialBatches<'_> {
         };
         self.segment += 1;
         match segments.get(self.segment) {
-            Some((lo, _)) => self.next_key = *lo,
+            Some(segment) => self.next_key = segment.lo,
             None => self.exhausted = true,
         }
+    }
+
+    fn current_segment(&self) -> Option<&Segment> {
+        self.segments.as_ref().and_then(|s| s.get(self.segment))
     }
 
     /// The direct path, which steps through the rows and fetches each value.
@@ -240,7 +292,12 @@ impl SequentialBatches<'_> {
         // one would silently drop everything after it.
         let mut candidates = 0usize;
         {
-            let mut stmt = self.conn.prepare_cached(&self.sql)?;
+            let ids = self.current_segment().and_then(|s| s.ids.as_ref());
+            let mut stmt = self.conn.prepare_cached(if ids.is_some() {
+                &self.ids_sql
+            } else {
+                &self.sql
+            })?;
             // Binding is positional, so the order here is the placeholder
             // numbering: the caller's params take `?1` to `?N`, then the key,
             // the limit, the upper key bound and any box, as the query text
@@ -255,17 +312,34 @@ impl SequentialBatches<'_> {
                 // since exhausting the last one sets `exhausted`; an i64::MAX
                 // bound on a missing segment would read past the candidates,
                 // and the exact re-test would still drop every extra row.
-                Some(segments) => segments.get(self.segment).map_or(i64::MAX, |(_, hi)| *hi),
+                Some(segments) => segments.get(self.segment).map_or(i64::MAX, |s| s.hi),
                 None => self.upper_key,
             };
             params.push(rusqlite::types::Value::Integer(upper));
+            let mut params: Vec<Box<dyn rusqlite::ToSql>> = params
+                .into_iter()
+                .map(|value| Box::new(value) as Box<dyn rusqlite::ToSql>)
+                .collect();
+            // A sparse segment's ids, the parameter after the upper bound. Built
+            // per page rather than stored: `rarray` takes an `Rc`, which would
+            // make the reader `!Send`.
+            if let Some(ids) = ids {
+                let array: rusqlite::vtab::array::Array = std::rc::Rc::new(
+                    ids.iter()
+                        .copied()
+                        .map(rusqlite::types::Value::Integer)
+                        .collect(),
+                );
+                params.push(Box::new(array));
+            }
             // The box of an unindexed scan, which the query text tests with
             // `ST_EnvIntersects`.
             if let (Some(filter), None) = (&self.filter, &self.segments) {
                 let bbox = filter.bbox;
                 params.extend(
-                    [bbox.min_x, bbox.min_y, bbox.max_x, bbox.max_y]
-                        .map(rusqlite::types::Value::Real),
+                    [bbox.min_x, bbox.min_y, bbox.max_x, bbox.max_y].map(|value| {
+                        Box::new(rusqlite::types::Value::Real(value)) as Box<dyn rusqlite::ToSql>
+                    }),
                 );
             }
             let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
@@ -395,4 +469,58 @@ enum Page {
     Exhausted,
     /// Candidates were read and all were filtered out. There may be more.
     AllFiltered,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Segment;
+
+    fn plan(ids: &[i64], per_page: usize) -> Vec<(i64, i64, bool)> {
+        Segment::plan(ids, per_page)
+            .into_iter()
+            .map(|s| (s.lo, s.hi, s.ids.is_some()))
+            .collect()
+    }
+
+    #[test]
+    fn consecutive_candidates_are_one_range_per_page() {
+        let ids: Vec<i64> = (1..=10).collect();
+        assert_eq!(plan(&ids, 100), [(1, 10, false)]);
+        assert_eq!(
+            plan(&ids, 4),
+            [(1, 4, false), (5, 8, false), (9, 10, false)]
+        );
+    }
+
+    #[test]
+    fn scattered_candidates_are_one_id_list_per_page() {
+        // One id every hundred keys: the case that cost a query per id when
+        // runs of consecutive keys were the unit. Now it is one per page.
+        let ids: Vec<i64> = (0..1000).map(|i| i * 100).collect();
+        let segments = Segment::plan(&ids, 256);
+        assert_eq!(segments.len(), 4);
+        assert!(segments.iter().all(|s| s.ids.is_some()));
+        let rejoined: Vec<i64> = segments
+            .iter()
+            .flat_map(|s| s.ids.clone().unwrap())
+            .collect();
+        assert_eq!(rejoined, ids);
+    }
+
+    #[test]
+    fn a_page_is_a_range_while_its_ids_fill_half_its_keys() {
+        // 3 ids over 6 keys is exactly half: a range. 3 over 7 is not.
+        assert_eq!(plan(&[1, 3, 6], 10), [(1, 6, false)]);
+        assert_eq!(plan(&[1, 3, 7], 10), [(1, 7, true)]);
+    }
+
+    #[test]
+    fn keys_across_the_whole_of_i64_do_not_overflow() {
+        assert_eq!(
+            plan(&[i64::MIN, 0, i64::MAX], 10),
+            [(i64::MIN, i64::MAX, true)]
+        );
+        assert_eq!(plan(&[i64::MAX], 10), [(i64::MAX, i64::MAX, false)]);
+        assert!(plan(&[], 10).is_empty());
+    }
 }

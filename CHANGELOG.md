@@ -8,6 +8,22 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Fixed
+
+- `Layer::read_arrow_in` and `read_arrow_in_where` were slow on spatially
+  scattered data, the usual case. They walked the RTree's candidates as runs
+  of consecutive keys, with one query per run, and scattered rows make nearly
+  every candidate its own run. A box selecting 1% of 200,000 scattered points
+  issued about 2,000 queries and took 4.9 times as long as `features_in`. The
+  candidates are now read a page at a time: a page whose ids fill at least
+  half its key span is read as a range, as before, and a sparser one by its
+  explicit ids, bound through rusqlite's `rarray`. On the new `scattered`
+  group of the `filtered` benchmark, that box now takes 3.6 ms instead of
+  17.6 ms (the row path takes 3.4 ms), and a 10% box takes 24 ms instead of
+  73 ms. Clustered data is unaffected: its candidates were already ranges.
+  Every connection the crate opens now registers `rarray`, which needs
+  rusqlite's `array` feature.
+
 ### Added
 
 - `geopackage-py`, Python bindings built with PyO3 as abi3 wheels for CPython

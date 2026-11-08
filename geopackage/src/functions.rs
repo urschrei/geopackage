@@ -33,8 +33,11 @@ use rusqlite::Connection;
 use rusqlite::functions::{Context, FunctionFlags};
 use rusqlite::types::ValueRef;
 
-/// Registers the GeoPackage SQL functions on `conn`.
+/// Registers the GeoPackage SQL functions on `conn`, and rusqlite's `rarray`
+/// table-valued function, which the Arrow bounding-box read binds a page's
+/// candidate ids through.
 pub fn register(conn: &Connection) -> rusqlite::Result<()> {
+    rusqlite::vtab::array::load_module(conn)?;
     let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;
 
     conn.create_scalar_function("ST_IsEmpty", 1, flags, |ctx| {
