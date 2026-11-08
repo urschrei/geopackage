@@ -440,26 +440,6 @@ fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-/// The RTree's candidate ids for `bbox`, sorted.
-fn rtree_candidates(
-    gpkg: &GeoPackage,
-    table: &str,
-    geometry: &str,
-    bbox: &BoundingBox,
-) -> Result<Vec<i64>, Error> {
-    let rtree = quote_ident(&format!("rtree_{table}_{geometry}"));
-    let mut stmt = gpkg.connection().prepare_cached(&format!(
-        "SELECT id FROM {rtree} WHERE minx <= ?3 AND maxx >= ?1 AND miny <= ?4 AND maxy >= ?2"
-    ))?;
-    let mut ids: Vec<i64> = stmt
-        .query_map([bbox.min_x, bbox.min_y, bbox.max_x, bbox.max_y], |row| {
-            row.get(0)
-        })?
-        .collect::<Result<_, _>>()?;
-    ids.sort_unstable();
-    Ok(ids)
-}
-
 /// What one read selects, owned so it can move to the reader thread.
 struct Request {
     path: PathBuf,
@@ -535,60 +515,19 @@ impl Request {
             ),
             None => has_geometry(self.geometry_column_name(&layer)),
         };
-        match (bbox, layer.has_spatial_index()?) {
-            (Some(b), true) => {
-                // The RTree is read once. Its candidates, in key order, are
-                // handed to the read in chunks of explicit ids, so each page
-                // reads only its own rows. `read_arrow_in` walks candidates as
-                // runs of consecutive keys, one query per run, and spatially
-                // scattered rows make nearly every candidate its own run; an
-                // `IN (SELECT ... FROM rtree)` clause is re-evaluated on every
-                // page instead. Both are for the crate to fix; this is the
-                // spike's version of the fix.
-                let ids =
-                    rtree_candidates(gpkg, &self.table, self.geometry_column_name(&layer), &b)?;
-                let pk = quote_ident(layer.primary_key_column().unwrap_or("rowid"));
-                let geometry = quote_ident(self.geometry_column_name(&layer));
-                let mut clause = format!(
-                    "{pk} IN (SELECT value FROM json_each(?1)) AND ST_EnvIntersects({geometry}, ?2, ?3, ?4, ?5)"
-                );
-                if let Some(w) = where_clause {
-                    clause = format!("({clause}) AND ({w})");
+        if let Some(b) = bbox {
+            // The crate's filtered read: the RTree once, then a page of
+            // candidates per query (or the exact scan, with no index).
+            let batches = match where_clause {
+                Some(w) => layer.read_arrow_in_where(b, w, &[], options)?,
+                None => layer.read_arrow_in(b, options)?,
+            };
+            for batch in batches {
+                if !sink(batch.map_err(|e| e.to_string())) {
+                    return Ok(());
                 }
-                let chunk = ArrowReadOptions::default().batch_size.max(1);
-                for ids in ids.chunks(chunk) {
-                    let list = format!(
-                        "[{}]",
-                        ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
-                    );
-                    let params = [
-                        geopackage::ValueRef::Text(&list),
-                        geopackage::ValueRef::Float(b.min_x),
-                        geopackage::ValueRef::Float(b.min_y),
-                        geopackage::ValueRef::Float(b.max_x),
-                        geopackage::ValueRef::Float(b.max_y),
-                    ];
-                    for batch in layer.read_arrow_where(&clause, &params, options)? {
-                        if !sink(batch.map_err(|e| e.to_string())) {
-                            return Ok(());
-                        }
-                    }
-                }
-                return Ok(());
             }
-            (Some(b), false) => {
-                let batches = match where_clause {
-                    Some(w) => layer.read_arrow_in_where(b, w, &[], options)?,
-                    None => layer.read_arrow_in(b, options)?,
-                };
-                for batch in batches {
-                    if !sink(batch.map_err(|e| e.to_string())) {
-                        return Ok(());
-                    }
-                }
-                return Ok(());
-            }
-            (None, _) => {}
+            return Ok(());
         }
         // No box, or one that covers the layer: every row, or every row with a
         // geometry when a box was asked for.
