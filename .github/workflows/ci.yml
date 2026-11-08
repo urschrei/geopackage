@@ -183,6 +183,9 @@ jobs:
         run: |
           echo %PATH%
           where qgis_core.dll Qt6Core.dll sqlite3.dll zlib.dll libcrypto-3-x64.dll libssl-3-x64.dll gdal.dll proj_9.dll geos_c.dll
+          pip install pefile
+          python scripts\ci\missing_imports.py "%CONDA_PREFIX%\Library\python\qgis\_core.pyd" "%CONDA_PREFIX%\Library\bin\qgis_core.dll"
+          conda list
           exit /b 0
       # A crash in QGIS's or the provider's C++ shows no Python frames, so a
       # failed run on Linux is repeated under gdb for the native backtrace.
