@@ -25,6 +25,12 @@ While the version is below 1.0 the API may change in any release.
   headless in CI. `scripts/package_qgis_plugin.py` and the `qgis-plugin`
   workflow build one zip with the native module for each platform.
 
+### Changed
+
+- The workspace requires `arrow-array` 60.1. `geopackage-ffi` uses
+  `RecordBatchStreamReader`, the new name of `ffi_stream::ArrowArrayStreamReader`,
+  which 60.1 deprecates and which CI's `-D warnings` rejects.
+
 ## [0.13.0] - 2026-10-18
 
 ### Added
