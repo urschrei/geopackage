@@ -314,6 +314,41 @@ fn a_writer_records_statistics_it_calculates() {
     assert_eq!(tile.std_dev, Some((2.0_f64 / 3.0).sqrt()));
 }
 
+/// The writer records statistics of values, after both scales and offsets,
+/// not of the stored samples, which is what the extension's "natural, not
+/// scaled or offset" means and what GDAL records. The float test above has
+/// scale 1 and offset 0, where the two readings agree, so it cannot tell.
+#[test]
+fn a_writer_records_statistics_of_values_not_stored_samples() {
+    let gpkg = new_coverage(CoverageDatatype::Integer, 1, 1, 4, |b| b.scale(0.5, 100.0));
+    let coverage = gpkg.coverage("dem").unwrap();
+    let mut writer = coverage.writer().unwrap();
+    // Stored samples 0 to 15. The value of sample `s` is
+    // (s * 2 + 1) * 0.5 + 100 = s + 100.5.
+    let stored: Vec<u16> = (0..16).collect();
+    writer
+        .put_with_statistics(
+            TileCoord::new(0, 0, 0),
+            &png16(4, 4, &stored),
+            &TileAncillary::new(2.0, 1.0),
+        )
+        .unwrap();
+    writer.commit().unwrap();
+
+    let tile = coverage
+        .tile_ancillary(TileCoord::new(0, 0, 0))
+        .unwrap()
+        .unwrap();
+    assert_eq!((tile.scale, tile.offset), (2.0, 1.0));
+    assert_eq!(
+        (tile.min, tile.max, tile.mean),
+        (Some(100.5), Some(115.5), Some(108.0))
+    );
+    // The population standard deviation of 16 consecutive values.
+    let expected = (255.0_f64 / 12.0).sqrt();
+    assert!((tile.std_dev.unwrap() - expected).abs() < 1e-12, "{tile:?}");
+}
+
 // Requirement 21.
 
 #[test]
