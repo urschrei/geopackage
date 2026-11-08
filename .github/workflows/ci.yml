@@ -60,18 +60,23 @@ jobs:
       - run: cargo test --workspace --exclude geopackage-cli --exclude geopackage-py
       - run: cargo test -p geopackage-cli --no-default-features
 
-  # The Python bindings: the abi3 module maturin builds, under pytest, on
-  # the oldest CPython the abi3 floor promises and on a current one.
+  # The Python bindings: the abi3 module maturin builds, under pytest, on a
+  # current CPython everywhere, and on the oldest the abi3 floor promises.
+  # The floor runs on Linux only: actions/python-versions publishes no 3.9
+  # builds for Windows or for macOS on arm64, which macos-latest is.
   python:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.9", "3.13"]
+        python: ["3.14"]
+        include:
+          - os: ubuntu-latest
+            python: "3.9"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - uses: dtolnay/rust-toolchain@stable
