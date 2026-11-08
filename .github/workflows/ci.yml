@@ -148,14 +148,10 @@ jobs:
       - run: |
           maturin build -m geopackage-py/Cargo.toml -o dist
           pip install --no-index --find-links dist geopackage-rs
-      # QGIS and Qt as conda installs them: under Library on Windows. There
-      # the qgis package's bash activation script joins PYTHONPATH with ':',
-      # which Windows' Python doesn't split on, so its bindings are put on
-      # the path here, with ';'.
+      # QGIS and Qt as conda installs them: under Library on Windows.
       - run: |
           if [ "$RUNNER_OS" = Windows ]; then
             echo "QT_DIR=$CONDA_PREFIX/Library" >> "$GITHUB_ENV"
-            echo "PYTHONPATH=$CONDA_PREFIX\\Library\\python;$CONDA_PREFIX\\Library\\python\\plugins" >> "$GITHUB_ENV"
           else
             echo "QT_DIR=$CONDA_PREFIX" >> "$GITHUB_ENV"
           fi
@@ -163,7 +159,16 @@ jobs:
       - run: cargo clippy --release --all-targets --manifest-path geopackage-qgis/Cargo.toml -- -D warnings
       - run: cargo build --release --manifest-path geopackage-qgis/Cargo.toml
       - run: |
+          # On Windows the qgis package's bash activation script, which the
+          # login shell runs before this, joins PYTHONPATH with ':', which
+          # Windows' Python doesn't split on, so the bindings are lost. Set it
+          # here, after activation, with ';'.
+          if [ "$RUNNER_OS" = Windows ]; then
+            echo "PYTHONPATH after activation: $PYTHONPATH"
+            export PYTHONPATH="$CONDA_PREFIX\\Library\\python;$CONDA_PREFIX\\Library\\python\\plugins"
+          fi
           export GPKG_TOOLKIT_NATIVE_PROVIDER="$PWD/geopackage-qgis/target/release/${{ matrix.library }}"
+          python -c "import qgis.core; print(qgis.core.Qgis.version())"
           python -X faulthandler -m pytest qgis-plugin/tests -rs
         env:
           QT_QPA_PLATFORM: offscreen
