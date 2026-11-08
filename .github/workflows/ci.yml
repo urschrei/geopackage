@@ -144,7 +144,17 @@ jobs:
       - run: |
           export QGIS_PLUGINPATH="$CONDA_PREFIX/share/qgis/python/plugins"
           export GPKG_TOOLKIT_NATIVE_PROVIDER="$PWD/geopackage-qgis/target/release/libgeopackage_qgis.so"
-          python -m pytest qgis-plugin/tests -rs
+          python -X faulthandler -m pytest qgis-plugin/tests -rs
+        env:
+          QT_QPA_PLATFORM: offscreen
+      # A crash in QGIS's or the provider's C++ shows no Python frames, so a
+      # failed run is repeated under gdb for the native backtrace.
+      - if: failure()
+        run: |
+          sudo apt-get install -y --no-install-recommends gdb
+          export QGIS_PLUGINPATH="$CONDA_PREFIX/share/qgis/python/plugins"
+          export GPKG_TOOLKIT_NATIVE_PROVIDER="$PWD/geopackage-qgis/target/release/libgeopackage_qgis.so"
+          gdb -batch -ex run -ex "thread apply all bt 30" --args python -m pytest qgis-plugin/tests -q
         env:
           QT_QPA_PLATFORM: offscreen
 
