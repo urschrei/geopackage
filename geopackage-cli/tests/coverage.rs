@@ -111,6 +111,38 @@ fn get_writes_the_stored_bytes_and_describes_them() {
     assert!(written.len() > 100);
 }
 
+/// The recorded statistics are values, and are printed as they are. GDAL's
+/// 16-bit PNG coverage stores samples with a tile scale of about 0.0015 and an
+/// offset of 0.5, and records the tile's range as the values 0.5 to 96.5.
+/// The command used to convert that range a second time, as if it were stored
+/// samples, and printed values of 0.5007 to 0.6414. The float fixture above
+/// cannot show this, because its scale and offset are 1 and 0.
+#[test]
+fn get_prints_the_recorded_statistics_as_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("tile.png");
+    let path = fixture("gdal_coverage_png.gpkg");
+    let output = gpkg(&[
+        "coverage",
+        "get",
+        path.to_str().unwrap(),
+        "elevation",
+        "0",
+        "0",
+        "0",
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert!(output.status.success());
+    let printed = stdout(&output);
+    assert!(
+        printed.contains("recorded range 0.5 to 96.5\n"),
+        "{printed}"
+    );
+    assert!(printed.contains("recorded mean 48.53"), "{printed}");
+    assert!(!printed.contains("0.5007"), "{printed}");
+}
+
 #[test]
 fn get_reports_a_tile_that_is_not_there() {
     let path = fixture(FIXTURE);

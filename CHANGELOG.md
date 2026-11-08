@@ -35,6 +35,11 @@ While the version is below 1.0 the API may change in any release.
   `RecordBatchStreamReader`, the new name of `ffi_stream::ArrowArrayStreamReader`,
   which 60.1 deprecates and which CI's `-D warnings` rejects.
 
+- `TileAncillary`'s `min`, `max`, `mean` and `std_dev` fields, and the
+  writer and builder documentation, now give their units: values after the
+  tile's and the coverage's scale and offset, not stored samples. The field
+  documentation used to say "sample", which was the misreading the CLI made.
+
 ### Fixed
 
 - A spatial index that had lost some of its triggers was reported as
@@ -64,6 +69,17 @@ While the version is below 1.0 the API may change in any release.
     drift it causes.
   - The book said a `Legacy` index is not used for queries. It is, as the API
     documentation says; the book now agrees.
+
+- `gpkg coverage get` printed the wrong values for a tile's recorded range on
+  any coverage with a scale or offset other than 1 and 0, such as GDAL's
+  16-bit PNG coverages. It converted the recorded minimum and maximum by the
+  tile's and the coverage's scale and offset, as if they were stored samples.
+  They are values already: the extension calls them "natural, not scaled or
+  offset", and GDAL and `put_with_statistics` record them that way. On GDAL's
+  PNG fixture, whose recorded range is 0.5 to 96.5, the command printed 0.5007
+  to 0.6414. It now prints the recorded range unconverted, in the coverage's
+  `uom` when the coverage has one, followed by the recorded mean and standard
+  deviation. Files were not affected.
 
 
 ## [0.13.0] - 2026-10-18

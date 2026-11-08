@@ -122,13 +122,18 @@ pub struct TileAncillary {
     pub scale: f64,
     /// The offset for the tile, applied after the scale of the tile.
     pub offset: f64,
-    /// The smallest sample in the tile, if recorded.
+    /// The smallest value in the tile, if recorded: a value after the tile's
+    /// and the coverage's scale and offset, in the coverage's `uom`, not a
+    /// stored sample.
     pub min: Option<f64>,
-    /// The largest sample in the tile, if recorded.
+    /// The largest value in the tile, if recorded, in the same units as
+    /// [`Self::min`].
     pub max: Option<f64>,
-    /// The mean of the samples in the tile, if recorded.
+    /// The mean of the values in the tile, if recorded, in the same units as
+    /// [`Self::min`].
     pub mean: Option<f64>,
-    /// The standard deviation of the samples in the tile, if recorded.
+    /// The population standard deviation of the values in the tile, if
+    /// recorded, in the same units as [`Self::min`].
     pub std_dev: Option<f64>,
 }
 
@@ -158,7 +163,9 @@ impl TileAncillary {
         }
     }
 
-    /// Sets the statistics of the values in the tile.
+    /// Sets the statistics of the values in the tile: values after the tile's
+    /// and the coverage's scale and offset, not stored samples (see
+    /// [`Self::min`]).
     ///
     /// Without the `coverage-samples` feature this crate does not decode
     /// samples, so you supply the statistics. With it, `TileSamples::statistics`

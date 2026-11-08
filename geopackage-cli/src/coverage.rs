@@ -153,18 +153,21 @@ pub fn get(
                 out_path.display()
             )?;
             // The statistics are the only numbers about the contents of a tile
-            // that this crate can report, because it does not decode samples.
+            // that this command reports, because it does not decode samples.
+            // The extension records them as values, after the tile's and the
+            // coverage's scale and offset, as GDAL and `put_with_statistics`
+            // write them, so they are printed as they are, not converted.
             if let Some(stats) = coverage.tile_ancillary(coord)?
                 && let (Some(min), Some(max)) = (stats.min, stats.max)
             {
-                writeln!(
-                    out,
-                    "  recorded range {} to {} (values {} to {})",
-                    min,
-                    max,
-                    coverage.value(&stats, min),
-                    coverage.value(&stats, max)
-                )?;
+                let uom = match coverage.ancillary().uom.as_deref() {
+                    Some(uom) => format!(" {uom}"),
+                    None => String::new(),
+                };
+                writeln!(out, "  recorded range {min} to {max}{uom}")?;
+                if let (Some(mean), Some(std_dev)) = (stats.mean, stats.std_dev) {
+                    writeln!(out, "  recorded mean {mean}, standard deviation {std_dev}")?;
+                }
             }
         }
         None => {

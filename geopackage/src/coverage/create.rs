@@ -210,7 +210,8 @@ impl GeoPackage {
     /// # Per-tile statistics
     ///
     /// The file contains per-tile statistics only if they are written. `min`,
-    /// `max`, `mean` and `std_dev` come from the samples, and the table
+    /// `max`, `mean` and `std_dev` are statistics of the tile's values, after
+    /// scale and offset, not of its stored samples, and the table
     /// definition makes all four optional. Supply them through
     /// [`CoverageWriter::put_with_ancillary`](crate::CoverageWriter::put_with_ancillary), or, with the `coverage-samples`
     /// feature, have [`CoverageWriter::put_with_statistics`](crate::CoverageWriter::put_with_statistics) calculate them.

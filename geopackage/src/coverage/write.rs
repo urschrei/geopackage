@@ -154,9 +154,11 @@ impl<'conn> CoverageWriter<'conn> {
 
     /// Writes one tile with the ancillary row you supply.
     ///
-    /// If you decoded the samples, supply the statistics here. The table
-    /// definition makes the four statistics optional, and this function does
-    /// not decode samples, so it cannot calculate them.
+    /// If you decoded the samples, supply the statistics here, as values after
+    /// the tile's and the coverage's scale and offset, not as stored samples
+    /// (see [`TileAncillary::min`]). The table definition makes the four
+    /// statistics optional, and this function does not decode samples, so it
+    /// cannot calculate them.
     /// [`CoverageWriter::put_with_statistics`], with the `coverage-samples`
     /// feature, does.
     ///
