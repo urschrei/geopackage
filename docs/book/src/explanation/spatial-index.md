@@ -30,10 +30,17 @@ the content work unconditionally.
 A file can arrive in one of four structural states:
 
 - **Absent**: neither the virtual table nor any trigger is there.
-- **Current**: the virtual table exists with the GeoPackage 1.4 trigger set.
-- **Legacy**: a pre-1.4 or mixed trigger set.
-- **Stale**: the two halves disagree, with a virtual table but no triggers, or
-  triggers but no table.
+- **Current**: the virtual table exists with the complete GeoPackage 1.4
+  trigger set.
+- **Legacy**: a complete pre-1.4 or mixed trigger set.
+- **Stale**: the two halves disagree: a virtual table with none or only some of
+  its triggers, or triggers but no table.
+
+A trigger set is complete when every kind of write has a trigger that keeps the
+index in step: insert, delete, and each kind of update. The check is by role,
+so a complete pre-1.4 set counts. A set that has lost even one trigger is
+Stale, not Current or Legacy, because the writes that trigger handled have been
+reaching the table without reaching the index.
 
 A legacy trigger set is a real problem, not just untidy. The pre-1.4 `update1`
 trigger corrupts the index under `UPSERT`. That is why 1.4 renamed the fixed
@@ -43,9 +50,11 @@ same failure in
 triggers from more than one generation, is the worst case. You get one when
 two tools have edited a file in turn.
 
-This library does not use a Legacy or Stale index. `has_spatial_index`
-reports both as unusable, so a bounding-box query falls back to a full scan,
-which returns the correct rows.
+This library does not use a Stale index. `has_spatial_index` reports it as
+unusable, so a bounding-box query falls back to a full scan, which returns the
+correct rows. A Legacy index is used, because a complete pre-1.4 set keeps the
+index in step except under `UPSERT`; repair it before writing to the file with
+`UPSERT`.
 
 ## Why repair is not automatic
 

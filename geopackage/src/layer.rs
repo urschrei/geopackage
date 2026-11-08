@@ -444,32 +444,38 @@ impl<'a> Layer<'a> {
     /// Returns `true` if [`Self::features_in`] will use the RTree spatial
     /// index.
     ///
-    /// True when the layer has a geometry column and a single-column primary
-    /// key, the `rtree_<table>_<column>` virtual table exists, and its trigger
-    /// set is a recognised generation ([`TriggerGeneration`] other than
-    /// `None`). Otherwise `features_in` falls back to a full scan.
+    /// True when the layer has a single-column primary key and its index is
+    /// [`SpatialIndexStatus::Current`] or [`SpatialIndexStatus::Legacy`]: the
+    /// `rtree_<table>_<column>` virtual table exists and a complete trigger set
+    /// keeps it in step with the table. A [`SpatialIndexStatus::Stale`] index,
+    /// including one with only some of its triggers, can be missing rows, so
+    /// `features_in` falls back to a full scan.
+    ///
+    /// [`SpatialIndexStatus::Current`]: crate::SpatialIndexStatus::Current
+    /// [`SpatialIndexStatus::Legacy`]: crate::SpatialIndexStatus::Legacy
+    /// [`SpatialIndexStatus::Stale`]: crate::SpatialIndexStatus::Stale
     pub fn has_spatial_index(&self) -> Result<bool> {
-        let Some(geom) = &self.geometry_column else {
-            return Ok(false);
-        };
         if self.pk_column.is_none() {
             return Ok(false);
         }
-        let conn = self.gpkg.connection();
-        let rtree = triggers::rtree_table_name(&self.table_name, &geom.column_name);
-        if !table_exists(conn, &rtree)? {
-            return Ok(false);
-        }
-        Ok(self.classify_rtree_triggers(&geom.column_name)? != TriggerGeneration::None)
+        Ok(matches!(
+            self.spatial_index_status()?,
+            crate::SpatialIndexStatus::Current | crate::SpatialIndexStatus::Legacy
+        ))
     }
 
-    /// Classifies the RTree trigger generation present on this layer's table
-    /// for `column`, reading the trigger names from `sqlite_master`.
+    /// Reads the RTree trigger names on this layer's table for `column` from
+    /// `sqlite_master`, and classifies them: their generation, and the 1.4
+    /// suffixes of the jobs no trigger does ([`triggers::missing_triggers`]).
     ///
-    /// The read path ([`Self::has_spatial_index`]) and the index-repair path
-    /// ([`Self::repair_spatial_index`]) share this classification. It inspects
-    /// only trigger names, not the virtual table or primary key.
-    pub(crate) fn classify_rtree_triggers(&self, column: &str) -> Result<TriggerGeneration> {
+    /// [`Self::spatial_index_status`] is built on this, and the read and
+    /// repair paths are built on the status, so they cannot disagree about an
+    /// index. It inspects only trigger names, not the virtual table, the
+    /// primary key or the trigger bodies.
+    pub(crate) fn rtree_triggers(
+        &self,
+        column: &str,
+    ) -> Result<(TriggerGeneration, Vec<&'static str>)> {
         let conn = self.gpkg.connection();
         let names: Vec<String> = {
             let mut stmt = conn.prepare(
@@ -478,10 +484,10 @@ impl<'a> Layer<'a> {
             stmt.query_map([self.table_name.as_str()], |r| r.get(0))?
                 .collect::<rusqlite::Result<_>>()?
         };
-        Ok(triggers::classify_triggers(
-            names.iter().map(String::as_str),
-            &self.table_name,
-            column,
+        let names = || names.iter().map(String::as_str);
+        Ok((
+            triggers::classify_triggers(names(), &self.table_name, column),
+            triggers::missing_triggers(names(), &self.table_name, column),
         ))
     }
 

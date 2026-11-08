@@ -147,6 +147,24 @@ fn repair_fixes_a_stale_index_and_leaves_the_rest_alone() {
     assert!(after.contains("index:    absent"), "{after}");
 }
 
+/// One lost trigger is enough to be stale. Before the completeness check, the
+/// names that were left read as a current 1.4 set, and `repair` said there
+/// was nothing to do while inserts went unindexed.
+#[test]
+fn repair_fixes_an_index_that_lost_one_trigger() {
+    let (_dir, path) = working_copy(r#"DROP TRIGGER "rtree_points_geom_insert""#);
+    assert!(index_states(&path).contains("index:    stale"));
+
+    let output = gpkg(&["repair"], &path);
+    assert!(output.status.success());
+    assert!(
+        stdout(&output).contains("points: stale index repaired"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(!index_states(&path).contains("index:    stale"));
+}
+
 #[test]
 fn repair_on_a_sound_file_says_there_was_nothing_to_do() {
     let (_dir, path) = working_copy("");
