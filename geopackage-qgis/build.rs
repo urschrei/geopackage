@@ -13,7 +13,8 @@
 //!
 //! # Where they come from
 //!
-//! - QGIS headers: `QGIS_INCLUDE_DIR`, else `$QGIS_PREFIX/include/qgis`.
+//! - QGIS headers: `QGIS_INCLUDE_DIR`, else `$QGIS_PREFIX/include/qgis` (or
+//!   `$QGIS_PREFIX/include`, as conda-forge installs them on Windows).
 //!   `QGIS_PREFIX` defaults to the active conda environment (its `Library`
 //!   folder on Windows), which is how CI gets QGIS 4, and then to `/usr`.
 //!   `scripts/qgis_headers.py` makes the directory from QGIS's source, for a
@@ -96,7 +97,18 @@ fn main() {
     let prefix = var("QGIS_PREFIX")
         .or_else(|| var("CONDA_PREFIX").map(|p| if windows { format!("{p}/Library") } else { p }))
         .unwrap_or_else(|| "/usr".to_owned());
-    let qgis_include = var("QGIS_INCLUDE_DIR").unwrap_or_else(|| format!("{prefix}/include/qgis"));
+    // `include/qgis` as QGIS installs itself; `include` as conda-forge's
+    // Windows package does.
+    let qgis_include = var("QGIS_INCLUDE_DIR")
+        .or_else(|| {
+            [
+                format!("{prefix}/include/qgis"),
+                format!("{prefix}/include"),
+            ]
+            .into_iter()
+            .find(|d| Path::new(&format!("{d}/qgsconfig.h")).is_file())
+        })
+        .unwrap_or_else(|| format!("{prefix}/include/qgis"));
     assert!(
         Path::new(&format!("{qgis_include}/qgsconfig.h")).is_file(),
         "no QGIS headers in {qgis_include}: set QGIS_INCLUDE_DIR or QGIS_PREFIX"
