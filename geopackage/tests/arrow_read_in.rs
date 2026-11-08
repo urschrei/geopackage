@@ -499,3 +499,146 @@ fn a_where_clause_composes_with_a_scattered_box() {
         assert_eq!(fids, expected, "batch size {batch_size}");
     }
 }
+
+/// The `fid`s of a read, in order.
+fn fids_of(batches: geopackage::arrow::ArrowBatches<'_>) -> Vec<i64> {
+    let mut fids = Vec::new();
+    for batch in batches {
+        let batch = batch.unwrap();
+        fids.extend(
+            batch
+                .column_by_name("fid")
+                .unwrap()
+                .as_primitive::<arrow_array::types::Int64Type>()
+                .iter()
+                .map(Option::unwrap),
+        );
+    }
+    fids
+}
+
+#[test]
+fn a_box_holding_the_whole_layer_reads_every_row_on_any_thread_count() {
+    // Such a box reads the layer unfiltered, which can use threads; the answer
+    // must still be `features_in`'s, in key order.
+    let (_dir, gpkg) = points(5000, true);
+    for bbox in [
+        // Exactly the index's bounds, which still filters; then one `f32`
+        // step outside them, the tightest box the unfiltered read takes.
+        BoundingBox::new(0.0, 0.0, 4999.0, 4999.0),
+        BoundingBox::new(
+            f64::from(0.0f32.next_down()),
+            f64::from(0.0f32.next_down()),
+            f64::from(4999.0f32.next_up()),
+            f64::from(4999.0f32.next_up()),
+        ),
+        BoundingBox::new(-1e9, -1e9, 1e9, 1e9),
+    ] {
+        let mut expected = row_fids(&gpkg, bbox);
+        expected.sort_unstable();
+        assert_eq!(expected.len(), 5000);
+        for options in [
+            ArrowReadOptions::default(),
+            ArrowReadOptions::with_batch_size(7),
+            ArrowReadOptions::default().with_threads(4),
+            ArrowReadOptions::with_batch_size(100).with_threads(3),
+        ] {
+            assert_eq!(
+                arrow_fids(&gpkg, bbox, options),
+                expected,
+                "{bbox:?} {options:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_box_just_short_of_the_whole_layer_still_filters() {
+    let (_dir, gpkg) = points(500, true);
+    let bbox = BoundingBox::new(0.0, 0.0, 498.5, 499.0);
+    let expected = row_fids(&gpkg, bbox);
+    assert_eq!(expected.len(), 499);
+    for options in [
+        ArrowReadOptions::default(),
+        ArrowReadOptions::default().with_threads(4),
+    ] {
+        assert_eq!(arrow_fids(&gpkg, bbox, options), expected, "{options:?}");
+    }
+}
+
+#[test]
+fn a_whole_layer_box_composes_with_a_where_clause() {
+    let (_dir, gpkg) = scattered(3000);
+    let layer = gpkg.layer("pts").unwrap();
+    let bbox = BoundingBox::new(-10.0, -10.0, 200.0, 200.0);
+    let mut expected: Vec<i64> = row_fids(&gpkg, bbox)
+        .into_iter()
+        .filter(|fid| fid % 3 == 0)
+        .collect();
+    expected.sort_unstable();
+    assert_eq!(expected.len(), 1000);
+    for options in [
+        ArrowReadOptions::with_batch_size(5),
+        ArrowReadOptions::default().with_threads(4),
+    ] {
+        let fids = fids_of(
+            layer
+                .read_arrow_in_where(
+                    bbox,
+                    "fid % ?1 = 0",
+                    &[geopackage::ValueRef::Integer(3)],
+                    options,
+                )
+                .unwrap(),
+        );
+        assert_eq!(fids, expected, "{options:?}");
+    }
+}
+
+/// A GPB blob for an empty point: the empty flag, NaN coordinates, no
+/// envelope. The RTree triggers leave such a row out of the index.
+fn gpb_empty_point(srs_id: i32) -> Vec<u8> {
+    use geopackage::core::gpb::{Envelope, encode_header};
+    let mut blob = encode_header(srs_id, &Envelope::None, true, false);
+    blob.push(1);
+    blob.extend_from_slice(&1u32.to_le_bytes());
+    blob.extend_from_slice(&f64::NAN.to_le_bytes());
+    blob.extend_from_slice(&f64::NAN.to_le_bytes());
+    blob
+}
+
+#[test]
+fn rows_the_index_leaves_out_are_not_read_by_a_whole_layer_box() {
+    // A NULL or empty geometry has no index entry and intersects no box. The
+    // box contains the index's bounds, so only the row counts can tell that
+    // an unfiltered read would return these rows too.
+    for geometry in [None, Some(gpb_empty_point(4326))] {
+        let (_dir, gpkg) = points(200, true);
+        gpkg.connection()
+            .execute(
+                "INSERT INTO pts (fid, name, geom) VALUES (1000, 'odd', ?1)",
+                [&geometry],
+            )
+            .unwrap();
+        let bbox = BoundingBox::new(-1e9, -1e9, 1e9, 1e9);
+        let expected = row_fids(&gpkg, bbox);
+        assert_eq!(expected, (1..=200).collect::<Vec<_>>());
+        for options in [
+            ArrowReadOptions::default(),
+            ArrowReadOptions::default().with_threads(4),
+        ] {
+            assert_eq!(
+                arrow_fids(&gpkg, bbox, options),
+                expected,
+                "{geometry:?} {options:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_empty_indexed_layer_reads_nothing_through_any_box() {
+    let (_dir, gpkg) = points(0, true);
+    let bbox = BoundingBox::new(-1e9, -1e9, 1e9, 1e9);
+    assert!(arrow_fids(&gpkg, bbox, ArrowReadOptions::default()).is_empty());
+}

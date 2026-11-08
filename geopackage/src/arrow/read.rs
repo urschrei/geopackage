@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use arrow_schema::DataType;
 use geopackage_core::ident::quote;
+use rusqlite::OptionalExtension;
 use rusqlite::limits::Limit;
 
 use crate::{BoundingBox, Error, Layer, Result};
@@ -111,6 +112,12 @@ impl Layer<'_> {
     /// threaded filtered read would be faster is a separate question, to be
     /// answered by measuring it against this one.
     ///
+    /// The exception is a box that selects every row: one containing the
+    /// bounds of the layer's spatial index, widened by one `f32` step, on a
+    /// layer where every row is indexed. That read is [`Layer::read_arrow`],
+    /// with its threads and its aggregate path, since the filter would remove
+    /// nothing. A map canvas zoomed out to the whole layer asks for this.
+    ///
     /// Like [`Layer::features_in`], it uses the RTree index if the layer has
     /// one, and otherwise falls back to a full scan with the same exact
     /// filter. Either way, each candidate's geometry is re-tested against its
@@ -143,7 +150,11 @@ impl Layer<'_> {
                 table_name: self.table_name().to_owned(),
             });
         }
-        self.read_arrow_filtered(options, Some(bbox), None)
+        let indexed = self.has_spatial_index()?;
+        if indexed && self.box_selects_every_row(&bbox)? {
+            return self.read_arrow(options);
+        }
+        self.read_arrow_filtered(options, Some((bbox, indexed)), None)
     }
 
     /// Reads the rows matching a caller-supplied `WHERE` clause as Arrow
@@ -187,7 +198,8 @@ impl Layer<'_> {
     /// bounding box uses the RTree index as [`Layer::read_arrow_in`] does,
     /// including the exact re-test. The clause has the same contract as in
     /// [`Layer::read_arrow_where`], including its `?1` to `?N` placeholder
-    /// numbering.
+    /// numbering. A box that selects every row, as described there, makes
+    /// this read [`Layer::read_arrow_where`].
     ///
     /// # Errors
     ///
@@ -205,7 +217,72 @@ impl Layer<'_> {
                 table_name: self.table_name().to_owned(),
             });
         }
-        self.read_arrow_filtered(options, Some(bbox), Some((where_clause, params)))
+        let indexed = self.has_spatial_index()?;
+        if indexed && self.box_selects_every_row(&bbox)? {
+            return self.read_arrow_where(where_clause, params, options);
+        }
+        self.read_arrow_filtered(options, Some((bbox, indexed)), Some((where_clause, params)))
+    }
+
+    /// Whether `bbox` selects every row of the layer, so that a filtered read
+    /// can be the unfiltered one, which can use the aggregate path and threads.
+    ///
+    /// Two facts make it so. The RTree's root bounds, widened by one `f32`
+    /// step, lie inside the box, and they contain every indexed envelope,
+    /// since an entry is the envelope rounded to `f32`, outwards except in the
+    /// subnormal range, where it can be inward by less than a step; so every
+    /// indexed row passes the exact re-test. And the index has an entry for
+    /// every row, so no row is left out because it has no geometry or an
+    /// empty one.
+    ///
+    /// The root bounds are one node read, about 4 µs, which is all a smaller
+    /// box pays. The two counts run only when the bounds already lie inside
+    /// the box. Each walks its table's pages: about 3 ms together for 200,000
+    /// points, against a full read several times that.
+    ///
+    /// The caller has established that the layer has a usable index
+    /// ([`Layer::has_spatial_index`]). It trusts that index's entries, as
+    /// every indexed read does; an index whose entries have drifted from the
+    /// table is what [`Layer::audit_spatial_index`] finds.
+    fn box_selects_every_row(&self, bbox: &BoundingBox) -> Result<bool> {
+        let Some(geom) = self.geometry_column() else {
+            return Ok(false);
+        };
+        let conn = self.gpkg().connection();
+        let rtree =
+            geopackage_core::triggers::rtree_table_name(self.table_name(), &geom.column_name);
+        let root: Option<Vec<u8>> = conn
+            .prepare_cached(&format!(
+                "SELECT data FROM {} WHERE nodeno = 1",
+                quote(&format!("{rtree}_node"))?
+            ))?
+            .query_row([], |row| row.get(0))
+            .optional()?;
+        let Some([min_x, max_x, min_y, max_y]) =
+            root.as_deref().and_then(crate::packed::node_bounds)
+        else {
+            return Ok(false);
+        };
+        // A stored bound can be inward of the true one by less than one `f32`
+        // step: the RTree module stores a subnormal value as the nearest
+        // `f32`. So the box must hold the bounds widened by one step.
+        // NaN anywhere (a NaN box, or a corrupt node) fails every comparison,
+        // so it falls back to the ordinary read rather than selecting all.
+        let inside = bbox.min_x <= f64::from(min_x.next_down())
+            && bbox.max_x >= f64::from(max_x.next_up())
+            && bbox.min_y <= f64::from(min_y.next_down())
+            && bbox.max_y >= f64::from(max_y.next_up());
+        if !inside {
+            return Ok(false);
+        }
+        let count = |table: &str| -> Result<i64> {
+            Ok(conn.query_row(
+                &format!("SELECT count(*) FROM {}", quote(table)?),
+                [],
+                |row| row.get(0),
+            )?)
+        };
+        Ok(count(&format!("{rtree}_rowid"))? == count(self.table_name())?)
     }
 
     /// Returns the single-threaded reader. The threaded reader falls back to
@@ -215,15 +292,17 @@ impl Layer<'_> {
     }
 
     /// Returns the single-threaded reader, optionally filtered to a bounding
-    /// box and a caller-supplied `WHERE` clause.
+    /// box, with whether the layer has a usable spatial index, and a
+    /// caller-supplied `WHERE` clause.
     #[hotpath::measure(label = "arrow::read_arrow_filtered")]
     fn read_arrow_filtered(
         &self,
         options: ArrowReadOptions,
-        filter: Option<BoundingBox>,
+        filter: Option<(BoundingBox, bool)>,
         sql_filter: Option<(&str, &[crate::ValueRef<'_>])>,
     ) -> Result<ArrowBatches<'_>> {
-        let filter = filter.map(BoundingBox::for_query);
+        let indexed = filter.is_some_and(|(_, indexed)| indexed);
+        let filter = filter.map(|(bbox, _)| bbox.for_query());
         let schema = self.arrow_schema()?;
         // The pagination key: the declared primary key, or SQLite's rowid for a
         // table that has none. This is the same fallback the write path uses.
@@ -288,7 +367,7 @@ impl Layer<'_> {
         // inserted after this point are not returned, exactly as a snapshot
         // would.
         let segments = match filter {
-            Some(bbox) if self.has_spatial_index()? => {
+            Some(bbox) if indexed => {
                 let geom = self
                     .geometry_column()
                     .ok_or_else(|| Error::NoGeometryColumn {
@@ -525,5 +604,107 @@ impl Layer<'_> {
             threads: options.resolved_threads(),
             mmap_size: u64::try_from(mmap_size).unwrap_or(0),
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{BoundingBox, GeoPackage, GeometrySpec, TableSchemaBuilder};
+    use geo_types::Point;
+    use geopackage_core::types::GeometryType;
+
+    /// An indexed point layer with a point at `(i, 2i)` for each `i` in
+    /// `0..count`.
+    fn layer(count: i32) -> (tempfile::TempDir, GeoPackage) {
+        let dir = tempfile::tempdir().unwrap();
+        let gpkg = GeoPackage::create(dir.path().join("t.gpkg")).unwrap();
+        let layer = gpkg
+            .create_layer(
+                &TableSchemaBuilder::new("pts")
+                    .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+            )
+            .unwrap();
+        let mut writer = layer.writer().unwrap();
+        for i in 0..count {
+            writer
+                .insert(None, &Point::new(f64::from(i), f64::from(2 * i)), &[])
+                .unwrap();
+        }
+        writer.commit().unwrap();
+        (dir, gpkg)
+    }
+
+    /// Whether a filtered read of `bbox` would be the unfiltered read.
+    fn selects_all(gpkg: &GeoPackage, bbox: BoundingBox) -> bool {
+        let layer = gpkg.layer("pts").unwrap();
+        layer.has_spatial_index().unwrap() && layer.box_selects_every_row(&bbox).unwrap()
+    }
+
+    #[test]
+    fn a_box_selects_every_row_when_it_holds_the_index_bounds() {
+        let (_dir, gpkg) = layer(100);
+        let out = |v: f32, up: bool| f64::from(if up { v.next_up() } else { v.next_down() });
+        let (min_x, min_y, max_x, max_y) = (
+            out(0.0, false),
+            out(0.0, false),
+            out(99.0, true),
+            out(198.0, true),
+        );
+        assert!(selects_all(
+            &gpkg,
+            BoundingBox::new(min_x, min_y, max_x, max_y)
+        ));
+        assert!(selects_all(&gpkg, BoundingBox::new(-1.0, -1.0, 1e6, 1e6)));
+        // Exactly the index's bounds is not enough: a stored bound may be
+        // inward of the true one by less than a step.
+        assert!(!selects_all(&gpkg, BoundingBox::new(0.0, 0.0, 99.0, 198.0)));
+        // Short on each side in turn.
+        for bbox in [
+            BoundingBox::new(0.0, min_y, max_x, max_y),
+            BoundingBox::new(min_x, 0.0, max_x, max_y),
+            BoundingBox::new(min_x, min_y, 99.0, max_y),
+            BoundingBox::new(min_x, min_y, max_x, 198.0),
+        ] {
+            assert!(!selects_all(&gpkg, bbox), "{bbox:?}");
+        }
+    }
+
+    #[test]
+    fn a_subnormal_coordinate_stored_inward_is_not_selected_by_a_tight_box() {
+        // The RTree module stores 3.5e-46 as 0.0, the nearest `f32`, so the
+        // root bounds are the zero box; a zero box must still filter the row
+        // out, because the point lies outside it.
+        let (_dir, gpkg) = layer(0);
+        let mut writer = gpkg.layer("pts").unwrap().writer().unwrap();
+        writer.insert(None, &Point::new(0.0, 3.5e-46), &[]).unwrap();
+        writer.commit().unwrap();
+        assert!(!selects_all(&gpkg, BoundingBox::new(0.0, 0.0, 0.0, 0.0)));
+        let read = gpkg
+            .layer("pts")
+            .unwrap()
+            .read_arrow_in(BoundingBox::new(0.0, 0.0, 0.0, 0.0), Default::default())
+            .unwrap()
+            .map(|batch| batch.unwrap().num_rows())
+            .sum::<usize>();
+        assert_eq!(read, 0);
+    }
+
+    #[test]
+    fn a_row_missing_from_the_index_means_the_box_must_filter() {
+        let (_dir, gpkg) = layer(10);
+        gpkg.connection()
+            .execute("INSERT INTO pts (geom) VALUES (NULL)", [])
+            .unwrap();
+        assert!(!selects_all(&gpkg, BoundingBox::new(-1e6, -1e6, 1e6, 1e6)));
+    }
+
+    #[test]
+    fn no_rows_or_no_index_never_select_every_row() {
+        let everything = BoundingBox::new(-1e6, -1e6, 1e6, 1e6);
+        let (_dir, gpkg) = layer(0);
+        assert!(!selects_all(&gpkg, everything));
+        let (_dir, gpkg) = layer(10);
+        gpkg.layer("pts").unwrap().drop_spatial_index().unwrap();
+        assert!(!selects_all(&gpkg, everything));
     }
 }

@@ -47,6 +47,19 @@ While the version is below 1.0 the API may change in any release.
 
 ### Changed
 
+- `Layer::read_arrow_in` and `read_arrow_in_where` read a box that selects
+  every row as `read_arrow` and `read_arrow_where` do, with their threads and
+  aggregate path, instead of walking every RTree candidate. A box selects
+  every row when it holds the bounds of the layer's spatial index, widened by
+  one `f32` step, and every row has an index entry (no NULL or empty
+  geometries). The widening is needed because the RTree module stores a
+  subnormal coordinate as the nearest `f32`, which can be inside the true one;
+  so a box exactly equal to the index bounds still filters. This is the
+  request a map canvas makes when zoomed out to the whole layer. On the
+  `scattered` group of the `filtered` benchmark, a box over all 200,000
+  points takes 28 ms instead of 119 ms. A smaller box pays for one read of
+  the RTree's root node, about 4 µs.
+
 - The workspace requires `arrow-array` 60.1. `geopackage-ffi` uses
   `RecordBatchStreamReader`, the new name of `ffi_stream::ArrowArrayStreamReader`,
   which 60.1 deprecates and which CI's `-D warnings` rejects.
