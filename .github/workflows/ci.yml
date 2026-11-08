@@ -136,7 +136,15 @@ jobs:
           channels: conda-forge
           conda-remove-defaults: "true"
           python-version: "3.13"
-      - run: conda install -y "qgis=4.2" pytest maturin
+      # On Windows, conda-forge's QGIS 4.2.3 imports a protobuf symbol
+      # mangled with abseil's lts_20260526, and the solver otherwise picks a
+      # libprotobuf built with a newer abseil, so qgis._core fails to load
+      # ("The specified procedure could not be found"). Pin abseil to the
+      # version QGIS was built with.
+      - run: |
+          extra=""
+          if [ "$RUNNER_OS" = Windows ]; then extra="libabseil=20260526"; fi
+          conda install -y "qgis=4.2" pytest maturin $extra
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt

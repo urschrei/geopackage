@@ -14,6 +14,11 @@ import sys
 
 import pefile
 
+# pefile stops reading an export table after 8,192 entries by default, and
+# Qt's and GDAL's DLLs export far more: without this, every late name reads
+# as missing.
+pefile.MAX_SYMBOL_EXPORT_COUNT = 1 << 20
+
 SKIP = ("api-ms-win-", "ext-ms-win-")
 
 
