@@ -33,6 +33,8 @@ cxx = "1"
 
 [build-dependencies]
 cxx-build = "1"
+# The `cc::Build` that `cxx-build` returns, named in build.rs.
+cc = "1"
 
 [profile.release]
 lto = "thin"

@@ -43,6 +43,7 @@ NUMBER_INTEGER = _pick(
 )
 FAST_INSERT = _pick((QgsFeatureSink, "Flag.FastInsert"), (QgsFeatureSink, "FastInsert"))
 WKB_NO_GEOMETRY = _pick((Qgis, "WkbType.NoGeometry"), (QgsWkbTypes, "NoGeometry"))
+WKB_POINT = _pick((Qgis, "WkbType.Point"), (QgsWkbTypes, "Point"))
 WKB_POLYGON = _pick((Qgis, "WkbType.Polygon"), (QgsWkbTypes, "Polygon"))
 WKT1_GDAL = _pick((Qgis, "CrsWktVariant.Wkt1Gdal"), (QgsCoordinateReferenceSystem, "WKT1_GDAL"))
 WKT2_2019 = _pick(
@@ -50,6 +51,7 @@ WKT2_2019 = _pick(
     (QgsCoordinateReferenceSystem, "WKT2_2019_SIMPLIFIED"),
 )
 WKB_UNKNOWN = _pick((Qgis, "WkbType.Unknown"), (QgsWkbTypes, "Unknown"))
+MESSAGE_INFO = _pick((Qgis, "MessageLevel.Info"), (Qgis, "Info"))
 
 # Feature requests and provider capabilities, for the data provider. QGIS
 # 3.36 moved these into `Qgis` enums; 3.34 has only the class-scoped names.

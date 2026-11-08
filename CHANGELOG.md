@@ -50,6 +50,15 @@ While the version is below 1.0 the API may change in any release.
   commit an edit session and check the result with the crate and with OGR,
   render a map on worker threads, and save and reopen a project with a
   relative path.
+- `geopackage-qgis`, a native build of that provider for QGIS 4: Rust over
+  the crate's Arrow reads, behind a C++ shim that subclasses QGIS's provider
+  classes through `cxx`. On 200,000 points it reads in a half to a third of
+  OGR's time, where the Python provider takes three to four times OGR's. It
+  edits as the Python provider does, each edit call in one transaction. The
+  plugin loads it, under the same `geopackage_rs` key, when it ships a build
+  for the running QGIS minor version, and otherwise falls back to the
+  Python provider. The provider tests run against both, the native one in a
+  new CI job that takes QGIS 4.2 from conda-forge.
 
 - `geopackage_core::triggers::missing_triggers` returns the 1.4 suffixes of
   the trigger jobs that a set of trigger names leaves undone. Its result is
