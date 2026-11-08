@@ -42,25 +42,73 @@ connections and see each commit from their next read on.
 
 ## Building
 
-`cargo build --release` compiles both halves into one `libgeopackage_qgis.so`
-against QGIS 4 and Qt 6. No Ubuntu release packages QGIS 4 yet; conda-forge
-does, and CI builds from there (the `native-provider` job):
+`cargo build --release` compiles both halves into one library
+(`libgeopackage_qgis.so`, `.dylib`, or `geopackage_qgis.dll`) against QGIS 4
+and Qt 6. The crate isn't a workspace member, because the workspace's other
+CI jobs don't install QGIS.
 
-    conda create -n qgis -c conda-forge "qgis=4.2" pkg-config
+**What a build needs.** On Linux and macOS, only QGIS's and Qt's headers:
+the library links neither and takes their symbols from the QGIS it loads
+into (see `build.rs`). So one build serves every patch release of its QGIS
+minor version, and any Qt at least as new as the headers it was built
+with. Windows has no such late binding, so it also needs QGIS's and Qt's
+import libraries. A build works only in the QGIS minor version it was
+compiled against: QGIS's C++ interface changes between minor versions, and
+the plugin checks.
+
+`build.rs` takes QGIS's headers from `QGIS_INCLUDE_DIR`, else
+`$QGIS_PREFIX/include/qgis`, where `QGIS_PREFIX` defaults to the active conda
+environment and then `/usr`. It takes Qt from `QT_DIR`, a Qt prefix in any of
+the usual layouts (including a folder of macOS frameworks), else
+`pkg-config`. Qt's headers should be no newer than the Qt the library will
+load into; QGIS 4.0 requires Qt 6.6, so 6.6's headers suit any QGIS 4.
+
+**With conda**, as CI builds and tests it (the `native-provider` job):
+
+    conda create -n qgis -c conda-forge "qgis=4.2" pytest
     conda activate qgis
-    cargo build --release
+    QT_DIR=$CONDA_PREFIX cargo build --release
 
-The build takes QGIS from `QGIS_PREFIX`, else the active conda environment,
-else `/usr`, and Qt from `pkg-config`. For a Qt unpacked rather than
-installed, set `QT_INCLUDE_DIR` and `QT_LIB_DIR`. The crate isn't a workspace
-member, because the workspace's other CI jobs don't install QGIS.
+**On macOS, against QGIS.app** (for example QGIS 4.0.2). Official app
+bundles have shipped without headers, so make them from QGIS's source at the
+same release, with `scripts/qgis_headers.py`. A comparison against
+conda-forge's installed QGIS 4.2.3 headers preprocesses the shim to
+identical code.
 
-A build works only in the QGIS minor version it was compiled against:
-QGIS's C++ interface changes between minor versions, and the plugin checks.
-On Linux it is tied tighter still, to the patch release, because
-`libqgis_core`'s soname carries the full version (`libqgis_core.so.4.2.3`).
-The release builds will have to settle that, by building per patch release
-or by resolving QGIS's symbols from the running process.
+    git clone --depth 1 --branch final-4_0_2 --filter=blob:none --sparse \
+        https://github.com/qgis/QGIS ../target/qgis-4.0.2
+    git -C ../target/qgis-4.0.2 sparse-checkout set src/core cmake_templates external/nlohmann
+    python3 scripts/qgis_headers.py ../target/qgis-4.0.2 ../target/qgis-4.0.2-include
+
+Then Qt 6 headers no newer than the bundle's Qt. To see which Qt that is:
+
+    plutil -p /Applications/QGIS*.app/Contents/Frameworks/QtCore.framework/Resources/Info.plist | grep -i version
+
+Any Qt 6 at or below that version will do, such as conda-forge's
+(`conda create -n qt -c conda-forge "qt6-main=6.6"`) or Qt's own installer.
+If the bundle's frameworks do carry `Headers`, point at the bundle instead:
+`QT_DIR=/Applications/QGIS-4.0.app/Contents/Frameworks`, and likewise
+`QGIS_INCLUDE_DIR=.../qgis_core.framework/Headers`. Then:
+
+    QGIS_INCLUDE_DIR=$PWD/../target/qgis-4.0.2-include QT_DIR=$CONDA_PREFIX \
+        cargo build --release
+
+To use the build, either start QGIS from a terminal with
+`GPKG_TOOLKIT_NATIVE_PROVIDER` set to it:
+
+    GPKG_TOOLKIT_NATIVE_PROVIDER=$PWD/target/release/libgeopackage_qgis.dylib \
+        /Applications/QGIS-4.0.app/Contents/MacOS/QGIS
+
+or copy it into the installed plugin, as
+`gpkg_toolkit/ext-libs/macos-universal2/qgis-4.0/libgeopackage_qgis.dylib`
+in your QGIS profile's `python/plugins` folder. QGIS's message log says when
+the plugin falls back to the Python provider, and why.
+
+**Release builds** (`.github/workflows/qgis-plugin.yml`) make the same header
+kit from each supported release's tag and use Qt 6.6's headers, for Linux
+(x86_64 and aarch64, in a manylinux_2_28 container, so glibc 2.28 or later),
+macOS (universal2) and Windows (x86_64; QGIS 4.2 only, since its import
+library comes from conda-forge, which has no QGIS 4.0).
 
 ## Results
 
@@ -124,7 +172,6 @@ crate's reads unchanged.
 
 ## Next
 
-CI and release builds for Linux, macOS and Windows against QGIS 4, shipped
-in the plugin as `ext-libs/<platform>/qgis-<major>.<minor>/`. conda-forge
-has QGIS 4 for all three, which makes it the likely SDK on every runner. The
-soname question above has to be settled first.
+A Windows build for QGIS 4.0, which needs QGIS 4.0's `qgis_core.lib` (from
+OSGeo4W's development package), and builds for each new QGIS minor version
+as it is released: add it to the `native` job's matrix.

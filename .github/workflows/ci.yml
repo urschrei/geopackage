@@ -109,11 +109,21 @@ jobs:
       - run: venv/bin/python scripts/package_qgis_plugin.py dist/*.whl
 
   # The native provider builds against QGIS 4 only, which no Ubuntu release
-  # packages yet, so this job takes QGIS 4.2 from conda-forge. It builds the
-  # provider and runs the plugin's tests, the provider tests against both the
-  # Python and the native provider.
+  # packages yet, so this job takes QGIS 4.2 from conda-forge, on each OS. It
+  # builds the provider and runs the plugin's tests, the provider tests
+  # against both the Python and the native provider.
   native-provider:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            library: libgeopackage_qgis.so
+          - os: macos-latest
+            library: libgeopackage_qgis.dylib
+          - os: windows-latest
+            library: geopackage_qgis.dll
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         shell: bash -el {0}
@@ -126,7 +136,7 @@ jobs:
           channels: conda-forge
           conda-remove-defaults: "true"
           python-version: "3.13"
-      - run: conda install -y "qgis=4.2" pkg-config pytest maturin
+      - run: conda install -y "qgis=4.2" pytest maturin
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -138,22 +148,27 @@ jobs:
       - run: |
           maturin build -m geopackage-py/Cargo.toml -o dist
           pip install --no-index --find-links dist geopackage-rs
+      # QGIS and Qt as conda installs them: under Library on Windows.
+      - run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            echo "QT_DIR=$CONDA_PREFIX/Library" >> "$GITHUB_ENV"
+          else
+            echo "QT_DIR=$CONDA_PREFIX" >> "$GITHUB_ENV"
+          fi
       - run: cargo fmt --manifest-path geopackage-qgis/Cargo.toml --check
       - run: cargo clippy --release --all-targets --manifest-path geopackage-qgis/Cargo.toml -- -D warnings
       - run: cargo build --release --manifest-path geopackage-qgis/Cargo.toml
       - run: |
-          export QGIS_PLUGINPATH="$CONDA_PREFIX/share/qgis/python/plugins"
-          export GPKG_TOOLKIT_NATIVE_PROVIDER="$PWD/geopackage-qgis/target/release/libgeopackage_qgis.so"
+          export GPKG_TOOLKIT_NATIVE_PROVIDER="$PWD/geopackage-qgis/target/release/${{ matrix.library }}"
           python -X faulthandler -m pytest qgis-plugin/tests -rs
         env:
           QT_QPA_PLATFORM: offscreen
       # A crash in QGIS's or the provider's C++ shows no Python frames, so a
-      # failed run is repeated under gdb for the native backtrace.
-      - if: failure()
+      # failed run on Linux is repeated under gdb for the native backtrace.
+      - if: failure() && runner.os == 'Linux'
         run: |
           sudo apt-get install -y --no-install-recommends gdb
-          export QGIS_PLUGINPATH="$CONDA_PREFIX/share/qgis/python/plugins"
-          export GPKG_TOOLKIT_NATIVE_PROVIDER="$PWD/geopackage-qgis/target/release/libgeopackage_qgis.so"
+          export GPKG_TOOLKIT_NATIVE_PROVIDER="$PWD/geopackage-qgis/target/release/${{ matrix.library }}"
           gdb -batch -ex run -ex "thread apply all bt 30" --args python -m pytest qgis-plugin/tests -q
         env:
           QT_QPA_PLATFORM: offscreen
