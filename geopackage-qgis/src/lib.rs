@@ -141,9 +141,6 @@ pub struct RsLayer {
     srs_wkt: String,
     /// For counts and extents, which are cheap single queries.
     gpkg: Mutex<GeoPackage>,
-    /// The RTree's bounds when the layer was opened, for recognising a box
-    /// that selects every geometry. Spike: edits can move them.
-    index_bounds: Option<BoundingBox>,
     /// Read-only connections that finished reads hand back, so the next read
     /// skips opening one (about 0.4 ms, which is most of a small read).
     pool: Pool,
@@ -261,13 +258,8 @@ fn open_layer(path: &str, layer: &str) -> Result<Box<RsLayer>, Error> {
         }
         None => ("NoGeometry".to_owned(), String::new(), String::new()),
     };
-    let bounds = match (&geometry, handle.has_spatial_index()?) {
-        (Some(g), true) => index_bounds(&gpkg, &table, &g.column_name),
-        _ => None,
-    };
     drop(handle);
     Ok(Box::new(RsLayer {
-        index_bounds: bounds,
         path: PathBuf::from(path),
         table,
         attributes,
@@ -369,7 +361,6 @@ impl RsLayer {
             bbox,
             where_clause: (!where_clause.is_empty()).then(|| where_clause.to_owned()),
             pool: Arc::clone(&self.pool),
-            index_bounds: self.index_bounds,
         };
         let source = if synchronous {
             let mut batches = VecDeque::new();
@@ -409,37 +400,6 @@ impl RsLayer {
     }
 }
 
-/// Rows a bounding-box read can return at all: a geometry that is not empty.
-fn has_geometry(column: &str) -> String {
-    let column = quote_ident(column);
-    format!("{column} IS NOT NULL AND NOT ST_IsEmpty({column})")
-}
-
-/// The bounds of every entry in the RTree, or `None` for an empty or absent
-/// index. The entries are 32-bit floats rounded outwards, so these bounds
-/// contain every indexed geometry's true envelope, which the extent recorded
-/// in `gpkg_contents` need not: it can be stale.
-fn index_bounds(gpkg: &GeoPackage, table: &str, geometry: &str) -> Option<BoundingBox> {
-    let rtree = quote_ident(&format!("rtree_{table}_{geometry}"));
-    gpkg.connection()
-        .query_row(
-            &format!("SELECT min(minx), min(miny), max(maxx), max(maxy) FROM {rtree}"),
-            [],
-            |row| {
-                Ok(match (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?) {
-                    (Some(a), Some(b), Some(c), Some(d)) => Some(BoundingBox::new(a, b, c, d)),
-                    _ => None,
-                })
-            },
-        )
-        .ok()
-        .flatten()
-}
-
-fn quote_ident(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
 /// What one read selects, owned so it can move to the reader thread.
 struct Request {
     path: PathBuf,
@@ -452,16 +412,9 @@ struct Request {
     bbox: Option<BoundingBox>,
     where_clause: Option<String>,
     pool: Pool,
-    index_bounds: Option<BoundingBox>,
 }
 
 impl Request {
-    fn geometry_column_name<'l>(&self, layer: &'l Layer<'_>) -> &'l str {
-        layer
-            .geometry_column()
-            .map_or("", |g| g.column_name.as_str())
-    }
-
     /// Runs the read, handing each batch to `sink` until it returns `false`.
     /// Borrows a pooled connection, or opens one, and gives it back after.
     fn run(&self, sink: &mut dyn FnMut(Result<RecordBatch, String>) -> bool) -> Result<(), Error> {
@@ -493,52 +446,16 @@ impl Request {
             layer = layer.with_columns(&names)?;
         }
         let options = ArrowReadOptions::default();
-        // A box that contains the layer's whole extent selects every row with
-        // a geometry: read it as a full scan, which can use the parallel
-        // reader, as OGR's driver skips the spatial filter in the same case.
-        let bbox = match (&self.bbox, self.index_bounds) {
-            (Some(b), Some(e))
-                if b.min_x <= e.min_x
-                    && b.min_y <= e.min_y
-                    && b.max_x >= e.max_x
-                    && b.max_y >= e.max_y =>
-            {
-                None
-            }
-            (bbox, _) => *bbox,
-        };
+        // The crate's reads, as they are. A box goes to the RTree once, then
+        // a page of candidates per query (or the exact scan, with no index);
+        // a box that selects every row is read unfiltered, as OGR's driver
+        // does.
         let where_clause = self.where_clause.as_deref();
-        let geometry_filter = match where_clause {
-            Some(w) => format!(
-                "({w}) AND {}",
-                has_geometry(self.geometry_column_name(&layer))
-            ),
-            None => has_geometry(self.geometry_column_name(&layer)),
-        };
-        if let Some(b) = bbox {
-            // The crate's filtered read: the RTree once, then a page of
-            // candidates per query (or the exact scan, with no index).
-            let batches = match where_clause {
-                Some(w) => layer.read_arrow_in_where(b, w, &[], options)?,
-                None => layer.read_arrow_in(b, options)?,
-            };
-            for batch in batches {
-                if !sink(batch.map_err(|e| e.to_string())) {
-                    return Ok(());
-                }
-            }
-            return Ok(());
-        }
-        // No box, or one that covers the layer: every row, or every row with a
-        // geometry when a box was asked for.
-        let filter = if self.bbox.is_some() {
-            Some(geometry_filter.as_str())
-        } else {
-            where_clause
-        };
-        let batches = match filter {
-            Some(w) => layer.read_arrow_where(w, &[], options)?,
-            None => layer.read_arrow(options)?,
+        let batches = match (self.bbox, where_clause) {
+            (Some(b), Some(w)) => layer.read_arrow_in_where(b, w, &[], options)?,
+            (Some(b), None) => layer.read_arrow_in(b, options)?,
+            (None, Some(w)) => layer.read_arrow_where(w, &[], options)?,
+            (None, None) => layer.read_arrow(options)?,
         };
         for batch in batches {
             if !sink(batch.map_err(|e| e.to_string())) {
