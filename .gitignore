@@ -32,3 +32,6 @@ qgis-plugin/gpkg_toolkit/ext-libs/
 # maturin develop's in-place build of the native module.
 geopackage-py/python/geopackage_rs/*.so
 geopackage-py/python/geopackage_rs/*.pyd
+
+# The native QGIS provider builds outside the workspace, so into its own target.
+geopackage-qgis/target
