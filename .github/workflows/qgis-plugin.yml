@@ -1,0 +1,83 @@
+name: qgis-plugin
+
+# Builds the geopackage-rs abi3 wheel for each platform QGIS ships on, packs
+# their native modules into one QGIS plugin zip, and attaches the zip and the
+# wheels to the GitHub release. Triggered as `release.yml` is: on a published
+# release, by hand with a tag, or by a pull request that changes this file,
+# which builds and packages everything and uploads nothing.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag to build and attach the plugin to, such as v0.14.0
+        required: true
+  pull_request:
+    paths:
+      - ".github/workflows/qgis-plugin.yml"
+      - "scripts/package_qgis_plugin.py"
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # manylinux2014 (glibc 2.17), so the module loads into the QGIS of
+          # any distribution still supported.
+          - os: ubuntu-latest
+            target: x86_64
+            manylinux: "2014"
+          - os: ubuntu-24.04-arm
+            target: aarch64
+            manylinux: "2014"
+          # One universal2 build, since `native.py` picks macOS modules by OS
+          # alone: QGIS's macOS installers are arm64 and x86_64.
+          - os: macos-latest
+            target: universal2-apple-darwin
+          - os: windows-latest
+            target: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG || github.sha }}
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release -m geopackage-py/Cargo.toml -o dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.target }}
+          path: dist/*.whl
+
+  package:
+    needs: wheels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - run: python3 scripts/package_qgis_plugin.py dist/*.whl --out plugin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qgis-plugin
+          path: plugin/*.zip
+      - if: env.TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" plugin/*.zip dist/*.whl --clobber

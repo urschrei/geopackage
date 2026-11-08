@@ -8,6 +8,23 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- `geopackage-py`, Python bindings built with PyO3 as abi3 wheels for CPython
+  3.9 and later, with SQLite vendored. They cover open and create, layer
+  schemas, streaming feature reads by bounding box, `WHERE` clause and column
+  projection (one reader thread and connection per read), batched inserts,
+  updates and deletes with ISO WKB geometry, `validate`, spatial index audit
+  and repair, the extension catalogue, SRS rows, and tiled gridded coverages
+  with value lookups, per-tile statistics and the Requirement 21 check. The
+  tests are pytest, run in CI on three OSes.
+- `qgis-plugin/gpkg_toolkit`, a QGIS Processing plugin over `geopackage-py`
+  with seven algorithms: validate, repair spatial indexes, list extensions,
+  sample a coverage at points, coverage tile statistics, the Requirement 21
+  check, and layer export. It supports QGIS 3.28 to 4.x. Its tests run
+  headless in CI. `scripts/package_qgis_plugin.py` and the `qgis-plugin`
+  workflow build one zip with the native module for each platform.
+
 ## [0.13.0] - 2026-10-18
 
 ### Added

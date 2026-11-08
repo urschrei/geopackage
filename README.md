@@ -113,9 +113,16 @@ coverages, Arrow, extensions, validation and configuration.
 | [`geopackage`](geopackage) | The main library: files, layers, spatial indexes, tiles, coverages, Arrow I/O. | [docs.rs](https://docs.rs/geopackage) |
 | [`geopackage-core`](geopackage-core) | Format code with no SQLite dependency: the geometry codec, table definitions, RTree triggers, coverage payload rules and, behind `coverage-samples`, the coverage sample decode. | [docs.rs](https://docs.rs/geopackage-core) |
 | [`geopackage-cli`](geopackage-cli) | The `gpkg` tool: `info`, `validate`, `index`, `repair`, `copy`, `tiles` and `coverage`. | `gpkg --help` |
+| [`geopackage-py`](geopackage-py) | Python bindings (PyO3, abi3 wheels): files, layers, streaming reads, writes, validation, index repair, coverages. Not on crates.io. | [`README`](geopackage-py/README.md) |
 | [`geopackage-ffi`](geopackage-ffi) | The C API: opaque handles, with data passed through the Arrow C Data Interface. Packaged with [cargo-c](https://github.com/lu-zero/cargo-c). CI builds and runs the C programs in [`examples`](geopackage-ffi/examples) against the committed header. | [docs.rs](https://docs.rs/geopackage-ffi), [`include/geopackage.h`](geopackage-ffi/include/geopackage.h) |
 
-Only `geopackage-ffi` uses `unsafe`.
+Only `geopackage-ffi` uses `unsafe`. `geopackage-py` has no handwritten
+`unsafe`; it denies the lint rather than forbidding it, so the PyO3 macros can
+expand.
+
+[`qgis-plugin`](qgis-plugin) is a QGIS Processing plugin built on
+`geopackage-py`. It validates and repairs files, samples coverages and exports
+layers.
 
 ## Limitations
 

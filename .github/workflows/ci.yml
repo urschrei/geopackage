@@ -31,7 +31,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --all-features
+      # `geopackage-py` is a cdylib for Python to load; its tests are pytest,
+      # in the `python` job below, against the module maturin builds.
+      - run: cargo test --workspace --all-features --exclude geopackage-py
 
   # The library's default build links the system SQLite, so it needs its own
   # leg: the bundled matrix above never exercises the linked path, the
@@ -55,8 +57,50 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --exclude geopackage-cli
+      - run: cargo test --workspace --exclude geopackage-cli --exclude geopackage-py
       - run: cargo test -p geopackage-cli --no-default-features
+
+  # The Python bindings: the abi3 module maturin builds, under pytest, on
+  # the oldest CPython the abi3 floor promises and on a current one.
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.9", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: python -m pip install maturin pytest
+      - run: maturin build -m geopackage-py/Cargo.toml -o dist
+      - run: python -m pip install --no-index --find-links dist geopackage-rs
+      - run: python -m pytest geopackage-py/tests
+
+  # The QGIS plugin, under headless QGIS from the distribution's packages
+  # (3.34 on Ubuntu 24.04), with the system Python QGIS is built against.
+  qgis-plugin:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-qgis qgis-providers python3-venv
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          /usr/bin/python3 -m venv --system-site-packages venv
+          venv/bin/pip install maturin pytest
+          venv/bin/maturin build -m geopackage-py/Cargo.toml -o dist
+          venv/bin/pip install --no-index --find-links dist geopackage-rs
+      - run: venv/bin/python -m pytest qgis-plugin/tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - run: venv/bin/python scripts/package_qgis_plugin.py dist/*.whl
 
   msrv:
     runs-on: ubuntu-latest

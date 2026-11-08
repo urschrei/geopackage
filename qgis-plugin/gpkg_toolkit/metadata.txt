@@ -1,0 +1,18 @@
+[general]
+name=GeoPackage Toolkit
+qgisMinimumVersion=3.28
+qgisMaximumVersion=4.99
+description=Validate, repair and inspect GeoPackages, sample elevation coverages, and export layers, using the Rust geopackage crate.
+about=Processing algorithms built on the geopackage Rust crate rather than GDAL: a validator that reports what is wrong with a GeoPackage and how to repair it; spatial index audits and repairs, including legacy pre-1.4 triggers; the extension catalogue with this crate's support for each row; value lookups, per-tile statistics and Requirement 21 checks on tiled gridded coverages; and a bulk layer export. The native module ships inside the plugin, one build per platform.
+version=0.13.0
+author=The GeoRust developers
+email=urschrei@gmail.com
+homepage=https://urschrei.github.io/geopackage/
+tracker=https://github.com/urschrei/geopackage/issues
+repository=https://github.com/urschrei/geopackage
+tags=geopackage,gpkg,validation,spatial index,rtree,coverage,elevation,processing
+category=Analysis
+hasProcessingProvider=yes
+experimental=True
+deprecated=False
+supportsQt6=True

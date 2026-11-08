@@ -1085,6 +1085,13 @@ a moving one.
   against pyogrio. The C ABI from phase 9 plus a ctypes shim already covers the
   read case, which is what M3 criterion 5 exercises, so this is an ergonomics
   and packaging piece rather than a capability one.
+  *(Started 2026-11-08, for a consumer: the QGIS plugin in `qgis-plugin/`.
+  Bound so far: files, layers, streaming row reads, batched writes,
+  validation, index repair, extensions, SRS, and coverages with sample
+  decoding. Not yet bound: Arrow streams and the geopandas convenience, tile
+  pyramid writes, metadata and related tables. The plugin's next piece is a
+  Python vector data provider, which needs F5 and F6 from the sense-check to
+  support editing schemas.)*
 - Node via napi-rs, or browser via wasm plus the D5 `serialize` bytes API:
   pick on who asks.
 - uniffi (Swift and Kotlin): when a mobile consumer materialises.
