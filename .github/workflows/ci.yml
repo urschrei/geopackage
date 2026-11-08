@@ -158,20 +158,32 @@ jobs:
       - run: cargo fmt --manifest-path geopackage-qgis/Cargo.toml --check
       - run: cargo clippy --release --all-targets --manifest-path geopackage-qgis/Cargo.toml -- -D warnings
       - run: cargo build --release --manifest-path geopackage-qgis/Cargo.toml
-      - run: |
-          # On Windows the qgis package's bash activation script, which the
-          # login shell runs before this, joins PYTHONPATH with ':', which
-          # Windows' Python doesn't split on, so the bindings are lost. Set it
-          # here, after activation, with ';'.
-          if [ "$RUNNER_OS" = Windows ]; then
-            echo "PYTHONPATH after activation: $PYTHONPATH"
-            export PYTHONPATH="$CONDA_PREFIX\\Library\\python;$CONDA_PREFIX\\Library\\python\\plugins"
-          fi
+      - if: runner.os != 'Windows'
+        run: |
           export GPKG_TOOLKIT_NATIVE_PROVIDER="$PWD/geopackage-qgis/target/release/${{ matrix.library }}"
-          python -c "import qgis.core; print(qgis.core.Qgis.version())"
           python -X faulthandler -m pytest qgis-plugin/tests -rs
         env:
           QT_QPA_PLATFORM: offscreen
+      # On Windows, conda's QGIS is set up for cmd: its bash activation script
+      # joins PYTHONPATH with ':', which Windows' Python doesn't split on, and
+      # Git Bash's PATH carries mingw builds of DLLs that QGIS's bindings then
+      # load in place of conda's. cmd runs the package's .bat activation.
+      - if: runner.os == 'Windows'
+        shell: cmd /C CALL {0}
+        run: |
+          set "GPKG_TOOLKIT_NATIVE_PROVIDER=%CD%\geopackage-qgis\target\release\${{ matrix.library }}"
+          python -c "import qgis.core; print(qgis.core.Qgis.version())" || exit /b 1
+          python -X faulthandler -m pytest qgis-plugin/tests -rs
+        env:
+          QT_QPA_PLATFORM: offscreen
+      # Which copies of QGIS's and Qt's DLLs, and of the DLLs they share with
+      # other software, a failed Windows run found first on PATH.
+      - if: failure() && runner.os == 'Windows'
+        shell: cmd /C CALL {0}
+        run: |
+          echo %PATH%
+          where qgis_core.dll Qt6Core.dll sqlite3.dll zlib.dll libcrypto-3-x64.dll libssl-3-x64.dll gdal.dll proj_9.dll geos_c.dll
+          exit /b 0
       # A crash in QGIS's or the provider's C++ shows no Python frames, so a
       # failed run on Linux is repeated under gdb for the native backtrace.
       - if: failure() && runner.os == 'Linux'
