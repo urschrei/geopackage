@@ -25,3 +25,10 @@ representative.gpkg
 
 # Hegel property-test server cache + failure database.
 .hegel/
+
+# The QGIS plugin's bundled native modules, written by
+# scripts/package_qgis_plugin.py into the zip, or by hand for development.
+qgis-plugin/gpkg_toolkit/ext-libs/
+# maturin develop's in-place build of the native module.
+geopackage-py/python/geopackage_rs/*.so
+geopackage-py/python/geopackage_rs/*.pyd

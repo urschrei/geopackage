@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "geopackage-rs"
+description = "Read, write, validate and repair OGC GeoPackage files, through the Rust geopackage crate"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT OR Apache-2.0"
+authors = [{ name = "The GeoRust developers" }]
+keywords = ["geopackage", "gpkg", "gis", "geospatial", "ogc"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/urschrei/geopackage"
+
+[tool.maturin]
+python-source = "python"
+module-name = "geopackage_rs._geopackage_rs"
+features = ["bundled"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

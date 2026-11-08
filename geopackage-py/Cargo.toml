@@ -1,0 +1,76 @@
+[package]
+name = "geopackage-py"
+description = "Python bindings for the geopackage crate, built with PyO3 as an abi3 extension module"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# Published to PyPI through maturin, not to crates.io: the crate is only a
+# vehicle for the extension module.
+publish = false
+
+[lib]
+# The Python import name of the native module, under the `geopackage_rs`
+# package that `python/` supplies.
+name = "_geopackage_rs"
+# `cdylib` only. There are no Rust tests: the suite is pytest, in `tests/`,
+# run against the built module, which is what a consumer imports.
+crate-type = ["cdylib"]
+
+# Like `geopackage-ffi`, this crate does not take `[lints] workspace = true`:
+# the PyO3 macros expand to `unsafe` blocks carrying their own
+# `#[allow(unsafe_code)]`, which the workspace's `forbid` would reject. `deny`
+# keeps hand-written `unsafe` out of this crate while letting the macros
+# through. The clippy table mirrors the workspace's.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+string_slice = "warn"
+indexing_slicing = "warn"
+unwrap_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+unreachable = "warn"
+get_unwrap = "warn"
+unwrap_in_result = "warn"
+panic_in_result_fn = "warn"
+let_underscore_future = "warn"
+let_underscore_must_use = "warn"
+unused_result_ok = "warn"
+map_err_ignore = "warn"
+assertions_on_result_states = "warn"
+float_cmp = "warn"
+float_cmp_const = "warn"
+lossy_float_literal = "warn"
+cast_sign_loss = "warn"
+invalid_upcast_comparisons = "warn"
+rc_mutex = "warn"
+debug_assert_with_mut_call = "warn"
+iter_not_returning_iterator = "warn"
+expl_impl_clone_on_copy = "warn"
+dbg_macro = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
+[features]
+# Vendored SQLite by default, as for `geopackage-cli`: a wheel has to work on
+# a host whose SQLite may lack the RTree module, and inside QGIS, whose own
+# SQLite is already loaded into the process. A cdylib exports only its
+# `PyInit_` symbol, so the vendored copy stays private to this module.
+# System-linked builds pass `--no-default-features`.
+default = ["bundled"]
+## Forward `geopackage`'s `bundled` feature.
+bundled = ["geopackage/bundled"]
+
+[dependencies]
+geopackage = { workspace = true, features = ["coverage-samples"] }
+# abi3 from 3.9: one wheel per platform serves every CPython that QGIS 3.28
+# and later ship.
+pyo3 = { version = "0.30", features = ["abi3-py39"] }
