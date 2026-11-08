@@ -116,7 +116,7 @@ def memory_layer(uri, features):
 
 
 def test_export_round_trips_through_gdal(tmp_path, run):
-    from qgis.PyQt.QtCore import QDate, QDateTime, QTime, Qt
+    from qgis.PyQt.QtCore import QDate, QDateTime, QTime, QTimeZone
 
     source = memory_layer(
         "MultiPolygon?crs=EPSG:3857&field=fid:integer&field=name:string(20)"
@@ -125,7 +125,7 @@ def test_export_round_trips_through_gdal(tmp_path, run):
             (
                 "Polygon((0 0, 1 0, 1 1, 0 0))",
                 [7, "single", 0.5, QDate(2024, 2, 29),
-                 QDateTime(QDate(2024, 1, 2), QTime(3, 4, 5), Qt.UTC), True],
+                 QDateTime(QDate(2024, 1, 2), QTime(3, 4, 5), QTimeZone.utc()), True],
             ),
             (
                 "MultiPolygon(((10 10, 12 10, 12 12, 10 10)))",

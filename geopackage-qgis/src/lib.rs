@@ -16,6 +16,15 @@
 //! is no per-row allocation on this side: the C++ shim builds each
 //! `QgsFeature` straight from the Arrow arrays, which is the loop OGR's
 //! provider runs too.
+//!
+//! # The write path
+//!
+//! Edits go through one read-write connection, opened on the first edit.
+//! Each of the provider's edit calls (add, delete, change attributes, change
+//! geometries) is one transaction, so a call that fails leaves the file as it
+//! was before it. QGIS's edit buffer makes those calls in turn when a layer's
+//! changes are committed. Reads keep their own read-only connections, and
+//! see each committed edit from their next read on.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -27,8 +36,9 @@ use arrow_array::types::{Date32Type, Float64Type, Int64Type, TimestampMicrosecon
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::{DataType, TimeUnit};
 use geopackage::arrow::ArrowReadOptions;
+use geopackage::core::datetime::{Date, DateTime};
 use geopackage::core::types::ZmFlag;
-use geopackage::{BoundingBox, GeoPackage, Layer};
+use geopackage::{BoundingBox, GeoPackage, Layer, Value, ValueRef};
 
 #[cxx::bridge(namespace = "gpkgrs")]
 mod ffi {
@@ -51,6 +61,36 @@ mod ffi {
         srs_authid: String,
         srs_wkt: String,
         fields: Vec<FieldInfo>,
+    }
+
+    /// One attribute value going to the file. `kind` says which of the other
+    /// fields holds it: see `kind` below; dates are days since the epoch and
+    /// datetimes microseconds since the epoch, UTC, both in `int_value`.
+    struct Cell {
+        kind: u8,
+        int_value: i64,
+        double_value: f64,
+        text: String,
+        blob: Vec<u8>,
+    }
+
+    /// A feature to add: ISO WKB (empty for none) and a cell per field.
+    struct NewFeature {
+        wkb: Vec<u8>,
+        cells: Vec<Cell>,
+    }
+
+    /// A new value for field `field` of feature `fid`.
+    struct AttributeChange {
+        fid: i64,
+        field: u32,
+        cell: Cell,
+    }
+
+    /// A new geometry for feature `fid`, as ISO WKB.
+    struct GeometryChange {
+        fid: i64,
+        wkb: Vec<u8>,
     }
 
     extern "Rust" {
@@ -78,6 +118,17 @@ mod ffi {
         ) -> Result<Box<RsCursor>>;
 
         /// Advances to the next row; `false` at the end.
+        /// Whether the file can be written, so the layer offers editing.
+        fn writable(self: &RsLayer) -> bool;
+        /// Adds features in one transaction and returns their ids, in order.
+        fn add_features(self: &RsLayer, features: &[NewFeature]) -> Result<Vec<i64>>;
+        /// Deletes features in one transaction; returns how many existed.
+        fn delete_features(self: &RsLayer, fids: &[i64]) -> Result<usize>;
+        /// Applies attribute changes in one transaction.
+        fn change_attributes(self: &RsLayer, changes: &[AttributeChange]) -> Result<()>;
+        /// Replaces geometries in one transaction, keeping each row's values.
+        fn change_geometries(self: &RsLayer, changes: &[GeometryChange]) -> Result<()>;
+
         fn advance(self: &mut RsCursor) -> Result<bool>;
         fn fid(self: &RsCursor) -> i64;
         /// The row's WKB, empty for no geometry.
@@ -94,9 +145,11 @@ mod ffi {
     unsafe extern "C++" {
         include!("geopackage-qgis/src/provider.h");
 
-        /// Registers the provider with QGIS's registry; `false` if a provider
-        /// with its key is registered already.
-        fn register_provider() -> bool;
+        /// Registers the provider with QGIS's registry under `key`; `false` if
+        /// a provider with that key is registered already.
+        fn register_provider(key: &str) -> bool;
+        /// The QGIS version the shim was compiled against, such as 33404.
+        fn built_qgis_version() -> i32;
     }
 }
 
@@ -141,6 +194,10 @@ pub struct RsLayer {
     srs_wkt: String,
     /// For counts and extents, which are cheap single queries.
     gpkg: Mutex<GeoPackage>,
+    /// Whether the file could be opened for writing when the layer was.
+    writable: bool,
+    /// The read-write connection edits go through, once there has been one.
+    writer: Mutex<Option<GeoPackage>>,
     /// Read-only connections that finished reads hand back, so the next read
     /// skips opening one (about 0.4 ms, which is most of a small read).
     pool: Pool,
@@ -259,7 +316,12 @@ fn open_layer(path: &str, layer: &str) -> Result<Box<RsLayer>, Error> {
         None => ("NoGeometry".to_owned(), String::new(), String::new()),
     };
     drop(handle);
+    // Opening the file for writing, without writing, is the check SQLite's
+    // own open makes; a read-only file or mount fails it.
+    let writable = std::fs::OpenOptions::new().write(true).open(path).is_ok();
     Ok(Box::new(RsLayer {
+        writable,
+        writer: Mutex::new(None),
         path: PathBuf::from(path),
         table,
         attributes,
@@ -398,6 +460,153 @@ impl RsLayer {
             geometry_name: self.geometry_column.clone(),
         }))
     }
+}
+
+impl RsLayer {
+    fn writable(&self) -> bool {
+        self.writable
+    }
+
+    /// Runs `f` on a handle to this layer through the read-write connection,
+    /// opening it the first time.
+    fn with_writer<R>(
+        &self,
+        f: impl FnOnce(&GeoPackage, &Layer<'_>) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        if !self.writable {
+            return Err(format!("{} is not writable", self.path.display()).into());
+        }
+        let mut slot = self
+            .writer
+            .lock()
+            .map_err(|_poisoned| "writer lock poisoned")?;
+        if slot.is_none() {
+            *slot = Some(
+                geopackage::OpenOptions::new()
+                    .lenient(true)
+                    .open(&self.path)?,
+            );
+        }
+        let gpkg = slot.as_ref().ok_or("no writer")?;
+        let layer = open_layer_handle(gpkg, &self.table, self.attributes)?;
+        f(gpkg, &layer)
+    }
+
+    fn add_features(&self, features: &[ffi::NewFeature]) -> Result<Vec<i64>, Error> {
+        let width = self.info_fields.len();
+        self.with_writer(|_, layer| {
+            let mut writer = layer.writer()?;
+            let mut fids = Vec::with_capacity(features.len());
+            for feature in features {
+                let mut values = feature
+                    .cells
+                    .iter()
+                    .take(width)
+                    .map(to_value)
+                    .collect::<Result<Vec<_>, _>>()?;
+                values.resize(width, Value::Null);
+                let refs: Vec<ValueRef<'_>> = values.iter().map(ValueRef::from).collect();
+                let fid = if feature.wkb.is_empty() || self.geometry_column.is_none() {
+                    writer.insert_row(None, &refs)?
+                } else {
+                    writer.insert_wkb(None, &feature.wkb, &refs)?
+                };
+                fids.push(fid);
+            }
+            writer.commit()?;
+            Ok(fids)
+        })
+    }
+
+    fn delete_features(&self, fids: &[i64]) -> Result<usize, Error> {
+        self.with_writer(|_, layer| {
+            let mut writer = layer.writer()?;
+            let mut deleted = 0;
+            for &fid in fids {
+                if writer.delete(fid)? {
+                    deleted += 1;
+                }
+            }
+            writer.commit()?;
+            Ok(deleted)
+        })
+    }
+
+    fn change_attributes(&self, changes: &[ffi::AttributeChange]) -> Result<(), Error> {
+        // QGIS hands over a map of maps, flattened here: consecutive changes
+        // to one feature become one update.
+        let mut grouped: Vec<(i64, Vec<(&str, Value)>)> = Vec::new();
+        for change in changes {
+            let Some(field) = self.info_fields.get(change.field as usize) else {
+                return Err(format!("no field {}", change.field).into());
+            };
+            let value = (field.0.as_str(), to_value(&change.cell)?);
+            match grouped.last_mut() {
+                Some((fid, values)) if *fid == change.fid => values.push(value),
+                _ => grouped.push((change.fid, vec![value])),
+            }
+        }
+        self.with_writer(|_, layer| {
+            let mut writer = layer.writer()?;
+            for (fid, values) in &grouped {
+                let refs: Vec<(&str, ValueRef<'_>)> = values
+                    .iter()
+                    .map(|(n, v)| (*n, ValueRef::from(v)))
+                    .collect();
+                writer.update_columns(*fid, &refs)?;
+            }
+            writer.commit()?;
+            Ok(())
+        })
+    }
+
+    fn change_geometries(&self, changes: &[ffi::GeometryChange]) -> Result<(), Error> {
+        if self.geometry_column.is_none() {
+            return Err(format!("{} has no geometry column", self.table).into());
+        }
+        self.with_writer(|gpkg, layer| {
+            // The crate replaces a geometry together with the row's values,
+            // so each row's current values are read first, in the same
+            // transaction as the writes.
+            let pk = layer.primary_key_column().unwrap_or("rowid").to_owned();
+            let clause = format!("{} = ?1", quote_ident(&pk));
+            let values_only =
+                open_layer_handle(gpkg, &self.table, self.attributes)?.without_geometry();
+            let mut writer = layer.writer()?;
+            for change in changes {
+                let current = values_only
+                    .select(&clause, &[ValueRef::Integer(change.fid)])?
+                    .next()
+                    .transpose()?;
+                let Some(current) = current else {
+                    continue;
+                };
+                let values: Vec<Value> = current.values().map(|v| v.to_value()).collect();
+                let refs: Vec<ValueRef<'_>> = values.iter().map(ValueRef::from).collect();
+                writer.update_wkb(change.fid, &change.wkb, &refs)?;
+            }
+            writer.commit()?;
+            Ok(())
+        })
+    }
+}
+
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// A cell from QGIS as a value for the crate.
+fn to_value(cell: &ffi::Cell) -> Result<Value, Error> {
+    Ok(match cell.kind {
+        kind::INT => Value::Integer(cell.int_value),
+        kind::DOUBLE => Value::Float(cell.double_value),
+        kind::TEXT => Value::Text(cell.text.clone()),
+        kind::BOOL => Value::Boolean(cell.int_value != 0),
+        kind::BLOB => Value::Blob(cell.blob.clone()),
+        kind::DATE => Value::Date(Date::from_days_since_epoch(i32::try_from(cell.int_value)?)?),
+        kind::DATETIME => Value::DateTime(DateTime::from_micros_since_epoch(cell.int_value)?),
+        _ => Value::Null,
+    })
 }
 
 /// What one read selects, owned so it can move to the reader thread.
@@ -647,15 +856,40 @@ impl RsCursor {
     }
 }
 
-/// Registers the provider with QGIS. The QGIS plugin calls this through
-/// ctypes after loading the library into a running QGIS; it returns `true`
-/// if the provider was registered, `false` if it already was.
-///
-/// # Safety
+/// The key the plugin's Python provider registers. The plugin registers this
+/// provider under it in that provider's place, so a project names one
+/// provider whichever of the two serves it.
+const PLUGIN_KEY: &str = "geopackage_rs";
+
+/// A key of this provider's own, for registering it beside the Python one, as
+/// the tests and the comparisons with OGR do.
+const SIDE_BY_SIDE_KEY: &str = "geopackage_rs_native";
+
+/// Registers the provider with QGIS under the Python provider's key,
+/// `geopackage_rs`, and returns `true`, or returns `false` if a provider
+/// with that key is registered already. The QGIS plugin calls this through
+/// ctypes, before registering the Python provider, after checking
+/// [`geopackage_qgis_qgis_version`] against the running QGIS.
 ///
 /// Call it from a process in which QGIS's core library is loaded and
 /// `QgsApplication` is initialised, on the main thread.
 #[unsafe(no_mangle)]
 pub extern "C" fn geopackage_qgis_register() -> bool {
-    ffi::register_provider()
+    ffi::register_provider(PLUGIN_KEY)
+}
+
+/// As [`geopackage_qgis_register`], under the key `geopackage_rs_native`, so
+/// that it can sit beside the Python provider.
+#[unsafe(no_mangle)]
+pub extern "C" fn geopackage_qgis_register_side_by_side() -> bool {
+    ffi::register_provider(SIDE_BY_SIDE_KEY)
+}
+
+/// The QGIS version this library was compiled against, as
+/// `Qgis.versionInt()` gives it (33404 for 3.34.4). QGIS's C++ interface
+/// changes between minor versions, so the plugin loads a build only into
+/// the minor version it was made for.
+#[unsafe(no_mangle)]
+pub extern "C" fn geopackage_qgis_qgis_version() -> i32 {
+    ffi::built_qgis_version()
 }

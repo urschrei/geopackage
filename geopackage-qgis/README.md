@@ -1,10 +1,16 @@
 # geopackage-qgis
 
-A native QGIS vector data provider over the `geopackage` crate. **This is a
-spike:** read-only, Linux, QGIS 3.34. It exists to answer one question:
-can a provider built on the crate match OGR's speed in QGIS? The Python
-provider in `qgis-plugin` can't, as its README explains. It does: on every
-request with throughput behind it, the spike is faster than OGR.
+A native QGIS vector data provider over the `geopackage` crate, for QGIS 4
+(Qt 6). It reads and edits. It started as a spike asking one question: can
+a provider built on the crate match OGR's speed in QGIS? The Python
+provider in `qgis-plugin` can't, as its README explains. This one can: on
+every request with throughput behind it, it is faster than OGR (the figures
+below).
+
+The plugin uses it in place of its Python provider when it ships a build for
+the running QGIS, under the same provider key, `geopackage_rs`. On QGIS 3,
+or with no matching build, the Python provider serves that key instead, so a
+project opens with whichever of the two the machine has.
 
 ## Why it's shaped like this
 
@@ -19,21 +25,49 @@ subclass a C++ class. So:
   to Rust through `cxx`. Its one piece of real work is the per-feature loop,
   which builds each `QgsFeature` straight from the Arrow arrays. OGR's
   provider runs the same loop.
-- **The plugin loads the library** with `ctypes` and calls
-  `geopackage_qgis_register()`. That registers the provider as
-  `geopackage_rs_native` beside OGR and the Python provider, so all three can
-  be compared on the same file.
+- **The plugin loads the library** with `ctypes`
+  (`gpkg_toolkit/native_provider.py`), checks
+  `geopackage_qgis_qgis_version()` against the running QGIS, and calls
+  `geopackage_qgis_register()`, which registers it as `geopackage_rs`.
+  `geopackage_qgis_register_side_by_side()` registers it as
+  `geopackage_rs_native` instead, beside the Python provider and OGR: the
+  plugin's tests run against both providers that way.
 
-`cargo build --release` compiles both halves into one `libgeopackage_qgis.so`.
-It needs QGIS's and Qt's development headers (`libqgis-dev`,
-`qtbase5-dev`). `QGIS_PREFIX` points the build at a QGIS installed elsewhere.
-The crate isn't a workspace member, because the workspace's CI legs don't
-install QGIS.
+**Editing** goes through one read-write connection, opened on the first
+edit. Each of QGIS's edit calls (add, delete, change attributes, change
+geometries) is one transaction, so a failed call leaves the file as it was.
+Geometries are made multi, and given or stripped of z and m, to match the
+column, as the Python provider does. Reads keep their own read-only
+connections and see each commit from their next read on.
+
+## Building
+
+`cargo build --release` compiles both halves into one `libgeopackage_qgis.so`
+against QGIS 4 and Qt 6. No Ubuntu release packages QGIS 4 yet; conda-forge
+does, and CI builds from there (the `native-provider` job):
+
+    conda create -n qgis -c conda-forge "qgis=4.2" pkg-config
+    conda activate qgis
+    cargo build --release
+
+The build takes QGIS from `QGIS_PREFIX`, else the active conda environment,
+else `/usr`, and Qt from `pkg-config`. For a Qt unpacked rather than
+installed, set `QT_INCLUDE_DIR` and `QT_LIB_DIR`. The crate isn't a workspace
+member, because the workspace's other CI jobs don't install QGIS.
+
+A build works only in the QGIS minor version it was compiled against:
+QGIS's C++ interface changes between minor versions, and the plugin checks.
+On Linux it is tied tighter still, to the patch release, because
+`libqgis_core`'s soname carries the full version (`libqgis_core.so.4.2.3`).
+The release builds will have to settle that, by building per patch release
+or by resolving QGIS's symbols from the running process.
 
 ## Results
 
-200,000 random points in EPSG:4326, headless QGIS 3.34, built against the
-crate with #207's bounding-box fix. Each figure is the best of several runs,
+200,000 random points in EPSG:4326, headless QGIS 3.34, measured before the
+provider moved to QGIS 4, built against the crate with #207's bounding-box
+fix. With #208 as well, a box 1.1 times the layer's extent, which is what a
+zoomed-out canvas asks for, took 129 ms against OGR's 231 ms. Each figure is the best of several runs,
 draining the iterator with `nextFeature` into one reused `QgsFeature`:
 
 | Request | Features | OGR | Native | Native/OGR |
@@ -90,10 +124,7 @@ crate's reads unchanged.
 
 ## Next
 
-1. Complete the provider: editing, the remaining capabilities, and a QGIS
-   3.40+ and QGIS 4 (Qt 6) build. In the plugin, use the native provider
-   when a build matches the running QGIS, and fall back to the Python one
-   otherwise. Run the plugin's provider tests against both.
-2. CI and release builds for Linux, macOS and Windows, against the current
-   LTR and QGIS 4. Getting the QGIS SDK onto macOS runners is the open
-   question.
+CI and release builds for Linux, macOS and Windows against QGIS 4, shipped
+in the plugin as `ext-libs/<platform>/qgis-<major>.<minor>/`. conda-forge
+has QGIS 4 for all three, which makes it the likely SDK on every runner. The
+soname question above has to be settled first.

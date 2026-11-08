@@ -108,6 +108,46 @@ jobs:
           QT_QPA_PLATFORM: offscreen
       - run: venv/bin/python scripts/package_qgis_plugin.py dist/*.whl
 
+  # The native provider builds against QGIS 4 only, which no Ubuntu release
+  # packages yet, so this job takes QGIS 4.2 from conda-forge. It builds the
+  # provider and runs the plugin's tests, the provider tests against both the
+  # Python and the native provider.
+  native-provider:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: conda-incubator/setup-miniconda@v4
+        with:
+          miniforge-version: latest
+          activate-environment: qgis
+          channels: conda-forge
+          conda-remove-defaults: "true"
+          python-version: "3.13"
+      - run: conda install -y "qgis=4.2" pkg-config pytest maturin
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            geopackage-qgis -> target
+      - run: |
+          maturin build -m geopackage-py/Cargo.toml -o dist
+          pip install --no-index --find-links dist geopackage-rs
+      - run: cargo fmt --manifest-path geopackage-qgis/Cargo.toml --check
+      - run: cargo clippy --release --all-targets --manifest-path geopackage-qgis/Cargo.toml -- -D warnings
+      - run: cargo build --release --manifest-path geopackage-qgis/Cargo.toml
+      - run: |
+          export QGIS_PLUGINPATH="$CONDA_PREFIX/share/qgis/python/plugins"
+          export GPKG_TOOLKIT_NATIVE_PROVIDER="$PWD/geopackage-qgis/target/release/libgeopackage_qgis.so"
+          python -m pytest qgis-plugin/tests -rs
+        env:
+          QT_QPA_PLATFORM: offscreen
+
   msrv:
     runs-on: ubuntu-latest
     steps:

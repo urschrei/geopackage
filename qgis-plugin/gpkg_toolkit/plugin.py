@@ -18,15 +18,30 @@ MENU_ALGORITHMS = [
 
 
 def register_data_provider():
-    """Registers the ``geopackage_rs`` vector provider, if the native module
-    loaded. Called from both entry points, since a headless Processing run
-    never calls ``initGui``."""
+    """Registers the ``geopackage_rs`` vector provider: the native build for
+    the running QGIS where the plugin has one, otherwise the Python provider,
+    if the ``geopackage_rs`` module loaded. Both serve the same key, so a
+    project opens with either. Called from both entry points, since a
+    headless Processing run never calls ``initGui``. Returns which provider
+    serves the key: ``"native"``, ``"python"`` or ``None``."""
+    from qgis.core import QgsMessageLog
+
+    from . import compat, native_provider
+
+    if native_provider.register():
+        return "native"
     if native.gpkg is None:
-        return False
+        return None
     from . import data_provider
 
     data_provider.register()
-    return True
+    if native_provider.LOAD_ERROR:
+        QgsMessageLog.logMessage(
+            f"Using the Python data provider: {native_provider.LOAD_ERROR}",
+            "GeoPackage Toolkit",
+            compat.MESSAGE_INFO,
+        )
+    return "python"
 
 
 class GpkgToolkitPlugin:
