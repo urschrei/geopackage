@@ -26,20 +26,27 @@ PLUGIN = ROOT / "qgis-plugin" / "gpkg_toolkit"
 
 
 def platform_dir(wheel_name):
-    """`native._platform_tag()`'s spelling for a wheel's platform tag."""
-    tag = wheel_name.rsplit("-", 1)[-1].removesuffix(".whl")
-    if tag.startswith("win_amd64"):
+    """`native._platform_tag()`'s spelling for a wheel's platform tag.
+
+    A wheel can carry a compressed tag set, joined by dots: maturin names a
+    universal2 macOS wheel `macosx_10_12_universal2.macosx_10_12_x86_64.
+    macosx_11_0_arm64`, and a manylinux one `manylinux_2_17_x86_64.
+    manylinux2014_x86_64`. Each component is checked.
+    """
+    tags = wheel_name.rsplit("-", 1)[-1].removesuffix(".whl").split(".")
+    if any(tag.startswith("win_amd64") for tag in tags):
         return "windows-x86_64"
-    if tag.startswith("win_arm64"):
+    if any(tag.startswith("win_arm64") for tag in tags):
         return "windows-aarch64"
-    if tag.startswith("macosx"):
-        if not tag.endswith("universal2"):
+    if any(tag.startswith("macosx") for tag in tags):
+        if not any(tag.endswith("universal2") for tag in tags):
             sys.exit(f"{wheel_name}: build macOS as universal2, which native.py expects")
         return "macos-universal2"
-    match = re.search(r"(x86_64|aarch64)$", tag)
-    if tag.startswith(("manylinux", "musllinux", "linux")) and match:
-        return f"linux-{match.group(1)}"
-    sys.exit(f"{wheel_name}: unrecognised platform tag {tag!r}")
+    for tag in tags:
+        match = re.search(r"(x86_64|aarch64)$", tag)
+        if tag.startswith(("manylinux", "musllinux", "linux")) and match:
+            return f"linux-{match.group(1)}"
+    sys.exit(f"{wheel_name}: unrecognised platform tag {'.'.join(tags)!r}")
 
 
 def main():
