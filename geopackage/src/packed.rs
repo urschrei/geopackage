@@ -329,6 +329,33 @@ impl Cell {
     }
 }
 
+/// Returns the union of a node's cell bounds as `[min_x, max_x, min_y,
+/// max_y]`, or `None` for a node with no cells or a blob too short to hold
+/// the cells its header counts.
+///
+/// Applied to the root node (`nodeno = 1`), this is the bounds of the whole
+/// index without reading it: every entry lies within its leaf cell, every
+/// cell within its parent's, and the root's cells within their union. The
+/// format is the one [`encode_node_into`] writes, and the RTree module's own.
+pub(crate) fn node_bounds(blob: &[u8]) -> Option<[f32; 4]> {
+    let count = usize::from(u16::from_be_bytes(blob.get(2..4)?.try_into().ok()?));
+    let mut union: Option<[f32; 4]> = None;
+    for i in 0..count {
+        let start = NODE_HEADER + i * BYTES_PER_CELL;
+        let cell = blob.get(start..start + BYTES_PER_CELL)?;
+        let mut bounds = [0.0f32; 4];
+        for (n, slot) in bounds.iter_mut().enumerate() {
+            let at = 8 + n * 4;
+            *slot = f32::from_be_bytes(cell.get(at..at + 4)?.try_into().ok()?);
+        }
+        union = Some(match union {
+            Some(so_far) => Cell::union(&so_far, &bounds),
+            None => bounds,
+        });
+    }
+    union
+}
+
 /// Serialises one node into `blob`: the header followed by its cells,
 /// zero-padded to `node_size`.
 ///
@@ -459,6 +486,35 @@ mod tests {
             cells.push(Cell { id, bounds });
         }
         cells
+    }
+
+    #[test]
+    fn node_bounds_is_the_union_of_a_nodes_cells() {
+        let cells = [
+            Cell {
+                id: 1,
+                bounds: [0.0, 1.0, 5.0, 6.0],
+            },
+            Cell {
+                id: 2,
+                bounds: [-3.5, -2.0, 7.0, 9.25],
+            },
+            Cell {
+                id: 3,
+                bounds: [2.0, 4.0, -1.0, 0.0],
+            },
+        ];
+        let mut blob = Vec::new();
+        encode_node_into(&mut blob, 1, &cells, 4 + 3 * BYTES_PER_CELL);
+        assert_eq!(super::node_bounds(&blob), Some([-3.5, 4.0, -1.0, 9.25]));
+        encode_node_into(&mut blob, 0, &[], 64);
+        assert_eq!(super::node_bounds(&blob), None);
+        // A header claiming more cells than the blob holds is not trusted.
+        let mut short = Vec::new();
+        encode_node_into(&mut short, 0, &cells[..1], 4 + BYTES_PER_CELL);
+        short[3] = 2;
+        assert_eq!(super::node_bounds(&short), None);
+        assert_eq!(super::node_bounds(&[0, 0]), None);
     }
 
     /// Every node blob is exactly `node_size` bytes, which the RTree module
