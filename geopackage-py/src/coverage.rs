@@ -351,9 +351,11 @@ impl PyCoverage {
     /// ``std_dev`` from ``gpkg_2d_gridded_tile_ancillary`` (``None`` where not
     /// recorded), the ``calculated`` statistics as a dictionary (``min``,
     /// ``max``, ``mean``, ``std_dev``, ``count``) or ``None`` for a tile with
-    /// no values, and ``error`` for a tile that cannot be decoded. The
-    /// calculated statistics are values, after scale and offset; the recorded
-    /// ones are whatever the writer of the file put there.
+    /// no values, and ``error`` for a tile that cannot be decoded. Both sets
+    /// are values, after the tile's and the coverage's scale and offset, as
+    /// the extension and GDAL record them, so they can be compared directly.
+    /// A recorded set that differs by more than about one quantisation step
+    /// was written in other units, or is out of date.
     #[pyo3(signature = (zoom = None))]
     fn tile_statistics<'py>(
         &self,
