@@ -78,20 +78,22 @@ nearly one per row: 1,974 queries for 1,989 rows. The spike worked around
 it. #207 fixed it in the crate, reading a page of candidates per query, and
 the workaround is gone: the provider calls `read_arrow_in` directly.
 
-**A box containing the whole layer still takes the filtered loop** in the
-crate. That's 125 ms on the `filtered` benchmark's diagonal, against 41 ms
-for an unfiltered read. The provider treats such a box as a full scan, as
-OGR's driver does. It decides this from the RTree's own bounds, because the
-extent recorded in `gpkg_contents` can be stale. That shortcut is still for
-the crate to take over.
+**A box containing the whole layer took the filtered loop.** That was
+125 ms on the `filtered` benchmark's diagonal, against 41 ms for an
+unfiltered read. The spike treated such a box as a full scan, as OGR's
+driver does. #208 moved that into the crate's Arrow read, which now
+decides from the RTree's root node (widened by one `f32` step, because
+SQLite stores a subnormal coordinate inward of its true value) and from
+whether every row is indexed. The spike's own check missed that widening
+and could return a row outside the box. It is gone: the provider calls the
+crate's reads unchanged.
 
 ## Next
 
-1. Move the whole-layer-box shortcut into the crate's Arrow read.
-2. Complete the provider: editing, the remaining capabilities, and a QGIS
+1. Complete the provider: editing, the remaining capabilities, and a QGIS
    3.40+ and QGIS 4 (Qt 6) build. In the plugin, use the native provider
    when a build matches the running QGIS, and fall back to the Python one
    otherwise. Run the plugin's provider tests against both.
-3. CI and release builds for Linux, macOS and Windows, against the current
+2. CI and release builds for Linux, macOS and Windows, against the current
    LTR and QGIS 4. Getting the QGIS SDK onto macOS runners is the open
    question.
