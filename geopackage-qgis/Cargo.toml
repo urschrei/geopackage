@@ -1,0 +1,38 @@
+[package]
+name = "geopackage-qgis"
+description = "A native QGIS vector data provider over the geopackage crate: Rust for the work, a C++ shim for QGIS's class interface"
+version = "0.13.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/urschrei/geopackage"
+authors = ["The GeoRust developers"]
+# Built against a particular QGIS's C++ headers and libraries, so it is
+# distributed inside the QGIS plugin, one build per platform and QGIS version,
+# never through crates.io.
+publish = false
+
+# Not a workspace member, like `geopackage-core/fuzz`: building it needs QGIS's
+# development headers, which the workspace's CI legs do not install. It has
+# its own lockfile and its own CI job.
+[workspace]
+
+[lib]
+name = "geopackage_qgis"
+# A shared library the QGIS plugin loads with ctypes, then calls
+# `geopackage_qgis_register` to register the provider.
+crate-type = ["cdylib"]
+
+[dependencies]
+# `bundled`: QGIS has its own SQLite loaded; ours stays private to this
+# library, since a cdylib exports only its `#[no_mangle]` symbols.
+geopackage = { path = "../geopackage", features = ["arrow", "bundled"] }
+arrow-array = "60.1"
+arrow-schema = "60"
+cxx = "1"
+
+[build-dependencies]
+cxx-build = "1"
+
+[profile.release]
+lto = "thin"

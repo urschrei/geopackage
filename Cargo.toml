@@ -1,6 +1,6 @@
 [workspace]
 members = ["geopackage-core", "geopackage", "geopackage-cli", "geopackage-ffi", "geopackage-py"]
-exclude = ["geopackage-core/fuzz"]
+exclude = ["geopackage-core/fuzz", "geopackage-qgis"]
 resolver = "3"
 
 [workspace.package]
