@@ -148,10 +148,14 @@ jobs:
       - run: |
           maturin build -m geopackage-py/Cargo.toml -o dist
           pip install --no-index --find-links dist geopackage-rs
-      # QGIS and Qt as conda installs them: under Library on Windows.
+      # QGIS and Qt as conda installs them: under Library on Windows. There
+      # the qgis package's bash activation script joins PYTHONPATH with ':',
+      # which Windows' Python doesn't split on, so its bindings are put on
+      # the path here, with ';'.
       - run: |
           if [ "$RUNNER_OS" = Windows ]; then
             echo "QT_DIR=$CONDA_PREFIX/Library" >> "$GITHUB_ENV"
+            echo "PYTHONPATH=$CONDA_PREFIX\\Library\\python;$CONDA_PREFIX\\Library\\python\\plugins" >> "$GITHUB_ENV"
           else
             echo "QT_DIR=$CONDA_PREFIX" >> "$GITHUB_ENV"
           fi
