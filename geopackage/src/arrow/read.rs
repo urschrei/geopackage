@@ -11,22 +11,12 @@ use super::aggregate::AggregateState;
 use super::aggregate::BatchFiller;
 use super::options::{ArrowReadOptions, DEFAULT_BATCH_SIZE, DEFAULT_MAX_BATCH_BYTES};
 use super::parallel::{ParallelBatches, WorkerPlan, database_path, key_span};
-use super::sequential::{SequentialBatches, SpatialFilter};
+use super::sequential::{Segment, SequentialBatches, SpatialFilter};
 use super::{ArrowBatches, BatchSource};
 
 /// Alias for the pagination key when it is not itself one of the columns, so
 /// the aggregate can name it as an argument.
 const KEY_ALIAS: &str = "__gpkg_key";
-
-/// Largest key gap folded into one candidate segment.
-///
-/// Sorted RTree candidates are read as key ranges, not fetched one id at a
-/// time, so a gap inside a segment fetches extra rows, which the exact re-test
-/// drops. Folding small gaps in is still cheaper. Continuing a range scan over
-/// a few dozen rows costs less than ending the page and starting a new index
-/// probe at the next cluster of candidates. Clustered data, where filtered
-/// reads matter, produces mostly such gaps.
-const SEGMENT_GAP: i64 = 64;
 
 impl Layer<'_> {
     /// Reads this layer as a stream of Arrow [`RecordBatch`](arrow_array::RecordBatch)es.
@@ -286,10 +276,14 @@ impl Layer<'_> {
         };
         // The spatial predicate, when there is one and the layer has an index
         // to answer it with. The RTree is scanned exactly once, here, and its
-        // candidate ids become key segments the pages walk with an ordinary
-        // range bound; an earlier shape re-evaluated an `IN (SELECT ... FROM
-        // rtree)` subquery on every page, which re-scanned the index once per
-        // batch and measured as most of the filtered read's overhead. A fixed
+        // sorted candidate ids are planned into segments of at most one page
+        // of ids each (`Segment::plan`): a dense segment is read as a key
+        // range, a sparse one by its explicit ids. Two earlier shapes cost
+        // more. An `IN (SELECT ... FROM rtree)` subquery is re-evaluated on
+        // every page, re-scanning the index once per batch. Walking runs of
+        // consecutive keys costs a query per run, and spatially scattered
+        // rows make nearly every candidate its own run: a box selecting 1% of
+        // 200,000 scattered points issued about 2,000 queries. A fixed
         // candidate set also gives the read one consistent answer: rows
         // inserted after this point are not returned, exactly as a snapshot
         // would.
@@ -320,7 +314,7 @@ impl Layer<'_> {
                     )?
                     .collect::<rusqlite::Result<_>>()?;
                 ids.sort_unstable();
-                Some(segment_runs(&ids))
+                Some(Segment::plan(&ids, options.batch_size.max(1)))
             }
             // No index, or no filter: a full scan. When a filter is set the
             // exact re-test still runs over every row, which is what
@@ -370,6 +364,16 @@ impl Layer<'_> {
              ORDER BY {key} LIMIT ?{limit_slot}"
         );
         let sql = rows_sql.clone();
+        // A sparse segment's query: the same, with its candidate ids bound as
+        // one `rarray` parameter after the upper bound. A segmented read never
+        // has the unindexed scan's box parameters, so the slot is free.
+        let ids_sql = format!(
+            "SELECT {row_columns} FROM {table} \
+             WHERE {user_and}{key} >= ?{key_slot} AND {key} <= ?{upper_slot} \
+             AND {key} IN rarray(?{ids_slot}) \
+             ORDER BY {key} LIMIT ?{limit_slot}",
+            ids_slot = base + 4
+        );
         let conn = self.gpkg().connection();
         let conversion = self.conversion_options();
         let names: Vec<String> = schema
@@ -470,11 +474,12 @@ impl Layer<'_> {
                 // candidate set has nothing to read at all, and issues no
                 // query to find that out.
                 next_key: match &segments {
-                    Some(segments) => segments.first().map_or(i64::MIN, |(lo, _)| *lo),
+                    Some(segments) => segments.first().map_or(i64::MIN, |s| s.lo),
                     None => i64::MIN,
                 },
                 exhausted: segments.as_ref().is_some_and(Vec::is_empty),
                 segments,
+                ids_sql,
                 segment: 0,
                 user_params,
                 hidden_geometry,
@@ -521,25 +526,4 @@ impl Layer<'_> {
             mmap_size: u64::try_from(mmap_size).unwrap_or(0),
         })))
     }
-}
-
-/// Folds sorted candidate ids into closed key ranges, bridging gaps of up to
-/// [`SEGMENT_GAP`].
-fn segment_runs(ids: &[i64]) -> Vec<(i64, i64)> {
-    let mut runs = Vec::new();
-    let mut ids = ids.iter().copied();
-    let Some(first) = ids.next() else {
-        return runs;
-    };
-    let (mut lo, mut hi) = (first, first);
-    for id in ids {
-        if id.saturating_sub(hi) <= SEGMENT_GAP {
-            hi = id;
-        } else {
-            runs.push((lo, hi));
-            (lo, hi) = (id, id);
-        }
-    }
-    runs.push((lo, hi));
-    runs
 }

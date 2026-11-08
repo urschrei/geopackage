@@ -29,6 +29,16 @@
 //!   above its own serial floor is small relative to this, threading the
 //!   filtered read has little to win.
 //!
+//! The diagonal makes a box's candidates consecutive keys, the best case for
+//! a read that walks key ranges. The `scattered` group repeats the filtered
+//! reads over points at random positions, where neighbours in space are
+//! strangers in key order, the usual case in real data, and puts the row
+//! path's `features_in` beside them as a one-query reference:
+//!
+//! - `scattered/read_arrow_in/{label}`: the columnar filtered read.
+//! - `scattered/features_in/{label}`: the row path's RTree join, rows
+//!   counted.
+//!
 //! Row count defaults to 200,000; override with `GPKG_BENCH_ROWS`.
 //!
 //! Run: `cargo bench -p geopackage --features arrow --bench filtered`.
@@ -81,6 +91,49 @@ fn build(count: i64) -> (tempfile::TempDir, GeoPackage) {
         .expect("write");
     assert!(layer.has_spatial_index().expect("status"));
     (dir, gpkg)
+}
+
+/// A layer of `count` points at pseudo-random positions in the unit square,
+/// spatially indexed, in a temp file. The positions come from a fixed xorshift
+/// sequence, so every run reads the same layer.
+fn build_scattered(count: i64) -> (tempfile::TempDir, GeoPackage) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gpkg = GeoPackage::create(dir.path().join("scattered.gpkg")).expect("create");
+    gpkg.add_epsg_srs(4326).expect("srs");
+    gpkg.create_layer(
+        &TableSchemaBuilder::new("pts")
+            .column(ColumnSpec::new("name", ColumnType::Text(None)))
+            .column(ColumnSpec::new("rank", ColumnType::Integer))
+            .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+    )
+    .expect("layer");
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    let mut unit = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let layer = gpkg.layer("pts").expect("open");
+    layer
+        .write_all(
+            (0..count).map(|i| {
+                NewFeature::new(
+                    Point::new(unit(), unit()),
+                    vec![Value::Text(format!("p{i}")), Value::Integer(i % 10)],
+                )
+            }),
+            10_000,
+        )
+        .expect("write");
+    assert!(layer.has_spatial_index().expect("status"));
+    (dir, gpkg)
+}
+
+/// A square in the middle of the unit square covering `fraction` of it.
+fn centred(fraction: f64) -> BoundingBox {
+    let half = fraction.sqrt() / 2.0;
+    BoundingBox::new(0.5 - half, 0.5 - half, 0.5 + half, 0.5 + half)
 }
 
 /// A box selecting about `fraction` of the diagonal.
@@ -156,6 +209,40 @@ fn bench(criterion: &mut Criterion) {
             black_box(total)
         });
     });
+    group.finish();
+    drop(gpkg);
+
+    let (_scattered_dir, scattered) = build_scattered(count);
+    let mut group = criterion.benchmark_group("scattered");
+    group
+        .sampling_mode(SamplingMode::Flat)
+        .sample_size(10)
+        .measurement_time(Duration::from_secs(5));
+    for (label, fraction) in [
+        ("0.01pct", 0.0001),
+        ("1pct", 0.01),
+        ("10pct", 0.1),
+        ("50pct", 0.5),
+        ("100pct", 1.0),
+    ] {
+        let bbox = centred(fraction);
+        group.bench_function(format!("read_arrow_in/{label}"), |bencher| {
+            bencher.iter(|| black_box(drain(&scattered, bbox)));
+        });
+        group.bench_function(format!("features_in/{label}"), |bencher| {
+            bencher.iter(|| {
+                let layer = scattered.layer("pts").expect("open");
+                let mut cursor = layer.cursor_in(bbox).expect("cursor");
+                let mut stream = cursor.features().expect("stream");
+                let mut rows = 0usize;
+                for feature in stream.by_ref() {
+                    black_box(feature.expect("feature"));
+                    rows += 1;
+                }
+                black_box(rows)
+            });
+        });
+    }
     group.finish();
 }
 

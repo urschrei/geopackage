@@ -303,11 +303,12 @@ fn agrees_with_features_in_over_lines_whose_envelopes_overlap() {
 
 #[test]
 fn scattered_candidates_agree_across_segment_boundaries() {
-    // The rtree is scanned once and its candidates walked as key segments;
-    // keys further apart than the segment gap start a new segment. This
-    // places five matching rows every hundred, so the candidate ids form
-    // islands far beyond any gap-folding, and walks them with a batch size
-    // small enough that segments and batches interleave every way.
+    // The rtree is scanned once and its sorted candidates split into pages
+    // of at most `batch_size` ids. A page whose ids fill at least half its key
+    // span is read as a range; a sparser one by its explicit ids. This places
+    // five matching rows every hundred, so the candidate ids form islands,
+    // and the batch sizes make pages that sit inside one island (dense), span
+    // several (sparse), and interleave with batches every way.
     let dir = tempfile::tempdir().unwrap();
     let gpkg = GeoPackage::create(dir.path().join("s.gpkg")).unwrap();
     gpkg.add_epsg_srs(4326).unwrap();
@@ -351,10 +352,11 @@ fn scattered_candidates_agree_across_segment_boundaries() {
 
 #[test]
 fn rows_overfetched_inside_a_folded_gap_are_dropped() {
-    // Small key gaps are folded into one segment, so the range fetch reads
-    // the non-matching rows sitting in them; only the exact re-test keeps
-    // them out of the batches. Alternating in-box and out-of-box rows make
-    // every second row such an over-fetch.
+    // A page whose candidates fill at least half its key span is read as a
+    // key range, so the fetch reads the non-matching rows between them; only
+    // the exact re-test keeps them out of the batches. Alternating in-box and
+    // out-of-box rows make every second row such an over-fetch: 100
+    // candidates over 199 keys is dense enough for a range.
     let dir = tempfile::tempdir().unwrap();
     let gpkg = GeoPackage::create(dir.path().join("g.gpkg")).unwrap();
     gpkg.add_epsg_srs(4326).unwrap();
@@ -386,4 +388,114 @@ fn rows_overfetched_inside_a_folded_gap_are_dropped() {
         arrow_fids(&gpkg, bbox, ArrowReadOptions::default()),
         expected
     );
+}
+
+/// A layer of `count` points at pseudo-random positions in a 100 by 100
+/// square, from a fixed xorshift sequence, so that neighbours in space are
+/// strangers in key order: the case that made the read issue a query per
+/// candidate when it walked runs of consecutive keys.
+fn scattered(count: i32) -> (TempDir, GeoPackage) {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("s.gpkg")).unwrap();
+    gpkg.add_epsg_srs(4326).unwrap();
+    gpkg.create_layer(
+        &TableSchemaBuilder::new("pts")
+            .column(ColumnSpec::new("name", ColumnType::Text(None)))
+            .geometry(GeometrySpec::new(GeometryType::Point, 4326)),
+    )
+    .unwrap();
+    let mut state = 0x2545_F491_4F6C_DD1D_u64;
+    let mut unit = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    gpkg.layer("pts")
+        .unwrap()
+        .write_all(
+            (0..count)
+                .map(|i| {
+                    // Every tenth row clusters at the origin, so a box there
+                    // has dense runs of keys beside the scattered ones, and a
+                    // read plans range pages and id pages together.
+                    let (x, y) = if i % 10 == 0 {
+                        (f64::from(i % 50) / 10.0, 0.5)
+                    } else {
+                        (unit() * 100.0, unit() * 100.0)
+                    };
+                    NewFeature::new(Point::new(x, y), vec![Value::Text(format!("p{i}"))])
+                })
+                .collect::<Vec<_>>(),
+            1000,
+        )
+        .unwrap();
+    (dir, gpkg)
+}
+
+#[test]
+fn agrees_with_features_in_over_scattered_points() {
+    let (_dir, gpkg) = scattered(3000);
+    let boxes = [
+        BoundingBox::new(40.0, 40.0, 41.0, 41.0),
+        BoundingBox::new(10.0, 10.0, 30.0, 30.0),
+        BoundingBox::new(0.0, 0.0, 5.0, 1.0),
+        BoundingBox::new(-1.0, -1.0, 60.0, 60.0),
+        BoundingBox::new(-10.0, -10.0, 200.0, 200.0),
+        BoundingBox::new(500.0, 500.0, 600.0, 600.0),
+    ];
+    for bbox in boxes {
+        let mut expected = row_fids(&gpkg, bbox);
+        expected.sort_unstable();
+        for options in [
+            ArrowReadOptions::with_batch_size(1),
+            ArrowReadOptions::with_batch_size(7),
+            ArrowReadOptions::with_batch_size(64),
+            ArrowReadOptions::default(),
+            // A ceiling a single geometry exceeds: every page is cut short
+            // after one row, so a page resumes inside its own id list.
+            ArrowReadOptions::with_batch_size(64).with_max_batch_bytes(1),
+        ] {
+            assert_eq!(
+                arrow_fids(&gpkg, bbox, options),
+                expected,
+                "{bbox:?} {options:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_where_clause_composes_with_a_scattered_box() {
+    let (_dir, gpkg) = scattered(2000);
+    let layer = gpkg.layer("pts").unwrap();
+    let bbox = BoundingBox::new(20.0, 20.0, 70.0, 70.0);
+    let mut expected: Vec<i64> = row_fids(&gpkg, bbox)
+        .into_iter()
+        .filter(|fid| fid % 3 == 0)
+        .collect();
+    expected.sort_unstable();
+    for batch_size in [5, 100, 65_536] {
+        let mut fids = Vec::new();
+        for batch in layer
+            .read_arrow_in_where(
+                bbox,
+                "fid % ?1 = 0",
+                &[geopackage::ValueRef::Integer(3)],
+                ArrowReadOptions::with_batch_size(batch_size),
+            )
+            .unwrap()
+        {
+            let batch = batch.unwrap();
+            fids.extend(
+                batch
+                    .column_by_name("fid")
+                    .unwrap()
+                    .as_primitive::<arrow_array::types::Int64Type>()
+                    .iter()
+                    .map(Option::unwrap),
+            );
+        }
+        assert_eq!(fids, expected, "batch size {batch_size}");
+    }
 }
