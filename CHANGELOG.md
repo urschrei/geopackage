@@ -40,6 +40,16 @@ While the version is below 1.0 the API may change in any release.
   check, and layer export. It supports QGIS 3.28 to 4.x. Its tests run
   headless in CI. `scripts/package_qgis_plugin.py` and the `qgis-plugin`
   workflow build one zip with the native module for each platform.
+- The QGIS plugin registers a vector data provider, `geopackage_rs`, that
+  reads and edits GeoPackage layers through `geopackage-py` in place of OGR,
+  with OGR's URI form. Bounding-box requests use the RTree, subset strings
+  are SQLite `WHERE` clauses, attribute subsets and no-geometry requests are
+  column projections, and edit sessions add, delete and change features.
+  Field changes are not offered, since the crate has no schema changes. Its
+  tests compare it feature by feature with OGR on GDAL-written fixtures,
+  commit an edit session and check the result with the crate and with OGR,
+  render a map on worker threads, and save and reopen a project with a
+  relative path.
 
 - `geopackage_core::triggers::missing_triggers` returns the 1.4 suffixes of
   the trigger jobs that a set of trigger names leaves undone. Its result is
