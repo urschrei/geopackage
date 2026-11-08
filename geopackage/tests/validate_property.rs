@@ -494,7 +494,9 @@ fn corrupt(tc: &hegel::TestCase, gpkg: &GeoPackage, defect: usize) -> Key {
             expect("LegacyApplicationId", None)
         }
         8 => {
-            // A pre-1.4 set, or a mixed set when the 1.4 triggers stay.
+            // A mixed set, or a complete pre-1.4 set when the 1.4-only
+            // triggers go and `update3` takes over `update5`'s job. Without
+            // `update3` the set would be incomplete, which is Stale.
             sql(
                 gpkg,
                 "CREATE TRIGGER rtree_legacy_geom_update1 AFTER UPDATE ON legacy \
@@ -505,7 +507,9 @@ fn corrupt(tc: &hegel::TestCase, gpkg: &GeoPackage, defect: usize) -> Key {
                     gpkg,
                     "DROP TRIGGER rtree_legacy_geom_update5; \
                      DROP TRIGGER rtree_legacy_geom_update6; \
-                     DROP TRIGGER rtree_legacy_geom_update7",
+                     DROP TRIGGER rtree_legacy_geom_update7; \
+                     CREATE TRIGGER rtree_legacy_geom_update3 AFTER UPDATE ON legacy \
+                     BEGIN SELECT 1; END",
                 );
             }
             expect("LegacySpatialIndexTriggers", Some("legacy"))
@@ -608,7 +612,9 @@ fn corrupt(tc: &hegel::TestCase, gpkg: &GeoPackage, defect: usize) -> Key {
             expect("TableNameCaseMismatch", Some("CasePts"))
         }
         23 => {
-            // The virtual table without its triggers, or the reverse.
+            // The triggers without the virtual table, or the virtual table
+            // without some or all of its triggers: one missing trigger is as
+            // stale as seven.
             if tc.draw(generators::booleans()) {
                 sql(gpkg, "DROP TABLE rtree_stale_geom");
             } else {
@@ -624,7 +630,15 @@ fn corrupt(tc: &hegel::TestCase, gpkg: &GeoPackage, defect: usize) -> Key {
                     .collect::<rusqlite::Result<_>>()
                     .unwrap();
                 assert!(!triggers.is_empty());
-                for trigger in triggers {
+                let mut dropped: Vec<&String> = triggers
+                    .iter()
+                    .filter(|_| tc.draw(generators::booleans()))
+                    .collect();
+                if dropped.is_empty() {
+                    dropped.extend(triggers.first());
+                }
+                tc.event(format!("dropped {} of {}", dropped.len(), triggers.len()));
+                for trigger in dropped {
                     sql(gpkg, &format!("DROP TRIGGER {trigger}"));
                 }
             }

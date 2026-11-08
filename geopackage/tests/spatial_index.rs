@@ -471,6 +471,147 @@ fn repair_on_v1_4_is_a_noop() {
     assert_eq!(generation(conn), TriggerGeneration::V1_4);
 }
 
+/// The 1.4 trigger suffixes, as `create_spatial_index` installs them.
+const V1_4_TRIGGERS: [&str; 7] = [
+    "insert", "update2", "update4", "update5", "update6", "update7", "delete",
+];
+
+fn bbox_fids(layer: &geopackage::Layer<'_>, bbox: BoundingBox) -> Vec<i64> {
+    let mut fids: Vec<i64> = layer
+        .features_in(bbox)
+        .unwrap()
+        .map(|f| f.unwrap().fid())
+        .collect();
+    fids.sort_unstable();
+    fids
+}
+
+/// Losing any one trigger makes the index stale at once: it is not used for
+/// queries, so writes the missing trigger lets past cannot produce wrong
+/// rows, `validate` reports it before any write has drifted, and
+/// `repair_spatial_index` reinstalls the whole set. Before the completeness
+/// check, each of these classified as `Current` from the names that were
+/// left, queries used the index, and repair was a no-op.
+#[test]
+fn an_index_missing_any_one_trigger_is_stale_and_repairable() {
+    for missing in V1_4_TRIGGERS {
+        let gpkg = in_memory_with_points(&[(1, 0.0, 0.0), (2, 50.0, 50.0)]);
+        let layer = gpkg.layer("pts").unwrap();
+        layer.create_spatial_index().unwrap();
+        let conn = gpkg.connection();
+        conn.execute_batch(&format!("DROP TRIGGER \"rtree_pts_geom_{missing}\""))
+            .unwrap();
+
+        assert_eq!(
+            layer.spatial_index_status().unwrap(),
+            SpatialIndexStatus::Stale,
+            "without {missing}"
+        );
+        assert!(!layer.has_spatial_index().unwrap(), "without {missing}");
+        let findings = gpkg.validate().unwrap();
+        assert!(
+            findings.iter().any(|f| matches!(
+                f,
+                geopackage::Finding::StaleSpatialIndex { table_name } if table_name == "pts"
+            )),
+            "without {missing}: {findings:?}"
+        );
+
+        // One write of each kind, so whichever trigger is missing, some write
+        // reaches the table without reaching the index.
+        conn.execute(
+            "INSERT INTO pts (fid, name, geom) VALUES (3, 'c', ?1)",
+            [gpb_point(4326, 52.0, 52.0)],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE pts SET geom = ?1 WHERE fid = 1",
+            [gpb_point(4326, 51.0, 49.0)],
+        )
+        .unwrap();
+        conn.execute("UPDATE pts SET fid = 4 WHERE fid = 3", [])
+            .unwrap();
+        conn.execute(
+            "UPDATE pts SET geom = ?1 WHERE fid = 4",
+            [gpb_empty_point(4326)],
+        )
+        .unwrap();
+        // Not followed by an empty-to-non-empty update of the same row: with
+        // `update2` gone, the emptied row's entry is still in the tree, and
+        // `update7`'s plain INSERT then fails on the UNIQUE id. A partial set
+        // can make writes fail, not just drift.
+        conn.execute(
+            "INSERT INTO pts (fid, name, geom) VALUES (5, 'e', ?1)",
+            [gpb_point(4326, 55.0, 55.0)],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM pts WHERE fid = 2", []).unwrap();
+
+        let bbox = BoundingBox::new(40.0, 40.0, 60.0, 60.0);
+        assert_eq!(bbox_fids(&layer, bbox), [1, 5], "scan without {missing}");
+
+        layer.repair_spatial_index().unwrap();
+        assert_eq!(
+            layer.spatial_index_status().unwrap(),
+            SpatialIndexStatus::Current,
+            "after repairing {missing}"
+        );
+        let mut expected: Vec<String> = V1_4_TRIGGERS
+            .iter()
+            .map(|s| format!("rtree_pts_geom_{s}"))
+            .collect();
+        expected.sort();
+        assert_eq!(trigger_names(conn), expected);
+        assert_eq!(rtree_rows(conn), envelope_scan(conn));
+        assert!(layer.audit_spatial_index().unwrap().is_consistent());
+        assert!(layer.has_spatial_index().unwrap());
+        assert_eq!(bbox_fids(&layer, bbox), [1, 5], "index after {missing}");
+    }
+}
+
+/// A complete set with a stray legacy trigger is mixed, which is `Legacy`
+/// and still used: every write is maintained, by both generations.
+#[test]
+fn a_complete_set_with_a_stray_legacy_trigger_is_legacy() {
+    let gpkg = in_memory_with_points(&[(1, 0.0, 0.0)]);
+    let layer = gpkg.layer("pts").unwrap();
+    layer.create_spatial_index().unwrap();
+    gpkg.connection()
+        .execute_batch(
+            "CREATE TRIGGER rtree_pts_geom_update1 AFTER UPDATE OF geom ON pts \
+             BEGIN SELECT 1; END",
+        )
+        .unwrap();
+    assert_eq!(
+        layer.spatial_index_status().unwrap(),
+        SpatialIndexStatus::Legacy
+    );
+    assert!(layer.has_spatial_index().unwrap());
+}
+
+/// Partial damage to both halves, a missing trigger and a missing virtual
+/// table, is stale, and repair puts back both.
+#[test]
+fn a_partial_set_without_its_table_is_stale_and_repairable() {
+    let gpkg = in_memory_with_points(&[(1, 0.0, 0.0), (2, 5.0, 5.0)]);
+    let layer = gpkg.layer("pts").unwrap();
+    layer.create_spatial_index().unwrap();
+    let conn = gpkg.connection();
+    conn.execute_batch("DROP TRIGGER rtree_pts_geom_insert; DROP TABLE rtree_pts_geom;")
+        .unwrap();
+    assert_eq!(
+        layer.spatial_index_status().unwrap(),
+        SpatialIndexStatus::Stale
+    );
+    layer.repair_spatial_index().unwrap();
+    assert_eq!(
+        layer.spatial_index_status().unwrap(),
+        SpatialIndexStatus::Current
+    );
+    assert!(table_exists(conn, "rtree_pts_geom"));
+    assert_eq!(rtree_rows(conn), envelope_scan(conn));
+}
+
 #[test]
 fn repair_without_index_errors() {
     let (_dir, gpkg) = gpkg_with_points(&[(1, 1.0, 1.0)]);

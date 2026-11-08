@@ -85,8 +85,9 @@ pub enum Finding {
         /// The indexed table.
         table_name: String,
     },
-    /// A spatial index with its virtual table but no triggers, or with
-    /// triggers but no virtual table (see [`SpatialIndexStatus::Stale`]).
+    /// A spatial index with its virtual table but none or only some of its
+    /// triggers, or with triggers but no virtual table (see
+    /// [`SpatialIndexStatus::Stale`]).
     StaleSpatialIndex {
         /// The indexed table.
         table_name: String,

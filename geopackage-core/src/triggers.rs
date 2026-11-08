@@ -142,9 +142,15 @@ pub fn drop_legacy_triggers_sql(table: &str, column: &str) -> Result<[String; 2]
 }
 
 /// Which generation of rtree triggers is present for a table/column pair.
+///
+/// The generation says which trigger *names* are present, not that the set is
+/// complete: a 1.4 set that has lost its `insert` trigger is still
+/// [`TriggerGeneration::V1_4`]. [`missing_triggers`] answers the completeness
+/// question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerGeneration {
-    /// The 1.4 set (`update5`/`update6`/`update7` present, no legacy triggers).
+    /// 1.4 triggers present (any of `update5`/`update6`/`update7`), and no
+    /// legacy triggers.
     V1_4,
     /// A pre-1.4 set (`update1` and/or `update3` present, no 1.4 triggers).
     /// The buggy (≤1.2.0) and fixed (1.2.1–1.3.1) `update3` bodies share a
@@ -182,6 +188,52 @@ pub fn classify_triggers<'a>(
         (false, true) => TriggerGeneration::V1_4,
         (false, false) => TriggerGeneration::None,
     }
+}
+
+/// The seven jobs an RTree trigger set does, each with the trigger names that
+/// do it: the 1.4 name first, then the pre-1.4 name that did the same job.
+///
+/// Pre-1.4 `update1` handled every same-id update to a non-empty geometry,
+/// which 1.4 split into `update6` (non-empty to non-empty) and `update7`
+/// (empty to non-empty). `update3`, the id-changing update, became `update5`.
+/// `insert`, `update2`, `update4` and `delete` kept their names.
+const TRIGGER_ROLES: [&[&str]; 7] = [
+    &["insert"],
+    &["update2"],
+    &["update4"],
+    &["update5", "update3"],
+    &["update6", "update1"],
+    &["update7", "update1"],
+    &["delete"],
+];
+
+/// Returns the 1.4 suffixes (`insert`, `update2`, ... `delete`) of the
+/// triggers whose job no trigger in `names` does, for `table`/`column`. An
+/// empty result means the set is complete.
+///
+/// A complete set keeps the index in step with every write; an incomplete one
+/// lets some writes past, so the index silently drifts from the table. The
+/// check is by role rather than exact name, so a complete pre-1.4 set
+/// (`insert`, `update1` to `update4`, `delete`) and a complete mixed set are
+/// both complete. Like [`classify_triggers`], it reads names only: a trigger
+/// with the right name and the wrong body passes, and
+/// `Layer::audit_spatial_index` in the `geopackage` crate is what finds the
+/// drift such a trigger causes.
+pub fn missing_triggers<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    table: &str,
+    column: &str,
+) -> Vec<&'static str> {
+    let base = rtree_table_name(table, column);
+    let present: Vec<&str> = names
+        .into_iter()
+        .filter_map(|n| n.strip_prefix(&base).and_then(|s| s.strip_prefix('_')))
+        .collect();
+    TRIGGER_ROLES
+        .iter()
+        .filter(|role| !role.iter().any(|name| present.contains(name)))
+        .filter_map(|role| role.first().copied())
+        .collect()
 }
 
 fn quoted(table: &str, column: &str, pk: &str) -> Result<(String, String, String, String), Error> {
@@ -243,5 +295,82 @@ mod tests {
             TriggerGeneration::Mixed
         );
         assert_eq!(t(&["rtree_other_geom_update6"]), TriggerGeneration::None);
+    }
+
+    const V1_4: [&str; 7] = [
+        "insert", "update2", "update4", "update5", "update6", "update7", "delete",
+    ];
+
+    fn names(suffixes: &[&str]) -> Vec<String> {
+        suffixes
+            .iter()
+            .map(|s| format!("rtree_roads_geom_{s}"))
+            .collect()
+    }
+
+    fn missing(suffixes: &[&str]) -> Vec<&'static str> {
+        let names = names(suffixes);
+        missing_triggers(names.iter().map(String::as_str), "roads", "geom")
+    }
+
+    /// Every subset of the 1.4 set: only the whole set is complete, and each
+    /// subset is missing exactly the triggers it leaves out.
+    #[test]
+    fn every_partial_1_4_set_is_incomplete() {
+        for mask in 0u32..(1 << V1_4.len()) {
+            let (present, absent): (Vec<_>, Vec<_>) = V1_4
+                .iter()
+                .enumerate()
+                .partition(|(i, _)| mask & (1 << i) != 0);
+            let present: Vec<&str> = present.into_iter().map(|(_, s)| *s).collect();
+            let absent: Vec<&str> = absent.into_iter().map(|(_, s)| *s).collect();
+            assert_eq!(missing(&present), absent, "present: {present:?}");
+        }
+    }
+
+    #[test]
+    fn complete_legacy_and_mixed_sets_are_complete() {
+        let pre_1_4 = [
+            "insert", "update1", "update2", "update3", "update4", "delete",
+        ];
+        assert_eq!(missing(&pre_1_4), Vec::<&str>::new());
+        assert_eq!(
+            classify_triggers(names(&pre_1_4).iter().map(String::as_str), "roads", "geom"),
+            TriggerGeneration::PreV1_4
+        );
+        // A 1.4 set with a stray legacy trigger, and a half-upgraded set.
+        let mut with_stray = V1_4.to_vec();
+        with_stray.push("update1");
+        assert_eq!(missing(&with_stray), Vec::<&str>::new());
+        let half = [
+            "insert", "update2", "update3", "update4", "update6", "update7", "delete",
+        ];
+        assert_eq!(missing(&half), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn incomplete_legacy_sets_are_incomplete() {
+        // No update1: same-id updates of a non-empty geometry go unindexed.
+        let no_update1 = ["insert", "update2", "update3", "update4", "delete"];
+        assert_eq!(missing(&no_update1), ["update6", "update7"]);
+        // update6 alone does not stand in for update1's other job.
+        let no_update7 = [
+            "insert", "update2", "update3", "update4", "update6", "delete",
+        ];
+        assert_eq!(missing(&no_update7), ["update7"]);
+    }
+
+    #[test]
+    fn other_tables_and_unknown_suffixes_do_not_count() {
+        let mut other: Vec<String> = V1_4
+            .iter()
+            .map(|s| format!("rtree_other_geom_{s}"))
+            .collect();
+        other.push("rtree_roads_geom_foo".to_owned());
+        other.push("rtree_roads_geometry_insert".to_owned());
+        assert_eq!(
+            missing_triggers(other.iter().map(String::as_str), "roads", "geom"),
+            V1_4.to_vec()
+        );
     }
 }

@@ -66,18 +66,23 @@ pub enum SpatialIndexStatus {
     /// No spatial index: neither the virtual table nor any RTree trigger is
     /// present. Build one with [`Layer::create_spatial_index`].
     Absent,
-    /// A complete, current index: the virtual table exists and has the
+    /// A complete, current index: the virtual table exists and has the whole
     /// GeoPackage 1.4 trigger set. [`Layer::features_in`] uses it.
     Current,
-    /// An index maintained by a legacy (pre-1.4) or mixed trigger set. It is
-    /// usable, but the pre-1.4 `update1` trigger corrupts the index under
+    /// An index maintained by a complete legacy (pre-1.4) or mixed trigger
+    /// set. It is usable, but the pre-1.4 `update1` trigger corrupts the index under
     /// `UPSERT`. [`Layer::repair_spatial_index`] upgrades it to the 1.4 set.
     Legacy,
-    /// A desynchronised index: the virtual table exists but its triggers are
-    /// missing (or triggers exist with no table). A bulk [`Layer::write_all`]
-    /// drops the triggers, inserts the rows, rebuilds the index and reinstalls
-    /// the triggers in one transaction, so an interrupted call rolls back to
-    /// the state before it. The state can come from a file another tool wrote,
+    /// A desynchronised index: the virtual table exists but some or all of
+    /// its triggers are missing (or triggers exist with no table). A set
+    /// missing even one trigger is stale: the writes it handled have been
+    /// reaching the table and not the index, so the index cannot be trusted
+    /// ([`missing_triggers`](crate::core::triggers::missing_triggers) names
+    /// what is missing).
+    ///
+    /// A bulk [`Layer::write_all`] drops the triggers, inserts the rows,
+    /// rebuilds the index and reinstalls the triggers in one transaction, so
+    /// an interrupted call rolls back to the state before it. The state can come from a file another tool wrote,
     /// or from SQL run directly against the connection. It can also come from
     /// committing a transaction you opened after a bulk `write_all` inside it
     /// failed, because the failed call leaves its partial work staged there
@@ -166,16 +171,18 @@ impl Layer<'_> {
         let conn = self.gpkg().connection();
         let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
         let rtree_exists = table_exists(conn, &rtree)?;
-        let generation = self.classify_rtree_triggers(&geom.column_name)?;
+        let (generation, missing) = self.rtree_triggers(&geom.column_name)?;
+        let complete = missing.is_empty();
         Ok(match (rtree_exists, generation) {
             (false, TriggerGeneration::None) => SpatialIndexStatus::Absent,
-            (true, TriggerGeneration::V1_4) => SpatialIndexStatus::Current,
-            (true, TriggerGeneration::PreV1_4 | TriggerGeneration::Mixed) => {
+            (true, TriggerGeneration::V1_4) if complete => SpatialIndexStatus::Current,
+            (true, TriggerGeneration::PreV1_4 | TriggerGeneration::Mixed) if complete => {
                 SpatialIndexStatus::Legacy
             }
-            // Virtual table without triggers (interrupted bulk build), or
-            // triggers without a table: a desynchronised, repairable index.
-            (true, TriggerGeneration::None) | (false, _) => SpatialIndexStatus::Stale,
+            // A virtual table with no triggers (an interrupted bulk build) or
+            // only some (writes have been getting past it), or triggers with
+            // no table: a desynchronised, repairable index.
+            _ => SpatialIndexStatus::Stale,
         })
     }
 
@@ -322,12 +329,13 @@ impl Layer<'_> {
     /// Repairs every state except a healthy or an absent index (see
     /// [`SpatialIndexStatus`]):
     ///
-    /// - [`SpatialIndexStatus::Current`]: already the 1.4 set with its virtual
-    ///   table. This is a no-op.
-    /// - [`SpatialIndexStatus::Legacy`]: a pre-1.4 or mixed trigger set. Drops
-    ///   every RTree trigger, installs the 1.4 set and rebuilds the content.
-    /// - [`SpatialIndexStatus::Stale`]: a virtual table with missing triggers,
-    ///   or orphaned triggers with no table. Runs the same rebuild, which makes
+    /// - [`SpatialIndexStatus::Current`]: already the whole 1.4 set with its
+    ///   virtual table. This is a no-op.
+    /// - [`SpatialIndexStatus::Legacy`]: a complete pre-1.4 or mixed trigger
+    ///   set. Drops every RTree trigger, installs the 1.4 set and rebuilds the
+    ///   content.
+    /// - [`SpatialIndexStatus::Stale`]: a virtual table with some or all of its
+    ///   triggers missing, or orphaned triggers with no table. Runs the same rebuild, which makes
     ///   the index consistent and 1.4-current again.
     /// - [`SpatialIndexStatus::Absent`]: there is nothing to repair, so this
     ///   returns [`Error::NoSpatialIndex`]. Use [`Self::create_spatial_index`].
@@ -345,27 +353,19 @@ impl Layer<'_> {
         self.gpkg().check_writable(self.table_name())?;
         let geom = self.require_geometry_column()?;
         let pk = self.require_primary_key()?;
-        let conn = self.gpkg().connection();
-        let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
-        let generation = self.classify_rtree_triggers(&geom.column_name)?;
-        let rtree_exists = table_exists(conn, &rtree)?;
-
-        // A current, complete index needs nothing.
-        if generation == TriggerGeneration::V1_4 && rtree_exists {
-            return Ok(());
-        }
-        // Truly absent: no triggers and no virtual table.
-        if generation == TriggerGeneration::None && !rtree_exists {
-            return Err(Error::NoSpatialIndex {
+        // Decided from the status, so a repair and a read never disagree about
+        // whether an index needs one.
+        match self.spatial_index_status()? {
+            SpatialIndexStatus::Current => Ok(()),
+            SpatialIndexStatus::Absent => Err(Error::NoSpatialIndex {
                 table_name: self.table_name().to_owned(),
                 column_name: geom.column_name.clone(),
-            });
+            }),
+            // Everything else is repairable by rebuilding: a legacy or mixed
+            // trigger set, a virtual table with none or only some of its
+            // triggers, or orphaned triggers with no table.
+            _ => self.rebuild_index_impl(geom, pk),
         }
-
-        // Everything else is repairable by rebuilding: a legacy/mixed trigger
-        // set, a stale index left by an interrupted bulk build (a virtual table
-        // with no triggers), or orphaned triggers with no table.
-        self.rebuild_index_impl(geom, pk)
     }
 
     /// Rebuilds the RTree spatial index from the geometries, whatever state
@@ -373,8 +373,8 @@ impl Layer<'_> {
     /// virtual table and repopulates it, in one transaction.
     ///
     /// [`Self::repair_spatial_index`] is the cheap operation. It only checks
-    /// structure, so it does nothing when the virtual table and the 1.4
-    /// triggers are both present, which says nothing about the entries. Use
+    /// structure, so it does nothing when the virtual table and the whole 1.4
+    /// trigger set are present, which says nothing about the entries. Use
     /// this method when an index's *contents* are in doubt.
     /// [`Self::audit_spatial_index`] checks them.
     ///
@@ -390,11 +390,7 @@ impl Layer<'_> {
     pub fn rebuild_spatial_index(&self) -> Result<()> {
         let geom = self.require_geometry_column()?;
         let pk = self.require_primary_key()?;
-        let conn = self.gpkg().connection();
-        let rtree = triggers::rtree_table_name(self.table_name(), &geom.column_name);
-        if !table_exists(conn, &rtree)?
-            && self.classify_rtree_triggers(&geom.column_name)? == TriggerGeneration::None
-        {
+        if self.spatial_index_status()? == SpatialIndexStatus::Absent {
             return Err(Error::NoSpatialIndex {
                 table_name: self.table_name().to_owned(),
                 column_name: geom.column_name.clone(),

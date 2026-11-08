@@ -25,11 +25,46 @@ While the version is below 1.0 the API may change in any release.
   headless in CI. `scripts/package_qgis_plugin.py` and the `qgis-plugin`
   workflow build one zip with the native module for each platform.
 
+- `geopackage_core::triggers::missing_triggers` returns the 1.4 suffixes of
+  the trigger jobs that a set of trigger names leaves undone. Its result is
+  empty for a complete set.
+
 ### Changed
 
 - The workspace requires `arrow-array` 60.1. `geopackage-ffi` uses
   `RecordBatchStreamReader`, the new name of `ffi_stream::ArrowArrayStreamReader`,
   which 60.1 deprecates and which CI's `-D warnings` rejects.
+
+### Fixed
+
+- A spatial index that had lost some of its triggers was reported as
+  `SpatialIndexStatus::Current` (or `Legacy`), because the status was decided
+  from which trigger names were present, and any one of `update5`, `update6`
+  or `update7` passed for the whole 1.4 set. `has_spatial_index` then
+  answered `true`, so `features_in`, the Arrow bbox reads and the bulk-write
+  decision used an index that writes were getting past: after dropping only
+  the `insert` trigger, a bounding-box query missed every row inserted since.
+  `repair_spatial_index` and `gpkg repair` did nothing to it, and `validate`
+  was silent until the index had drifted. Such an index is now
+  `SpatialIndexStatus::Stale`. Reads fall back to a full scan, `validate`
+  reports `StaleSpatialIndex` straight away, and repair reinstalls the whole
+  set and rebuilds the content. A missing trigger can also make writes fail:
+  without `update2`, an emptied geometry keeps its entry, and a later update
+  back to a non-empty geometry hits `update7`'s UNIQUE id.
+  - `has_spatial_index`, `repair_spatial_index` and `rebuild_spatial_index`
+    now decide from `spatial_index_status`, so they cannot disagree with it.
+  - A large `write_all` into such a layer now takes the per-row path, as it
+    already did for a stale index with no triggers. It used to take the bulk
+    path, which reinstalled the whole trigger set as a side effect. Repair
+    is never automatic, so the index stays stale until you repair it.
+  - Completeness is by role, not exact name. A complete pre-1.4 set
+    (`insert`, `update1` to `update4`, `delete`) is still `Legacy`, and so is
+    a complete mixed set. Trigger bodies are not inspected. A trigger with the
+    right name and the wrong body passes, and `audit_spatial_index` finds the
+    drift it causes.
+  - The book said a `Legacy` index is not used for queries. It is, as the API
+    documentation says; the book now agrees.
+
 
 ## [0.13.0] - 2026-10-18
 

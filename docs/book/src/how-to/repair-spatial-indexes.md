@@ -1,8 +1,10 @@
 # How to repair a file's spatial indexes
 
 An index in a file you receive may be maintained by a pre-1.4 trigger set, or
-may have lost its triggers entirely. This library trusts neither for queries,
-so bounding-box reads fall back to a full scan until the index is repaired.
+may have lost some or all of its triggers. This library does not trust an index
+that has lost triggers for queries, so bounding-box reads fall back to a full
+scan until the index is repaired. A complete pre-1.4 set is still used, but
+corrupts the index under `UPSERT`.
 This guide shows you how to repair it.
 
 Repair is never automatic. The library rewrites an existing trigger set only
@@ -70,7 +72,7 @@ without doing anything when the index is already current, and fails with
 
 `spatial_index_status` checks only the structure. It cannot tell whether the
 entries agree with the geometries. An index can be `Current` and still be
-wrong if rows were written while the triggers were absent, or if another tool
+wrong if another tool wrote rows with the triggers disabled, or
 populated it incompletely. To check the contents, audit the index:
 
 ```rust,no_run

@@ -570,6 +570,7 @@ pub fn geopackage_core::triggers::classify_triggers<'a>(impl core::iter::traits:
 pub fn geopackage_core::triggers::create_rtree_table_sql(&str, &str) -> core::result::Result<alloc::string::String, geopackage_core::Error>
 pub fn geopackage_core::triggers::create_triggers_sql(&str, &str, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, geopackage_core::Error>
 pub fn geopackage_core::triggers::drop_legacy_triggers_sql(&str, &str) -> core::result::Result<[alloc::string::String; 2], geopackage_core::Error>
+pub fn geopackage_core::triggers::missing_triggers<'a>(impl core::iter::traits::collect::IntoIterator<Item = &'a str>, &str, &str) -> alloc::vec::Vec<&'static str>
 pub fn geopackage_core::triggers::populate_rtree_sql(&str, &str, &str) -> core::result::Result<alloc::string::String, geopackage_core::Error>
 pub fn geopackage_core::triggers::rtree_table_name(&str, &str) -> alloc::string::String
 pub mod geopackage_core::types
