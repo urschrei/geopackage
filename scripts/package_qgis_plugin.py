@@ -97,6 +97,10 @@ def main():
             if path.is_dir() or "__pycache__" in path.parts or "ext-libs" in path.parts:
                 continue
             out.write(path, relative.as_posix())
+        # The licence texts that gpkg_toolkit/LICENSE names, from the
+        # repository's root.
+        for name in ("LICENSE-APACHE", "LICENSE-MIT"):
+            out.write(ROOT / name, f"gpkg_toolkit/{name}")
         for wheel in args.wheels:
             platform = platform_dir(wheel.name)
             if platform in seen:
