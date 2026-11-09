@@ -15,6 +15,7 @@
 - [How to read a layer as Arrow record batches](how-to/read-arrow.md)
 - [How to read values from a coverage](how-to/coverage-values.md)
 - [How to validate a GeoPackage and act on the findings](how-to/validate.md)
+- [How to install the QGIS plugin and add a layer through it](how-to/qgis-plugin.md)
 
 # Explanation
 
@@ -27,3 +28,4 @@
 # Reference
 
 - [Reference](reference.md)
+- [QGIS plugin reference](qgis-plugin-reference.md)
