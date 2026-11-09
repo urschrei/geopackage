@@ -10,7 +10,13 @@ from gpkg_toolkit import native_provider
 from gpkg_toolkit.data_provider import PROVIDER_KEY, register
 
 BUILT = os.environ.get(native_provider.ENV) or os.path.join(
-    os.path.dirname(__file__), "..", "..", "geopackage-qgis", "target", "release", native_provider.LIBRARY
+    os.path.dirname(__file__),
+    "..",
+    "..",
+    "geopackage-qgis",
+    "target",
+    "release",
+    native_provider.LIBRARY,
 )
 
 
@@ -63,7 +69,8 @@ def _loadable():
 
 
 @pytest.mark.skipif(
-    not os.path.isfile(BUILT) or not _loadable(), reason="no native provider build for this QGIS"
+    not os.path.isfile(BUILT) or not _loadable(),
+    reason="no native provider build for this QGIS",
 )
 def test_a_build_for_another_qgis_is_refused(fresh, monkeypatch):
     monkeypatch.setattr(native_provider, "running_version", lambda: (9, 99))
@@ -72,7 +79,8 @@ def test_a_build_for_another_qgis_is_refused(fresh, monkeypatch):
 
 
 @pytest.mark.skipif(
-    not os.path.isfile(BUILT) or not _loadable(), reason="no native provider build for this QGIS"
+    not os.path.isfile(BUILT) or not _loadable(),
+    reason="no native provider build for this QGIS",
 )
 def test_the_python_provider_keeps_a_key_it_holds():
     # The plugin registers the native provider first; registered second, it
