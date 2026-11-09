@@ -10,15 +10,16 @@ It's experimental, as the crate is. Work on copies.
 
 | Algorithm | Group | What it does |
 |---|---|---|
-| Validate GeoPackage | Inspect and repair | `GeoPackage.validate`: findings, most severe first, each with its repair. Read-only. |
+| Validate GeoPackage | Inspect and repair | `GeoPackage.validate`: findings, most severe first, each with its repair and the algorithm here that makes it. Read-only. |
 | Repair spatial indexes | Inspect and repair | Audits each RTree. Replaces legacy (pre-1.4 or mixed) and stale trigger sets, rebuilds indexes that are out of step with their table, and optionally builds missing ones. **Modifies the file.** |
+| Repair geometry and datetime encodings | Inspect and repair | Rewrites geometries whose WKB gives Z or M by a high-bit flag in a type code with ISO type codes, and `DATETIME` text in another ISO 8601 form (such as `2017-08-01T00:00:00.0Z`) in the GeoPackage form, where nothing is lost. **Modifies the file.** |
 | List extensions | Inspect and repair | `gpkg_extensions`, each row classified as implemented, known, removed or unrecognised. |
 | Sample coverage at points | Coverages | Nearest or bilinear value lookups in a tiled gridded coverage, with points reprojected into the coverage's CRS. |
 | Coverage tile statistics | Coverages | Tile footprints with their recorded statistics and the statistics calculated from the decoded samples. |
 | Check coverage samples (Requirement 21) | Coverages | Decodes every tile and reports NaN or infinite samples, which a header-only validator can't see. |
 | Export layer to GeoPackage | Import and export | Bulk-writes any vector layer through the crate's writer and bulk RTree build, into a new file or a new table in an existing one. |
 
-The first three are also on the Plugins menu.
+The first four are also on the Plugins menu.
 
 ## Data provider
 
