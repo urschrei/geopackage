@@ -8,6 +8,12 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- The QGIS plugin ships the native provider for QGIS 4.0 on Windows. The
+  Windows builds for QGIS 4.0 and 4.2 link the `qgis_core.lib` of OSGeo4W's
+  `qgis-devel` package for the same release.
+
 ## [0.14.1] - 2026-11-09
 
 This release changes the QGIS plugin and the scripts that build it. The

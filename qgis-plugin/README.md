@@ -74,8 +74,8 @@ rows through the bindings alone takes about a quarter of the provider's time
 From a release: download `gpkg_toolkit-<version>.zip` and use *Plugins →
 Manage and Install Plugins → Install from ZIP*. The zip holds the native
 module for Linux x86_64 and aarch64, macOS (universal2) and Windows x86_64,
-in `ext-libs/`, and the native provider for QGIS 4.0 and 4.2 on each (on
-Windows, 4.2 only), in `ext-libs/<platform>/qgis-<version>/`.
+in `ext-libs/`, and the native provider for QGIS 4.0 and 4.2 on each, in
+`ext-libs/<platform>/qgis-<version>/`.
 
 Supports QGIS 3.28 and later, including QGIS 4. The `compat` module resolves
 the enums that moved between them.
@@ -121,5 +121,5 @@ build. `geopackage-qgis/README.md` has the steps.
   the crate has them.
 - Coverage writing from a raster layer, once the crate has a TIFF encoder path
   exposed for float coverages.
-- Native provider builds for each new QGIS minor version, and for Windows on
-  QGIS 4.0 (see `geopackage-qgis/README.md`).
+- Native provider builds for each new QGIS minor version (see
+  `geopackage-qgis/README.md`).
