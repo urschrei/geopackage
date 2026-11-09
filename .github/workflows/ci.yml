@@ -139,7 +139,15 @@ jobs:
           channels: conda-forge
           conda-remove-defaults: "true"
           python-version: "3.13"
-      - run: conda install -y "qgis=4.2" pytest maturin
+      # On Windows, conda-forge's QGIS 4.2.3 imports a protobuf symbol
+      # mangled with abseil's lts_20260526, and the solver otherwise picks a
+      # libprotobuf built with a newer abseil, so qgis._core fails to load
+      # ("The specified procedure could not be found"). Pin abseil to the
+      # version QGIS was built with.
+      - run: |
+          extra=""
+          if [ "$RUNNER_OS" = Windows ]; then extra="libabseil=20260526"; fi
+          conda install -y "qgis=4.2" pytest maturin $extra
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -148,16 +156,12 @@ jobs:
           workspaces: |
             . -> target
             geopackage-qgis -> target
-      # QGIS and Qt as conda installs them: under Library on Windows. There
-      # the qgis package's bash activation script joins PYTHONPATH with ':',
-      # which Windows' Python doesn't split on, so its bindings are put on
-      # the path here, with ';'. On Linux, the SQLite that the module and the
-      # provider link is conda's, the one conda's QGIS loads; on macOS,
-      # scripts/host_sqlite.py gives it.
+      # QGIS and Qt as conda installs them: under Library on Windows. On
+      # Linux, the SQLite that the module and the provider link is conda's,
+      # the one conda's QGIS loads; on macOS, scripts/host_sqlite.py gives it.
       - run: |
           if [ "$RUNNER_OS" = Windows ]; then
             echo "QT_DIR=$CONDA_PREFIX/Library" >> "$GITHUB_ENV"
-            echo "PYTHONPATH=$CONDA_PREFIX\\Library\\python;$CONDA_PREFIX\\Library\\python\\plugins" >> "$GITHUB_ENV"
           else
             echo "QT_DIR=$CONDA_PREFIX" >> "$GITHUB_ENV"
           fi
@@ -179,11 +183,33 @@ jobs:
       - run: cargo build --release --manifest-path geopackage-qgis/Cargo.toml
       - run: |
           python scripts/host_sqlite.py --check "geopackage-qgis/target/release/${{ matrix.library }}" dist/*.whl
-      - run: |
+      - if: runner.os != 'Windows'
+        run: |
           export GPKG_TOOLKIT_NATIVE_PROVIDER="$PWD/geopackage-qgis/target/release/${{ matrix.library }}"
           python -X faulthandler -m pytest qgis-plugin/tests -rs
         env:
           QT_QPA_PLATFORM: offscreen
+      # On Windows, conda's QGIS is set up for cmd: its bash activation script
+      # joins PYTHONPATH with ':', which Windows' Python doesn't split on, and
+      # Git Bash's PATH carries mingw builds of DLLs that QGIS's bindings then
+      # load in place of conda's. cmd runs the package's .bat activation.
+      - if: runner.os == 'Windows'
+        shell: cmd /C CALL {0}
+        run: |
+          set "GPKG_TOOLKIT_NATIVE_PROVIDER=%CD%\geopackage-qgis\target\release\${{ matrix.library }}"
+          python -c "import qgis.core; print(qgis.core.Qgis.version())" || exit /b 1
+          python -X faulthandler -m pytest qgis-plugin/tests -rs
+        env:
+          QT_QPA_PLATFORM: offscreen
+      # Which copies of QGIS's and Qt's DLLs, and of the DLLs they share with
+      # other software, a failed Windows run found first on PATH.
+      - if: failure() && runner.os == 'Windows'
+        shell: cmd /C CALL {0}
+        run: |
+          echo %PATH%
+          where qgis_core.dll Qt6Core.dll sqlite3.dll zlib.dll libcrypto-3-x64.dll libssl-3-x64.dll gdal.dll proj_9.dll geos_c.dll
+          conda list
+          exit /b 0
       # A crash in QGIS's or the provider's C++ shows no Python frames, so a
       # failed run on Linux is repeated under gdb for the native backtrace.
       - if: failure() && runner.os == 'Linux'
