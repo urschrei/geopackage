@@ -71,9 +71,19 @@ fuzz_target!(|data: &[u8]| {
             assert_eq!(again.len, scan.len);
             assert_eq!(again.flagged_type_code, scan.flagged_type_code);
         }
+
+        // The ISO rewrite reads the same geometry, with no flagged code left.
+        let iso = curve::to_iso_wkb(data).expect("a body the scan reads is rewritten");
+        let rescan = curve::scan(&iso).expect("the rewritten body reads");
+        assert_eq!(rescan.flagged_type_code, None);
+        assert_eq!(rescan.envelope, scan.envelope);
+        assert_eq!(rescan.dimensions, scan.dimensions);
+        assert_eq!(rescan.len, iso.len());
+        assert_eq!(iso.len(), scan.len);
     } else {
-        // A rejected body is rejected by both entry points.
+        // A rejected body is rejected by every entry point.
         assert!(curve::xy_envelope(data).is_err());
+        assert!(curve::to_iso_wkb(data).is_err());
     }
 
     // --- the arc primitive ---

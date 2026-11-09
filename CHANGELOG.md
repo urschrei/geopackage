@@ -47,6 +47,10 @@ While the version is below 1.0 the API may change in any release.
 
 ### Added
 
+- `curve::to_iso_wkb` returns a WKB body with every type code in ISO form, at
+  every nesting depth: a code that gives Z or M by a high-bit flag becomes
+  the ISO code for the same type and dimensions. Coordinates and byte order
+  are copied unchanged.
 - `geopackage-py`, Python bindings built with PyO3 as abi3 wheels for CPython
   3.9 and later, with SQLite vendored. They cover open and create, layer
   schemas, streaming feature reads by bounding box, `WHERE` clause and column

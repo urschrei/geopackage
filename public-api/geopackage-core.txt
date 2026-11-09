@@ -116,6 +116,7 @@ pub geopackage_core::curve::BodyScan::len: usize
 pub geopackage_core::curve::BodyScan::xy_envelope: core::option::Option<[f64; 4]>
 pub fn geopackage_core::curve::arc_envelope([f64; 2], [f64; 2], [f64; 2]) -> core::option::Option<[f64; 4]>
 pub fn geopackage_core::curve::scan(&[u8]) -> core::result::Result<geopackage_core::curve::BodyScan, geopackage_core::geometry::GeometryError>
+pub fn geopackage_core::curve::to_iso_wkb(&[u8]) -> core::result::Result<alloc::vec::Vec<u8>, geopackage_core::geometry::GeometryError>
 pub fn geopackage_core::curve::xy_envelope(&[u8]) -> core::result::Result<core::option::Option<[f64; 4]>, geopackage_core::geometry::GeometryError>
 pub mod geopackage_core::datetime
 #[non_exhaustive] pub enum geopackage_core::datetime::DateTimeError

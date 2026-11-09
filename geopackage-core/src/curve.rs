@@ -177,6 +177,91 @@ pub fn scan(wkb_body: &[u8]) -> Result<BodyScan, GeometryError> {
     })
 }
 
+/// Returns the geometry at the start of a WKB body with every type code in
+/// ISO form, at every nesting depth.
+///
+/// A code that gives Z or M by a high-bit flag (see
+/// [`BodyScan::flagged_type_code`]) becomes the ISO code for the same type and
+/// dimensions. Everything else is copied unchanged, coordinates and byte
+/// order included, so the result is the same geometry. Trailing bytes beyond
+/// the geometry are left out, as for [`BodyScan::len`].
+///
+/// # Errors
+///
+/// As [`xy_envelope`].
+pub fn to_iso_wkb(wkb_body: &[u8]) -> Result<Vec<u8>, GeometryError> {
+    let mut cursor = Cursor::new(wkb_body);
+    let mut out = Vec::with_capacity(wkb_body.len());
+    copy_as_iso(&mut cursor, &mut out, 0)?;
+    Ok(out)
+}
+
+/// Copies one WKB geometry from `cursor` to `out`, writing its type code, and
+/// those of its members, in ISO form.
+fn copy_as_iso(
+    cursor: &mut Cursor<'_>,
+    out: &mut Vec<u8>,
+    depth: u32,
+) -> Result<(), GeometryError> {
+    if depth > MAX_DEPTH {
+        return Err(GeometryError::NestingTooDeep);
+    }
+    let little_endian = cursor.read_byte_order()?;
+    let code = cursor.read_u32(little_endian)?;
+    let (base, coord) = decode_type(code)?;
+    let iso = base + 1000 * u32::from(coord.has_z) + 2000 * u32::from(coord.has_m);
+    out.push(u8::from(little_endian));
+    out.extend_from_slice(&if little_endian {
+        iso.to_le_bytes()
+    } else {
+        iso.to_be_bytes()
+    });
+    // The same structure `read_geometry` walks.
+    match base {
+        1 => out.extend_from_slice(cursor.take_coord_words(1, coord)?.as_flattened()),
+        2 | 8 => copy_coords(cursor, out, little_endian, coord)?,
+        3 => {
+            for _ in 0..copy_count(cursor, out, little_endian)? {
+                copy_coords(cursor, out, little_endian, coord)?;
+            }
+        }
+        4..=7 | 9..=12 => {
+            for _ in 0..copy_count(cursor, out, little_endian)? {
+                copy_as_iso(cursor, out, depth + 1)?;
+            }
+        }
+        _ => return Err(GeometryError::AbstractWkbType(code)),
+    }
+    Ok(())
+}
+
+/// Copies a count from `cursor` to `out`, and returns it.
+fn copy_count(
+    cursor: &mut Cursor<'_>,
+    out: &mut Vec<u8>,
+    little_endian: bool,
+) -> Result<u32, GeometryError> {
+    let count = cursor.read_u32(little_endian)?;
+    out.extend_from_slice(&if little_endian {
+        count.to_le_bytes()
+    } else {
+        count.to_be_bytes()
+    });
+    Ok(count)
+}
+
+/// Copies a counted coordinate sequence from `cursor` to `out`.
+fn copy_coords(
+    cursor: &mut Cursor<'_>,
+    out: &mut Vec<u8>,
+    little_endian: bool,
+    coord: CoordLayout,
+) -> Result<(), GeometryError> {
+    let count = copy_count(cursor, out, little_endian)?;
+    out.extend_from_slice(cursor.take_coord_words(count, coord)?.as_flattened());
+    Ok(())
+}
+
 /// Returns the XY envelope of the circular arc that runs from `p0` through
 /// `p1` to `p2`, or `None` when no control point is finite.
 ///
@@ -578,6 +663,7 @@ fn read_circular_string(
 struct CoordLayout {
     stride: usize,
     has_z: bool,
+    has_m: bool,
     dimensions: Dimensions,
 }
 
@@ -620,21 +706,25 @@ fn decode_type(code: u32) -> Result<(u32, CoordLayout), GeometryError> {
         (false, false) => CoordLayout {
             stride: 2,
             has_z: false,
+            has_m: false,
             dimensions: Dimensions::Xy,
         },
         (true, false) => CoordLayout {
             stride: 3,
             has_z: true,
+            has_m: false,
             dimensions: Dimensions::Xyz,
         },
         (false, true) => CoordLayout {
             stride: 3,
             has_z: false,
+            has_m: true,
             dimensions: Dimensions::Xym,
         },
         (true, true) => CoordLayout {
             stride: 4,
             has_z: true,
+            has_m: true,
             dimensions: Dimensions::Xyzm,
         },
     };
@@ -1337,6 +1427,80 @@ mod tests {
                 "{code:#x}"
             );
         }
+    }
+
+    /// A polygon body: one ring of `points`, each with a Z of 5.
+    fn polygon_z(code: u32, points: &[[f64; 2]], little_endian: bool) -> Vec<u8> {
+        let word = |v: u32| {
+            if little_endian {
+                v.to_le_bytes()
+            } else {
+                v.to_be_bytes()
+            }
+        };
+        let mut body = vec![u8::from(little_endian)];
+        body.extend_from_slice(&word(code));
+        body.extend_from_slice(&word(1));
+        body.extend_from_slice(&word(u32::try_from(points.len()).unwrap()));
+        for [x, y] in points {
+            for v in [*x, *y, 5.0] {
+                body.extend_from_slice(&if little_endian {
+                    v.to_le_bytes()
+                } else {
+                    v.to_be_bytes()
+                });
+            }
+        }
+        body
+    }
+
+    const RING: [[f64; 2]; 4] = [[0.0, 0.0], [3.0, 0.0], [3.0, 2.0], [0.0, 0.0]];
+
+    #[test]
+    fn to_iso_wkb_rewrites_flagged_codes_at_every_depth() {
+        // A big-endian flagged member inside a little-endian ISO container.
+        let flagged = polygon_z(Z_FLAG | 3, &RING, false);
+        let body = wkb(1006, &children(&[flagged]));
+        let iso = to_iso_wkb(&body).unwrap();
+        let expected = wkb(1006, &children(&[polygon_z(1003, &RING, false)]));
+        assert_eq!(iso, expected);
+        let (before, after) = (scan(&body).unwrap(), scan(&iso).unwrap());
+        assert_eq!(after.flagged_type_code, None);
+        assert_eq!(after.envelope, before.envelope);
+        assert_eq!(after.dimensions, before.dimensions);
+    }
+
+    #[test]
+    fn to_iso_wkb_maps_each_flag_to_its_offset() {
+        for (flags, offset, stride) in [
+            (Z_FLAG, 1000, 3),
+            (M_FLAG, 2000, 3),
+            (Z_FLAG | M_FLAG, 3000, 4),
+        ] {
+            let payload = vec![0u8; 8 * stride];
+            let iso = to_iso_wkb(&wkb(flags | 1, &payload)).unwrap();
+            assert_eq!(iso, wkb(offset + 1, &payload), "{flags:#x}");
+        }
+    }
+
+    #[test]
+    fn to_iso_wkb_copies_an_iso_body_and_drops_trailing_bytes() {
+        let body = wkb(1006, &children(&[polygon_z(1003, &RING, true)]));
+        assert_eq!(to_iso_wkb(&body).unwrap(), body);
+        let mut padded = body.clone();
+        padded.extend_from_slice(&[0xAA; 7]);
+        assert_eq!(to_iso_wkb(&padded).unwrap(), body);
+    }
+
+    #[test]
+    fn to_iso_wkb_rejects_what_the_scan_rejects() {
+        let srid = wkb(Z_FLAG | SRID_FLAG | 1, &[0u8; 28]);
+        assert!(matches!(
+            to_iso_wkb(&srid),
+            Err(GeometryError::UnknownWkbType(_))
+        ));
+        let truncated = polygon_z(Z_FLAG | 3, &RING, true);
+        to_iso_wkb(&truncated[..truncated.len() - 1]).unwrap_err();
     }
 
     #[test]
