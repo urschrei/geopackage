@@ -8,6 +8,13 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/qgis_versions.py` reports QGIS 4 minor versions that the native
+  provider has no build for, with the matrix entries each needs: the release
+  tag, and the name and SHA-256 of OSGeo4W's `qgis-devel` archive. A monthly
+  workflow, `qgis-versions.yml`, runs it and opens an issue for each.
+
 ## [0.14.2] - 2026-11-09
 
 This release changes the QGIS plugin's native provider and its release
