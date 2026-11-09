@@ -80,8 +80,10 @@ const COLLINEAR_TOLERANCE: f64 = 1e-14;
 /// # Errors
 ///
 /// [`GeometryError`] if the body is truncated, declares a type code that is
-/// not a GeoPackage geometry type or is one of the abstract supertypes, is
-/// EWKB rather than ISO WKB, or nests containers deeper than 32.
+/// not a GeoPackage geometry type or is one of the abstract supertypes,
+/// declares an SRID in a type code (EWKB), or nests containers deeper than 32.
+/// A type code that gives Z or M by a high-bit flag is read; see
+/// [`BodyScan::flagged_type_code`].
 pub fn xy_envelope(wkb_body: &[u8]) -> Result<Option<[f64; 4]>, GeometryError> {
     Ok(scan(wkb_body)?.xy_envelope)
 }
@@ -116,6 +118,15 @@ pub struct BodyScan {
     /// `CIRCULARSTRING`s needs a row for each. The caller must register them,
     /// because this function sees a body, not a table.
     pub extension_types: GeometryTypeSet,
+    /// The first type code in the body, at any nesting depth, that gives Z or
+    /// M by a high-bit flag (`0x8000_0000` for Z, `0x4000_0000` for M, as in
+    /// OGC 99-402 and EWKB) and not by the ISO offset. `None` when every code
+    /// is ISO.
+    ///
+    /// A GPB body must be ISO WKB. Some writers put flagged codes in it all
+    /// the same, and GDAL reads them, so the scan reads them too and reports
+    /// them here. A write path must reject a body that has one.
+    pub flagged_type_code: Option<u32>,
 }
 
 /// Walks an ISO WKB body once, returning everything the read and write paths
@@ -130,7 +141,14 @@ pub fn scan(wkb_body: &[u8]) -> Result<BodyScan, GeometryError> {
     let mut cursor = Cursor::new(wkb_body);
     let mut bounds = XyzBounds::new();
     let mut extension_types = GeometryTypeSet::new();
-    let dimensions = read_geometry(&mut cursor, &mut bounds, &mut extension_types, 0)?;
+    let mut flagged_type_code = None;
+    let dimensions = read_geometry(
+        &mut cursor,
+        &mut bounds,
+        &mut extension_types,
+        &mut flagged_type_code,
+        0,
+    )?;
     let len = cursor.offset;
 
     let Some([min_x, max_x, min_y, max_y]) = bounds.xy_bounds() else {
@@ -141,6 +159,7 @@ pub fn scan(wkb_body: &[u8]) -> Result<BodyScan, GeometryError> {
             dimensions,
             len,
             extension_types,
+            flagged_type_code,
         });
     };
     let envelope = match bounds.z_bounds() {
@@ -154,6 +173,7 @@ pub fn scan(wkb_body: &[u8]) -> Result<BodyScan, GeometryError> {
         dimensions,
         len,
         extension_types,
+        flagged_type_code,
     })
 }
 
@@ -298,10 +318,14 @@ fn chord_side(a: [f64; 2], b: [f64; 2], q: [f64; 2]) -> i8 {
 }
 
 /// Reads one WKB geometry, adding every coordinate in it to `bounds`.
+///
+/// Records the first type code that gives its dimensions by a high-bit flag in
+/// `flagged_type_code`.
 fn read_geometry(
     cursor: &mut Cursor<'_>,
     bounds: &mut XyzBounds,
     extension_types: &mut GeometryTypeSet,
+    flagged_type_code: &mut Option<u32>,
     depth: u32,
 ) -> Result<Dimensions, GeometryError> {
     if depth > MAX_DEPTH {
@@ -311,6 +335,9 @@ fn read_geometry(
     let little_endian = cursor.read_byte_order()?;
     let code = cursor.read_u32(little_endian)?;
     let (base, coord) = decode_type(code)?;
+    if code & DIMENSION_FLAGS != 0 {
+        flagged_type_code.get_or_insert(code);
+    }
 
     // Recorded at every depth, so a container reports the types of its members
     // as well as its own. A body that turns out to be malformed is rejected
@@ -345,7 +372,13 @@ fn read_geometry(
             let count = cursor.read_u32(little_endian)?;
             for _ in 0..count {
                 // A child's own dimensions do not override the container's.
-                read_geometry(cursor, bounds, extension_types, depth + 1)?;
+                read_geometry(
+                    cursor,
+                    bounds,
+                    extension_types,
+                    flagged_type_code,
+                    depth + 1,
+                )?;
             }
         }
         // Geometry, Curve and Surface are abstract supertypes: a conformant
@@ -548,39 +581,63 @@ struct CoordLayout {
     dimensions: Dimensions,
 }
 
-/// Splits an ISO WKB type code into its base type and its coordinate layout.
+/// The high-bit flag for Z in an OGC 99-402 or EWKB type code.
+const Z_FLAG: u32 = 0x8000_0000;
+/// The high-bit flag for M in an OGC 99-402 or EWKB type code.
+const M_FLAG: u32 = 0x4000_0000;
+/// The EWKB flag for an SRID that follows the type code.
+const SRID_FLAG: u32 = 0x2000_0000;
+/// The flags that give a type code's dimensions.
+const DIMENSION_FLAGS: u32 = Z_FLAG | M_FLAG;
+
+/// Splits a WKB type code into its base type and its coordinate layout.
 ///
-/// ISO WKB adds 1000 for Z, 2000 for M and 3000 for ZM. EWKB instead sets high
-/// bit flags and may prefix an SRID. A GPB body must not be EWKB, so EWKB is
-/// rejected rather than guessed at.
+/// ISO WKB adds 1000 for Z, 2000 for M and 3000 for ZM. OGC 99-402 and EWKB
+/// set [`Z_FLAG`] and [`M_FLAG`] instead, which this also reads (see
+/// [`BodyScan::flagged_type_code`]). A code with [`SRID_FLAG`] is rejected:
+/// an SRID follows it, and a GPB body has none. A code with both a flag and
+/// an ISO offset is rejected, because its dimensions are ambiguous.
 fn decode_type(code: u32) -> Result<(u32, CoordLayout), GeometryError> {
-    if code & 0xE000_0000 != 0 {
+    if code & SRID_FLAG != 0 {
         return Err(GeometryError::UnknownWkbType(code));
     }
-    let coord = match code / 1000 {
-        0 => CoordLayout {
+    let (has_z, has_m, base) = if code & DIMENSION_FLAGS != 0 {
+        let rest = code & !DIMENSION_FLAGS;
+        if rest >= 1000 {
+            return Err(GeometryError::UnknownWkbType(code));
+        }
+        (code & Z_FLAG != 0, code & M_FLAG != 0, rest)
+    } else {
+        match code / 1000 {
+            0 => (false, false, code % 1000),
+            1 => (true, false, code % 1000),
+            2 => (false, true, code % 1000),
+            3 => (true, true, code % 1000),
+            _ => return Err(GeometryError::UnknownWkbType(code)),
+        }
+    };
+    let coord = match (has_z, has_m) {
+        (false, false) => CoordLayout {
             stride: 2,
             has_z: false,
             dimensions: Dimensions::Xy,
         },
-        1 => CoordLayout {
+        (true, false) => CoordLayout {
             stride: 3,
             has_z: true,
             dimensions: Dimensions::Xyz,
         },
-        2 => CoordLayout {
+        (false, true) => CoordLayout {
             stride: 3,
             has_z: false,
             dimensions: Dimensions::Xym,
         },
-        3 => CoordLayout {
+        (true, true) => CoordLayout {
             stride: 4,
             has_z: true,
             dimensions: Dimensions::Xyzm,
         },
-        _ => return Err(GeometryError::UnknownWkbType(code)),
     };
-    let base = code % 1000;
     if base == 0 || base > 14 {
         return Err(GeometryError::UnknownWkbType(code));
     }
@@ -1225,12 +1282,61 @@ mod tests {
     }
 
     #[test]
-    fn ewkb_is_rejected_rather_than_guessed_at() {
-        let body = wkb(0x8000_0002, &coords(&[[0.0, 0.0]]));
-        assert!(matches!(
-            xy_envelope(&body),
-            Err(GeometryError::UnknownWkbType(_))
-        ));
+    fn a_high_bit_z_flag_is_read_and_reported() {
+        let mut z = 1.0_f64.to_le_bytes().to_vec();
+        z.extend_from_slice(&2.0_f64.to_le_bytes());
+        z.extend_from_slice(&9.0_f64.to_le_bytes());
+        let body = wkb(Z_FLAG | 1, &z);
+        let scan = scan(&body).unwrap();
+        assert_eq!(scan.xy_envelope, Some([1.0, 1.0, 2.0, 2.0]));
+        assert_eq!(scan.dimensions, Dimensions::Xyz);
+        assert_eq!(scan.flagged_type_code, Some(Z_FLAG | 1));
+        assert_eq!(scan.len, body.len());
+    }
+
+    #[test]
+    fn a_flagged_member_of_an_iso_container_is_reported() {
+        // An ISO MultiPolygonZ whose polygon gives its Z by the flag: the
+        // layout one Esri writer produces.
+        let mut ring = 4u32.to_le_bytes().to_vec();
+        for [x, y] in [[0.0, 0.0], [3.0, 0.0], [3.0, 2.0], [0.0, 0.0]] {
+            for v in [x, y, 5.0_f64] {
+                ring.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        let mut polygon_payload = 1u32.to_le_bytes().to_vec();
+        polygon_payload.extend_from_slice(&ring);
+        let polygon = wkb(Z_FLAG | 3, &polygon_payload);
+        let body = wkb(1006, &children(&[polygon]));
+        let scan = scan(&body).unwrap();
+        assert_eq!(scan.xy_envelope, Some([0.0, 3.0, 0.0, 2.0]));
+        assert_eq!(scan.dimensions, Dimensions::Xyz);
+        assert_eq!(scan.flagged_type_code, Some(Z_FLAG | 3));
+        assert_eq!(scan.len, body.len());
+    }
+
+    #[test]
+    fn an_iso_body_reports_no_flagged_code() {
+        let body = wkb(1, &coords(&[[0.0, 0.0]]));
+        assert_eq!(scan(&body).unwrap().flagged_type_code, None);
+    }
+
+    #[test]
+    fn an_srid_flag_or_a_flag_with_an_iso_offset_is_rejected() {
+        // An SRID would follow the code, and a flag beside an ISO offset gives
+        // two answers for the dimensions.
+        for code in [
+            SRID_FLAG | 1,
+            Z_FLAG | SRID_FLAG | 1,
+            Z_FLAG | 1001,
+            M_FLAG | 2001,
+        ] {
+            let body = wkb(code, &coords(&[[0.0, 0.0]]));
+            assert!(
+                matches!(xy_envelope(&body), Err(GeometryError::UnknownWkbType(c)) if c == code),
+                "{code:#x}"
+            );
+        }
     }
 
     #[test]

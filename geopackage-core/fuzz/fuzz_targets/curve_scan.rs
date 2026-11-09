@@ -69,6 +69,7 @@ fuzz_target!(|data: &[u8]| {
             assert_eq!(again.xy_envelope, scan.xy_envelope);
             assert_eq!(again.dimensions, scan.dimensions);
             assert_eq!(again.len, scan.len);
+            assert_eq!(again.flagged_type_code, scan.flagged_type_code);
         }
     } else {
         // A rejected body is rejected by both entry points.

@@ -511,12 +511,18 @@ pub fn write_envelope<G: GeometryTrait<T = f64>>(geom: &G) -> (gpb::Envelope, bo
 /// # Errors
 ///
 /// [`GeometryError`] if `wkb_body` is not a body [`crate::curve::scan`]
-/// accepts, or is a core-typed container holding a non-linear member
-/// ([`GeometryError::NonLinearMember`]).
+/// accepts, has a type code with a high-bit Z or M flag
+/// ([`GeometryError::UnknownWkbType`]), or is a core-typed container holding a
+/// non-linear member ([`GeometryError::NonLinearMember`]).
 #[hotpath::measure(label = "geometry::encode_gpb_from_wkb")]
 pub fn encode_gpb_from_wkb(wkb_body: &[u8], srs_id: i32) -> Result<EncodedGpb, GeometryError> {
     let own_type = wkb_geometry_type(wkb_body)?;
     let scan = crate::curve::scan(wkb_body)?;
+    // The scan reads a type code with a high-bit Z or M flag, but a GPB body
+    // must be ISO WKB, so a body with one is not copied into a blob.
+    if let Some(code) = scan.flagged_type_code {
+        return Err(GeometryError::UnknownWkbType(code));
+    }
     let extended = own_type.is_extension();
     // The scanner reads a core-typed container with non-linear members, but
     // the `wkb`-reader read path cannot, so writing one is refused rather
@@ -1319,5 +1325,19 @@ mod encode_from_wkb_tests {
         encode_gpb_from_wkb(b"not wkb at all", 4326).unwrap_err();
         // A valid byte-order marker followed by an unknown geometry type.
         encode_gpb_from_wkb(&[1, 0xff, 0xff, 0, 0], 4326).unwrap_err();
+    }
+
+    #[test]
+    fn a_body_with_a_high_bit_z_flag_is_not_written() {
+        // POINT Z (1 2 3), with Z given by the flag and not the ISO offset.
+        let mut body = vec![1u8];
+        body.extend_from_slice(&0x8000_0001_u32.to_le_bytes());
+        for v in [1.0_f64, 2.0, 3.0] {
+            body.extend_from_slice(&v.to_le_bytes());
+        }
+        assert!(matches!(
+            encode_gpb_from_wkb(&body, 4326),
+            Err(GeometryError::UnknownWkbType(0x8000_0001))
+        ));
     }
 }

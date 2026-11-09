@@ -10,6 +10,18 @@ While the version is below 1.0 the API may change in any release.
 
 ### Fixed
 
+- The WKB scanner that computes envelopes rejected a type code that gives Z
+  or M by a high-bit flag (`0x8000_0000`, `0x4000_0000`, as in OGC 99-402)
+  instead of the ISO offset. Some writers put such codes in GeoPackage
+  bodies; one Esri export has ISO `MULTIPOLYGON Z` containers whose polygons
+  are `0x80000003`. GDAL reads them, and so did this crate's `wkb`-crate read
+  path, but the scanner's rejection made `audit_spatial_index`, the index
+  rebuild and `validate` fail on the whole file. The scanner now reads the
+  Z and M flags and reports the first flagged code in the new
+  `BodyScan::flagged_type_code`. It still rejects the EWKB SRID flag and a
+  code with both a flag and an ISO offset. `encode_gpb_from_wkb` still
+  refuses to write a flagged body, so the crate writes only ISO WKB.
+
 - `Layer::read_arrow_in` and `read_arrow_in_where` were slow on spatially
   scattered data, the usual case. They walked the RTree's candidates as runs
   of consecutive keys, with one query per run, and scattered rows make nearly
