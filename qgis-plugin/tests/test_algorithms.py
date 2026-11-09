@@ -98,6 +98,30 @@ def test_repair_spatial_indexes(tmp_path, run):
         assert gpkg.layer("unindexed").spatial_index_status() == "current"
 
 
+def test_repair_a_legacy_trigger_set(tmp_path, run):
+    path = str(tmp_path / "a.gpkg")
+    points_gpkg(path)
+    # A pre-1.4 trigger beside the 1.4 set: a complete mixed set, which is
+    # legacy.
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TRIGGER rtree_pts_geom_update1 AFTER UPDATE OF geom ON pts BEGIN SELECT 1; END"
+    )
+    con.commit()
+    con.close()
+
+    result = run(
+        "repairspatialindexes", {"INPUT": path, "LAYER": "pts", "OUTPUT": "memory:"}
+    )
+    assert result["REPAIRED"] == 1
+    (row,) = table_rows(result["OUTPUT"])
+    assert (row["status_before"], row["action"], row["status_after"]) == (
+        "legacy",
+        "repaired to the 1.4 trigger set",
+        "current",
+    )
+
+
 def test_list_extensions(tmp_path, run):
     path = str(tmp_path / "a.gpkg")
     points_gpkg(path)

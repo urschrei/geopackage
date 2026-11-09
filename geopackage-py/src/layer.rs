@@ -1,7 +1,9 @@
 //! The `Layer` class: a feature layer or attribute table, by name.
 
 use geopackage::core::gpb;
-use geopackage::{BoundingBox, GeoPackage, GeometryColumn, Layer, Value, ValueRef};
+use geopackage::{
+    BoundingBox, GeoPackage, GeometryColumn, Layer, SpatialIndexStatus, Value, ValueRef,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -186,6 +188,22 @@ fn write_rows(layer: &Layer<'_>, rows: &[NewRow]) -> geopackage::Result<Vec<i64>
     Ok(fids)
 }
 
+/// Returns the word that `Layer.spatial_index_status` documents for a status.
+/// `SpatialIndexStatus::as_str` gives a phrase for display ("legacy trigger
+/// set"), which callers that compare the result do not expect.
+fn status_name(status: SpatialIndexStatus) -> &'static str {
+    match status {
+        SpatialIndexStatus::Absent => "absent",
+        SpatialIndexStatus::Current => "current",
+        SpatialIndexStatus::Legacy => "legacy",
+        SpatialIndexStatus::Stale => "stale",
+        // `SpatialIndexStatus` is `#[non_exhaustive]`. A status that this
+        // version does not know gets the crate's phrase, so that a caller
+        // reports it and does not act on it.
+        other => other.as_str(),
+    }
+}
+
 #[pymethods]
 impl PyLayer {
     fn __repr__(&self) -> String {
@@ -263,7 +281,10 @@ impl PyLayer {
     /// ``"current"``, ``"legacy"`` (pre-1.4 or mixed triggers), ``"stale"``
     /// (out of step with the table) or ``"absent"``.
     fn spatial_index_status(&self, py: Python<'_>) -> PyGpkgResult<String> {
-        self.with(py, |l| Ok(l.spatial_index_status()?.as_str().to_owned()))
+        self.with(
+            py,
+            |l| Ok(status_name(l.spatial_index_status()?).to_owned()),
+        )
     }
 
     /// Whether bounding-box reads use an RTree.

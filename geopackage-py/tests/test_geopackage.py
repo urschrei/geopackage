@@ -235,6 +235,23 @@ def test_repair_an_index_missing_its_triggers(points, path):
         assert layer.spatial_index_status() == "current"
 
 
+# A pre-1.4 trigger beside the 1.4 set: a complete mixed set, which is legacy.
+LEGACY_TRIGGER = "CREATE TRIGGER rtree_pts_geom_update1 AFTER UPDATE OF geom ON pts BEGIN SELECT 1; END"
+
+
+def test_repair_a_legacy_trigger_set(points, path):
+    points.close()
+    damage(path, LEGACY_TRIGGER)
+
+    with g.GeoPackage(path) as gpkg:
+        layer = gpkg.layer("pts")
+        assert layer.spatial_index_status() == "legacy"
+        findings = [f for f in gpkg.validate() if f.table_name == "pts"]
+        assert [f.code for f in findings] == ["LegacySpatialIndexTriggers"]
+        layer.repair_spatial_index()
+        assert layer.spatial_index_status() == "current"
+
+
 def test_srs(points):
     srs = points.srs(4326)
     assert srs.authid == "EPSG:4326"
