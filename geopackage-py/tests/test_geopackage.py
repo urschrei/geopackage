@@ -5,9 +5,8 @@ import sqlite3
 import struct
 import zlib
 
-import pytest
-
 import geopackage_rs as g
+import pytest
 
 
 def point(x, y):

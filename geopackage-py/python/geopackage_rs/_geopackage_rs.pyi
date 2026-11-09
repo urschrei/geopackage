@@ -5,12 +5,14 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from os import PathLike
 from typing import Any, Literal, Optional, Union
 
+from typing_extensions import TypeAlias
+
 __version__: str
 
-Value = Union[None, bool, int, float, str, bytes, datetime.date, datetime.datetime]
-Bounds = tuple[float, float, float, float]
-Row = tuple[int, Optional[bytes], list[Value]]
-ZmFlag = Union[Literal["prohibited", "mandatory", "optional"], int]
+Value: TypeAlias = Union[None, bool, int, float, str, bytes, datetime.date, datetime.datetime]
+Bounds: TypeAlias = tuple[float, float, float, float]
+Row: TypeAlias = tuple[int, Optional[bytes], list[Value]]
+ZmFlag: TypeAlias = Union[Literal["prohibited", "mandatory", "optional"], int]
 
 class GeoPackageError(Exception): ...
 
