@@ -6,7 +6,7 @@ import os
 import pytest
 from qgis.core import QgsProviderRegistry
 
-from gpkg_toolkit import native_provider
+from gpkg_toolkit import native, native_provider, plugin
 from gpkg_toolkit.data_provider import PROVIDER_KEY, register
 
 BUILT = os.environ.get(native_provider.ENV) or os.path.join(
@@ -25,6 +25,7 @@ def fresh(monkeypatch):
     """The loader as if nothing had been loaded in this process yet."""
     monkeypatch.setattr(native_provider, "_LIBRARY", None)
     monkeypatch.setattr(native_provider, "LOAD_ERROR", None)
+    monkeypatch.setattr(native_provider, "LOADED_PATH", None)
     return native_provider
 
 
@@ -58,6 +59,44 @@ def test_a_file_that_is_not_a_library_is_refused(fresh, tmp_path):
     assert "cannot load" in fresh.LOAD_ERROR
 
 
+def test_a_release_has_no_development_build(monkeypatch, tmp_path):
+    monkeypatch.setattr(native, "EXT_LIBS", str(tmp_path))
+    assert native.development_build() is None
+
+
+def test_the_development_build_record_is_read(monkeypatch, tmp_path):
+    monkeypatch.setattr(native, "EXT_LIBS", str(tmp_path))
+    (tmp_path / "BUILD").write_text("geopackage_rs: built from abc\n", encoding="utf-8")
+    assert native.development_build() == "geopackage_rs: built from abc"
+
+
+def test_each_startup_message_is_logged_once(monkeypatch, tmp_path):
+    from qgis.core import QgsMessageLog
+
+    monkeypatch.setattr(native, "EXT_LIBS", str(tmp_path))
+    (tmp_path / "BUILD").write_text(
+        "native provider: built from abc\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(plugin, "_LOGGED", set())
+    # Under conda's QGIS 4.2, a function connected to messageReceived did not
+    # receive the message during the call, as it did under QGIS 3.34. So the
+    # test replaces the call that writes to the log.
+    received = []
+    monkeypatch.setattr(
+        QgsMessageLog,
+        "logMessage",
+        lambda message, tag, _level: received.append((message, tag)),
+    )
+    plugin._log_once("Using the native data provider: here")
+    plugin._log_once("Using the native data provider: here")
+    assert received == [
+        (
+            "Using the native data provider: here\nDevelopment build:\nnative provider: built from abc",
+            "GeoPackage Toolkit",
+        )
+    ]
+
+
 def _loadable():
     """Whether the built library loads into this QGIS at all: a build for
     QGIS 4 cannot, into QGIS 3, which it does not link against."""
@@ -76,6 +115,16 @@ def test_a_build_for_another_qgis_is_refused(fresh, monkeypatch):
     monkeypatch.setattr(native_provider, "running_version", lambda: (9, 99))
     assert fresh.load(BUILT) is None
     assert "not 9.99" in fresh.LOAD_ERROR
+    assert fresh.LOADED_PATH is None
+
+
+@pytest.mark.skipif(
+    not os.path.isfile(BUILT) or not _loadable(),
+    reason="no native provider build for this QGIS",
+)
+def test_a_loaded_build_records_its_path(fresh):
+    assert fresh.load(BUILT) is not None
+    assert fresh.LOADED_PATH == BUILT
 
 
 @pytest.mark.skipif(

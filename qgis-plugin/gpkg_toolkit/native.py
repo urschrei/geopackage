@@ -46,4 +46,14 @@ def _load():
         )
 
 
+def development_build():
+    """What ``scripts/dev_qgis_plugin.py`` recorded in ``ext-libs/BUILD``:
+    the revision each part was built from. ``None`` for a released plugin."""
+    try:
+        with open(os.path.join(EXT_LIBS, "BUILD"), encoding="utf-8") as record:
+            return record.read().strip() or None
+    except OSError:
+        return None
+
+
 gpkg, LOAD_ERROR = _load()

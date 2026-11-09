@@ -35,6 +35,8 @@ else:
 # the library registered, and cannot unregister it.
 _LIBRARY = None
 LOAD_ERROR = None
+# The path of the library loaded, once one is.
+LOADED_PATH = None
 
 
 def running_version():
@@ -94,7 +96,7 @@ def load(path=None):
     """Loads the library at `path` (by default, :func:`library_path`) and
     checks it was built for the running QGIS. Returns the library, or
     ``None``, setting :data:`LOAD_ERROR` to say why."""
-    global _LIBRARY, LOAD_ERROR
+    global _LIBRARY, LOAD_ERROR, LOADED_PATH
     if _LIBRARY is not None:
         return _LIBRARY
     path = path or library_path()
@@ -123,6 +125,7 @@ def load(path=None):
         return None
     _LIBRARY = library
     LOAD_ERROR = None
+    LOADED_PATH = path
     return library
 
 
