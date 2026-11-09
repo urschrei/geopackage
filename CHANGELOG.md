@@ -8,6 +8,11 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-11-09
+
+This release publishes the QGIS plugin through a plugin repository and
+documents it in the book. The crates' code is the same as in 0.14.2.
+
 ### Added
 
 - `scripts/qgis_versions.py` reports QGIS 4 minor versions that the native
@@ -1804,7 +1809,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.14.2...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.14.3...HEAD
+[0.14.3]: https://github.com/urschrei/geopackage/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/urschrei/geopackage/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/urschrei/geopackage/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/urschrei/geopackage/compare/v0.13.0...v0.14.0
