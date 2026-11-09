@@ -16,6 +16,9 @@ pub struct HowToAddSpatialIndex;
 #[doc = include_str!("../../docs/book/src/how-to/repair-spatial-indexes.md")]
 pub struct HowToRepairSpatialIndexes;
 
+#[doc = include_str!("../../docs/book/src/how-to/repair-encodings.md")]
+pub struct HowToRepairEncodings;
+
 #[doc = include_str!("../../docs/book/src/how-to/copy-features.md")]
 pub struct HowToCopyFeatures;
 

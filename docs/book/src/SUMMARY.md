@@ -10,6 +10,7 @@
 
 - [How to add a spatial index to an existing layer](how-to/add-spatial-index.md)
 - [How to repair a file's spatial indexes](how-to/repair-spatial-indexes.md)
+- [How to repair geometry and datetime encodings](how-to/repair-encodings.md)
 - [How to copy features between files without decoding geometry](how-to/copy-features.md)
 - [How to read a layer as Arrow record batches](how-to/read-arrow.md)
 - [How to read values from a coverage](how-to/coverage-values.md)
