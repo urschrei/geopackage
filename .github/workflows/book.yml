@@ -1,11 +1,19 @@
 name: book
 
+# The site also serves the QGIS plugin repository, qgis/plugins.xml, which
+# points at the newest release's plugin zip. So the site is rebuilt after
+# qgis-plugin.yml has attached a release's zip, as well as on a change to the
+# book.
 on:
   push:
     branches: [main]
     paths:
       - "docs/book/**"
       - ".github/workflows/book.yml"
+      - "scripts/plugins_xml.py"
+  workflow_run:
+    workflows: [qgis-plugin]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -20,6 +28,10 @@ concurrency:
 
 jobs:
   deploy:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'release' &&
+       github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -33,6 +45,22 @@ jobs:
             | tar -xz -C "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: mdbook build docs/book
+      # The newest release with a plugin zip, which plugins.xml points at.
+      - name: QGIS plugin repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for tag in $(gh release list --exclude-drafts --exclude-pre-releases --limit 20 --json tagName -q '.[].tagName'); do
+            zip=$(gh release view "$tag" --json assets -q '.assets[].name | select(test("^gpkg_toolkit-.*[.]zip$"))')
+            [ -n "$zip" ] && break
+          done
+          [ -n "$zip" ] || { echo "no release has a plugin zip"; exit 1; }
+          gh release download "$tag" -p "$zip" -D plugin-release
+          python3 scripts/plugins_xml.py "plugin-release/$zip" \
+            --url "https://github.com/${{ github.repository }}/releases/download/$tag/$zip" \
+            --date "$(gh release view "$tag" --json publishedAt -q .publishedAt)" \
+            --out docs/book/book/qgis \
+            --base "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/qgis"
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
