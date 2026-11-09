@@ -24,12 +24,18 @@ name = "geopackage_qgis"
 crate-type = ["cdylib"]
 
 [dependencies]
-# `bundled`: QGIS has its own SQLite loaded; ours stays private to this
-# library, since a cdylib exports only its `#[no_mangle]` symbols.
-geopackage = { path = "../geopackage", features = ["arrow", "bundled"] }
 arrow-array = "60.1"
 arrow-schema = "60"
 cxx = "1"
+
+# SQLite: on Linux and macOS, the copy that QGIS loaded, since two copies in
+# one process do not see each other's locks (see scripts/host_sqlite.py). On
+# Windows, which keeps a lock for each file handle, a copy of its own.
+[target.'cfg(not(windows))'.dependencies]
+geopackage = { path = "../geopackage", features = ["arrow"] }
+
+[target.'cfg(windows)'.dependencies]
+geopackage = { path = "../geopackage", features = ["arrow", "bundled"] }
 
 [build-dependencies]
 cxx-build = "1"

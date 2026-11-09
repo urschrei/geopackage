@@ -10,6 +10,7 @@ registered beside it, as ``geopackage_rs_native``.
 import datetime
 import os
 import shutil
+import sqlite3
 import struct
 
 import pytest
@@ -262,6 +263,27 @@ def test_an_edit_session_commits_through_the_crate(path, key):
     assert ogr.featureCount() == 100
     (from_ogr,) = ogr.getFeatures("\"name\" = 'new'")
     assert from_ogr.geometry().asWkt() == "Point (500 500)"
+
+
+def test_a_commit_waits_for_a_lock_that_qgis_holds(path, key):
+    # Python's sqlite3 is QGIS's SQLite. A provider with a copy of its own
+    # would not see this lock, and would write (see test_one_sqlite.py).
+    layer = open_layer(path, key=key)
+    assert layer.startEditing()
+    new = QgsFeature(layer.fields())
+    new.setGeometry(QgsGeometry.fromWkt("Point (1 1)"))
+    assert layer.addFeature(new)
+    holder = sqlite3.connect(path, isolation_level=None, timeout=0)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        assert not layer.commitChanges()
+        errors = layer.commitErrors() + layer.dataProvider().errors()
+        assert any("locked" in e for e in errors), errors
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert layer.commitChanges(), layer.commitErrors()
+    assert layer.featureCount() == 101
 
 
 def test_a_failed_write_fails_the_commit_with_the_crate_error(tmp_path, key):

@@ -23,7 +23,6 @@ Repository = "https://github.com/urschrei/geopackage"
 [tool.maturin]
 python-source = "python"
 module-name = "geopackage_rs._geopackage_rs"
-features = ["bundled"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

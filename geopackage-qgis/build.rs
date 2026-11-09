@@ -11,6 +11,13 @@
 //! nothing inside QGIS.app is linked. Windows has no such late binding, so
 //! there it links QGIS's and Qt's import libraries.
 //!
+//! SQLite is QGIS's too, on Linux and macOS: two copies in one process do not
+//! see each other's locks. On Linux the library depends on `libsqlite3.so.0`,
+//! which the loader resolves to QGIS's. On macOS it links
+//! `@rpath/libsqlite3.dylib`, QGIS.app's name for it, through the stub that
+//! `scripts/host_sqlite.py` makes; the build stops without that script's
+//! settings, which would otherwise link Apple's SQLite.
+//!
 //! # Where they come from
 //!
 //! - QGIS headers: `QGIS_INCLUDE_DIR`, else `$QGIS_PREFIX/include/qgis` (or
@@ -31,6 +38,10 @@
 use std::env;
 use std::path::Path;
 use std::process::Command;
+
+/// `libsqlite3.so.0` as a dependency whether or not the linker would keep
+/// it. Rust's `-as-needed` link modifier would say this, but is unstable.
+const KEEP_SQLITE: &str = "-Wl,--push-state,--no-as-needed,-lsqlite3,--pop-state";
 
 /// The Qt modules QGIS's core headers include (`qgsapplication.h` brings in
 /// Widgets).
@@ -178,10 +189,29 @@ fn main() {
         }
         // ELF shared libraries may leave symbols undefined by default; the
         // loader binds them to the QGIS process's.
-        "macos" => println!("cargo:rustc-cdylib-link-arg=-Wl,-undefined,dynamic_lookup"),
+        "macos" => {
+            println!("cargo:rustc-cdylib-link-arg=-Wl,-undefined,dynamic_lookup");
+            assert!(
+                var("SQLITE3_LIB_DIR").is_some() && var("SQLITE3_NO_PKG_CONFIG").is_some(),
+                "set the environment that scripts/host_sqlite.py prints, so that the \
+                 library links QGIS's SQLite"
+            );
+            // Where dyld looks for `@rpath/libsqlite3.dylib` if QGIS has not
+            // loaded it under that name: QGIS.app's `Contents/Frameworks`, and
+            // a conda environment's `lib`.
+            for path in ["@executable_path/../Frameworks", "@executable_path/../lib"] {
+                println!("cargo:rustc-cdylib-link-arg=-Wl,-rpath,{path}");
+            }
+        }
+        // `libsqlite3.so.0` stays a dependency even where the linker would
+        // drop it: in the manylinux_2_28 containers it did, and left the
+        // SQLite symbols to whatever the process had loaded globally.
+        "linux" => println!("cargo:rustc-cdylib-link-arg={KEEP_SQLITE}"),
         _ => {}
     }
     println!("cargo:rerun-if-changed=src/provider.cpp");
     println!("cargo:rerun-if-changed=src/provider.h");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    println!("cargo:rerun-if-env-changed=SQLITE3_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=SQLITE3_NO_PKG_CONFIG");
 }

@@ -7,9 +7,10 @@ For a QGIS whose profile links to `qgis-plugin/gpkg_toolkit`. The script
 builds `geopackage_rs` with maturin (through `uvx`) and unpacks it into
 `gpkg_toolkit/ext-libs/<platform>/`. Then it builds the native data provider
 and links it into `gpkg_toolkit/ext-libs/<platform>/qgis-<major>.<minor>/`,
-with the QGIS version from the headers the build used. After that, a
-`cargo build --release` in `geopackage-qgis` is enough to update the
-provider. Restart QGIS after each build.
+with the QGIS version from the headers the build used. Both builds link the
+SQLite of the QGIS that loads them, with the settings from
+`scripts/host_sqlite.py`, and the script checks that they do. Run it again
+after a change, and restart QGIS after each build.
 
 The provider build finds QGIS's headers and Qt as `geopackage-qgis/build.rs`
 does: from `QGIS_INCLUDE_DIR` and `QT_DIR`, else from `QGIS_PREFIX` or the
@@ -33,7 +34,12 @@ import sys
 import tempfile
 import zipfile
 
+import host_sqlite
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# Away from the workspace's `target`, where a build with the host's SQLite
+# and a workspace build would replace each other's `libsqlite3-sys`.
+MODULE_TARGET = ROOT / "target" / "qgis-plugin-module"
 EXT_LIBS = ROOT / "qgis-plugin" / "gpkg_toolkit" / "ext-libs"
 PROVIDER = ROOT / "geopackage-qgis"
 
@@ -65,20 +71,15 @@ def run(command, **kwargs):
 
 def install_module(tag):
     """Builds `geopackage_rs` and replaces the copy in `ext-libs/<tag>`."""
+    command = ["uvx", "maturin", "build", "--release", "-m", "geopackage-py/Cargo.toml"]
+    if not sys.platform.startswith("win"):
+        # The host's SQLite, which the wheel must not carry a copy of.
+        command += ["--no-default-features", "--auditwheel", "skip"]
+    env = dict(
+        os.environ, CARGO_TARGET_DIR=str(MODULE_TARGET), **host_sqlite.settings()
+    )
     with tempfile.TemporaryDirectory() as out:
-        run(
-            [
-                "uvx",
-                "maturin",
-                "build",
-                "--release",
-                "-m",
-                "geopackage-py/Cargo.toml",
-                "-o",
-                out,
-            ],
-            cwd=ROOT,
-        )
+        run([*command, "-o", out], cwd=ROOT, env=env)
         (wheel,) = pathlib.Path(out).glob("*.whl")
         destination = EXT_LIBS / tag
         shutil.rmtree(destination / "geopackage_rs", ignore_errors=True)
@@ -90,6 +91,9 @@ def install_module(tag):
             ]
             source.extractall(destination, members)
     print(f"{wheel.name} -> {destination.relative_to(ROOT)}")
+    for module in (destination / "geopackage_rs").iterdir():
+        if module.suffix in (".so", ".pyd"):
+            host_sqlite.check(str(module))
 
 
 def default_environment():
@@ -143,13 +147,14 @@ def qgis_minor_version(include_dir):
 def install_provider(tag):
     """Builds the native provider and links it into
     `ext-libs/<tag>/qgis-<major>.<minor>`. Returns that QGIS version."""
-    env = default_environment()
+    env = dict(default_environment(), **host_sqlite.settings())
     major, minor = qgis_minor_version(qgis_include_dir(env))
     run(
         ["cargo", "build", "--release", "--manifest-path", PROVIDER / "Cargo.toml"],
         env=env,
     )
     library = PROVIDER / "target" / "release" / library_name()
+    host_sqlite.check(str(library))
     destination = EXT_LIBS / tag / f"qgis-{major}.{minor}" / library.name
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.unlink(missing_ok=True)
