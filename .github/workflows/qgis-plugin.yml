@@ -19,6 +19,7 @@ on:
     paths:
       - ".github/workflows/qgis-plugin.yml"
       - "scripts/package_qgis_plugin.py"
+      - "scripts/host_sqlite.py"
       - "geopackage-qgis/**"
 
 permissions:
@@ -33,18 +34,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # manylinux2014 (glibc 2.17), so the module loads into the QGIS of
-          # any distribution still supported.
+          # manylinux_2_28 (glibc 2.28), as for the native provider, so the
+          # module loads into the QGIS of any distribution still supported.
+          # On Linux and macOS the module links QGIS's SQLite rather than a
+          # copy of its own (scripts/host_sqlite.py), so the wheel is not
+          # repaired, which would put a copy of the build host's in it.
           - os: ubuntu-latest
             target: x86_64
-            manylinux: "2014"
+            manylinux: "2_28"
+            args: --no-default-features --auditwheel skip
           - os: ubuntu-24.04-arm
             target: aarch64
-            manylinux: "2014"
+            manylinux: "2_28"
+            args: --no-default-features --auditwheel skip
           # One universal2 build, since `native.py` picks macOS modules by OS
           # alone: QGIS's macOS installers are arm64 and x86_64.
           - os: macos-latest
             target: universal2-apple-darwin
+            args: --no-default-features --auditwheel skip
+          # Windows keeps a lock for each file handle, so there the module
+          # keeps its own SQLite.
           - os: windows-latest
             target: x64
     runs-on: ${{ matrix.os }}
@@ -52,11 +61,18 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG || github.sha }}
+      - if: runner.os == 'macOS'
+        run: python3 scripts/host_sqlite.py --github-env
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          args: --release -m geopackage-py/Cargo.toml -o dist
+          # The system's SQLite, whose soname is libsqlite3.so.0: the linker
+          # otherwise found a libsqlite3.so without a soname first.
+          before-script-linux: dnf install -y sqlite-devel && export SQLITE3_LIB_DIR=/usr/lib64
+          args: --release -m geopackage-py/Cargo.toml -o dist ${{ matrix.args }}
+      - if: runner.os != 'Windows'
+        run: python3 scripts/host_sqlite.py --check dist/*.whl
       - uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.os }}-${{ matrix.target }}
@@ -132,6 +148,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      # QGIS's SQLite: on Linux, the system's development files, to link
+      # `libsqlite3.so.0` against (the linker otherwise found a libsqlite3.so
+      # without a soname first); on macOS, the settings that link QGIS.app's.
+      - if: runner.os == 'Linux'
+        run: |
+          dnf install -y sqlite-devel
+          echo "SQLITE3_LIB_DIR=/usr/lib64" >> "$GITHUB_ENV"
+      - run: python scripts/host_sqlite.py --github-env
       - name: Build
         run: |
           cd geopackage-qgis
@@ -157,6 +181,8 @@ jobs:
           objdump -T "$lib" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
           objdump -T "$lib" | grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -1
           ! objdump -p "$lib" | grep -E 'NEEDED.*(qgis|Qt6)'
+      - if: runner.os != 'Windows'
+        run: python scripts/host_sqlite.py --check native/*/qgis-*/${{ matrix.library }}
       - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.platform }}-qgis-${{ matrix.qgis }}
