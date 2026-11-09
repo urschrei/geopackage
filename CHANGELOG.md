@@ -8,6 +8,11 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-11-09
+
+This release changes the QGIS plugin's native provider and its release
+builds. The crates' code is the same as in 0.14.1.
+
 ### Added
 
 - The QGIS plugin ships the native provider for QGIS 4.0 on Windows. The
@@ -1783,7 +1788,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.14.2...HEAD
+[0.14.2]: https://github.com/urschrei/geopackage/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/urschrei/geopackage/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/urschrei/geopackage/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/urschrei/geopackage/compare/v0.12.0...v0.13.0
