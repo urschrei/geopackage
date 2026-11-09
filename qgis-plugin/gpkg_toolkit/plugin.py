@@ -25,11 +25,10 @@ def register_data_provider():
     project opens with either. Called from both entry points, since a
     headless Processing run never calls ``initGui``. Returns which provider
     serves the key: ``"native"``, ``"python"`` or ``None``."""
-    from qgis.core import QgsMessageLog
-
-    from . import compat, native_provider
+    from . import native_provider
 
     if native_provider.register():
+        _log_once(f"Using the native data provider: {native_provider.LOADED_PATH}")
         return "native"
     if native.gpkg is None:
         return None
@@ -37,12 +36,28 @@ def register_data_provider():
 
     data_provider.register()
     if native_provider.LOAD_ERROR:
-        QgsMessageLog.logMessage(
-            f"Using the Python data provider: {native_provider.LOAD_ERROR}",
-            "GeoPackage Toolkit",
-            compat.MESSAGE_INFO,
-        )
+        _log_once(f"Using the Python data provider: {native_provider.LOAD_ERROR}")
     return "python"
+
+
+_LOGGED = set()
+
+
+def _log_once(message):
+    """Writes `message` to QGIS's message log, with the development build's
+    record where there is one. QGIS calls both entry points, so each message
+    is written once per session."""
+    from qgis.core import QgsMessageLog
+
+    from . import compat
+
+    build = native.development_build()
+    if build:
+        message = f"{message}\nDevelopment build:\n{build}"
+    if message in _LOGGED:
+        return
+    _LOGGED.add(message)
+    QgsMessageLog.logMessage(message, "GeoPackage Toolkit", compat.MESSAGE_INFO)
 
 
 class GpkgToolkitPlugin:

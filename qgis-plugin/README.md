@@ -99,7 +99,10 @@ venv/bin/python scripts/package_qgis_plugin.py dist/*.whl
 
 To run it in the desktop app, symlink `qgis-plugin/gpkg_toolkit` into your
 profile's `python/plugins` directory. With the `maturin develop` module
-importable from QGIS's Python, `ext-libs/` isn't needed.
+importable from QGIS's Python, `ext-libs/` isn't needed. Where it isn't, as
+in QGIS.app on macOS, `scripts/dev_qgis_plugin.py` builds the module, and
+the native provider for QGIS 4, into `ext-libs/`. Restart QGIS after each
+build. `geopackage-qgis/README.md` has the steps.
 
 ## Next
 

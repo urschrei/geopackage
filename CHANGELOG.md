@@ -8,6 +8,19 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/dev_qgis_plugin.py` builds `geopackage_rs` and the native provider
+  into the repository's copy of the QGIS plugin, for a QGIS profile that
+  links to it. The plugin's startup message names the provider library it
+  loaded and the revision the script built each part from.
+
+### Fixed
+
+- The QGIS plugin's version is 0.14.0; the 0.14.0 release attached it as
+  `gpkg_toolkit-0.13.0.zip`. `scripts/package_qgis_plugin.py` now refuses a
+  plugin version that differs from the workspace's.
+
 ## [0.14.0] - 2026-11-09
 
 ### Added

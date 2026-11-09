@@ -113,26 +113,32 @@ the Plugin Manager:
     ln -s $PWD/../qgis-plugin/gpkg_toolkit \
         ~/Library/Application\ Support/QGIS/QGIS4/profiles/default/python/plugins/gpkg_toolkit
 
-Then either start QGIS from a terminal with `GPKG_TOOLKIT_NATIVE_PROVIDER`
-set to the build, or copy the build into the plugin, as
-`gpkg_toolkit/ext-libs/macos-universal2/qgis-4.0/libgeopackage_qgis.dylib`.
-The executable in `Contents/MacOS` takes the bundle's name, which
-`CFBundleExecutable` in `Contents/Info.plist` gives. For QGIS 4.0.2:
+Then build the provider and the plugin's Python module, `geopackage_rs`, into
+that copy:
+
+    python3 ../scripts/dev_qgis_plugin.py
+
+The script unpacks `geopackage_rs` into
+`gpkg_toolkit/ext-libs/macos-universal2/`, which the plugin's menu actions
+and Processing algorithms need. It links the provider into
+`gpkg_toolkit/ext-libs/macos-universal2/qgis-4.0/`, with the QGIS version
+from the headers. Then QGIS starts from Finder or the Dock as usual, and a
+later `cargo build --release` updates the provider. Restart QGIS after each
+build. It finds the headers and Qt as `build.rs` does, or, with none set,
+uses the header kit and Qt that the steps above put in `../target`.
+`--no-module` and `--no-provider` skip a part.
+
+QGIS's message log says which provider serves the layers, which library it
+loaded, and which revision the script built each part from. When the plugin
+falls back to the Python provider, the log says why.
+
+`GPKG_TOOLKIT_NATIVE_PROVIDER` names a library to load in place of the one in
+`ext-libs`, for example a build from another checkout. The executable in
+`Contents/MacOS` takes the bundle's name, which `CFBundleExecutable` in
+`Contents/Info.plist` gives. For QGIS 4.0.2:
 
     GPKG_TOOLKIT_NATIVE_PROVIDER=$PWD/target/release/libgeopackage_qgis.dylib \
         /Applications/QGIS-final-4_0_2.app/Contents/MacOS/QGIS-final-4_0_2
-
-QGIS's message log says when the plugin falls back to the Python provider,
-and why.
-
-The provider does not need the plugin's Python module, `geopackage_rs`, but
-the plugin's menu actions and Processing algorithms do. To build it into the
-plugin from `geopackage-py`:
-
-    uvx maturin build --release --out ../target/wheels
-    mkdir -p ../qgis-plugin/gpkg_toolkit/ext-libs/macos-universal2
-    unzip -o ../target/wheels/geopackage_rs-*.whl 'geopackage_rs/*' \
-        -d ../qgis-plugin/gpkg_toolkit/ext-libs/macos-universal2
 
 **Release builds** (`.github/workflows/qgis-plugin.yml`) make the same header
 kit from each supported release's tag and use Qt 6.6's headers, for Linux
