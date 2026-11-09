@@ -2,7 +2,8 @@
 
 use geopackage::core::gpb;
 use geopackage::{
-    BoundingBox, GeoPackage, GeometryColumn, Layer, SpatialIndexStatus, Value, ValueRef,
+    BoundingBox, ConversionOptions, GeoPackage, GeometryColumn, Layer, SpatialIndexStatus, Value,
+    ValueRef,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -72,17 +73,20 @@ pub struct PyLayer {
     primary_key: Option<String>,
 }
 
-/// Opens the Rust handle for a layer of `gpkg`.
+/// Opens the Rust handle for a layer of `gpkg`, converting values by
+/// `conversion`.
 fn open_layer<'g>(
     gpkg: &'g GeoPackage,
     name: &str,
     attributes: bool,
+    conversion: ConversionOptions,
 ) -> geopackage::Result<Layer<'g>> {
-    if attributes {
-        gpkg.attributes(name)
+    let layer = if attributes {
+        gpkg.attributes(name)?
     } else {
-        gpkg.layer(name)
-    }
+        gpkg.layer(name)?
+    };
+    Ok(layer.with_conversion_options(conversion))
 }
 
 impl PyLayer {
@@ -91,10 +95,11 @@ impl PyLayer {
         name: &str,
         attributes: bool,
     ) -> PyGpkgResult<Self> {
+        let conversion = gpkg.get().conversion_options();
         let (fields, geometry, primary_key) = gpkg
             .get()
             .with(gpkg.py(), |g| {
-                let layer = open_layer(g, name, attributes)?;
+                let layer = open_layer(g, name, attributes, conversion)?;
                 let geometry = layer.geometry_column().cloned();
                 let pk = layer.primary_key_column().map(str::to_owned);
                 let fields = layer
@@ -116,9 +121,9 @@ impl PyLayer {
             .or_else(|error| {
                 // `with` has already turned the error into a Python one; look
                 // the layer up again only to choose the exception type.
-                let missing = gpkg
-                    .get()
-                    .with(gpkg.py(), |g| Ok(open_layer(g, name, attributes).err()))?;
+                let missing = gpkg.get().with(gpkg.py(), |g| {
+                    Ok(open_layer(g, name, attributes, conversion).err())
+                })?;
                 match missing {
                     Some(e) => Err(lookup_error("layer", name, e)),
                     None => Err(error),
@@ -141,9 +146,10 @@ impl PyLayer {
         f: impl FnOnce(Layer<'_>) -> geopackage::Result<R> + Send,
     ) -> PyGpkgResult<R> {
         let (name, attributes) = (self.name.as_str(), self.attributes);
+        let conversion = self.gpkg.get().conversion_options();
         self.gpkg
             .get()
-            .with(py, |g| f(open_layer(g, name, attributes)?))
+            .with(py, |g| f(open_layer(g, name, attributes, conversion)?))
     }
 }
 
@@ -397,6 +403,7 @@ impl PyLayer {
             geometry: geometry && self.geometry.is_some(),
             geometry_column: self.geometry.as_ref().map(|g| g.column_name.clone()),
             chunk_size: chunk_size.max(1),
+            conversion: self.gpkg.get().conversion_options(),
         };
         PyFeatureIterator::start(query, selected)
     }
@@ -506,10 +513,11 @@ impl PyLayer {
         }
         let pk = self.primary_key.as_deref().unwrap_or("rowid").to_owned();
         let (name, attributes) = (self.name.as_str(), self.attributes);
+        let conversion = self.gpkg.get().conversion_options();
         self.gpkg.get().with(py, |g| {
-            let layer = open_layer(g, name, attributes)?;
+            let layer = open_layer(g, name, attributes, conversion)?;
             let clause = format!("{} = ?1", crate::convert::quote_ident(&pk));
-            let current = open_layer(g, name, attributes)?
+            let current = open_layer(g, name, attributes, conversion)?
                 .without_geometry()
                 .select(&clause, &[ValueRef::Integer(fid)])?
                 .next()

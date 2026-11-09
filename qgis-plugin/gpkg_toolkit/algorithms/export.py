@@ -107,11 +107,10 @@ class ExportLayerAlgorithm(Algorithm):
         promote = geometry is not None and QgsWkbTypes.isMultiType(wkb_type)
 
         try:
-            handle = (
-                gpkg.GeoPackage(path)
-                if os.path.exists(path)
-                else gpkg.GeoPackage.create(path)
-            )
+            if os.path.exists(path):
+                handle = gpkg.GeoPackage(path, lenient=True)
+            else:
+                handle = gpkg.GeoPackage.create(path)
         except gpkg.GeoPackageError as error:
             raise QgsProcessingException(f"cannot open {path}: {error}") from error
 

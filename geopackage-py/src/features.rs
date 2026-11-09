@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 use geopackage::core::gpb;
-use geopackage::{BoundingBox, GeoPackage, Value, ValueRef};
+use geopackage::{BoundingBox, ConversionOptions, GeoPackage, Value, ValueRef};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyTuple};
 
@@ -39,6 +39,7 @@ pub(crate) struct FeatureQuery {
     pub(crate) geometry: bool,
     pub(crate) geometry_column: Option<String>,
     pub(crate) chunk_size: usize,
+    pub(crate) conversion: ConversionOptions,
 }
 
 /// One row, owned.
@@ -97,7 +98,8 @@ fn read(query: &FeatureQuery, tx: &SyncSender<Message>) -> geopackage::Result<()
         gpkg.attributes(&query.table)?
     } else {
         gpkg.layer(&query.table)?
-    };
+    }
+    .with_conversion_options(query.conversion);
     let has_index = query.bbox.is_some() && layer.has_spatial_index()?;
     let pk = layer.primary_key_column().map(str::to_owned);
     match &query.columns {

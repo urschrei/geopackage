@@ -143,6 +143,23 @@ def test_value_round_trip(path):
         table.insert([(None, None, [None, None, None, None])])  # NOT NULL
 
 
+def test_lenient_reads_other_datetime_forms(path):
+    gpkg = g.GeoPackage.create(path)
+    gpkg.create_layer("t", None, columns=[("dt", "DATETIME")])
+    gpkg.close()
+    # One fractional digit, as one Esri export writes it.
+    damage(path, "INSERT INTO t (dt) VALUES ('2017-08-01T00:00:00.0Z')")
+    expected = datetime.datetime(2017, 8, 1, tzinfo=datetime.timezone.utc)
+
+    with g.GeoPackage(path, read_only=True) as strict:
+        with pytest.raises(g.GeoPackageError, match="invalid date/datetime"):
+            list(strict.attributes("t").features())
+    with g.GeoPackage(path, read_only=True, lenient=True) as lenient:
+        table = lenient.attributes("t")
+        assert [values for _, _, values in table.features()] == [[expected]]
+        assert table.get(1)[2] == [expected]
+
+
 def test_update_and_delete(points):
     layer = points.layer("pts")
     assert layer.update_attributes(5, {"name": "five", "n": 555})

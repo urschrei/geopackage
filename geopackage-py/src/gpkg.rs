@@ -5,7 +5,8 @@ use std::sync::{Mutex, MutexGuard};
 
 use geopackage::core::types::{ColumnType, GeometryType, ZmFlag};
 use geopackage::{
-    ColumnSpec, ContentsDataType, GeoPackage, GeometrySpec, OpenOptions, Srs, TableSchemaBuilder,
+    ColumnSpec, ContentsDataType, ConversionOptions, GeoPackage, GeometrySpec, OpenOptions, Srs,
+    TableSchemaBuilder,
 };
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
@@ -21,7 +22,10 @@ use crate::{GeoPackageError, IntoPyResult, PyGpkgResult, to_py};
 /// ``read_only=True`` opens it read-only, and ``lenient=True`` accepts the
 /// defects a repair tool has to be able to open (a legacy ``application_id``,
 /// a missing ``gpkg_geometry_columns``, an unsupported extension), recording
-/// them in :meth:`open_warnings`. :meth:`create` makes a new file.
+/// them in :meth:`open_warnings`. ``lenient=True`` also reads ``DATETIME``
+/// text in the common ISO 8601 forms other than GeoPackage's own, such as
+/// second precision or another number of fractional digits.
+/// :meth:`create` makes a new file.
 ///
 /// The object is a context manager that closes the file on exit.
 #[pyclass(name = "GeoPackage", module = "geopackage_rs", frozen)]
@@ -29,6 +33,7 @@ pub struct PyGeoPackage {
     inner: Mutex<Option<GeoPackage>>,
     path: PathBuf,
     read_only: bool,
+    conversion: ConversionOptions,
 }
 
 impl PyGeoPackage {
@@ -56,6 +61,12 @@ impl PyGeoPackage {
     /// The file's path, for readers that open their own connection.
     pub(crate) fn path(&self) -> &PathBuf {
         &self.path
+    }
+
+    /// How the file's layers convert stored values: lenient for a file
+    /// opened with ``lenient=True``.
+    pub(crate) fn conversion_options(&self) -> ConversionOptions {
+        self.conversion
     }
 }
 
@@ -137,6 +148,11 @@ impl PyGeoPackage {
             inner: Mutex::new(Some(gpkg)),
             path,
             read_only,
+            conversion: if lenient {
+                ConversionOptions::lenient()
+            } else {
+                ConversionOptions::default()
+            },
         })
     }
 
@@ -148,6 +164,7 @@ impl PyGeoPackage {
             inner: Mutex::new(Some(gpkg)),
             path,
             read_only: false,
+            conversion: ConversionOptions::default(),
         })
     }
 

@@ -38,7 +38,7 @@ use arrow_schema::{DataType, TimeUnit};
 use geopackage::arrow::ArrowReadOptions;
 use geopackage::core::datetime::{Date, DateTime};
 use geopackage::core::types::ZmFlag;
-use geopackage::{BoundingBox, GeoPackage, Layer, Value, ValueRef};
+use geopackage::{BoundingBox, ConversionOptions, GeoPackage, Layer, Value, ValueRef};
 
 #[cxx::bridge(namespace = "gpkgrs")]
 mod ffi {
@@ -228,16 +228,20 @@ fn qgis_type_name(geometry_type: &str) -> &'static str {
     }
 }
 
+/// Opens a layer of `gpkg`. Every connection here is lenient, and so are its
+/// layers' value conversions: `DATETIME` text in the common ISO 8601 forms
+/// other than GeoPackage's own is read, as OGR reads it.
 fn open_layer_handle<'g>(
     gpkg: &'g GeoPackage,
     table: &str,
     attributes: bool,
 ) -> geopackage::Result<Layer<'g>> {
-    if attributes {
-        gpkg.attributes(table)
+    let layer = if attributes {
+        gpkg.attributes(table)?
     } else {
-        gpkg.layer(table)
-    }
+        gpkg.layer(table)?
+    };
+    Ok(layer.with_conversion_options(ConversionOptions::lenient()))
 }
 
 fn open_layer(path: &str, layer: &str) -> Result<Box<RsLayer>, Error> {
