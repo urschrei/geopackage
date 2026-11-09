@@ -306,7 +306,9 @@ def test_a_project_stores_a_relative_path_and_reopens(path, tmp_path, key):
     (layer,) = reopened.mapLayers().values()
     assert layer.isValid()
     assert layer.providerType() == key
-    assert decode_uri(layer.source())["path"] == str(moved / "data.gpkg")
+    # QGIS writes paths with forward slashes on Windows too.
+    reopened_path = os.path.normcase(os.path.normpath(decode_uri(layer.source())["path"]))
+    assert reopened_path == os.path.normcase(str(moved / "data.gpkg"))
     assert layer.featureCount() == 100
 
 
