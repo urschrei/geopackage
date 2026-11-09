@@ -14,6 +14,13 @@ While the version is below 1.0 the API may change in any release.
   Windows builds for QGIS 4.0 and 4.2 link the `qgis_core.lib` of OSGeo4W's
   `qgis-devel` package for the same release.
 
+### Changed
+
+- The QGIS native provider keeps reader threads for each layer. Each holds a
+  read-only connection and the layer resolved on it, so a read no longer
+  starts a thread or resolves the layer again, which the crate's `handles`
+  benchmark puts at 37 to 51 µs, more than a small read itself.
+
 ## [0.14.1] - 2026-11-09
 
 This release changes the QGIS plugin and the scripts that build it. The
