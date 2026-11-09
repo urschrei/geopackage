@@ -8,6 +8,11 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-11-09
+
+This release changes the QGIS plugin and the scripts that build it. The
+crates' code is the same as in 0.14.0.
+
 ### Added
 
 - `scripts/dev_qgis_plugin.py` builds `geopackage_rs` and the native provider
@@ -24,9 +29,10 @@ While the version is below 1.0 the API may change in any release.
   a file while QGIS, through GDAL, was writing to it. `scripts/host_sqlite.py`
   gives the settings for these builds and checks the result. The plugin's
   Linux module now needs glibc 2.28, as the native provider does.
-- The QGIS plugin's version is 0.14.0; the 0.14.0 release attached it as
-  `gpkg_toolkit-0.13.0.zip`. `scripts/package_qgis_plugin.py` now refuses a
-  plugin version that differs from the workspace's.
+- The QGIS plugin's version follows the workspace's: the 0.14.0 release
+  attached its plugin as `gpkg_toolkit-0.13.0.zip`.
+  `scripts/package_qgis_plugin.py` now refuses a plugin version that differs
+  from the workspace's.
 
 ## [0.14.0] - 2026-11-09
 
@@ -1764,7 +1770,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/urschrei/geopackage/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/urschrei/geopackage/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/urschrei/geopackage/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/urschrei/geopackage/compare/v0.11.2...v0.12.0
