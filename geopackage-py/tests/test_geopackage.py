@@ -269,6 +269,40 @@ def test_repair_a_legacy_trigger_set(points, path):
         assert layer.spatial_index_status() == "current"
 
 
+def test_repair_flagged_wkb_and_non_standard_datetimes(path):
+    gpkg = g.GeoPackage.create(path)
+    gpkg.add_epsg_srs(4326)
+    gpkg.create_layer("pts", "POINT", 4326, [("at", "DATETIME")], z="mandatory")
+    gpkg.close()
+    # POINT Z (1 2 3) with Z given by the high-bit flag, in a GPB blob with no
+    # envelope, and a datetime with one fractional digit.
+    body = struct.pack("<BIddd", 1, 0x8000_0001, 1.0, 2.0, 3.0)
+    blob = b"GP\x00\x01" + struct.pack("<i", 4326) + body
+    con = sqlite3.connect(path)
+    con.execute("DROP TRIGGER rtree_pts_geom_insert")
+    con.execute(
+        "INSERT INTO pts (geom, at) VALUES (?, '2017-08-01T00:00:00.0Z')", (blob,)
+    )
+    con.commit()
+    con.close()
+
+    with g.GeoPackage(path) as gpkg:
+        codes = sorted(f.code for f in gpkg.validate() if f.table_name == "pts")
+        assert codes == [
+            "NonIsoWkbTypeCode",
+            "NonStandardDateTime",
+            "StaleSpatialIndex",
+        ]
+        layer = gpkg.layer("pts")
+        assert layer.repair_wkb_type_codes() == 1
+        assert layer.repair_datetimes() == 1
+        layer.repair_spatial_index()
+        assert gpkg.validate() == []
+        ((_, wkb, values),) = layer.features()
+        assert wkb == struct.pack("<BIddd", 1, 1001, 1.0, 2.0, 3.0)
+        assert values == [datetime.datetime(2017, 8, 1, tzinfo=datetime.timezone.utc)]
+
+
 def test_srs(points):
     srs = points.srs(4326)
     assert srs.authid == "EPSG:4326"

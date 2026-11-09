@@ -314,6 +314,19 @@ impl PyLayer {
         self.with(py, |l| l.rebuild_spatial_index())
     }
 
+    /// Rewrites each geometry whose WKB gives Z or M by a high-bit flag in a
+    /// type code with ISO type codes. Returns how many it rewrote.
+    fn repair_wkb_type_codes(&self, py: Python<'_>) -> PyGpkgResult<usize> {
+        self.with(py, |l| l.repair_wkb_type_codes())
+    }
+
+    /// Rewrites ``DATETIME`` text that only the lenient parser reads in the
+    /// GeoPackage form, when nothing is lost. Returns how many values it
+    /// rewrote.
+    fn repair_datetimes(&self, py: Python<'_>) -> PyGpkgResult<usize> {
+        self.with(py, |l| l.repair_datetimes())
+    }
+
     /// Drops the index, its triggers and its extension row.
     fn drop_spatial_index(&self, py: Python<'_>) -> PyGpkgResult<()> {
         self.with(py, |l| l.drop_spatial_index())
