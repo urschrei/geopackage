@@ -80,29 +80,59 @@ identical code.
     git -C ../target/qgis-4.0.2 sparse-checkout set src/core cmake_templates external/nlohmann
     python3 scripts/qgis_headers.py ../target/qgis-4.0.2 ../target/qgis-4.0.2-include
 
-Then Qt 6 headers no newer than the bundle's Qt. To see which Qt that is:
+Then Qt 6 headers no newer than the bundle's Qt. QGIS 4.0.2's bundle ships
+Qt as plain libraries, whose names give the version
+(`libQt6Core.6.9.3.dylib`):
 
-    plutil -p /Applications/QGIS*.app/Contents/Frameworks/QtCore.framework/Resources/Info.plist | grep -i version
+    ls /Applications/QGIS*.app/Contents/Frameworks | grep libQt6Core
 
-Any Qt 6 at or below that version will do, such as conda-forge's
-(`conda create -n qt -c conda-forge "qt6-main=6.6"`) or Qt's own installer.
+A bundle that ships Qt as frameworks gives it in
+`QtCore.framework/Resources/Info.plist` instead.
+
+Any Qt 6 at or below that version will do. `aqtinstall` downloads Qt's
+own macOS build, and needs only `uv`; Qt's base module holds every header
+the build uses:
+
+    uvx --from aqtinstall aqt install-qt mac desktop 6.6.3 clang_64 \
+        --outputdir ../target/qt --archives qtbase
+    QGIS_INCLUDE_DIR=$PWD/../target/qgis-4.0.2-include \
+        QT_DIR=$PWD/../target/qt/6.6.3/macos cargo build --release
+
+conda-forge's Qt also works, with `QT_DIR=$CONDA_PREFIX`:
+
+    conda create -n qt -c conda-forge "qt6-main=6.6"
+
 If the bundle's frameworks do carry `Headers`, point at the bundle instead:
 `QT_DIR=/Applications/QGIS-4.0.app/Contents/Frameworks`, and likewise
-`QGIS_INCLUDE_DIR=.../qgis_core.framework/Headers`. Then:
+`QGIS_INCLUDE_DIR=.../qgis_core.framework/Headers`.
 
-    QGIS_INCLUDE_DIR=$PWD/../target/qgis-4.0.2-include QT_DIR=$CONDA_PREFIX \
-        cargo build --release
+To use the build, the plugin must be installed in QGIS 4's profile. For
+development, link the repository's copy and enable "GeoPackage toolkit" in
+the Plugin Manager:
 
-To use the build, either start QGIS from a terminal with
-`GPKG_TOOLKIT_NATIVE_PROVIDER` set to it:
+    ln -s $PWD/../qgis-plugin/gpkg_toolkit \
+        ~/Library/Application\ Support/QGIS/QGIS4/profiles/default/python/plugins/gpkg_toolkit
+
+Then either start QGIS from a terminal with `GPKG_TOOLKIT_NATIVE_PROVIDER`
+set to the build, or copy the build into the plugin, as
+`gpkg_toolkit/ext-libs/macos-universal2/qgis-4.0/libgeopackage_qgis.dylib`.
+The executable in `Contents/MacOS` takes the bundle's name, which
+`CFBundleExecutable` in `Contents/Info.plist` gives. For QGIS 4.0.2:
 
     GPKG_TOOLKIT_NATIVE_PROVIDER=$PWD/target/release/libgeopackage_qgis.dylib \
-        /Applications/QGIS-4.0.app/Contents/MacOS/QGIS
+        /Applications/QGIS-final-4_0_2.app/Contents/MacOS/QGIS-final-4_0_2
 
-or copy it into the installed plugin, as
-`gpkg_toolkit/ext-libs/macos-universal2/qgis-4.0/libgeopackage_qgis.dylib`
-in your QGIS profile's `python/plugins` folder. QGIS's message log says when
-the plugin falls back to the Python provider, and why.
+QGIS's message log says when the plugin falls back to the Python provider,
+and why.
+
+The provider does not need the plugin's Python module, `geopackage_rs`, but
+the plugin's menu actions and Processing algorithms do. To build it into the
+plugin from `geopackage-py`:
+
+    uvx maturin build --release --out ../target/wheels
+    mkdir -p ../qgis-plugin/gpkg_toolkit/ext-libs/macos-universal2
+    unzip -o ../target/wheels/geopackage_rs-*.whl 'geopackage_rs/*' \
+        -d ../qgis-plugin/gpkg_toolkit/ext-libs/macos-universal2
 
 **Release builds** (`.github/workflows/qgis-plugin.yml`) make the same header
 kit from each supported release's tag and use Qt 6.6's headers, for Linux
