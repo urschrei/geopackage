@@ -61,10 +61,11 @@ allow_attributes_without_reason = "warn"
 
 [features]
 # Vendored SQLite by default, as for `geopackage-cli`: a wheel has to work on
-# a host whose SQLite may lack the RTree module, and inside QGIS, whose own
-# SQLite is already loaded into the process. A cdylib exports only its
-# `PyInit_` symbol, so the vendored copy stays private to this module.
-# System-linked builds pass `--no-default-features`.
+# a host whose SQLite may lack the RTree module. In a process that also
+# loads SQLite through Python's `sqlite3` or GDAL, that copy is a second one,
+# and the two do not see each other's locks. So the QGIS plugin's build
+# passes `--no-default-features` and links QGIS's SQLite (see
+# `scripts/host_sqlite.py` and `build.rs`).
 default = ["bundled"]
 ## Forward `geopackage`'s `bundled` feature.
 bundled = ["geopackage/bundled"]
