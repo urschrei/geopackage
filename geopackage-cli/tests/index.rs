@@ -192,3 +192,85 @@ fn repair_can_be_narrowed_to_one_layer() {
     // The layer that was not named is still stale.
     assert!(index_states(&path).contains("index:    stale"));
 }
+
+/// A file with one unindexed POINT Z layer and one attribute table, each
+/// holding a value in a form the spec does not give it: a point whose Z is
+/// given by the high-bit flag, and `DATETIME` text with one fractional digit.
+fn file_with_encodings_to_repair() -> (tempfile::TempDir, PathBuf) {
+    use geopackage::core::types::{ColumnType, GeometryType, ZmFlag};
+    use geopackage::{ColumnSpec, GeoPackage, GeometrySpec, TableSchemaBuilder};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("encodings.gpkg");
+    let gpkg = GeoPackage::create(&path).unwrap();
+    gpkg.add_epsg_srs(4326).unwrap();
+    gpkg.create_layer(
+        &TableSchemaBuilder::new("pts")
+            .column(ColumnSpec::new("at", ColumnType::DateTime))
+            .geometry(GeometrySpec::new(GeometryType::Point, 4326).z(ZmFlag::Mandatory))
+            .spatial_index(false),
+    )
+    .unwrap();
+    gpkg.create_attributes_table(
+        &TableSchemaBuilder::new("visits").column(ColumnSpec::new("at", ColumnType::DateTime)),
+    )
+    .unwrap();
+    gpkg.close().unwrap();
+
+    let mut blob = vec![b'G', b'P', 0, 0x01];
+    blob.extend_from_slice(&4326_i32.to_le_bytes());
+    blob.push(1);
+    blob.extend_from_slice(&0x8000_0001_u32.to_le_bytes());
+    for v in [1.0_f64, 2.0, 3.0] {
+        blob.extend_from_slice(&v.to_le_bytes());
+    }
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO pts (geom, at) VALUES (?1, '2017-08-01T00:00:00.0Z')",
+        [blob],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO visits (at) VALUES ('2017-08-01T00:00:00.0Z')",
+        [],
+    )
+    .unwrap();
+    (dir, path)
+}
+
+#[test]
+fn repair_rewrites_flagged_wkb_and_non_standard_datetimes() {
+    let (_dir, path) = file_with_encodings_to_repair();
+    let output = gpkg(&["repair"], &path);
+    assert!(output.status.success());
+    let out = stdout(&output);
+    assert!(
+        out.contains("pts: 1 geometries rewritten with ISO WKB type codes"),
+        "{out}"
+    );
+    assert!(
+        out.contains("pts: 1 DATETIME values rewritten in the GeoPackage form"),
+        "{out}"
+    );
+    assert!(
+        out.contains("visits: 1 DATETIME values rewritten in the GeoPackage form"),
+        "{out}"
+    );
+
+    let again = gpkg(&["repair"], &path);
+    assert!(
+        stdout(&again).contains("nothing to repair"),
+        "{}",
+        stdout(&again)
+    );
+}
+
+#[test]
+fn repair_can_be_narrowed_to_one_attribute_table() {
+    let (_dir, path) = file_with_encodings_to_repair();
+    let output = gpkg_on(&["repair"], &path, &["visits"]);
+    assert!(output.status.success());
+    let out = stdout(&output);
+    assert!(out.contains("visits: 1 DATETIME values"), "{out}");
+    assert!(!out.contains("pts"), "{out}");
+}

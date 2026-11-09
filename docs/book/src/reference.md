@@ -36,7 +36,7 @@ committed header and runs it.
 | `gpkg info <file>` | Version, layers with their schemas and row counts, spatial reference systems, spatial-index state including its trigger generation, tile pyramids, and the extension catalogue. |
 | `gpkg validate <file>` | The findings of `GeoPackage::validate`, most severe first, each with its repair advice. Nothing is modified. `--strict` also exits non-zero for warnings. |
 | `gpkg index <file> <layer>` | Builds a spatial index on a layer that has none. A layer whose index is present but broken exits non-zero. |
-| `gpkg repair <file> [layer]` | Rebuilds legacy and desynchronised indexes onto the 1.4 trigger set, for one named layer or every layer that needs it. A layer with no index is left alone. |
+| `gpkg repair <file> [layer]` | Rebuilds legacy and desynchronised indexes onto the 1.4 trigger set, rewrites geometries whose WKB type codes use the high-bit Z or M flags with ISO codes, and rewrites `DATETIME` text in the GeoPackage form where nothing is lost. Works on one named layer or attribute table, or on every one that needs it. A layer with no index is left alone. |
 | `gpkg copy <src> <dst>` | Copies the feature and attribute layers of one file into a new one. |
 | `gpkg tiles info <file> [pyramid]` | Each pyramid's extent, spatial reference system and zoom ladder, with the tiles stored at each level. |
 | `gpkg tiles get <file> <pyramid> <zoom> <column> <row>` | Writes one tile's stored bytes to `--out` or to standard output. |

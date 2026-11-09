@@ -5,15 +5,17 @@
 //! `application_id` would put repair out of reach of the files that need it
 //! most.
 //!
-//! Each command chooses what to do from the layer's [`SpatialIndexStatus`]
-//! rather than acting blindly, so the tool says what it is about to do and
-//! skips a layer that does not need it.
+//! The index work is chosen from the layer's [`SpatialIndexStatus`] rather
+//! than done blindly, so the tool says what it does and skips a layer that
+//! does not need it. `gpkg repair` also rewrites WKB type codes and
+//! `DATETIME` text that are not in the form the spec gives them; each of
+//! those repairs writes only the values that need it.
 
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
-use geopackage::{GeoPackage, Layer, SpatialIndexStatus};
+use geopackage::{ContentsDataType, GeoPackage, Layer, SpatialIndexStatus};
 
 use crate::error::Result;
 
@@ -52,14 +54,22 @@ pub fn build(path: &Path, layer_name: &str, out: &mut impl Write) -> Result<Exit
     }
 }
 
-/// `gpkg repair`: repair the index of every layer that needs it, or of one
-/// named layer.
+/// `gpkg repair`: repair every feature layer and attribute table that needs
+/// it, or one named table.
 pub fn repair(path: &Path, layer_name: Option<&str>, out: &mut impl Write) -> Result<ExitCode> {
     let gpkg = GeoPackage::open_lenient(path)?;
 
     let layers = match layer_name {
-        Some(name) => vec![gpkg.layer(name)?],
-        None => gpkg.layers()?,
+        Some(name) => vec![named_layer(&gpkg, name)?],
+        None => {
+            let mut layers = gpkg.layers()?;
+            for entry in gpkg.contents()? {
+                if entry.data_type == ContentsDataType::Attributes {
+                    layers.push(gpkg.attributes(&entry.table_name)?);
+                }
+            }
+            layers
+        }
     };
 
     let mut repaired = 0usize;
@@ -75,14 +85,46 @@ pub fn repair(path: &Path, layer_name: Option<&str>, out: &mut impl Write) -> Re
     Ok(ExitCode::SUCCESS)
 }
 
+/// Opens `name` as a feature layer, or as an attribute table when it is one.
+fn named_layer<'g>(gpkg: &'g GeoPackage, name: &str) -> Result<Layer<'g>> {
+    match gpkg.layer(name) {
+        Err(geopackage::Error::WrongDataType { .. }) => Ok(gpkg.attributes(name)?),
+        other => Ok(other?),
+    }
+}
+
 /// Repair one layer, reporting whether anything was done.
 fn repair_one(layer: &Layer<'_>, out: &mut impl Write) -> Result<bool> {
-    // An attribute layer has no geometry and so no index to repair.
-    if layer.geometry_column().is_none() {
-        return Ok(false);
-    }
-
     let name = layer.table_name().to_owned();
+    let has_geometry = layer.geometry_column().is_some();
+    let mut changed = false;
+    if has_geometry {
+        let geometries = layer.repair_wkb_type_codes()?;
+        if geometries > 0 {
+            writeln!(
+                out,
+                "{name}: {geometries} geometries rewritten with ISO WKB type codes"
+            )?;
+            changed = true;
+        }
+    }
+    let datetimes = layer.repair_datetimes()?;
+    if datetimes > 0 {
+        writeln!(
+            out,
+            "{name}: {datetimes} DATETIME values rewritten in the GeoPackage form"
+        )?;
+        changed = true;
+    }
+    // An attribute table has no geometry and so no index to repair.
+    if has_geometry && repair_index(layer, &name, out)? {
+        changed = true;
+    }
+    Ok(changed)
+}
+
+/// Repair one layer's spatial index, reporting whether anything was done.
+fn repair_index(layer: &Layer<'_>, name: &str, out: &mut impl Write) -> Result<bool> {
     match layer.spatial_index_status()? {
         SpatialIndexStatus::Legacy | SpatialIndexStatus::Stale => {
             let status = layer.spatial_index_status()?;

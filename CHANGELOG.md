@@ -63,6 +63,9 @@ While the version is below 1.0 the API may change in any release.
   becomes `Z` for the same instant, and a value with a sub-millisecond part
   is left alone. `validate` reports such text as the new
   `NonStandardDateTime` warning, per table, naming that repair.
+- `gpkg repair` also runs both repairs: on every feature layer and, for
+  `DATETIME` text, on every attribute table, or on one named table. It
+  reports how many values each rewrote.
 - `geopackage-py`, Python bindings built with PyO3 as abi3 wheels for CPython
   3.9 and later, with SQLite vendored. They cover open and create, layer
   schemas, streaming feature reads by bounding box, `WHERE` clause and column

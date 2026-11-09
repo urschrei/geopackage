@@ -57,14 +57,20 @@ enum Command {
         layer: String,
     },
     /// Repair spatial indexes that legacy or mixed triggers maintain, or that
-    /// are out of sync.
+    /// are out of sync, and rewrite values not in the form the spec gives
+    /// them.
+    ///
+    /// Geometries whose WKB gives Z or M by a high-bit flag in a type code are
+    /// rewritten with ISO type codes. DATETIME text in another ISO 8601 form
+    /// is rewritten in the GeoPackage form when nothing is lost.
     ///
     /// A layer with no index is left alone, because that is a choice rather
     /// than a defect. Use `gpkg index` to add one.
     Repair {
         /// The `.gpkg` file to write to.
         file: PathBuf,
-        /// Repair only this layer, rather than every layer that needs it.
+        /// Repair only this layer or attribute table, rather than every one
+        /// that needs it.
         layer: Option<String>,
     },
     /// Copy the feature and attribute layers of one file into a new one.
