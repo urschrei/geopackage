@@ -17,6 +17,13 @@ While the version is below 1.0 the API may change in any release.
 
 ### Fixed
 
+- On Linux and macOS, the QGIS plugin's module and native provider link the
+  SQLite that QGIS has loaded, instead of a copy of their own. Two copies in
+  one process do not see each other's locks, and closing a file in one
+  releases the locks that the other holds on it. So the plugin could write to
+  a file while QGIS, through GDAL, was writing to it. `scripts/host_sqlite.py`
+  gives the settings for these builds and checks the result. The plugin's
+  Linux module now needs glibc 2.28, as the native provider does.
 - The QGIS plugin's version is 0.14.0; the 0.14.0 release attached it as
   `gpkg_toolkit-0.13.0.zip`. `scripts/package_qgis_plugin.py` now refuses a
   plugin version that differs from the workspace's.

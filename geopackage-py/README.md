@@ -39,9 +39,17 @@ pytest geopackage-py/tests
 ```
 
 `maturin build` makes a wheel. The vendored SQLite is the default
-(`bundled`), because a host SQLite may lack RTree, and inside QGIS another
-SQLite is already loaded. The module exports only `PyInit__geopackage_rs`, so
-the two never collide.
+(`bundled`), because a host SQLite may lack RTree. The module exports only
+`PyInit__geopackage_rs`, so its SQLite is private to it, and it is a second
+copy in a process that also loads SQLite through Python's `sqlite3` or GDAL.
+Two copies do not see each other's locks, and closing a file in one releases
+the locks that the other holds on that file. So do not write to a file
+through this module while the same process has it open through another
+SQLite library.
+
+The QGIS plugin's build links QGIS's SQLite instead, which QGIS, GDAL and
+QGIS's Python share: `--no-default-features --auditwheel skip`, with the
+settings that `scripts/host_sqlite.py` prints on macOS.
 
 ## Not yet bound
 

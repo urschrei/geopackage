@@ -56,6 +56,15 @@ import libraries. A build works only in the QGIS minor version it was
 compiled against: QGIS's C++ interface changes between minor versions, and
 the plugin checks.
 
+**SQLite.** On Linux and macOS the library uses the SQLite that QGIS has
+loaded, which GDAL and QGIS's Python share. A copy of its own would not see
+their locks, and closing a file in it would release theirs. On Linux it links
+`libsqlite3.so.0`, which a build finds through `pkg-config`, or in
+`SQLITE3_LIB_DIR`. On macOS it links `@rpath/libsqlite3.dylib`, QGIS.app's
+name for it, through a stub that `scripts/host_sqlite.py` makes. The build
+stops without the settings that script prints. Windows keeps a lock for each
+file handle, so there the library keeps its own SQLite.
+
 `build.rs` takes QGIS's headers from `QGIS_INCLUDE_DIR`, else
 `$QGIS_PREFIX/include/qgis`, where `QGIS_PREFIX` defaults to the active conda
 environment and then `/usr`. It takes Qt from `QT_DIR`, a Qt prefix in any of
@@ -67,7 +76,10 @@ load into; QGIS 4.0 requires Qt 6.6, so 6.6's headers suit any QGIS 4.
 
     conda create -n qgis -c conda-forge "qgis=4.2" pytest
     conda activate qgis
-    QT_DIR=$CONDA_PREFIX cargo build --release
+    QT_DIR=$CONDA_PREFIX SQLITE3_LIB_DIR=$CONDA_PREFIX/lib cargo build --release
+
+On macOS, set the variables that `python ../scripts/host_sqlite.py` prints
+in place of `SQLITE3_LIB_DIR`.
 
 **On macOS, against QGIS.app** (for example QGIS 4.0.2). Official app
 bundles have shipped without headers, so make them from QGIS's source at the
@@ -95,7 +107,8 @@ the build uses:
 
     uvx --from aqtinstall aqt install-qt mac desktop 6.6.3 clang_64 \
         --outputdir ../target/qt --archives qtbase
-    QGIS_INCLUDE_DIR=$PWD/../target/qgis-4.0.2-include \
+    env $(python3 ../scripts/host_sqlite.py) \
+        QGIS_INCLUDE_DIR=$PWD/../target/qgis-4.0.2-include \
         QT_DIR=$PWD/../target/qt/6.6.3/macos cargo build --release
 
 conda-forge's Qt also works, with `QT_DIR=$CONDA_PREFIX`:

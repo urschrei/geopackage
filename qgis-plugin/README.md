@@ -84,18 +84,29 @@ the enums that moved between them.
 
 ```sh
 # A Python that sees QGIS's bindings, with the native module built into it.
+# The module links QGIS's SQLite (on macOS, with the settings that
+# scripts/host_sqlite.py prints; on Windows, omit the two flags).
 python3 -m venv --system-site-packages venv
 venv/bin/pip install maturin pytest
-venv/bin/maturin develop -m geopackage-py/Cargo.toml
+venv/bin/maturin develop -m geopackage-py/Cargo.toml --no-default-features
 
 # Headless tests: every algorithm, through Processing, including a GDAL read
 # of what the export wrote.
 QT_QPA_PLATFORM=offscreen venv/bin/python -m pytest qgis-plugin/tests
 
 # A plugin zip for this platform.
-venv/bin/maturin build --release -m geopackage-py/Cargo.toml -o dist
+venv/bin/maturin build --release -m geopackage-py/Cargo.toml \
+    --no-default-features --auditwheel skip -o dist
 venv/bin/python scripts/package_qgis_plugin.py dist/*.whl
 ```
+
+**One SQLite.** On Linux and macOS, the module and the native provider link
+the SQLite that QGIS has loaded, which GDAL and QGIS's Python share. Two
+copies of SQLite in one process do not see each other's locks: a copy of
+their own would let the plugin write to a file while QGIS was writing to it.
+`tests/test_one_sqlite.py` checks that a lock held through QGIS's SQLite
+stops the plugin's writes. Windows keeps a lock for each file handle, so
+there both keep their own SQLite.
 
 To run it in the desktop app, symlink `qgis-plugin/gpkg_toolkit` into your
 profile's `python/plugins` directory. With the `maturin develop` module
