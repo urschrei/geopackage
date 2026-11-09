@@ -251,6 +251,10 @@ pub geopackage::Finding::NoSpatialIndex
 pub geopackage::Finding::NoSpatialIndex::table_name: alloc::string::String
 pub geopackage::Finding::NonConformantRelationName
 pub geopackage::Finding::NonConformantRelationName::relation_name: alloc::string::String
+pub geopackage::Finding::NonIsoWkbTypeCode
+pub geopackage::Finding::NonIsoWkbTypeCode::rows: usize
+pub geopackage::Finding::NonIsoWkbTypeCode::table_name: alloc::string::String
+pub geopackage::Finding::NonIsoWkbTypeCode::type_code: u32
 pub geopackage::Finding::RemovedExtension
 pub geopackage::Finding::RemovedExtension::extension_name: alloc::string::String
 pub geopackage::Finding::RemovedExtension::table_name: core::option::Option<alloc::string::String>
@@ -265,6 +269,10 @@ pub geopackage::Finding::TableNameCaseMismatch::declared: alloc::string::String
 pub geopackage::Finding::TilePyramidInconsistent
 pub geopackage::Finding::TilePyramidInconsistent::detail: alloc::string::String
 pub geopackage::Finding::TilePyramidInconsistent::table_name: alloc::string::String
+pub geopackage::Finding::UnreadableGeometry
+pub geopackage::Finding::UnreadableGeometry::detail: alloc::string::String
+pub geopackage::Finding::UnreadableGeometry::rows: usize
+pub geopackage::Finding::UnreadableGeometry::table_name: alloc::string::String
 pub geopackage::Finding::UnrecognisedExtension
 pub geopackage::Finding::UnrecognisedExtension::extension_name: alloc::string::String
 pub geopackage::Finding::UnrecognisedExtension::scope: geopackage_core::extensions::ExtensionScope

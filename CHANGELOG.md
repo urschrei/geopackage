@@ -21,6 +21,15 @@ While the version is below 1.0 the API may change in any release.
   `BodyScan::flagged_type_code`. It still rejects the EWKB SRID flag and a
   code with both a flag and an ISO offset. `encode_gpb_from_wkb` still
   refuses to write a flagged body, so the crate writes only ISO WKB.
+- `GeoPackage::validate` stopped with an error at the first geometry it could
+  not read, so one bad row hid every other finding in the file. It now reads
+  the header and walks the body of every geometry once, and reports two new
+  findings per layer: `UnreadableGeometry` (an error, with the count and the
+  first reason), and `NonIsoWkbTypeCode` (a warning, with the count and the
+  first code) for the high-bit flags above. A layer with an unreadable
+  geometry is not audited, since the audit reads the same geometries. The
+  extra pass makes `validate` read every geometry, where before only the
+  index audit read the feature tables.
 
 - `Layer::read_arrow_in` and `read_arrow_in_where` were slow on spatially
   scattered data, the usual case. They walked the RTree's candidates as runs

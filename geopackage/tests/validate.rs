@@ -126,6 +126,117 @@ fn an_out_of_step_spatial_index_is_an_error() {
     assert!(finding.repair().unwrap().contains("rebuild_spatial_index"));
 }
 
+/// A GPB blob, little-endian, with no envelope, around `body`.
+fn gpb_blob(body: &[u8]) -> Vec<u8> {
+    let mut blob = vec![b'G', b'P', 0, 0x01];
+    blob.extend_from_slice(&4326_i32.to_le_bytes());
+    blob.extend_from_slice(body);
+    blob
+}
+
+/// A LINESTRING whose type code gives Z by the high-bit flag, not by the ISO
+/// offset: two points, each three doubles.
+fn flagged_linestring() -> Vec<u8> {
+    let mut body = vec![1u8];
+    body.extend_from_slice(&0x8000_0002_u32.to_le_bytes());
+    body.extend_from_slice(&2_u32.to_le_bytes());
+    for v in [0.0_f64, 0.0, 5.0, 1.0, 1.0, 5.0] {
+        body.extend_from_slice(&v.to_le_bytes());
+    }
+    body
+}
+
+fn roads_with_one_row() -> (TempDir, GeoPackage) {
+    let (dir, gpkg) = with_layer();
+    let layer = gpkg.layer("roads").unwrap();
+    let mut writer = layer.writer().unwrap();
+    writer
+        .insert(
+            None,
+            &geo_types::Line::new(
+                geo_types::Coord { x: 0.0, y: 0.0 },
+                geo_types::Coord { x: 1.0, y: 1.0 },
+            ),
+            &[geopackage::ValueRef::Text("a")],
+        )
+        .unwrap();
+    writer.commit().unwrap();
+    (dir, gpkg)
+}
+
+#[test]
+fn a_high_bit_wkb_type_code_is_a_warning_and_the_index_is_still_audited() {
+    let (_dir, gpkg) = roads_with_one_row();
+    // Written through SQL, so the index triggers run on the flagged body.
+    gpkg.connection()
+        .execute(
+            "UPDATE roads SET geom = ?1",
+            [gpb_blob(&flagged_linestring())],
+        )
+        .unwrap();
+
+    let findings = gpkg.validate().unwrap();
+    assert_eq!(
+        findings,
+        vec![Finding::NonIsoWkbTypeCode {
+            table_name: "roads".into(),
+            rows: 1,
+            type_code: 0x8000_0002,
+        }]
+    );
+    assert_eq!(findings[0].severity(), Severity::Warning);
+    let audit = gpkg.layer("roads").unwrap().audit_spatial_index().unwrap();
+    assert!(audit.is_consistent());
+}
+
+#[test]
+fn an_unreadable_geometry_is_an_error_and_skips_the_audit() {
+    let (_dir, gpkg) = roads_with_one_row();
+    let conn = gpkg.connection();
+    // The triggers would read the body and fail, so they are dropped for the
+    // write and created again after it. Creating a trigger does not run it.
+    let triggers: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'rtree_roads_geom_%'")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for name in &triggers {
+        conn.execute_batch(&format!("DROP TRIGGER \"{name}\""))
+            .unwrap();
+    }
+    // A valid byte-order marker, then a type code that is no geometry type.
+    conn.execute(
+        "UPDATE roads SET geom = ?1",
+        [gpb_blob(&[1, 0xff, 0xff, 0, 0])],
+    )
+    .unwrap();
+    for sql in geopackage::core::triggers::create_triggers_sql("roads", "geom", "fid").unwrap() {
+        conn.execute_batch(&sql).unwrap();
+    }
+    assert_eq!(
+        gpkg.layer("roads").unwrap().spatial_index_status().unwrap(),
+        geopackage::SpatialIndexStatus::Current
+    );
+
+    let findings = gpkg.validate().unwrap();
+    let [
+        Finding::UnreadableGeometry {
+            table_name,
+            rows,
+            detail,
+        },
+    ] = findings.as_slice()
+    else {
+        panic!("expected only the unreadable geometry, got {findings:?}");
+    };
+    assert_eq!((table_name.as_str(), *rows), ("roads", 1));
+    assert!(detail.contains("65535"), "{detail}");
+    assert_eq!(findings[0].severity(), Severity::Error);
+    assert_eq!(findings[0].repair(), None);
+}
+
 #[test]
 fn a_removed_extension_is_reported_as_a_warning() {
     let (_dir, gpkg) = with_layer();
@@ -432,6 +543,22 @@ fn every_finding_renders_as_a_sentence_naming_its_subject() {
                 relation_name: "sideways".into(),
             },
             "sideways",
+        ),
+        (
+            Finding::NonIsoWkbTypeCode {
+                table_name: "roads".into(),
+                rows: 3,
+                type_code: 0x8000_0003,
+            },
+            "0x80000003",
+        ),
+        (
+            Finding::UnreadableGeometry {
+                table_name: "roads".into(),
+                rows: 2,
+                detail: "unknown WKB geometry type code 65535".into(),
+            },
+            "roads",
         ),
     ];
 

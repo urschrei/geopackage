@@ -25,7 +25,11 @@ use geopackage_core::extensions::ExtensionSupport;
 
 use geopackage_core::TileError;
 use geopackage_core::coverage::{CoverageDatatype, TILE_ANCILLARY_TABLE, coverage_payload};
+use geopackage_core::curve::{self, BodyScan};
+use geopackage_core::geometry::GeometryError;
+use geopackage_core::gpb;
 use geopackage_core::ident::quote;
+use rusqlite::types::ValueRef;
 
 use crate::index::SpatialIndexAudit;
 use crate::{
@@ -91,6 +95,26 @@ pub enum Finding {
     StaleSpatialIndex {
         /// The indexed table.
         table_name: String,
+    },
+    /// Geometries whose WKB gives Z or M by a high-bit flag in a type code
+    /// (OGC 99-402 or EWKB), not by the ISO offset that a GPB body requires.
+    /// This crate and GDAL read them.
+    NonIsoWkbTypeCode {
+        /// The feature table.
+        table_name: String,
+        /// How many geometries have such a code.
+        rows: usize,
+        /// The first such code found.
+        type_code: u32,
+    },
+    /// Geometries whose GPB header or WKB body cannot be read.
+    UnreadableGeometry {
+        /// The feature table.
+        table_name: String,
+        /// How many geometries cannot be read.
+        rows: usize,
+        /// Why the first of them cannot be read.
+        detail: String,
     },
     /// A feature table with no spatial index.
     NoSpatialIndex {
@@ -225,7 +249,8 @@ impl Finding {
             | Self::CoverageDatatypeUnknown { .. }
             | Self::CoveragePayloadDatatypeMismatch { .. }
             | Self::CoverageTileSizeMismatch { .. }
-            | Self::MissingMappingTable { .. } => Severity::Error,
+            | Self::MissingMappingTable { .. }
+            | Self::UnreadableGeometry { .. } => Severity::Error,
             // The severity depends on the coverage. Without the row, a reader
             // uses a scale of 1 and an offset of 0. Requirement 11 sets these
             // values for a float coverage. For an integer coverage, the scale
@@ -244,6 +269,7 @@ impl Finding {
             | Self::RemovedExtension { .. }
             | Self::UnrecognisedExtension { .. }
             | Self::LegacySpatialIndexTriggers { .. }
+            | Self::NonIsoWkbTypeCode { .. }
             | Self::TilePyramidInconsistent { .. }
             | Self::CoverageScaleNotDefault { .. }
             | Self::DanglingTileAncillary { .. }
@@ -264,6 +290,8 @@ impl Finding {
             | Self::SpatialIndexOutOfStep { table_name, .. }
             | Self::LegacySpatialIndexTriggers { table_name }
             | Self::StaleSpatialIndex { table_name }
+            | Self::NonIsoWkbTypeCode { table_name, .. }
+            | Self::UnreadableGeometry { table_name, .. }
             | Self::NoSpatialIndex { table_name }
             | Self::TilePyramidInconsistent { table_name, .. }
             | Self::CoverageUninterpretable { table_name, .. }
@@ -326,7 +354,11 @@ impl Finding {
             | Self::CoverageTileSizeMismatch { .. }
             | Self::MissingTileAncillary { .. }
             | Self::DanglingTileAncillary { .. }
-            | Self::NonConformantRelationName { .. } => None,
+            | Self::NonConformantRelationName { .. }
+            // Both need the geometries written again, which this crate does
+            // not yet do for a file it did not write.
+            | Self::NonIsoWkbTypeCode { .. }
+            | Self::UnreadableGeometry { .. } => None,
         }
     }
 }
@@ -408,6 +440,26 @@ impl fmt::Display for Finding {
             }
             Self::NoSpatialIndex { table_name } => {
                 write!(f, "feature table {table_name:?} has no spatial index")
+            }
+            Self::NonIsoWkbTypeCode {
+                table_name,
+                rows,
+                type_code,
+            } => {
+                write!(
+                    f,
+                    "{rows} geometries in {table_name:?} give Z or M by a high-bit flag in a WKB type code (first {type_code:#010x}), not by the ISO offset"
+                )
+            }
+            Self::UnreadableGeometry {
+                table_name,
+                rows,
+                detail,
+            } => {
+                write!(
+                    f,
+                    "{rows} geometries in {table_name:?} cannot be read (first: {detail})"
+                )
             }
             Self::TilePyramidInconsistent { table_name, detail } => {
                 write!(
@@ -557,13 +609,17 @@ impl GeoPackage {
     ///
     /// # Cost
     ///
-    /// Every check but one reads catalogue rows, pragmas and index shadow
-    /// tables, so the work is proportional to the number of tables, not to the
-    /// size of the file. The exception is coverages. The extension's encoding
-    /// requirements apply to payloads, so that check reads every coverage
-    /// tile. A file without a coverage does not pay this cost. With the
-    /// `coverage-samples` feature it also decodes every coverage tile, for
-    /// [Requirement 21], which costs more again.
+    /// Most checks read catalogue rows and pragmas. Three read the data:
+    ///
+    /// - The geometry check reads the header and walks the WKB body of every
+    ///   geometry once, without building geometry objects.
+    /// - The index audit reads every indexed row and its RTree entry.
+    /// - The coverage check reads every coverage tile, because the extension's
+    ///   encoding requirements apply to payloads. With the `coverage-samples`
+    ///   feature it also decodes every tile, for [Requirement 21], which costs
+    ///   more again.
+    ///
+    /// So the work grows with the number of features and tiles.
     ///
     /// An empty vector means every check passed. It does not mean the file
     /// conforms in every respect the spec defines. This method reports what it
@@ -582,7 +638,8 @@ impl GeoPackage {
         let mut findings = Vec::new();
         let missing = self.validate_container(&mut findings)?;
         self.validate_extensions(&mut findings)?;
-        self.validate_spatial_indexes(&missing, &mut findings)?;
+        let unreadable = self.validate_geometries(&missing, &mut findings)?;
+        self.validate_spatial_indexes(&missing, &unreadable, &mut findings)?;
         self.validate_tile_pyramids(&missing, &mut findings)?;
         self.validate_coverages(&missing, &mut findings)?;
         self.validate_metadata(&mut findings)?;
@@ -666,9 +723,75 @@ impl GeoPackage {
         Ok(())
     }
 
+    /// Reads the GPB header and walks the WKB body of every geometry in each
+    /// feature layer. Returns the layers with a geometry that cannot be read,
+    /// which the index audit skips: it reads the same geometries and would
+    /// stop at the first such one.
+    fn validate_geometries(
+        &self,
+        missing: &[String],
+        findings: &mut Vec<Finding>,
+    ) -> Result<Vec<String>> {
+        let conn = self.connection();
+        let mut unreadable_layers = Vec::new();
+        for name in self.layer_names()? {
+            if missing.contains(&name) {
+                continue;
+            }
+            let layer = self.layer(&name)?;
+            let Some(geom) = layer.geometry_column() else {
+                continue;
+            };
+            let column = quote(&geom.column_name)?;
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {column} FROM {} WHERE {column} IS NOT NULL",
+                quote(layer.table_name())?
+            ))?;
+            let mut rows = stmt.query([])?;
+            let (mut flagged, mut first_code) = (0_usize, None);
+            let (mut unreadable, mut first_error) = (0_usize, None);
+            while let Some(row) = rows.next()? {
+                let scanned = match row.get_ref(0)? {
+                    ValueRef::Blob(blob) => scan_blob(blob).map_err(|e| e.to_string()),
+                    other => Err(format!("a {:?} value, not a BLOB", other.data_type())),
+                };
+                match scanned {
+                    Ok(scan) => {
+                        if let Some(code) = scan.flagged_type_code {
+                            flagged += 1;
+                            first_code.get_or_insert(code);
+                        }
+                    }
+                    Err(detail) => {
+                        unreadable += 1;
+                        first_error.get_or_insert(detail);
+                    }
+                }
+            }
+            let table_name = layer.table_name().to_owned();
+            if let Some(type_code) = first_code {
+                findings.push(Finding::NonIsoWkbTypeCode {
+                    table_name: table_name.clone(),
+                    rows: flagged,
+                    type_code,
+                });
+            }
+            if let Some(detail) = first_error {
+                findings.push(Finding::UnreadableGeometry {
+                    table_name: table_name.clone(),
+                    rows: unreadable,
+                    detail,
+                });
+                unreadable_layers.push(name);
+            }
+        }
+        Ok(unreadable_layers)
+    }
+
     fn validate_spatial_indexes(
         &self,
         missing: &[String],
+        unreadable: &[String],
         findings: &mut Vec<Finding>,
     ) -> Result<()> {
         for name in self.layer_names()? {
@@ -689,6 +812,9 @@ impl GeoPackage {
                 SpatialIndexStatus::Stale => {
                     findings.push(Finding::StaleSpatialIndex { table_name });
                 }
+                // The audit reads every geometry, so a layer with one that
+                // cannot be read is not audited; its own finding says why.
+                SpatialIndexStatus::Current if unreadable.contains(&name) => {}
                 SpatialIndexStatus::Current => {
                     let audit = layer.audit_spatial_index()?;
                     if !audit.is_consistent() {
@@ -1031,4 +1157,10 @@ fn check_coverage_samples(
     samples
         .check_finite()
         .map_err(|error| (21, error.to_string()))
+}
+
+/// Reads a GPB blob's header and walks its WKB body.
+fn scan_blob(blob: &[u8]) -> std::result::Result<BodyScan, GeometryError> {
+    let offset = gpb::body_offset(blob)?;
+    curve::scan(blob.get(offset..).unwrap_or_default())
 }
