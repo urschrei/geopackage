@@ -553,6 +553,15 @@ fn every_finding_renders_as_a_sentence_naming_its_subject() {
             "0x80000003",
         ),
         (
+            Finding::NonStandardDateTime {
+                table_name: "roads".into(),
+                values: 4,
+                columns: vec!["opened".into(), "closed".into()],
+                example: "2017-08-01T00:00:00.0Z".into(),
+            },
+            "opened, closed",
+        ),
+        (
             Finding::UnreadableGeometry {
                 table_name: "roads".into(),
                 rows: 2,

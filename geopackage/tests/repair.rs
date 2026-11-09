@@ -1,4 +1,5 @@
-//! The repairs that rewrite stored values: `Layer::repair_wkb_type_codes`.
+//! The repairs that rewrite stored values: `Layer::repair_wkb_type_codes` and
+//! `Layer::repair_datetimes`.
 
 #![expect(
     clippy::unwrap_used,
@@ -6,8 +7,8 @@
 )]
 
 use geopackage::core::gpb::{self, Envelope};
-use geopackage::core::types::{GeometryType, ZmFlag};
-use geopackage::{Finding, GeoPackage, GeometrySpec, TableSchemaBuilder};
+use geopackage::core::types::{ColumnType, GeometryType, ZmFlag};
+use geopackage::{ColumnSpec, Finding, GeoPackage, GeometrySpec, TableSchemaBuilder};
 use tempfile::TempDir;
 
 /// A GPB blob, little-endian, SRS 4326, with no envelope, around `body`.
@@ -123,4 +124,75 @@ fn a_read_only_file_is_not_repaired() {
         .unwrap()
         .repair_wkb_type_codes()
         .unwrap_err();
+}
+
+/// An attribute table `visits` with one `DATETIME` column, holding `values`
+/// in this order, stored through SQL as given.
+fn visits(values: &[&str]) -> (TempDir, GeoPackage) {
+    let dir = tempfile::tempdir().unwrap();
+    let gpkg = GeoPackage::create(dir.path().join("v.gpkg")).unwrap();
+    gpkg.create_attributes_table(
+        &TableSchemaBuilder::new("visits").column(ColumnSpec::new("at", ColumnType::DateTime)),
+    )
+    .unwrap();
+    for value in values {
+        gpkg.connection()
+            .execute("INSERT INTO visits (at) VALUES (?1)", [value])
+            .unwrap();
+    }
+    (dir, gpkg)
+}
+
+fn stored(gpkg: &GeoPackage) -> Vec<String> {
+    gpkg.connection()
+        .prepare("SELECT at FROM visits ORDER BY fid")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+#[test]
+fn datetimes_the_lenient_parser_reads_without_loss_are_rewritten() {
+    let (_dir, gpkg) = visits(&[
+        "2017-08-01T00:00:00.0Z",
+        "2017-08-01 00:00:00",
+        "2017-08-01T02:00:00+02:00",
+        "2017-08-01T00:00:00.000Z",
+        "2017-08-01T00:00:00.0001Z",
+        "not a datetime",
+    ]);
+    let findings = gpkg.validate().unwrap();
+    let [
+        finding @ Finding::NonStandardDateTime {
+            values: 5, example, ..
+        },
+    ] = findings.as_slice()
+    else {
+        panic!("expected the five non-standard values, got {findings:?}");
+    };
+    assert_eq!(example, "2017-08-01T00:00:00.0Z");
+    assert!(finding.repair().unwrap().contains("repair_datetimes"));
+
+    let table = gpkg.attributes("visits").unwrap();
+    assert_eq!(table.repair_datetimes().unwrap(), 3);
+    assert_eq!(
+        stored(&gpkg),
+        [
+            "2017-08-01T00:00:00.000Z",
+            "2017-08-01T00:00:00.000Z",
+            "2017-08-01T00:00:00.000Z",
+            "2017-08-01T00:00:00.000Z",
+            // A sub-millisecond part would be lost, and the last value is not
+            // a datetime at all.
+            "2017-08-01T00:00:00.0001Z",
+            "not a datetime",
+        ]
+    );
+    assert_eq!(table.repair_datetimes().unwrap(), 0);
+    let [Finding::NonStandardDateTime { values: 2, .. }] = gpkg.validate().unwrap().as_slice()
+    else {
+        panic!("expected the two values left as they were");
+    };
 }

@@ -26,6 +26,7 @@ use geopackage_core::extensions::ExtensionSupport;
 use geopackage_core::TileError;
 use geopackage_core::coverage::{CoverageDatatype, TILE_ANCILLARY_TABLE, coverage_payload};
 use geopackage_core::curve::{self, BodyScan};
+use geopackage_core::datetime::DateTime;
 use geopackage_core::geometry::GeometryError;
 use geopackage_core::gpb;
 use geopackage_core::ident::quote;
@@ -106,6 +107,19 @@ pub enum Finding {
         rows: usize,
         /// The first such code found.
         type_code: u32,
+    },
+    /// `DATETIME` text that is not in the GeoPackage form
+    /// `YYYY-MM-DDTHH:MM:SS.SSSZ`. A reader that parses only that form, as
+    /// this crate does by default, cannot read it.
+    NonStandardDateTime {
+        /// The feature or attribute table.
+        table_name: String,
+        /// How many values are not in the GeoPackage form.
+        values: usize,
+        /// The columns that hold them.
+        columns: Vec<String>,
+        /// The first of them.
+        example: String,
     },
     /// Geometries whose GPB header or WKB body cannot be read.
     UnreadableGeometry {
@@ -270,6 +284,7 @@ impl Finding {
             | Self::UnrecognisedExtension { .. }
             | Self::LegacySpatialIndexTriggers { .. }
             | Self::NonIsoWkbTypeCode { .. }
+            | Self::NonStandardDateTime { .. }
             | Self::TilePyramidInconsistent { .. }
             | Self::CoverageScaleNotDefault { .. }
             | Self::DanglingTileAncillary { .. }
@@ -291,6 +306,7 @@ impl Finding {
             | Self::LegacySpatialIndexTriggers { table_name }
             | Self::StaleSpatialIndex { table_name }
             | Self::NonIsoWkbTypeCode { table_name, .. }
+            | Self::NonStandardDateTime { table_name, .. }
             | Self::UnreadableGeometry { table_name, .. }
             | Self::NoSpatialIndex { table_name }
             | Self::TilePyramidInconsistent { table_name, .. }
@@ -332,6 +348,9 @@ impl Finding {
             }
             Self::NonIsoWkbTypeCode { .. } => {
                 Some("rewrite the type codes in ISO form with Layer::repair_wkb_type_codes")
+            }
+            Self::NonStandardDateTime { .. } => {
+                Some("rewrite the values in the GeoPackage form with Layer::repair_datetimes")
             }
             Self::NoSpatialIndex { .. } => Some("build one with Layer::create_spatial_index"),
             Self::LegacyApplicationId { .. } => {
@@ -451,6 +470,18 @@ impl fmt::Display for Finding {
                 write!(
                     f,
                     "{rows} geometries in {table_name:?} give Z or M by a high-bit flag in a WKB type code (first {type_code:#010x}), not by the ISO offset"
+                )
+            }
+            Self::NonStandardDateTime {
+                table_name,
+                values,
+                columns,
+                example,
+            } => {
+                write!(
+                    f,
+                    "{values} DATETIME values in {table_name:?} ({}) are not in the GeoPackage form (first: {example:?})",
+                    columns.join(", ")
                 )
             }
             Self::UnreadableGeometry {
@@ -611,10 +642,11 @@ impl GeoPackage {
     ///
     /// # Cost
     ///
-    /// Most checks read catalogue rows and pragmas. Three read the data:
+    /// Most checks read catalogue rows and pragmas. Four read the data:
     ///
     /// - The geometry check reads the header and walks the WKB body of every
     ///   geometry once, without building geometry objects.
+    /// - The `DATETIME` check reads every value of every `DATETIME` column.
     /// - The index audit reads every indexed row and its RTree entry.
     /// - The coverage check reads every coverage tile, because the extension's
     ///   encoding requirements apply to payloads. With the `coverage-samples`
@@ -642,6 +674,7 @@ impl GeoPackage {
         self.validate_extensions(&mut findings)?;
         let unreadable = self.validate_geometries(&missing, &mut findings)?;
         self.validate_spatial_indexes(&missing, &unreadable, &mut findings)?;
+        self.validate_datetimes(&missing, &mut findings)?;
         self.validate_tile_pyramids(&missing, &mut findings)?;
         self.validate_coverages(&missing, &mut findings)?;
         self.validate_metadata(&mut findings)?;
@@ -788,6 +821,69 @@ impl GeoPackage {
             }
         }
         Ok(unreadable_layers)
+    }
+
+    /// Reads every `DATETIME` value of each feature layer and attribute table,
+    /// and reports the text that is not in the GeoPackage form.
+    fn validate_datetimes(&self, missing: &[String], findings: &mut Vec<Finding>) -> Result<()> {
+        let mut layers = Vec::new();
+        for name in self.layer_names()? {
+            if !missing.contains(&name) {
+                layers.push(self.layer(&name)?);
+            }
+        }
+        for entry in self.contents()? {
+            if entry.data_type == ContentsDataType::Attributes
+                && !missing.contains(&entry.table_name)
+            {
+                layers.push(self.attributes(&entry.table_name)?);
+            }
+        }
+        let conn = self.connection();
+        for layer in &layers {
+            let columns = layer.datetime_columns();
+            if columns.is_empty() {
+                continue;
+            }
+            let selected = columns
+                .iter()
+                .map(|c| quote(c))
+                .collect::<std::result::Result<Vec<_>, _>>()?
+                .join(", ");
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {selected} FROM {}",
+                quote(layer.table_name())?
+            ))?;
+            let mut rows = stmt.query([])?;
+            let mut values = 0_usize;
+            let mut in_columns = vec![false; columns.len()];
+            let mut example = None;
+            while let Some(row) = rows.next()? {
+                for (i, seen) in in_columns.iter_mut().enumerate() {
+                    if let rusqlite::types::ValueRef::Text(text) = row.get_ref(i)? {
+                        let text = String::from_utf8_lossy(text);
+                        if DateTime::parse_strict(&text).is_err() {
+                            values += 1;
+                            *seen = true;
+                            example.get_or_insert_with(|| text.into_owned());
+                        }
+                    }
+                }
+            }
+            if let Some(example) = example {
+                findings.push(Finding::NonStandardDateTime {
+                    table_name: layer.table_name().to_owned(),
+                    values,
+                    columns: columns
+                        .into_iter()
+                        .zip(in_columns)
+                        .filter_map(|(column, seen)| seen.then_some(column))
+                        .collect(),
+                    example,
+                });
+            }
+        }
+        Ok(())
     }
 
     fn validate_spatial_indexes(

@@ -255,6 +255,11 @@ pub geopackage::Finding::NonIsoWkbTypeCode
 pub geopackage::Finding::NonIsoWkbTypeCode::rows: usize
 pub geopackage::Finding::NonIsoWkbTypeCode::table_name: alloc::string::String
 pub geopackage::Finding::NonIsoWkbTypeCode::type_code: u32
+pub geopackage::Finding::NonStandardDateTime
+pub geopackage::Finding::NonStandardDateTime::columns: alloc::vec::Vec<alloc::string::String>
+pub geopackage::Finding::NonStandardDateTime::example: alloc::string::String
+pub geopackage::Finding::NonStandardDateTime::table_name: alloc::string::String
+pub geopackage::Finding::NonStandardDateTime::values: usize
 pub geopackage::Finding::RemovedExtension
 pub geopackage::Finding::RemovedExtension::extension_name: alloc::string::String
 pub geopackage::Finding::RemovedExtension::table_name: core::option::Option<alloc::string::String>
@@ -675,6 +680,7 @@ pub fn geopackage::Layer<'_>::read_arrow_in(&self, geopackage::BoundingBox, geop
 pub fn geopackage::Layer<'_>::read_arrow_in_where(&self, geopackage::BoundingBox, &str, &[geopackage::ValueRef<'_>], geopackage::arrow::ArrowReadOptions) -> geopackage::Result<geopackage::arrow::ArrowBatches<'_>>
 pub fn geopackage::Layer<'_>::read_arrow_where(&self, &str, &[geopackage::ValueRef<'_>], geopackage::arrow::ArrowReadOptions) -> geopackage::Result<geopackage::arrow::ArrowBatches<'_>>
 impl geopackage::Layer<'_>
+pub fn geopackage::Layer<'_>::repair_datetimes(&self) -> geopackage::Result<usize>
 pub fn geopackage::Layer<'_>::repair_wkb_type_codes(&self) -> geopackage::Result<usize>
 impl geopackage::Layer<'_>
 pub fn geopackage::Layer<'_>::write_arrow<R>(&self, R, usize) -> geopackage::Result<alloc::vec::Vec<i64>> where R: core::iter::traits::collect::IntoIterator<Item = core::result::Result<arrow_array::record_batch::RecordBatch, arrow_schema::error::ArrowError>>

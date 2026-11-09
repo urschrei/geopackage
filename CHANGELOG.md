@@ -57,6 +57,12 @@ While the version is below 1.0 the API may change in any release.
   rewrote, writes nothing when there is nothing to rewrite, and leaves a
   geometry it cannot read alone. The `NonIsoWkbTypeCode` finding now names
   it as the repair.
+- `Layer::repair_datetimes` rewrites `DATETIME` text that only the lenient
+  parser reads, such as `2017-08-01T00:00:00.0Z`, in the GeoPackage form
+  `YYYY-MM-DDTHH:MM:SS.SSSZ`, when nothing is lost: a numeric UTC offset
+  becomes `Z` for the same instant, and a value with a sub-millisecond part
+  is left alone. `validate` reports such text as the new
+  `NonStandardDateTime` warning, per table, naming that repair.
 - `geopackage-py`, Python bindings built with PyO3 as abi3 wheels for CPython
   3.9 and later, with SQLite vendored. They cover open and create, layer
   schemas, streaming feature reads by bounding box, `WHERE` clause and column
