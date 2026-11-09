@@ -14,6 +14,15 @@ While the version is below 1.0 the API may change in any release.
   provider has no build for, with the matrix entries each needs: the release
   tag, and the name and SHA-256 of OSGeo4W's `qgis-devel` archive. A monthly
   workflow, `qgis-versions.yml`, runs it and opens an issue for each.
+- A QGIS plugin repository, `https://urschrei.github.io/geopackage/qgis/plugins.xml`,
+  from which QGIS installs and updates the GeoPackage Toolkit plugin. The
+  book's site serves it, and `scripts/plugins_xml.py` writes it from the
+  newest release's plugin zip after each release.
+- The book has a guide to installing the QGIS plugin and adding a layer
+  through it, and a reference page for its algorithms and data provider.
+- The plugin has a `LICENSE` file, with both licence texts beside it in the
+  release zip, and an icon. Its `about` text names the compiled parts it
+  holds and the platforms they are built for.
 
 ## [0.14.2] - 2026-11-09
 
