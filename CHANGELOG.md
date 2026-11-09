@@ -8,6 +8,16 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Fixed
+
+- The QGIS plugin repository gave the plugin's `file_name` as the release
+  asset's name, `gpkg_toolkit-0.14.3.zip`. QGIS takes a plugin's id from
+  that name, up to its first dot, so it read the id as `gpkg_toolkit-0`. An
+  install from the repository then failed with "Could not store plugin to
+  the plugin directory", and an installed plugin was shown as available
+  only locally. `file_name` is now `gpkg_toolkit.<version>.zip`, as
+  plugins.qgis.org names it.
+
 ## [0.14.3] - 2026-11-09
 
 This release publishes the QGIS plugin through a plugin repository and

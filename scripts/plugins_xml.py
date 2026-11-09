@@ -74,7 +74,14 @@ def main():
     )
     for element, key in ELEMENTS:
         ElementTree.SubElement(entry, element).text = general.get(key, "")
-    ElementTree.SubElement(entry, "file_name").text = args.zip.name
+    # QGIS takes the plugin's id from `file_name`, as the part before its
+    # first dot, and installs the zip's folder of that name. So the name is
+    # `<id>.<version>.zip`, as plugins.qgis.org gives it, whatever the
+    # release asset is called: QGIS downloads from `download_url`.
+    file_name = f"{PLUGIN}.{general['version']}.zip"
+    if file_name.partition(".")[0] != PLUGIN:
+        raise SystemExit(f"{file_name}: QGIS would read the plugin id wrongly")
+    ElementTree.SubElement(entry, "file_name").text = file_name
     ElementTree.SubElement(entry, "download_url").text = args.url
     ElementTree.SubElement(entry, "uploaded_by").text = general["author"]
     ElementTree.SubElement(entry, "create_date").text = args.date
