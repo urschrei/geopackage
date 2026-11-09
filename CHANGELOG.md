@@ -8,42 +8,7 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
-### Fixed
-
-- The WKB scanner that computes envelopes rejected a type code that gives Z
-  or M by a high-bit flag (`0x8000_0000`, `0x4000_0000`, as in OGC 99-402)
-  instead of the ISO offset. Some writers put such codes in GeoPackage
-  bodies; one Esri export has ISO `MULTIPOLYGON Z` containers whose polygons
-  are `0x80000003`. GDAL reads them, and so did this crate's `wkb`-crate read
-  path, but the scanner's rejection made `audit_spatial_index`, the index
-  rebuild and `validate` fail on the whole file. The scanner now reads the
-  Z and M flags and reports the first flagged code in the new
-  `BodyScan::flagged_type_code`. It still rejects the EWKB SRID flag and a
-  code with both a flag and an ISO offset. `encode_gpb_from_wkb` still
-  refuses to write a flagged body, so the crate writes only ISO WKB.
-- `GeoPackage::validate` stopped with an error at the first geometry it could
-  not read, so one bad row hid every other finding in the file. It now reads
-  the header and walks the body of every geometry once, and reports two new
-  findings per layer: `UnreadableGeometry` (an error, with the count and the
-  first reason), and `NonIsoWkbTypeCode` (a warning, with the count and the
-  first code) for the high-bit flags above. A layer with an unreadable
-  geometry is not audited, since the audit reads the same geometries. The
-  extra pass makes `validate` read every geometry, where before only the
-  index audit read the feature tables.
-
-- `Layer::read_arrow_in` and `read_arrow_in_where` were slow on spatially
-  scattered data, the usual case. They walked the RTree's candidates as runs
-  of consecutive keys, with one query per run, and scattered rows make nearly
-  every candidate its own run. A box selecting 1% of 200,000 scattered points
-  issued about 2,000 queries and took 4.9 times as long as `features_in`. The
-  candidates are now read a page at a time: a page whose ids fill at least
-  half its key span is read as a range, as before, and a sparser one by its
-  explicit ids, bound through rusqlite's `rarray`. On the new `scattered`
-  group of the `filtered` benchmark, that box now takes 3.6 ms instead of
-  17.6 ms (the row path takes 3.4 ms), and a 10% box takes 24 ms instead of
-  73 ms. Clustered data is unaffected: its candidates were already ranges.
-  Every connection the crate opens now registers `rarray`, which needs
-  rusqlite's `array` feature.
+## [0.14.0] - 2026-11-09
 
 ### Added
 
@@ -113,6 +78,9 @@ While the version is below 1.0 the API may change in any release.
 
 ### Changed
 
+- `curve::BodyScan` has a new public field, `flagged_type_code` (see
+  Fixed). Code that builds a `BodyScan` with a struct literal must set it.
+
 - `Layer::read_arrow_in` and `read_arrow_in_where` read a box that selects
   every row as `read_arrow` and `read_arrow_where` do, with their threads and
   aggregate path, instead of walking every RTree candidate. A box selects
@@ -136,6 +104,41 @@ While the version is below 1.0 the API may change in any release.
   documentation used to say "sample", which was the misreading the CLI made.
 
 ### Fixed
+
+- The WKB scanner that computes envelopes rejected a type code that gives Z
+  or M by a high-bit flag (`0x8000_0000`, `0x4000_0000`, as in OGC 99-402)
+  instead of the ISO offset. Some writers put such codes in GeoPackage
+  bodies; one Esri export has ISO `MULTIPOLYGON Z` containers whose polygons
+  are `0x80000003`. GDAL reads them, and so did this crate's `wkb`-crate read
+  path, but the scanner's rejection made `audit_spatial_index`, the index
+  rebuild and `validate` fail on the whole file. The scanner now reads the
+  Z and M flags and reports the first flagged code in the new
+  `BodyScan::flagged_type_code`. It still rejects the EWKB SRID flag and a
+  code with both a flag and an ISO offset. `encode_gpb_from_wkb` still
+  refuses to write a flagged body, so the crate writes only ISO WKB.
+- `GeoPackage::validate` stopped with an error at the first geometry it could
+  not read, so one bad row hid every other finding in the file. It now reads
+  the header and walks the body of every geometry once, and reports two new
+  findings per layer: `UnreadableGeometry` (an error, with the count and the
+  first reason), and `NonIsoWkbTypeCode` (a warning, with the count and the
+  first code) for the high-bit flags above. A layer with an unreadable
+  geometry is not audited, since the audit reads the same geometries. The
+  extra pass makes `validate` read every geometry, where before only the
+  index audit read the feature tables.
+
+- `Layer::read_arrow_in` and `read_arrow_in_where` were slow on spatially
+  scattered data, the usual case. They walked the RTree's candidates as runs
+  of consecutive keys, with one query per run, and scattered rows make nearly
+  every candidate its own run. A box selecting 1% of 200,000 scattered points
+  issued about 2,000 queries and took 4.9 times as long as `features_in`. The
+  candidates are now read a page at a time: a page whose ids fill at least
+  half its key span is read as a range, as before, and a sparser one by its
+  explicit ids, bound through rusqlite's `rarray`. On the new `scattered`
+  group of the `filtered` benchmark, that box now takes 3.6 ms instead of
+  17.6 ms (the row path takes 3.4 ms), and a 10% box takes 24 ms instead of
+  73 ms. Clustered data is unaffected: its candidates were already ranges.
+  Every connection the crate opens now registers `rarray`, which needs
+  rusqlite's `array` feature.
 
 - A spatial index that had lost some of its triggers was reported as
   `SpatialIndexStatus::Current` (or `Legacy`), because the status was decided
@@ -175,7 +178,6 @@ While the version is below 1.0 the API may change in any release.
   to 0.6414. It now prints the recorded range unconverted, in the coverage's
   `uom` when the coverage has one, followed by the recorded mean and standard
   deviation. Files were not affected.
-
 
 ## [0.13.0] - 2026-10-18
 
@@ -1742,7 +1744,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/urschrei/geopackage/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/urschrei/geopackage/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/urschrei/geopackage/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/urschrei/geopackage/compare/v0.11.1...v0.11.2
