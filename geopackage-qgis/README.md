@@ -156,8 +156,11 @@ falls back to the Python provider, the log says why.
 **Release builds** (`.github/workflows/qgis-plugin.yml`) make the same header
 kit from each supported release's tag and use Qt 6.6's headers, for Linux
 (x86_64 and aarch64, in a manylinux_2_28 container, so glibc 2.28 or later),
-macOS (universal2) and Windows (x86_64; QGIS 4.2 only, since its import
-library comes from conda-forge, which has no QGIS 4.0).
+macOS (universal2) and Windows (x86_64). On Windows, QGIS's import library
+comes from OSGeo4W's `qgis-devel` package for the same release, since OSGeo4W
+also builds QGIS's Windows installers. CI runs the plugin's tests against
+conda-forge's QGIS 4.2 on each OS, with a build of its own; the Windows
+release builds are linked, not run.
 
 ## Results
 
@@ -221,6 +224,6 @@ crate's reads unchanged.
 
 ## Next
 
-A Windows build for QGIS 4.0, which needs QGIS 4.0's `qgis_core.lib` (from
-OSGeo4W's development package), and builds for each new QGIS minor version
-as it is released: add it to the `native` job's matrix.
+Builds for each new QGIS minor version as it is released: add it to the
+`native` job's matrix, with the name and SHA-256 of OSGeo4W's `qgis-devel`
+archive for that release.

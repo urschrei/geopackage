@@ -91,8 +91,9 @@ jobs:
   # the oldest Qt QGIS 4 supports, so that a build loads into any newer Qt.
   # Linux builds in a manylinux_2_28 container, whose toolchain links newer
   # C++ runtime parts statically, so the library loads into the QGIS of any
-  # distribution with glibc 2.28 or later. Windows has 4.2 only: its import
-  # library comes from conda-forge, which has no QGIS 4.0.
+  # distribution with glibc 2.28 or later. On Windows the import library,
+  # qgis_core.lib, comes from OSGeo4W's qgis-devel package for the same
+  # release: OSGeo4W also builds QGIS's Windows installers.
   native:
     strategy:
       fail-fast: false
@@ -114,9 +115,13 @@ jobs:
           - platform: windows-x86_64
             os: windows-latest
             library: geopackage_qgis.dll
-        exclude:
-          - platform: windows-x86_64
-            qgis: "4.0.2"
+          # OSGeo4W's qgis-devel archive for each release, and its SHA-256.
+          - qgis: "4.0.2"
+            osgeo4w: qgis-devel-4.0.2-2.tar.bz2
+            osgeo4w_sha256: 74067c1208d3614a31a8d01ff5b8f2fe9d537566562332a754c298903b9f304e
+          - qgis: "4.2.3"
+            osgeo4w: qgis-devel-4.2.3-1.tar.bz2
+            osgeo4w_sha256: 7e3c659f39720c1c9862521bdc863bf364e6aee70406d56a43d3d871e72ad6ed
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
     defaults:
@@ -140,8 +145,11 @@ jobs:
           conda install -y "qt6-main=6.6"
           if [ "$RUNNER_OS" = Windows ]; then
             echo "QT_DIR=$CONDA_PREFIX/Library" >> "$GITHUB_ENV"
-            conda create -y -n qgis --no-deps "qgis=${{ matrix.qgis }}"
-            echo "QGIS_LIB_DIR=$(conda info --base)/envs/qgis/Library/lib" >> "$GITHUB_ENV"
+            curl -fsSL -o qgis-devel.tar.bz2 \
+              "https://download.osgeo.org/osgeo4w/v2/x86_64/release/qgis/qgis/qgis-devel/${{ matrix.osgeo4w }}"
+            echo "${{ matrix.osgeo4w_sha256 }}  qgis-devel.tar.bz2" | sha256sum -c -
+            tar xjf qgis-devel.tar.bz2 apps/qgis/lib/qgis_core.lib
+            echo "QGIS_LIB_DIR=$(cygpath -m "$PWD/apps/qgis/lib")" >> "$GITHUB_ENV"
           else
             echo "QT_DIR=$CONDA_PREFIX" >> "$GITHUB_ENV"
           fi
