@@ -28,7 +28,11 @@ import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # What `cargo build` names the native provider on Linux, macOS and Windows.
-NATIVE_LIBRARIES = {"libgeopackage_qgis.so", "libgeopackage_qgis.dylib", "geopackage_qgis.dll"}
+NATIVE_LIBRARIES = {
+    "libgeopackage_qgis.so",
+    "libgeopackage_qgis.dylib",
+    "geopackage_qgis.dll",
+}
 PLUGIN = ROOT / "qgis-plugin" / "gpkg_toolkit"
 
 
@@ -47,7 +51,9 @@ def platform_dir(wheel_name):
         return "windows-aarch64"
     if any(tag.startswith("macosx") for tag in tags):
         if not any(tag.endswith("universal2") for tag in tags):
-            sys.exit(f"{wheel_name}: build macOS as universal2, which native.py expects")
+            sys.exit(
+                f"{wheel_name}: build macOS as universal2, which native.py expects"
+            )
         return "macos-universal2"
     for tag in tags:
         match = re.search(r"(x86_64|aarch64)$", tag)
@@ -59,8 +65,14 @@ def platform_dir(wheel_name):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("wheels", nargs="+", type=pathlib.Path)
-    parser.add_argument("--native", type=pathlib.Path, help="native provider builds, by platform and QGIS version")
-    parser.add_argument("--out", type=pathlib.Path, default=ROOT / "target" / "qgis-plugin")
+    parser.add_argument(
+        "--native",
+        type=pathlib.Path,
+        help="native provider builds, by platform and QGIS version",
+    )
+    parser.add_argument(
+        "--out", type=pathlib.Path, default=ROOT / "target" / "qgis-plugin"
+    )
     args = parser.parse_args()
 
     metadata = configparser.ConfigParser()
@@ -100,14 +112,21 @@ def main():
                 if path.name in NATIVE_LIBRARIES and path.is_file()
             )
             if not libraries:
-                sys.exit(f"{args.native}: no native provider builds as <platform>/qgis-<M.m>/<library>")
+                sys.exit(
+                    f"{args.native}: no native provider builds as <platform>/qgis-<M.m>/<library>"
+                )
             for library in libraries:
                 platform, version = library.parent.parent.name, library.parent.name
                 if platform not in seen:
-                    sys.exit(f"{library}: no wheel for {platform}, whose plugin would lack its module")
+                    sys.exit(
+                        f"{library}: no wheel for {platform}, whose plugin would lack its module"
+                    )
                 if not re.fullmatch(r"qgis-\d+\.\d+", version):
                     sys.exit(f"{library}: {version} is not qgis-<major>.<minor>")
-                out.write(library, f"gpkg_toolkit/ext-libs/{platform}/{version}/{library.name}")
+                out.write(
+                    library,
+                    f"gpkg_toolkit/ext-libs/{platform}/{version}/{library.name}",
+                )
                 print(f"{library} -> ext-libs/{platform}/{version}")
     print(target)
 
