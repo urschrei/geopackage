@@ -122,6 +122,40 @@ def test_repair_a_legacy_trigger_set(tmp_path, run):
     )
 
 
+def test_repair_encodings(tmp_path, run):
+    import struct
+
+    path = str(tmp_path / "a.gpkg")
+    gpkg = g.GeoPackage.create(path)
+    gpkg.add_epsg_srs(4326)
+    gpkg.create_layer(
+        "pts", "POINT", 4326, [("at", "DATETIME")], z="mandatory", spatial_index=False
+    )
+    gpkg.close()
+    # POINT Z (1 2 3) with Z given by the high-bit flag, as one Esri export
+    # writes it, and a datetime with one fractional digit.
+    body = struct.pack("<BIddd", 1, 0x8000_0001, 1.0, 2.0, 3.0)
+    blob = b"GP\x00\x01" + struct.pack("<i", 4326) + body
+    con = sqlite3.connect(path)
+    con.execute(
+        "INSERT INTO pts (geom, at) VALUES (?, '2017-08-01T00:00:00.0Z')", (blob,)
+    )
+    con.commit()
+    con.close()
+
+    before = table_rows(run("validate", {"INPUT": path, "OUTPUT": "memory:"})["OUTPUT"])
+    plugin = {r["code"]: r["plugin_algorithm"] for r in before}
+    assert plugin["NonIsoWkbTypeCode"] == "Repair geometry and datetime encodings"
+    assert plugin["NonStandardDateTime"] == "Repair geometry and datetime encodings"
+
+    result = run("repairencodings", {"INPUT": path, "OUTPUT": "memory:"})
+    assert result["REPAIRED"] == 1
+    (row,) = table_rows(result["OUTPUT"])
+    assert (row["layer"], row["geometries"], row["datetimes"]) == ("pts", 1, 1)
+    after = run("validate", {"INPUT": path, "OUTPUT": "memory:"})
+    assert (after["ERRORS"], after["WARNINGS"]) == (0, 0)
+
+
 def test_list_extensions(tmp_path, run):
     path = str(tmp_path / "a.gpkg")
     points_gpkg(path)

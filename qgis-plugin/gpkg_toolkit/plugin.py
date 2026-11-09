@@ -13,6 +13,7 @@ MENU = "&GeoPackage Toolkit"
 MENU_ALGORITHMS = [
     ("Validate GeoPackage…", "validate"),
     ("Repair spatial indexes…", "repairspatialindexes"),
+    ("Repair geometry and datetime encodings…", "repairencodings"),
     ("List extensions…", "listextensions"),
 ]
 

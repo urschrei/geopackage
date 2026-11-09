@@ -1,4 +1,4 @@
-"""Validation, spatial index repair and the extension catalogue."""
+"""Validation, repair and the extension catalogue."""
 
 from qgis.core import (
     QgsProcessingOutputNumber,
@@ -10,6 +10,16 @@ from .base import Algorithm, add_row, make_fields, wrap_errors
 GROUP = "Inspect and repair"
 GROUP_ID = "inspect"
 
+# The algorithm in this plugin that repairs each finding, by finding code.
+REPAIRED_BY = {
+    "LegacySpatialIndexTriggers": "Repair spatial indexes",
+    "StaleSpatialIndex": "Repair spatial indexes",
+    "SpatialIndexOutOfStep": "Repair spatial indexes",
+    "NoSpatialIndex": "Repair spatial indexes (Build missing indexes)",
+    "NonIsoWkbTypeCode": "Repair geometry and datetime encodings",
+    "NonStandardDateTime": "Repair geometry and datetime encodings",
+}
+
 
 class ValidateAlgorithm(Algorithm):
     NAME = "validate"
@@ -19,7 +29,9 @@ class ValidateAlgorithm(Algorithm):
     HELP = (
         "Reports what the geopackage crate can see wrong with a GeoPackage, "
         "most severe first, and the repair for each finding where there is "
-        "one. The file is opened read-only and leniently and is not modified.\n\n"
+        "one. The plugin_algorithm column names the algorithm in this plugin "
+        "that makes the repair. The file is opened read-only and leniently "
+        "and is not modified.\n\n"
         "<b>error</b>: a reader can get a wrong answer from the file. "
         "<b>warning</b>: the file breaks a rule but reads correctly. "
         "<b>advisory</b>: a choice worth knowing about, such as a layer with "
@@ -38,6 +50,7 @@ class ValidateAlgorithm(Algorithm):
         ("table_name", "string"),
         ("message", "string"),
         ("repair", "string"),
+        ("plugin_algorithm", "string"),
     )
 
     def initAlgorithm(self, config=None):  # noqa: N802
@@ -57,7 +70,9 @@ class ValidateAlgorithm(Algorithm):
         with self.open(parameters, context, read_only=True) as gpkg:
             for warning in gpkg.open_warnings():
                 counts["warning"] += 1
-                add_row(sink, fields, ["warning", "OpenWarning", None, warning, None])
+                add_row(
+                    sink, fields, ["warning", "OpenWarning", None, warning, None, None]
+                )
             for finding in wrap_errors(gpkg.validate):
                 counts[finding.severity] = counts.get(finding.severity, 0) + 1
                 add_row(
@@ -69,6 +84,7 @@ class ValidateAlgorithm(Algorithm):
                         finding.table_name,
                         finding.message,
                         finding.repair,
+                        REPAIRED_BY.get(finding.code),
                     ],
                 )
                 feedback.pushInfo(f"{finding.severity}: {finding.message}")
@@ -166,6 +182,76 @@ class RepairSpatialIndexesAlgorithm(Algorithm):
                         audit["extra"] if audit else None,
                     ],
                 )
+        if not changed:
+            feedback.pushInfo("Nothing to repair.")
+        return {self.OUTPUT: dest, self.REPAIRED: changed}
+
+
+class RepairEncodingsAlgorithm(Algorithm):
+    NAME = "repairencodings"
+    DISPLAY_NAME = "Repair geometry and datetime encodings"
+    GROUP = GROUP
+    GROUP_ID = GROUP_ID
+    HELP = (
+        "Rewrites values that QGIS reads but that are not in the form the "
+        "GeoPackage standard gives them, in every feature layer and attribute "
+        "table, or in one named table. <b>The file is modified in place</b>; "
+        "close any layer that QGIS is editing from it first.\n\n"
+        "A geometry whose WKB gives Z or M by a high-bit flag in a type code, "
+        "as some Esri exports write it, is rewritten with ISO type codes and "
+        "given a header envelope. Its coordinates do not change.\n\n"
+        "DATETIME text in another ISO 8601 form, such as "
+        "2017-08-01T00:00:00.0Z, is rewritten as 2017-08-01T00:00:00.000Z. A "
+        "value that would lose precision, or that is not a datetime, is left "
+        "as it is.\n\n"
+        "Run Validate GeoPackage afterwards to see anything left."
+    )
+
+    LAYER = "LAYER"
+    REPAIRED = "REPAIRED"
+
+    FIELDS = (
+        ("layer", "string"),
+        ("geometries", "int"),
+        ("datetimes", "int"),
+    )
+
+    def initAlgorithm(self, config=None):  # noqa: N802
+        self.add_gpkg_parameter()
+        self.add_name_parameter(self.LAYER, "Layer or table (all if empty)")
+        self.add_table_sink(description="Repair report")
+        self.addOutput(QgsProcessingOutputNumber(self.REPAIRED, "Tables changed"))
+
+    def processAlgorithm(self, parameters, context, feedback):  # noqa: N802
+        only = self.parameterAsString(parameters, self.LAYER, context).strip()
+        fields = make_fields(*self.FIELDS)
+        sink, dest = self.sink(parameters, context, fields)
+        changed = 0
+        with self.open(parameters, context, read_only=False) as gpkg:
+            features = gpkg.layer_names()
+            tables = [(name, True) for name in features]
+            tables += [(name, False) for name in gpkg.attribute_table_names()]
+            if only:
+                tables = [t for t in tables if t[0] == only]
+                if not tables:
+                    # Raises the error that says why the name is not a table.
+                    wrap_errors(gpkg.layer, only)
+            for i, (name, is_feature) in enumerate(tables):
+                if feedback.isCanceled():
+                    break
+                feedback.setProgress(100 * i / max(len(tables), 1))
+                layer = wrap_errors(gpkg.layer if is_feature else gpkg.attributes, name)
+                geometries = (
+                    wrap_errors(layer.repair_wkb_type_codes) if is_feature else 0
+                )
+                datetimes = wrap_errors(layer.repair_datetimes)
+                if geometries or datetimes:
+                    changed += 1
+                    feedback.pushInfo(
+                        f"{name}: {geometries} geometries and {datetimes} "
+                        "DATETIME values rewritten"
+                    )
+                add_row(sink, fields, [name, geometries, datetimes])
         if not changed:
             feedback.pushInfo("Nothing to repair.")
         return {self.OUTPUT: dest, self.REPAIRED: changed}

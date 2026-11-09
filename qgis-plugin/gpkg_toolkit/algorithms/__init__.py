@@ -8,6 +8,7 @@ from .coverage import (
 from .export import ExportLayerAlgorithm
 from .inspect import (
     ListExtensionsAlgorithm,
+    RepairEncodingsAlgorithm,
     RepairSpatialIndexesAlgorithm,
     ValidateAlgorithm,
 )
@@ -15,6 +16,7 @@ from .inspect import (
 ALGORITHMS = [
     ValidateAlgorithm,
     RepairSpatialIndexesAlgorithm,
+    RepairEncodingsAlgorithm,
     ListExtensionsAlgorithm,
     SampleCoverageAlgorithm,
     CoverageStatisticsAlgorithm,
