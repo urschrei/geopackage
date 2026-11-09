@@ -6,7 +6,11 @@ from .coverage import (
     SampleCoverageAlgorithm,
 )
 from .export import ExportLayerAlgorithm
-from .inspect import ListExtensionsAlgorithm, RepairSpatialIndexesAlgorithm, ValidateAlgorithm
+from .inspect import (
+    ListExtensionsAlgorithm,
+    RepairSpatialIndexesAlgorithm,
+    ValidateAlgorithm,
+)
 
 ALGORITHMS = [
     ValidateAlgorithm,

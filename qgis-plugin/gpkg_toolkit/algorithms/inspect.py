@@ -73,7 +73,9 @@ class ValidateAlgorithm(Algorithm):
                 )
                 feedback.pushInfo(f"{finding.severity}: {finding.message}")
         if not any(counts.values()):
-            feedback.pushInfo("No findings (this crate's checks; the OGC ETS is the authority).")
+            feedback.pushInfo(
+                "No findings (this crate's checks; the OGC ETS is the authority)."
+            )
         return {
             self.OUTPUT: dest,
             self.ERRORS: counts["error"],
@@ -116,7 +118,9 @@ class RepairSpatialIndexesAlgorithm(Algorithm):
         self.add_gpkg_parameter()
         self.add_name_parameter(self.LAYER, "Layer (all layers if empty)")
         self.addParameter(
-            QgsProcessingParameterBoolean(self.BUILD_MISSING, "Build missing indexes", False)
+            QgsProcessingParameterBoolean(
+                self.BUILD_MISSING, "Build missing indexes", False
+            )
         )
         self.add_table_sink(description="Index report")
         self.addOutput(QgsProcessingOutputNumber(self.REPAIRED, "Layers changed"))

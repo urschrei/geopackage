@@ -47,7 +47,11 @@ def test_create_and_read_back(points, path):
     assert layer.field_names == ["name", "n", "x", "ok"]
     assert layer.primary_key == "fid"
     geom = layer.geometry_column
-    assert (geom.column_name, geom.geometry_type, geom.srs_id) == ("geom", "POINT", 4326)
+    assert (geom.column_name, geom.geometry_type, geom.srs_id) == (
+        "geom",
+        "POINT",
+        4326,
+    )
     assert layer.count() == 100
     assert layer.extent() == (0.0, 0.0, 99.0, 99.0)
     assert points.layer_names() == ["pts"]
@@ -111,7 +115,14 @@ def test_value_round_trip(path):
     assert table.kind == "attributes"
     when = datetime.datetime(2024, 5, 6, 7, 8, 9, 123000, tzinfo=datetime.timezone.utc)
     local = datetime.datetime(
-        2024, 5, 6, 9, 8, 9, 123000, tzinfo=datetime.timezone(datetime.timedelta(hours=2))
+        2024,
+        5,
+        6,
+        9,
+        8,
+        9,
+        123000,
+        tzinfo=datetime.timezone(datetime.timedelta(hours=2)),
     )
     fids = table.insert(
         [
@@ -153,7 +164,7 @@ def test_curves_pass_through(path):
     layer = gpkg.create_layer("arcs", "CIRCULARSTRING", 4326)
     wkb = circular_string((0, 0), (1, 1), (2, 0))
     layer.insert([(None, wkb, [])])
-    (fid, back, values), = layer.features()
+    ((fid, back, values),) = layer.features()
     assert back == wkb
     # The arc's apex is at y = 1, so the envelope is exact, not the chord's.
     assert [r[0] for r in layer.features(bbox=(0.9, 0.9, 1.1, 1.1))] == [1]

@@ -50,7 +50,9 @@ class ExportLayerAlgorithm(Algorithm):
 
     def initAlgorithm(self, config=None):  # noqa: N802
         self.addParameter(
-            QgsProcessingParameterFeatureSource(self.INPUT, "Input layer", [compat.SOURCE_VECTOR])
+            QgsProcessingParameterFeatureSource(
+                self.INPUT, "Input layer", [compat.SOURCE_VECTOR]
+            )
         )
         self.addParameter(
             QgsProcessingParameterFileDestination(
@@ -63,15 +65,21 @@ class ExportLayerAlgorithm(Algorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterBoolean(self.SPATIAL_INDEX, "Build a spatial index", True)
+            QgsProcessingParameterBoolean(
+                self.SPATIAL_INDEX, "Build a spatial index", True
+            )
         )
-        self.addOutput(QgsProcessingOutputVectorLayer(self.OUTPUT_LAYER, "Exported layer"))
+        self.addOutput(
+            QgsProcessingOutputVectorLayer(self.OUTPUT_LAYER, "Exported layer")
+        )
         self.addOutput(QgsProcessingOutputNumber(self.WRITTEN, "Rows written"))
 
     def processAlgorithm(self, parameters, context, feedback):  # noqa: N802
         source = self.parameterAsSource(parameters, self.INPUT, context)
         if source is None:
-            raise QgsProcessingException(self.invalidSourceError(parameters, self.INPUT))
+            raise QgsProcessingException(
+                self.invalidSourceError(parameters, self.INPUT)
+            )
         path = self.parameterAsFileOutput(parameters, self.OUTPUT, context)
         table = self.parameterAsString(parameters, self.LAYER_NAME, context).strip()
         if not table:
@@ -84,7 +92,8 @@ class ExportLayerAlgorithm(Algorithm):
             (
                 i
                 for i, f in enumerate(fields)
-                if f.name().lower() == "fid" and compat.field_kind(f) in ("int", "int64", "uint")
+                if f.name().lower() == "fid"
+                and compat.field_kind(f) in ("int", "int64", "uint")
             ),
             None,
         )
@@ -98,13 +107,19 @@ class ExportLayerAlgorithm(Algorithm):
         promote = geometry is not None and QgsWkbTypes.isMultiType(wkb_type)
 
         try:
-            handle = gpkg.GeoPackage(path) if os.path.exists(path) else gpkg.GeoPackage.create(path)
+            handle = (
+                gpkg.GeoPackage(path)
+                if os.path.exists(path)
+                else gpkg.GeoPackage.create(path)
+            )
         except gpkg.GeoPackageError as error:
             raise QgsProcessingException(f"cannot open {path}: {error}") from error
 
         with handle:
             if geometry is not None:
-                srs_id = wrap_errors(ensure_srs, handle, source.sourceCrs(), gpkg.GeoPackageError)
+                srs_id = wrap_errors(
+                    ensure_srs, handle, source.sourceCrs(), gpkg.GeoPackageError
+                )
                 name, z, m = geometry
                 target = wrap_errors(
                     handle.create_layer,
@@ -128,7 +143,11 @@ class ExportLayerAlgorithm(Algorithm):
                     if feedback.isCanceled():
                         raise Cancelled
                     attributes = feature.attributes()
-                    fid = to_value(attributes[fid_index]) if fid_index is not None else None
+                    fid = (
+                        to_value(attributes[fid_index])
+                        if fid_index is not None
+                        else None
+                    )
                     wkb = None
                     if geometry is not None and feature.hasGeometry():
                         geom = QgsGeometry(feature.geometry())
@@ -142,7 +161,9 @@ class ExportLayerAlgorithm(Algorithm):
             try:
                 written = len(wrap_errors(target.insert, rows(), batch=self.BATCH))
             except Cancelled:
-                feedback.reportError("Cancelled: the batches before it were kept.", False)
+                feedback.reportError(
+                    "Cancelled: the batches before it were kept.", False
+                )
                 written = target.count()
 
             if geometry is not None:

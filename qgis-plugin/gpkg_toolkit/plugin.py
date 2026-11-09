@@ -60,7 +60,9 @@ class GpkgToolkitPlugin:
         from qgis.PyQt.QtWidgets import QAction
 
         if native.gpkg is not None:
-            add_layer = QAction("Add GeoPackage layer (geopackage crate)…", self.iface.mainWindow())
+            add_layer = QAction(
+                "Add GeoPackage layer (geopackage crate)…", self.iface.mainWindow()
+            )
             add_layer.triggered.connect(self._add_layer)
             self.iface.addPluginToMenu(MENU, add_layer)
             self.actions.append(add_layer)
@@ -84,7 +86,9 @@ class GpkgToolkitPlugin:
         from .data_provider import PROVIDER_KEY, encode_uri
 
         window = self.iface.mainWindow()
-        path, _ = QFileDialog.getOpenFileName(window, "GeoPackage", "", "GeoPackage (*.gpkg)")
+        path, _ = QFileDialog.getOpenFileName(
+            window, "GeoPackage", "", "GeoPackage (*.gpkg)"
+        )
         if not path:
             return
         try:
@@ -94,18 +98,25 @@ class GpkgToolkitPlugin:
             self.iface.messageBar().pushCritical("GeoPackage Toolkit", str(error))
             return
         if not names:
-            self.iface.messageBar().pushWarning("GeoPackage Toolkit", f"{path} has no layers")
+            self.iface.messageBar().pushWarning(
+                "GeoPackage Toolkit", f"{path} has no layers"
+            )
             return
         name = names[0]
         if len(names) > 1:
-            name, ok = QInputDialog.getItem(window, "GeoPackage", "Layer", names, 0, False)
+            name, ok = QInputDialog.getItem(
+                window, "GeoPackage", "Layer", names, 0, False
+            )
             if not ok:
                 return
-        layer = QgsVectorLayer(encode_uri({"path": path, "layerName": name}), name, PROVIDER_KEY)
+        layer = QgsVectorLayer(
+            encode_uri({"path": path, "layerName": name}), name, PROVIDER_KEY
+        )
         if not layer.isValid():
             error = layer.dataProvider().errors() if layer.dataProvider() else []
             self.iface.messageBar().pushCritical(
-                "GeoPackage Toolkit", f"cannot open {name}: {'; '.join(error) or 'invalid layer'}"
+                "GeoPackage Toolkit",
+                f"cannot open {name}: {'; '.join(error) or 'invalid layer'}",
             )
             return
         from qgis.core import QgsProject

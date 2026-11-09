@@ -52,7 +52,9 @@ def test_validate_clean_and_damaged(tmp_path, run):
     assert clean["ERRORS"] == 0
     rows = table_rows(clean["OUTPUT"])
     # The unindexed layer is an advisory, not an error.
-    assert {r["table_name"] for r in rows if r["severity"] == "advisory"} == {"unindexed"}
+    assert {r["table_name"] for r in rows if r["severity"] == "advisory"} == {
+        "unindexed"
+    }
 
     con = sqlite3.connect(path)
     con.execute("DELETE FROM rtree_pts_geom WHERE id < 5")
@@ -84,7 +86,12 @@ def test_repair_spatial_indexes(tmp_path, run):
 
     built = run(
         "repairspatialindexes",
-        {"INPUT": path, "LAYER": "unindexed", "BUILD_MISSING": True, "OUTPUT": "memory:"},
+        {
+            "INPUT": path,
+            "LAYER": "unindexed",
+            "BUILD_MISSING": True,
+            "OUTPUT": "memory:",
+        },
     )
     assert built["REPAIRED"] == 1
     with g.GeoPackage(path, read_only=True) as gpkg:
@@ -124,8 +131,14 @@ def test_export_round_trips_through_gdal(tmp_path, run):
         [
             (
                 "Polygon((0 0, 1 0, 1 1, 0 0))",
-                [7, "single", 0.5, QDate(2024, 2, 29),
-                 QDateTime(QDate(2024, 1, 2), QTime(3, 4, 5), QTimeZone.utc()), True],
+                [
+                    7,
+                    "single",
+                    0.5,
+                    QDate(2024, 2, 29),
+                    QDateTime(QDate(2024, 1, 2), QTime(3, 4, 5), QTimeZone.utc()),
+                    True,
+                ],
             ),
             (
                 "MultiPolygon(((10 10, 12 10, 12 12, 10 10)))",
@@ -138,7 +151,12 @@ def test_export_round_trips_through_gdal(tmp_path, run):
     path = str(tmp_path / "out.gpkg")
     result = run(
         "exportlayer",
-        {"INPUT": source, "OUTPUT": path, "LAYER_NAME": "shapes", "SPATIAL_INDEX": True},
+        {
+            "INPUT": source,
+            "OUTPUT": path,
+            "LAYER_NAME": "shapes",
+            "SPATIAL_INDEX": True,
+        },
     )
     assert result["WRITTEN"] == 3
 
@@ -146,7 +164,11 @@ def test_export_round_trips_through_gdal(tmp_path, run):
         layer = gpkg.layer("shapes")
         assert layer.field_names == ["name", "area", "day", "at", "flag"]
         assert [f.declared_type for f in layer.fields] == [
-            "TEXT(20)", "DOUBLE", "DATE", "DATETIME", "BOOLEAN",
+            "TEXT(20)",
+            "DOUBLE",
+            "DATE",
+            "DATETIME",
+            "BOOLEAN",
         ]
         geom = layer.geometry_column
         assert (geom.geometry_type, geom.srs_id) == ("MULTIPOLYGON", 3857)
@@ -155,8 +177,11 @@ def test_export_round_trips_through_gdal(tmp_path, run):
         rows = {fid: values for fid, _, values in layer.features()}
         assert sorted(rows) == [7, 9, 11]
         assert rows[7] == [
-            "single", 0.5, datetime.date(2024, 2, 29),
-            datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc), True,
+            "single",
+            0.5,
+            datetime.date(2024, 2, 29),
+            datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc),
+            True,
         ]
         assert not [f for f in gpkg.validate() if f.severity == "error"]
 
@@ -250,9 +275,21 @@ def test_check_coverage_samples(tmp_path, run):
     result = run("checkcoveragesamples", {"INPUT": path, "OUTPUT": "memory:"})
     assert result["FAILURES"] == 0
     with pytest.raises(Exception, match="no coverage named"):
-        run("checkcoveragesamples", {"INPUT": path, "COVERAGE": "nope", "OUTPUT": "memory:"})
+        run(
+            "checkcoveragesamples",
+            {"INPUT": path, "COVERAGE": "nope", "OUTPUT": "memory:"},
+        )
 
 
 def test_compat_field_kinds():
-    for kind in ("bool", "int", "int64", "double", "string", "bytes", "date", "datetime"):
+    for kind in (
+        "bool",
+        "int",
+        "int64",
+        "double",
+        "string",
+        "bytes",
+        "date",
+        "datetime",
+    ):
         assert compat.field_kind(compat.field("x", kind)) == kind
