@@ -2,7 +2,7 @@
 """Link settings that make a build use the SQLite of the QGIS that loads it.
 
     scripts/host_sqlite.py [--github-env]
-    scripts/host_sqlite.py --check LIBRARY [LIBRARY ...]
+    scripts/host_sqlite.py --check LIBRARY|WHEEL [LIBRARY|WHEEL ...]
 
 For the QGIS plugin's native parts on Linux and macOS: `geopackage_rs`
 (built with `--no-default-features`) and the native provider. A process
@@ -23,7 +23,8 @@ so that pkg-config does not select another SQLite.
 
 The script prints the settings as `NAME=value` lines, or with `--github-env`
 appends them to the file that `$GITHUB_ENV` names. `--check` fails unless
-each library given links the host's SQLite. Windows needs none: there
+each library given, or the module in each `geopackage_rs` wheel given, links
+the host's SQLite. Windows needs none: there
 the parts keep their own SQLite, because Windows keeps a lock for each file
 handle, and a copy in the same process sees it.
 """
@@ -34,6 +35,8 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
+import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 STUB_DIR = ROOT / "target" / "host-sqlite"
@@ -87,9 +90,10 @@ def settings():
     return {}
 
 
-def check(library):
+def check(library, label=None):
     """Exits unless `library` links the host's SQLite: on macOS by
-    `INSTALL_NAME`, on Linux by soname."""
+    `INSTALL_NAME`, on Linux by soname. Messages name it `label`, if given."""
+    label = label or library
     if sys.platform == "darwin":
         command, wanted = ["otool", "-L", library], INSTALL_NAME
     elif sys.platform.startswith("linux"):
@@ -98,10 +102,38 @@ def check(library):
         return
     output = subprocess.run(command, capture_output=True, text=True, check=True).stdout
     if wanted not in output:
+        dependencies = [
+            line.strip()
+            for line in output.splitlines()
+            if "NEEDED" in line or (sys.platform == "darwin" and line.startswith("\t"))
+        ]
+        symbols = subprocess.run(
+            ["nm", library], capture_output=True, text=True, check=False
+        ).stdout
+        opens = [
+            line.strip() for line in symbols.splitlines() if "sqlite3_open_v2" in line
+        ]
         sys.exit(
-            f"{library} does not link {wanted}, the SQLite of the QGIS that loads it"
+            f"{label} does not link {wanted}, the SQLite of the QGIS that loads it.\n"
+            f"Dependencies: {dependencies}\n"
+            f"sqlite3_open_v2 (U: referenced, t or T: compiled in): {opens}"
         )
-    print(f"{library} links {wanted}")
+    print(f"{label} links {wanted}")
+
+
+def check_wheel(wheel):
+    """Checks the compiled module in a `geopackage_rs` wheel."""
+    with zipfile.ZipFile(wheel) as source, tempfile.TemporaryDirectory() as out:
+        modules = [
+            name
+            for name in source.namelist()
+            if name.startswith("geopackage_rs/_geopackage_rs")
+            and name.endswith((".so", ".pyd"))
+        ]
+        if not modules:
+            sys.exit(f"{wheel}: no compiled geopackage_rs module inside")
+        for name in modules:
+            check(source.extract(name, out), f"{wheel}: {name}")
 
 
 def main():
@@ -113,12 +145,15 @@ def main():
         "--check",
         nargs="+",
         metavar="LIBRARY",
-        help="check that each library links the host's SQLite",
+        help="check that each library, or the module in each wheel, links the host's SQLite",
     )
     args = parser.parse_args()
     if args.check:
-        for library in args.check:
-            check(library)
+        for path in args.check:
+            if path.endswith(".whl"):
+                check_wheel(path)
+            else:
+                check(path)
         return
     lines = [f"{name}={value}" for name, value in settings().items()]
     if args.github_env:

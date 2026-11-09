@@ -95,14 +95,17 @@ jobs:
       - uses: actions/checkout@v7
       - run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends python3-qgis qgis-providers python3-venv
+          sudo apt-get install -y --no-install-recommends python3-qgis qgis-providers python3-venv libsqlite3-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # The plugin's build of the module, which links QGIS's SQLite instead of
+      # a copy of its own (scripts/host_sqlite.py).
       - run: |
           /usr/bin/python3 -m venv --system-site-packages venv
           venv/bin/pip install maturin pytest
-          venv/bin/maturin build -m geopackage-py/Cargo.toml -o dist
+          venv/bin/maturin build -m geopackage-py/Cargo.toml --no-default-features --auditwheel skip -o dist
           venv/bin/pip install --no-index --find-links dist geopackage-rs
+          python3 scripts/host_sqlite.py --check dist/*.whl
       - run: venv/bin/python -m pytest qgis-plugin/tests
         env:
           QT_QPA_PLATFORM: offscreen
@@ -145,13 +148,12 @@ jobs:
           workspaces: |
             . -> target
             geopackage-qgis -> target
-      - run: |
-          maturin build -m geopackage-py/Cargo.toml -o dist
-          pip install --no-index --find-links dist geopackage-rs
       # QGIS and Qt as conda installs them: under Library on Windows. There
       # the qgis package's bash activation script joins PYTHONPATH with ':',
       # which Windows' Python doesn't split on, so its bindings are put on
-      # the path here, with ';'.
+      # the path here, with ';'. On Linux, the SQLite that the module and the
+      # provider link is conda's, the one conda's QGIS loads; on macOS,
+      # scripts/host_sqlite.py gives it.
       - run: |
           if [ "$RUNNER_OS" = Windows ]; then
             echo "QT_DIR=$CONDA_PREFIX/Library" >> "$GITHUB_ENV"
@@ -159,9 +161,24 @@ jobs:
           else
             echo "QT_DIR=$CONDA_PREFIX" >> "$GITHUB_ENV"
           fi
+          if [ "$RUNNER_OS" = Linux ]; then
+            echo "SQLITE3_LIB_DIR=$CONDA_PREFIX/lib" >> "$GITHUB_ENV"
+          fi
+          python scripts/host_sqlite.py --github-env
+      # Windows keeps a lock for each file handle, so there the module keeps
+      # its own SQLite.
+      - run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            maturin build -m geopackage-py/Cargo.toml -o dist
+          else
+            maturin build -m geopackage-py/Cargo.toml --no-default-features --auditwheel skip -o dist
+          fi
+          pip install --no-index --find-links dist geopackage-rs
       - run: cargo fmt --manifest-path geopackage-qgis/Cargo.toml --check
       - run: cargo clippy --release --all-targets --manifest-path geopackage-qgis/Cargo.toml -- -D warnings
       - run: cargo build --release --manifest-path geopackage-qgis/Cargo.toml
+      - run: |
+          python scripts/host_sqlite.py --check "geopackage-qgis/target/release/${{ matrix.library }}" dist/*.whl
       - run: |
           export GPKG_TOOLKIT_NATIVE_PROVIDER="$PWD/geopackage-qgis/target/release/${{ matrix.library }}"
           python -X faulthandler -m pytest qgis-plugin/tests -rs
