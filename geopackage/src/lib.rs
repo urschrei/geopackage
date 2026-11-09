@@ -419,8 +419,9 @@
 //!
 //! Most calls either read or write, but three depend on the state of the
 //! file. [`Layer::extent`] stores the extent it measures if the recorded one
-//! is unusable. [`Layer::repair_spatial_index`] writes only if there is
-//! something to repair. [`Layer::writer`] begins a deferred transaction,
+//! is unusable. [`Layer::repair_spatial_index`] and
+//! [`Layer::repair_wkb_type_codes`] write only if there is something to
+//! repair. [`Layer::writer`] begins a deferred transaction,
 //! which takes no lock until a row is written, so on a read-only connection
 //! the first row fails rather than the call.
 //!
@@ -432,6 +433,7 @@
 //! | [`GeoPackage::contents`] | Never | Works |
 //! | [`Layer::extent`] | Only if the recorded extent is unusable | Works; the extent is returned but not stored |
 //! | [`Layer::repair_spatial_index`] | Only if the triggers are out of date | Works if there is nothing to repair |
+//! | [`Layer::repair_wkb_type_codes`] | Only if a geometry has a flagged WKB type code | Works if there is nothing to repair |
 //! | [`Layer::recompute_extent`] | Always | Fails |
 //! | [`Layer::create_spatial_index`], [`Layer::drop_spatial_index`], [`Layer::rebuild_spatial_index`] | Always | Fails |
 //! | [`Layer::writer`] | On row operations and commit | Opens; the first row fails |
@@ -534,6 +536,7 @@ mod open;
 mod options;
 mod packed;
 mod related;
+mod repair;
 mod schema;
 mod srs;
 mod tiles;

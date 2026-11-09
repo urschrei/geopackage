@@ -520,7 +520,7 @@ impl Layer<'_> {
     /// Returns this layer's geometry column, or [`Error::NoGeometryColumn`]
     /// when it has none (an attribute layer, or a feature table with no
     /// `gpkg_geometry_columns` row).
-    fn require_geometry_column(&self) -> Result<&GeometryColumn> {
+    pub(crate) fn require_geometry_column(&self) -> Result<&GeometryColumn> {
         self.geometry_column()
             .ok_or_else(|| Error::NoGeometryColumn {
                 table_name: self.table_name().to_owned(),
@@ -529,7 +529,7 @@ impl Layer<'_> {
 
     /// Returns this layer's single-column primary key, or
     /// [`Error::NoPrimaryKey`].
-    fn require_primary_key(&self) -> Result<&str> {
+    pub(crate) fn require_primary_key(&self) -> Result<&str> {
         self.primary_key_column()
             .ok_or_else(|| Error::NoPrimaryKey {
                 table_name: self.table_name().to_owned(),

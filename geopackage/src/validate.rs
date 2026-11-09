@@ -330,6 +330,9 @@ impl Finding {
             Self::StaleSpatialIndex { .. } => {
                 Some("rebuild the index and its triggers with Layer::repair_spatial_index")
             }
+            Self::NonIsoWkbTypeCode { .. } => {
+                Some("rewrite the type codes in ISO form with Layer::repair_wkb_type_codes")
+            }
             Self::NoSpatialIndex { .. } => Some("build one with Layer::create_spatial_index"),
             Self::LegacyApplicationId { .. } => {
                 Some("rewriting the file through this crate stamps the current application_id")
@@ -355,9 +358,8 @@ impl Finding {
             | Self::MissingTileAncillary { .. }
             | Self::DanglingTileAncillary { .. }
             | Self::NonConformantRelationName { .. }
-            // Both need the geometries written again, which this crate does
-            // not yet do for a file it did not write.
-            | Self::NonIsoWkbTypeCode { .. }
+            // The geometry's data has to come from the writer that produced
+            // it.
             | Self::UnreadableGeometry { .. } => None,
         }
     }

@@ -51,6 +51,12 @@ While the version is below 1.0 the API may change in any release.
   every nesting depth: a code that gives Z or M by a high-bit flag becomes
   the ISO code for the same type and dimensions. Coordinates and byte order
   are copied unchanged.
+- `Layer::repair_wkb_type_codes` rewrites each geometry whose type codes use
+  the high-bit flags with ISO codes, keeping its coordinates and SRS id and
+  adding a header envelope, in one transaction. It returns how many it
+  rewrote, writes nothing when there is nothing to rewrite, and leaves a
+  geometry it cannot read alone. The `NonIsoWkbTypeCode` finding now names
+  it as the repair.
 - `geopackage-py`, Python bindings built with PyO3 as abi3 wheels for CPython
   3.9 and later, with SQLite vendored. They cover open and create, layer
   schemas, streaming feature reads by bounding box, `WHERE` clause and column
