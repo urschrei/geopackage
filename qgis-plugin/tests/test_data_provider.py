@@ -47,7 +47,9 @@ def _native_library():
     override = os.environ.get(native_provider.ENV)
     if override:
         return None if override == "0" else override
-    built = os.path.join(REPO, "geopackage-qgis", "target", "release", native_provider.LIBRARY)
+    built = os.path.join(
+        REPO, "geopackage-qgis", "target", "release", native_provider.LIBRARY
+    )
     return built if os.path.isfile(built) else None
 
 
@@ -80,7 +82,13 @@ def path(tmp_path):
         "pts",
         "POINT",
         4326,
-        [("name", "TEXT(10)"), ("n", "INTEGER"), ("x", "DOUBLE"), ("at", "DATETIME"), ("day", "DATE")],
+        [
+            ("name", "TEXT(10)"),
+            ("n", "INTEGER"),
+            ("x", "DOUBLE"),
+            ("at", "DATETIME"),
+            ("day", "DATE"),
+        ],
     )
     layer.insert(
         (
@@ -90,7 +98,9 @@ def path(tmp_path):
                 f"p{i}",
                 i,
                 i / 4,
-                datetime.datetime(2024, 1, 1, 0, 0, i % 60, tzinfo=datetime.timezone.utc),
+                datetime.datetime(
+                    2024, 1, 1, 0, 0, i % 60, tzinfo=datetime.timezone.utc
+                ),
                 datetime.date(2024, 1, 1 + i % 28),
             ],
         )
@@ -126,21 +136,36 @@ def test_the_layer_describes_itself(path, key):
     assert layer.wkbType() == compat.WKB_POINT
     fields = layer.fields()
     assert [f.name() for f in fields] == ["name", "n", "x", "at", "day"]
-    assert [compat.field_kind(f) for f in fields] == ["string", "int64", "double", "datetime", "date"]
+    assert [compat.field_kind(f) for f in fields] == [
+        "string",
+        "int64",
+        "double",
+        "datetime",
+        "date",
+    ]
     assert fields[0].length() == 10
     assert layer.extent() == QgsRectangle(0, 0, 99, 99)
 
 
 def test_requests(path, key):
     layer = open_layer(path, key=key)
-    assert ids(layer.getFeatures(QgsFeatureRequest(QgsRectangle(10, 10, 12, 12)))) == [11, 12, 13]
-    assert ids(layer.getFeatures(QgsFeatureRequest().setFilterFids([3, 7, 500]))) == [3, 7]
+    assert ids(layer.getFeatures(QgsFeatureRequest(QgsRectangle(10, 10, 12, 12)))) == [
+        11,
+        12,
+        13,
+    ]
+    assert ids(layer.getFeatures(QgsFeatureRequest().setFilterFids([3, 7, 500]))) == [
+        3,
+        7,
+    ]
     assert ids(layer.getFeatures(QgsFeatureRequest().setFilterFids([]))) == []
     assert ids(layer.getFeatures('"n" >= 97 OR "name" = \'p3\'')) == [4, 98, 99, 100]
 
     feature = layer.getFeature(5)
     assert feature.attributes()[:3] == ["p4", 4, 1.0]
-    assert feature.attribute("at") == QDateTime(QDate(2024, 1, 1), QTime(0, 0, 4), QTimeZone.utc())
+    assert feature.attribute("at") == QDateTime(
+        QDate(2024, 1, 1), QTime(0, 0, 4), QTimeZone.utc()
+    )
     assert feature.attribute("day") == QDate(2024, 1, 5)
     assert feature.geometry().asWkt() == "Point (4 4)"
     assert not layer.getFeature(5000).isValid()
@@ -164,7 +189,9 @@ def test_a_request_in_another_crs(path, key):
     mercator = QgsCoordinateReferenceSystem("EPSG:3857")
     to_mercator = QgsCoordinateTransform(layer.crs(), mercator, QgsProject.instance())
     rect = to_mercator.transformBoundingBox(QgsRectangle(19.5, 19.5, 20.5, 20.5))
-    request = QgsFeatureRequest(rect).setDestinationCrs(mercator, QgsProject.instance().transformContext())
+    request = QgsFeatureRequest(rect).setDestinationCrs(
+        mercator, QgsProject.instance().transformContext()
+    )
     (feature,) = layer.getFeatures(request)
     assert feature["n"] == 20
     expected = to_mercator.transform(QgsPointXY(20, 20))
@@ -173,13 +200,17 @@ def test_a_request_in_another_crs(path, key):
 
 def test_subset_string_is_sql(path, key):
     layer = open_layer(path, key=key)
-    assert layer.setSubsetString('"n" < 10 AND name <> \'p0\'')
+    assert layer.setSubsetString("\"n\" < 10 AND name <> 'p0'")
     assert layer.featureCount() == 9
     assert layer.extent() == QgsRectangle(1, 1, 9, 9)
-    assert ids(layer.getFeatures(QgsFeatureRequest(QgsRectangle(0, 0, 3, 3)))) == [2, 3, 4]
+    assert ids(layer.getFeatures(QgsFeatureRequest(QgsRectangle(0, 0, 3, 3)))) == [
+        2,
+        3,
+        4,
+    ]
     assert ids(layer.getFeatures(QgsFeatureRequest().setFilterFid(50))) == []
     assert not layer.setSubsetString("nope >")
-    assert layer.subsetString() == '"n" < 10 AND name <> \'p0\''
+    assert layer.subsetString() == "\"n\" < 10 AND name <> 'p0'"
     assert layer.setSubsetString("")
     assert layer.featureCount() == 100
 
@@ -191,7 +222,15 @@ def test_an_edit_session_commits_through_the_crate(path, key):
 
     assert layer.startEditing()
     new = QgsFeature(layer.fields())
-    new.setAttributes(["new", 1000, 2.5, QDateTime(QDate(2025, 6, 7), QTime(8, 9, 10), QTimeZone.utc()), QDate(2025, 6, 7)])
+    new.setAttributes(
+        [
+            "new",
+            1000,
+            2.5,
+            QDateTime(QDate(2025, 6, 7), QTime(8, 9, 10), QTimeZone.utc()),
+            QDate(2025, 6, 7),
+        ]
+    )
     new.setGeometry(QgsGeometry.fromWkt("Point (500 500)"))
     assert layer.addFeature(new)
     assert layer.changeAttributeValue(1, layer.fields().indexOf("name"), "renamed")
@@ -208,16 +247,20 @@ def test_an_edit_session_commits_through_the_crate(path, key):
         assert pts.get(3) is None
         (added,) = [row for row in pts.features(where="name = 'new'")]
         assert added[2][:3] == ["new", 1000, 2.5]
-        assert added[2][3] == datetime.datetime(2025, 6, 7, 8, 9, 10, tzinfo=datetime.timezone.utc)
+        assert added[2][3] == datetime.datetime(
+            2025, 6, 7, 8, 9, 10, tzinfo=datetime.timezone.utc
+        )
         assert pts.spatial_index_status() == "current"
         assert pts.audit_spatial_index()["consistent"]
         assert not [f for f in gpkg.validate() if f.severity == "error"]
 
     # The index followed the edits, so a bbox read finds the moved and new rows.
-    assert ids(layer.getFeatures(QgsFeatureRequest(QgsRectangle(-11, -11, -9, -9)))) == [2]
+    assert ids(
+        layer.getFeatures(QgsFeatureRequest(QgsRectangle(-11, -11, -9, -9)))
+    ) == [2]
     ogr = QgsVectorLayer(f"{path}|layername=pts", "ogr", "ogr")
     assert ogr.featureCount() == 100
-    (from_ogr,) = ogr.getFeatures('"name" = \'new\'')
+    (from_ogr,) = ogr.getFeatures("\"name\" = 'new'")
     assert from_ogr.geometry().asWkt() == "Point (500 500)"
 
 
@@ -360,13 +403,22 @@ def test_values_of_every_kind_reach_the_file(tmp_path, key):
         "pts",
         "MULTIPOINT",
         4326,
-        [("ok", "BOOLEAN"), ("raw", "BLOB"), ("n", "INTEGER"), ("x", "DOUBLE"), ("s", "TEXT"), ("day", "DATE")],
+        [
+            ("ok", "BOOLEAN"),
+            ("raw", "BLOB"),
+            ("n", "INTEGER"),
+            ("x", "DOUBLE"),
+            ("s", "TEXT"),
+            ("day", "DATE"),
+        ],
     )
     gpkg.close()
     layer = open_layer(path, key=key)
     assert layer.startEditing()
     new = QgsFeature(layer.fields())
-    new.setAttributes([True, QByteArray(b"\x00\x01\xff"), 2**40, -0.5, "snow ☃", QDate(1969, 12, 31)])
+    new.setAttributes(
+        [True, QByteArray(b"\x00\x01\xff"), 2**40, -0.5, "snow ☃", QDate(1969, 12, 31)]
+    )
     # A single point with a z, into a 2D multipoint column: made multi, z dropped.
     new.setGeometry(QgsGeometry.fromWkt("PointZ (1 2 3)"))
     assert layer.addFeature(new)
@@ -378,7 +430,14 @@ def test_values_of_every_kind_reach_the_file(tmp_path, key):
     with g.GeoPackage(path, read_only=True) as gpkg:
         rows = sorted(gpkg.layer("pts").features(), key=lambda row: row[0])
     (fid, wkb, values), (_, no_wkb, nulls) = rows
-    assert values == [True, b"\x00\x01\xff", 2**40, -0.5, "snow ☃", datetime.date(1969, 12, 31)]
+    assert values == [
+        True,
+        b"\x00\x01\xff",
+        2**40,
+        -0.5,
+        "snow ☃",
+        datetime.date(1969, 12, 31),
+    ]
     stored = QgsGeometry()
     stored.fromWkb(QByteArray(wkb))
     assert stored.asWkt() == "MultiPoint ((1 2))"
@@ -399,11 +458,15 @@ def test_an_edit_shows_in_the_next_read(path, key):
     # The native provider reads through pooled read-only connections; a
     # committed edit must reach them.
     layer = open_layer(path, key=key)
-    assert ids(layer.getFeatures(QgsFeatureRequest(QgsRectangle(-1, -1, 0.5, 0.5)))) == [1]
+    assert ids(
+        layer.getFeatures(QgsFeatureRequest(QgsRectangle(-1, -1, 0.5, 0.5)))
+    ) == [1]
     assert layer.startEditing()
     assert layer.deleteFeature(1)
     assert layer.commitChanges(), layer.commitErrors()
-    assert ids(layer.getFeatures(QgsFeatureRequest(QgsRectangle(-1, -1, 0.5, 0.5)))) == []
+    assert (
+        ids(layer.getFeatures(QgsFeatureRequest(QgsRectangle(-1, -1, 0.5, 0.5)))) == []
+    )
     assert layer.featureCount() == 99
     assert layer.dataProvider().featureCount() == 99
 
