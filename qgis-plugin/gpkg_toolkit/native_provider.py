@@ -51,7 +51,9 @@ def library_path():
     if override:
         return override
     major, minor = running_version()
-    candidate = os.path.join(EXT_LIBS, _platform_tag(), f"qgis-{major}.{minor}", LIBRARY)
+    candidate = os.path.join(
+        EXT_LIBS, _platform_tag(), f"qgis-{major}.{minor}", LIBRARY
+    )
     return candidate if os.path.isfile(candidate) else None
 
 
@@ -75,7 +77,9 @@ def _share_qgis_symbols():
                 fields[5]
                 for fields in (line.split(maxsplit=5) for line in maps)
                 if len(fields) == 6
-                and os.path.basename(fields[5]).startswith(("libqgis_core.so", "libQt6"))
+                and os.path.basename(fields[5]).startswith(
+                    ("libqgis_core.so", "libQt6")
+                )
             }
     except OSError:
         return
@@ -95,7 +99,9 @@ def load(path=None):
         return _LIBRARY
     path = path or library_path()
     if path is None:
-        LOAD_ERROR = "no native provider build for QGIS {}.{}".format(*running_version())
+        LOAD_ERROR = "no native provider build for QGIS {}.{}".format(
+            *running_version()
+        )
         return None
     _share_qgis_symbols()
     try:
