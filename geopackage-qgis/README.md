@@ -228,4 +228,6 @@ crate's reads unchanged.
 
 Builds for each new QGIS minor version as it is released: add it to the
 `native` job's matrix, with the name and SHA-256 of OSGeo4W's `qgis-devel`
-archive for that release.
+archive for that release. `.github/workflows/qgis-versions.yml` runs
+`scripts/qgis_versions.py` once a month and opens an issue for a minor
+version that has no build, with the matrix entries it needs.
