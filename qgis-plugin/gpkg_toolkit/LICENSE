@@ -1,0 +1,16 @@
+GeoPackage Toolkit for QGIS
+
+Copyright (c) The GeoRust Developers
+
+Licensed under either of
+
+ * the Apache License, Version 2.0 (the file LICENSE-APACHE), or
+ * the MIT license (the file LICENSE-MIT)
+
+at your option. The MIT license is compatible with the GNU GPL version 2
+or later.
+
+The released plugin holds both files next to this one. In the source
+repository, https://github.com/urschrei/geopackage, they are at its root.
+The compiled parts of the plugin, the geopackage_rs module and the native
+data provider, are built from that repository under the same licences.
