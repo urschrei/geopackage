@@ -8,14 +8,15 @@
 //!
 //! # The read path
 //!
-//! An iterator's read runs on a thread of its own, through its own read-only
-//! connection, using the crate's Arrow read. That read applies the bounding
-//! box (through the RTree), the `WHERE` clause and the column projection, and
-//! on a full scan reads on up to four threads. Batches cross a bounded
-//! channel to the iterator, whose C++ side reads values by field index. There
-//! is no per-row allocation on this side: the C++ shim builds each
-//! `QgsFeature` straight from the Arrow arrays, which is the loop OGR's
-//! provider runs too.
+//! An iterator's read runs on one of the layer's reader threads, using the
+//! crate's Arrow read. Each reader holds a read-only connection and the layer
+//! resolved on it, made on its first read and kept, so a read pays for
+//! neither a thread nor a layer lookup. The read applies the bounding box
+//! (through the RTree), the `WHERE` clause and the column projection, and on
+//! a full scan reads on up to four threads. Batches cross a bounded channel
+//! to the iterator, whose C++ side reads values by field index. There is no
+//! per-row allocation on this side: the C++ shim builds each `QgsFeature`
+//! straight from the Arrow arrays, which is the loop OGR's provider runs too.
 //!
 //! # The write path
 //!
@@ -26,10 +27,10 @@
 //! changes are committed. Reads keep their own read-only connections, and
 //! see each committed edit from their next read on.
 
-use std::collections::VecDeque;
-use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, sync_channel};
-use std::sync::{Arc, Mutex};
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, SendError, Sender, SyncSender, channel, sync_channel};
+use std::sync::{Arc, Mutex, Weak};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Date32Type, Float64Type, Int64Type, TimestampMicrosecondType};
@@ -105,8 +106,8 @@ mod ffi {
         fn extent(self: &RsLayer, out: &mut [f64]) -> Result<bool>;
         /// Starts a read. `bbox` is empty or four values; `where_clause` is
         /// empty for none; `columns` are field indexes, read only when
-        /// `all_columns` is false. `synchronous` reads on the calling thread
-        /// before returning, for a read known to be small (feature ids).
+        /// `all_columns` is false. `synchronous` finishes the read before
+        /// returning, for a read known to be small (feature ids).
         fn start(
             self: &RsLayer,
             bbox: &[f64],
@@ -198,17 +199,25 @@ pub struct RsLayer {
     writable: bool,
     /// The read-write connection edits go through, once there has been one.
     writer: Mutex<Option<GeoPackage>>,
-    /// Read-only connections that finished reads hand back, so the next read
-    /// skips opening one (about 0.4 ms, which is most of a small read).
-    pool: Pool,
+    /// Reader threads with no read to run.
+    readers: Readers,
 }
 
-/// Idle read-only connections to one file.
-type Pool = Arc<Mutex<Vec<GeoPackage>>>;
+/// A reader thread's queue of reads. The thread holds a read-only connection
+/// and the layer resolved on it, so a read skips opening a connection (about
+/// 0.4 ms) and resolving the layer (37 to 51 µs, more than a small read
+/// itself takes).
+type Reader = Sender<Job>;
 
-/// Connections kept idle per layer; more than QGIS keeps iterators open at
-/// once on one layer in ordinary use.
-const POOL_SIZE: usize = 8;
+/// The idle readers of one layer.
+type Readers = Arc<Mutex<Vec<Reader>>>;
+
+/// Readers kept idle per layer; more than QGIS keeps iterators open at once
+/// on one layer in ordinary use.
+const IDLE_READERS: usize = 8;
+
+/// Projected layers a reader keeps, one for each column list it has read.
+const PROJECTIONS: usize = 16;
 
 fn qgis_type_name(geometry_type: &str) -> &'static str {
     match geometry_type {
@@ -335,7 +344,7 @@ fn open_layer(path: &str, layer: &str) -> Result<Box<RsLayer>, Error> {
         srs_authid,
         srs_wkt,
         gpkg: Mutex::new(gpkg),
-        pool: Arc::new(Mutex::new(Vec::new())),
+        readers: Arc::new(Mutex::new(Vec::new())),
     }))
 }
 
@@ -418,34 +427,24 @@ impl RsLayer {
             _ => None,
         };
         let geometry = geometry && self.geometry_column.is_some();
-        let request = Request {
-            path: self.path.clone(),
-            table: self.table.clone(),
-            attributes: self.attributes,
-            columns: (!all_columns || !geometry).then(|| names.clone()),
-            geometry_column: self.geometry_column.clone().filter(|_| geometry),
+        let columns = (!all_columns || !geometry).then(|| {
+            let mut columns = names;
+            columns.extend(self.geometry_column.clone().filter(|_| geometry));
+            columns
+        });
+        let (sink, rx) = sync_channel(4);
+        let job = Job {
+            columns,
             bbox,
             where_clause: (!where_clause.is_empty()).then(|| where_clause.to_owned()),
-            pool: Arc::clone(&self.pool),
+            sink,
         };
-        let source = if synchronous {
-            let mut batches = VecDeque::new();
-            request.run(&mut |batch| {
-                batches.push_back(batch);
-                true
-            })?;
-            Source::Ready(batches)
+        let lease = self.dispatch(job)?;
+        let (source, lease) = if synchronous {
+            // The reader drops its end of the channel when the read ends.
+            (Source::Ready(rx.iter().collect()), None)
         } else {
-            let (tx, rx) = sync_channel(4);
-            std::thread::Builder::new()
-                .name(format!("gpkg-qgis-{}", self.table))
-                .spawn(move || {
-                    let result = request.run(&mut |batch| tx.send(batch).is_ok());
-                    if let Err(error) = result {
-                        drop(tx.send(Err(error.to_string())));
-                    }
-                })?;
-            Source::Channel(rx)
+            (Source::Channel(rx), Some(lease))
         };
         let field_index = self
             .info_fields
@@ -454,6 +453,7 @@ impl RsLayer {
             .collect::<Vec<_>>();
         Ok(Box::new(RsCursor {
             source: Some(source),
+            lease,
             batch: None,
             row: 0,
             rows: 0,
@@ -463,6 +463,42 @@ impl RsLayer {
             field_names: field_index,
             geometry_name: self.geometry_column.clone(),
         }))
+    }
+}
+
+impl RsLayer {
+    /// Sends `job` to an idle reader, or to a new one, and returns the lease
+    /// that gives the reader back.
+    fn dispatch(&self, mut job: Job) -> Result<Lease, Error> {
+        loop {
+            let idle = self.readers.lock().ok().and_then(|mut idle| idle.pop());
+            let reader = match idle {
+                Some(reader) => reader,
+                None => self.spawn_reader()?,
+            };
+            match reader.send(job) {
+                Ok(()) => {
+                    return Ok(Lease {
+                        reader: Some(reader),
+                        readers: Arc::downgrade(&self.readers),
+                    });
+                }
+                // The reader's thread has stopped, after it could not open
+                // the file or the layer. A new reader tries again.
+                Err(SendError(returned)) => job = returned,
+            }
+        }
+    }
+
+    fn spawn_reader(&self) -> Result<Reader, Error> {
+        let (reader, jobs) = channel();
+        let path = self.path.clone();
+        let table = self.table.clone();
+        let attributes = self.attributes;
+        std::thread::Builder::new()
+            .name(format!("gpkg-qgis-{table}"))
+            .spawn(move || serve(&path, &table, attributes, &jobs))?;
+        Ok(reader)
     }
 }
 
@@ -613,51 +649,39 @@ fn to_value(cell: &ffi::Cell) -> Result<Value, Error> {
     })
 }
 
-/// What one read selects, owned so it can move to the reader thread.
-struct Request {
-    path: PathBuf,
-    table: String,
-    attributes: bool,
-    /// `Some` to project: the value columns to read.
+/// One read, sent to a reader.
+struct Job {
+    /// `Some` to project: the columns to read, with the geometry column
+    /// among them when the read includes it.
     columns: Option<Vec<String>>,
-    /// The geometry column, when the read includes it.
-    geometry_column: Option<String>,
     bbox: Option<BoundingBox>,
     where_clause: Option<String>,
-    pool: Pool,
+    /// Where the batches go. The reader drops it when the read ends.
+    sink: SyncSender<Result<RecordBatch, String>>,
 }
 
-impl Request {
-    /// Runs the read, handing each batch to `sink` until it returns `false`.
-    /// Borrows a pooled connection, or opens one, and gives it back after.
-    fn run(&self, sink: &mut dyn FnMut(Result<RecordBatch, String>) -> bool) -> Result<(), Error> {
-        let pooled = self.pool.lock().ok().and_then(|mut idle| idle.pop());
-        let gpkg = match pooled {
-            Some(gpkg) => gpkg,
-            None => GeoPackage::open_read_only_lenient(&self.path)?,
-        };
-        let result = self.read(&gpkg, sink);
-        if let Ok(mut idle) = self.pool.lock()
-            && idle.len() < POOL_SIZE
-        {
-            idle.push(gpkg);
-        }
-        result
-    }
-
-    fn read(
+impl Job {
+    /// Reads through `layer`, or through the projection of it that the job
+    /// names, which `projections` keeps.
+    fn run<'g>(
         &self,
-        gpkg: &GeoPackage,
-        sink: &mut dyn FnMut(Result<RecordBatch, String>) -> bool,
+        layer: &Layer<'g>,
+        projections: &mut HashMap<Vec<String>, Layer<'g>>,
+        project: &dyn Fn(&[&str]) -> geopackage::Result<Layer<'g>>,
     ) -> Result<(), Error> {
-        let mut layer = open_layer_handle(gpkg, &self.table, self.attributes)?;
-        if let Some(columns) = &self.columns {
-            let mut names: Vec<&str> = columns.iter().map(String::as_str).collect();
-            if let Some(geometry) = &self.geometry_column {
-                names.push(geometry);
+        let layer = match &self.columns {
+            None => layer,
+            Some(columns) => {
+                if !projections.contains_key(columns) {
+                    if projections.len() >= PROJECTIONS {
+                        projections.clear();
+                    }
+                    let names: Vec<&str> = columns.iter().map(String::as_str).collect();
+                    projections.insert(columns.clone(), project(&names)?);
+                }
+                &projections[columns]
             }
-            layer = layer.with_columns(&names)?;
-        }
+        };
         let options = ArrowReadOptions::default();
         // The crate's reads, as they are. A box goes to the RTree once, then
         // a page of candidates per query (or the exact scan, with no index);
@@ -671,11 +695,62 @@ impl Request {
             (None, None) => layer.read_arrow(options)?,
         };
         for batch in batches {
-            if !sink(batch.map_err(|e| e.to_string())) {
+            if self.sink.send(batch.map_err(|e| e.to_string())).is_err() {
                 break; // the iterator was closed
             }
         }
         Ok(())
+    }
+}
+
+/// Runs a reader thread: the reads that arrive on `jobs`, until the layer
+/// and every cursor have let it go. Opens the connection and resolves the
+/// layer on the first read, and keeps both; a failure to do either goes to
+/// that read, and stops the thread.
+fn serve(path: &Path, table: &str, attributes: bool, jobs: &Receiver<Job>) {
+    let Ok(first) = jobs.recv() else {
+        return;
+    };
+    let gpkg = match GeoPackage::open_read_only_lenient(path) {
+        Ok(gpkg) => gpkg,
+        Err(error) => {
+            drop(first.sink.send(Err(error.to_string())));
+            return;
+        }
+    };
+    let project =
+        |columns: &[&str]| open_layer_handle(&gpkg, table, attributes)?.with_columns(columns);
+    let layer = match open_layer_handle(&gpkg, table, attributes) {
+        Ok(layer) => layer,
+        Err(error) => {
+            drop(first.sink.send(Err(error.to_string())));
+            return;
+        }
+    };
+    let mut projections = HashMap::new();
+    for job in std::iter::once(first).chain(jobs.iter()) {
+        if let Err(error) = job.run(&layer, &mut projections, &project) {
+            drop(job.sink.send(Err(error.to_string())));
+        }
+    }
+}
+
+/// A reader lent to one cursor. Dropping it gives the reader back to the
+/// layer's idle readers, unless there are enough of those or the layer is
+/// gone, in which case the reader's thread ends after its current read.
+struct Lease {
+    reader: Option<Reader>,
+    readers: Weak<Mutex<Vec<Reader>>>,
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        if let (Some(reader), Some(readers)) = (self.reader.take(), self.readers.upgrade())
+            && let Ok(mut idle) = readers.lock()
+            && idle.len() < IDLE_READERS
+        {
+            idle.push(reader);
+        }
     }
 }
 
@@ -712,6 +787,8 @@ impl Source {
 /// A read in progress: the current batch and the row in it.
 pub struct RsCursor {
     source: Option<Source>,
+    /// The reader of a read still running; given back at the end.
+    lease: Option<Lease>,
     batch: Option<RecordBatch>,
     row: usize,
     rows: usize,
@@ -778,10 +855,12 @@ impl RsCursor {
                 }
                 Some(Err(message)) => {
                     self.source = None;
+                    self.lease = None;
                     return Err(message.into());
                 }
                 None => {
                     self.source = None;
+                    self.lease = None;
                     self.batch = None;
                     return Ok(false);
                 }
