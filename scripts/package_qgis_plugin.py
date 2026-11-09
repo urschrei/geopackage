@@ -7,7 +7,8 @@ Each WHEEL is a geopackage-rs abi3 wheel (from `maturin build`). Its
 `geopackage_rs` package is unpacked into `gpkg_toolkit/ext-libs/<tag>/`, where
 `gpkg_toolkit/native.py` looks for it, with `<tag>` derived from the wheel's
 platform tag. The result is `<out>/gpkg_toolkit-<version>.zip`, which installs
-through QGIS's "Install from ZIP".
+through QGIS's "Install from ZIP". The plugin's version, in `metadata.txt`,
+must be the workspace's, in `Cargo.toml`: a release sets both.
 
 `--native DIR` adds builds of the native data provider (`geopackage-qgis`),
 laid out as `DIR/<tag>/qgis-<major>.<minor>/<library>`, at the same place
@@ -24,6 +25,7 @@ import configparser
 import pathlib
 import re
 import sys
+import tomllib
 import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -78,6 +80,13 @@ def main():
     metadata = configparser.ConfigParser()
     metadata.read(PLUGIN / "metadata.txt")
     version = metadata["general"]["version"]
+    with open(ROOT / "Cargo.toml", "rb") as manifest:
+        workspace = tomllib.load(manifest)["workspace"]["package"]["version"]
+    if version != workspace:
+        sys.exit(
+            f"metadata.txt gives the plugin version {version}, but Cargo.toml "
+            f"gives {workspace}: set metadata.txt's version to {workspace}"
+        )
 
     args.out.mkdir(parents=True, exist_ok=True)
     target = args.out / f"gpkg_toolkit-{version}.zip"
