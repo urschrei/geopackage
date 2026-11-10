@@ -3,9 +3,11 @@ name: qgis-plugin
 # Builds the geopackage-rs abi3 wheel for each platform QGIS ships on, and the
 # native data provider for each platform and QGIS 4 minor version, packs them
 # into one QGIS plugin zip, and attaches the zip and the wheels to the GitHub
-# release. Triggered as `release.yml` is: on a published
-# release, by hand with a tag, or by a pull request that changes this file,
-# which builds and packages everything and uploads nothing.
+# release. The plugin has releases of its own, tagged `qgis-plugin-vX.Y.Z`,
+# separate from the crates' `vX.Y.Z`. Triggered on a published plugin
+# release, by hand with a plugin tag, or by a pull request that changes this
+# file, which builds and packages everything and uploads nothing. A crate
+# release does not run it.
 
 on:
   release:
@@ -13,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: The release tag to build and attach the plugin to, such as v0.14.0
+        description: The plugin release tag to build and attach the plugin to, such as qgis-plugin-v0.15.0
         required: true
   pull_request:
     paths:
@@ -36,7 +38,18 @@ env:
   TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
 jobs:
+  # The other jobs need this one, so a crate release skips them all.
+  tag:
+    if: ${{ github.event_name != 'release' || startsWith(github.event.release.tag_name, 'qgis-plugin-v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - if: env.TAG != '' && !startsWith(env.TAG, 'qgis-plugin-v')
+        run: |
+          echo "$TAG is not a plugin release tag (qgis-plugin-vX.Y.Z)"
+          exit 1
+
   wheels:
+    needs: tag
     strategy:
       fail-fast: false
       matrix:
@@ -95,6 +108,7 @@ jobs:
   # qgis_core.lib, comes from OSGeo4W's qgis-devel package for the same
   # release: OSGeo4W also builds QGIS's Windows installers.
   native:
+    needs: tag
     strategy:
       fail-fast: false
       matrix:
@@ -220,7 +234,7 @@ jobs:
           pattern: native-*
           path: native
           merge-multiple: true
-      - run: python3 scripts/package_qgis_plugin.py dist/*.whl --native native --out plugin
+      - run: python3 scripts/package_qgis_plugin.py dist/*.whl --native native --out plugin ${TAG:+--tag "$TAG"}
       - uses: actions/upload-artifact@v7
         with:
           name: qgis-plugin
