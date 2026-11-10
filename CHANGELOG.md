@@ -8,6 +8,14 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Changed
+
+- The QGIS plugin's *Plugins → GeoPackage Toolkit* menu lists every
+  Processing algorithm, in the toolbox's groups. It listed only the four in
+  *Inspect and repair*, so the coverage algorithms and *Export layer to
+  GeoPackage* were only in the toolbox. When the `geopackage_rs` module
+  does not load, the menu has no entries: no algorithm is registered then.
+
 ### Fixed
 
 - The QGIS plugin repository gave the plugin's `file_name` as the release

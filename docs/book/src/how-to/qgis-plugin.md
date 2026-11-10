@@ -66,10 +66,9 @@ Adding, deleting and renaming fields isn't possible through this provider.
 
 ## Run the algorithms
 
-Open *Processing → Toolbox* and expand *GeoPackage Toolkit*. *Validate
-GeoPackage*, *Repair spatial indexes*, *Repair geometry and datetime
-encodings* and *List extensions* are also on *Plugins → GeoPackage
-Toolkit*.
+Select an algorithm from *Plugins → GeoPackage Toolkit*, or open
+*Processing → Toolbox* and expand *GeoPackage Toolkit*. Both list the same
+algorithms.
 
 Start with *Validate GeoPackage*. Its `plugin_algorithm` column names the
 algorithm that repairs each finding. The repair algorithms change the file
