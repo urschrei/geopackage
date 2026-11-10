@@ -42,12 +42,28 @@ rows through the bindings alone takes about a quarter of the provider's time
 
 ## Release
 
-`.github/workflows/qgis-plugin.yml` builds the module and the native
-provider for each platform when a release is published, packages them with
-`scripts/package_qgis_plugin.py`, and attaches the zip to the release. Then
+The plugin has its own releases, separate from the crates'. Its version is
+`version=` in `gpkg_toolkit/metadata.txt`, its changes are in
+[`CHANGELOG.md`](CHANGELOG.md), and its releases are tagged
+`qgis-plugin-vX.Y.Z`. A plugin release is built from the tagged commit, so
+it can include library changes that are not yet on crates.io.
+
+1. Set `version=` in `metadata.txt`, and rename the changelog's
+   `[Unreleased]` section to the version, with the date and a compare link.
+2. Push the commit, then tag it `qgis-plugin-vX.Y.Z` and push the tag.
+3. Publish a GitHub release for the tag, with `--latest=false`, so that the
+   crates' newest release stays the repository's latest.
+
+`.github/workflows/qgis-plugin.yml` then builds the module and the native
+provider for each platform, packages them with
+`scripts/package_qgis_plugin.py`, and attaches the zip and the wheels to the
+release. The script refuses a tag that does not match `metadata.txt`, or a
+version with no changelog section, and copies that section into the zip's
+`metadata.txt`, where QGIS's plugin manager shows it. Then
 `.github/workflows/book.yml` rebuilds the book's site, with the plugin
 repository QGIS reads, `qgis/plugins.xml`, which `scripts/plugins_xml.py`
-writes from that zip.
+writes from the newest release that has a plugin zip. A crate release
+(`vX.Y.Z`) does not build the plugin.
 
 ## Develop
 
