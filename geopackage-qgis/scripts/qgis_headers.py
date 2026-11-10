@@ -85,7 +85,9 @@ def read_version(source):
         match = re.search(rf'set\(\s*{name}\s+"?([^")\s]+)"?\s*\)', text)
         return match.group(1) if match else None
 
-    major, minor, patch = (field(f"CPACK_PACKAGE_VERSION_{p}") for p in ("MAJOR", "MINOR", "PATCH"))
+    major, minor, patch = (
+        field(f"CPACK_PACKAGE_VERSION_{p}") for p in ("MAJOR", "MINOR", "PATCH")
+    )
     if None in (major, minor, patch):
         return None
     name = re.search(r'set\(\s*RELEASE_NAME\s+"([^"]*)"\s*\)', text)
@@ -126,7 +128,9 @@ def main():
     core = os.path.join(args.source, "src", "core")
     template = os.path.join(args.source, "cmake_templates", "qgsconfig.h.in")
     if not os.path.isdir(core) or not os.path.isfile(template):
-        sys.exit(f"{args.source} is not a QGIS source checkout (no src/core, cmake_templates)")
+        sys.exit(
+            f"{args.source} is not a QGIS source checkout (no src/core, cmake_templates)"
+        )
     # Header names are unique only within core; another library's could
     # shadow one of core's, so start from an empty directory.
     if os.path.isdir(args.out) and os.listdir(args.out):
@@ -140,7 +144,9 @@ def main():
             sys.exit("cannot read the version from CMakeLists.txt; pass --version")
         major, minor, patch, release_name = found
     if major < 4:
-        sys.exit(f"the native provider builds against QGIS 4 or later, not {major}.{minor}")
+        sys.exit(
+            f"the native provider builds against QGIS 4 or later, not {major}.{minor}"
+        )
 
     os.makedirs(args.out, exist_ok=True)
     copied = {}
@@ -151,7 +157,10 @@ def main():
             if name in copied:
                 # The installed directory is flat; QGIS keeps header names
                 # unique for that reason.
-                print(f"warning: {name} in both {copied[name]} and {root}", file=sys.stderr)
+                print(
+                    f"warning: {name} in both {copied[name]} and {root}",
+                    file=sys.stderr,
+                )
                 continue
             copied[name] = root
             shutil.copy2(os.path.join(root, name), os.path.join(args.out, name))
@@ -159,7 +168,9 @@ def main():
     # QGIS installs beside them.
     nlohmann = os.path.join(args.source, "external", "nlohmann", "nlohmann")
     if not os.path.isdir(nlohmann):
-        sys.exit(f"{args.source} has no external/nlohmann, which core's headers include")
+        sys.exit(
+            f"{args.source} has no external/nlohmann, which core's headers include"
+        )
     shutil.copytree(nlohmann, os.path.join(args.out, "nlohmann"), dirs_exist_ok=True)
     with open(template, encoding="utf-8") as f:
         config = render_config(f.read(), major, minor, patch, release_name)

@@ -62,7 +62,9 @@ class ExportLayerAlgorithm(Algorithm):
         )
         self.addParameter(
             QgsProcessingParameterString(
-                self.LAYER_NAME, "Table name (if empty, the input layer's name)", optional=True
+                self.LAYER_NAME,
+                "Table name (if empty, the input layer's name)",
+                optional=True,
             )
         )
         self.addParameter(
@@ -162,7 +164,8 @@ class ExportLayerAlgorithm(Algorithm):
                 written = len(wrap_errors(target.insert, rows(), batch=self.BATCH))
             except Cancelled:
                 feedback.reportError(
-                    "Cancelled. The features written before you cancelled are kept.", False
+                    "Cancelled. The features written before you cancelled are kept.",
+                    False,
                 )
                 written = target.count()
 

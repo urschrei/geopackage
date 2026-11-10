@@ -96,27 +96,38 @@ class SampleCoverageAlgorithm(Algorithm):
 
     def initAlgorithm(self, config=None):  # noqa: N802
         self.add_gpkg_parameter()
-        self.add_name_parameter(COVERAGE, "Coverage name (if empty, the file's only coverage)")
+        self.add_name_parameter(
+            COVERAGE, "Coverage name (if empty, the file's only coverage)"
+        )
         self.addParameter(
-            QgsProcessingParameterFeatureSource(self.POINTS, "Points", [compat.SOURCE_POINT])
+            QgsProcessingParameterFeatureSource(
+                self.POINTS, "Points", [compat.SOURCE_POINT]
+            )
         )
         self.addParameter(zoom_parameter())
         self.addParameter(
             QgsProcessingParameterEnum(
-                self.INTERPOLATION, "Interpolation", options=self.INTERPOLATIONS, defaultValue=0
+                self.INTERPOLATION,
+                "Interpolation",
+                options=self.INTERPOLATIONS,
+                defaultValue=0,
             )
         )
         self.addParameter(
             QgsProcessingParameterString(self.FIELD, "Name of the new field", "value")
         )
         self.addParameter(
-            QgsProcessingParameterFeatureSink(self.OUTPUT, "Sampled points", compat.SOURCE_POINT)
+            QgsProcessingParameterFeatureSink(
+                self.OUTPUT, "Sampled points", compat.SOURCE_POINT
+            )
         )
 
     def processAlgorithm(self, parameters, context, feedback):  # noqa: N802
         source = self.parameterAsSource(parameters, self.POINTS, context)
         if source is None:
-            raise QgsProcessingException(self.invalidSourceError(parameters, self.POINTS))
+            raise QgsProcessingException(
+                self.invalidSourceError(parameters, self.POINTS)
+            )
         field_name = self.parameterAsString(parameters, self.FIELD, context) or "value"
         interpolation = self.INTERPOLATIONS[
             self.parameterAsEnum(parameters, self.INTERPOLATION, context)
@@ -166,7 +177,9 @@ class SampleCoverageAlgorithm(Algorithm):
 
             # Sort spatially (by tile row, then column) so lookups that share
             # tiles run together; the answers are put back in input order.
-            order = sorted(range(len(positions)), key=lambda i: (-positions[i][1], positions[i][0]))
+            order = sorted(
+                range(len(positions)), key=lambda i: (-positions[i][1], positions[i][0])
+            )
             values = wrap_errors(
                 coverage.values_at,
                 [positions[i] for i in order],
@@ -224,10 +237,14 @@ class CoverageStatisticsAlgorithm(Algorithm):
 
     def initAlgorithm(self, config=None):  # noqa: N802
         self.add_gpkg_parameter()
-        self.add_name_parameter(COVERAGE, "Coverage name (if empty, the file's only coverage)")
+        self.add_name_parameter(
+            COVERAGE, "Coverage name (if empty, the file's only coverage)"
+        )
         self.addParameter(zoom_parameter())
         self.addParameter(
-            QgsProcessingParameterFeatureSink(self.OUTPUT, "Tile statistics", compat.SOURCE_ANY_GEOMETRY)
+            QgsProcessingParameterFeatureSink(
+                self.OUTPUT, "Tile statistics", compat.SOURCE_ANY_GEOMETRY
+            )
         )
 
     def processAlgorithm(self, parameters, context, feedback):  # noqa: N802
@@ -299,7 +316,9 @@ class CheckCoverageSamplesAlgorithm(Algorithm):
         self.add_gpkg_parameter()
         self.add_name_parameter(COVERAGE, "Coverage name (if empty, every coverage)")
         self.addParameter(
-            QgsProcessingParameterFeatureSink(self.OUTPUT, "Failing tiles", compat.SOURCE_ANY_GEOMETRY)
+            QgsProcessingParameterFeatureSink(
+                self.OUTPUT, "Failing tiles", compat.SOURCE_ANY_GEOMETRY
+            )
         )
         self.addOutput(QgsProcessingOutputNumber(self.FAILURES, "Failing tiles"))
 

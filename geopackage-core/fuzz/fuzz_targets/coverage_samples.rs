@@ -44,7 +44,11 @@ fuzz_target!(|data: &[u8]| {
             .map_or(0.5, |bytes| f64::from_le_bytes(bytes.try_into().unwrap()))
     };
     let (x, y) = (coordinate(0), coordinate(8));
-    for encoding in [None, Some("grid-value-is-area"), Some("grid-value-is-corner")] {
+    for encoding in [
+        None,
+        Some("grid-value-is-area"),
+        Some("grid-value-is-corner"),
+    ] {
         ancillary.grid_cell_encoding = encoding.map(str::to_owned);
         for interpolation in [Interpolation::Nearest, Interpolation::Bilinear] {
             let Some(lookup) = SampleLookup::new(&set, &matrix, &ancillary, x, y, interpolation)

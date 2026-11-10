@@ -42,8 +42,14 @@ def coverage_gpkg(path):
     gpkg = g.GeoPackage.create(path)
     gpkg.add_epsg_srs(4326)
     cov = gpkg.create_coverage(
-        "dem", 4326, (0.0, 0.0, 8.0, 4.0), [(0, 2, 1, 4, 4)],
-        scale=0.5, offset=100.0, data_null=65535, uom="m",
+        "dem",
+        4326,
+        (0.0, 0.0, 8.0, 4.0),
+        [(0, 2, 1, 4, 4)],
+        scale=0.5,
+        offset=100.0,
+        data_null=65535,
+        uom="m",
     )
     cov.put_tile(0, 0, 0, png16(4, 4, list(range(16))))
     right = [65535] * 16
