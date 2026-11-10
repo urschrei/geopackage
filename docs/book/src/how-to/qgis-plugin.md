@@ -26,8 +26,8 @@ installed. It is experimental: work on copies of files you can't lose.
 QGIS then offers each new release under *Upgradeable*.
 
 If you can't reach the repository from QGIS, download
-`gpkg_toolkit-<version>.zip` from the project's
-[GitHub releases](https://github.com/urschrei/geopackage/releases), and
+`gpkg_toolkit-<version>.zip` from the newest `qgis-plugin-v<version>`
+release on [GitHub](https://github.com/urschrei/geopackage/releases), and
 install it with *Install from ZIP*. Install the zip as it is: don't
 unpack it.
 

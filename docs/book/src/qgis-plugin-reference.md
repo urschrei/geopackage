@@ -10,7 +10,8 @@ Processing algorithms. To install it, see
 |---|---|
 | QGIS | 3.28 or later |
 | Plugin repository | `https://urschrei.github.io/geopackage/qgis/plugins.xml` |
-| Release zips | `gpkg_toolkit-<version>.zip`, attached to each [GitHub release](https://github.com/urschrei/geopackage/releases) |
+| Release zips | `gpkg_toolkit-<version>.zip`, attached to each plugin release, tagged `qgis-plugin-v<version>`, on [GitHub](https://github.com/urschrei/geopackage/releases) |
+| Changelog | [`qgis-plugin/CHANGELOG.md`](https://github.com/urschrei/geopackage/blob/main/qgis-plugin/CHANGELOG.md) |
 | Status | Experimental |
 
 The zip holds compiled code for each platform it supports. A file is chosen
