@@ -10,7 +10,9 @@ platform tag. The result is `<out>/gpkg_toolkit-<version>.zip`, which installs
 through QGIS's "Install from ZIP". The plugin's version is the one in
 `metadata.txt`, and is independent of the crates' version. `--tag` names the
 release that the zip is for, `qgis-plugin-v<version>`; the script refuses a
-tag that does not match `metadata.txt`.
+tag that does not match `metadata.txt`. The zip's `metadata.txt` gets a
+`changelog` field, which QGIS's plugin manager shows, with the version's
+section of `qgis-plugin/CHANGELOG.md`; a release needs that section.
 
 `--native DIR` adds builds of the native data provider (`geopackage-qgis`),
 laid out as `DIR/<tag>/qgis-<major>.<minor>/<library>`, at the same place
@@ -37,6 +39,39 @@ NATIVE_LIBRARIES = {
     "geopackage_qgis.dll",
 }
 PLUGIN = ROOT / "qgis-plugin" / "gpkg_toolkit"
+CHANGELOG = ROOT / "qgis-plugin" / "CHANGELOG.md"
+
+
+def changelog_section(version):
+    """The body of `version`'s section of the plugin's changelog, or `None`
+    if the changelog has no section for it."""
+    lines = CHANGELOG.read_text(encoding="utf-8").splitlines()
+    heading = re.compile(rf"## \[{re.escape(version)}\]( |$)")
+    for start, line in enumerate(lines):
+        if heading.match(line):
+            break
+    else:
+        return None
+    body = []
+    for line in lines[start + 1 :]:
+        if line.startswith("## ") or line.startswith("["):
+            break
+        body.append(line)
+    return "\n".join(body).strip() or None
+
+
+def with_changelog(metadata_text, changelog):
+    """`metadata.txt`'s text with a `changelog` field. Its value continues on
+    indented lines, as configparser reads them, without blank lines. A
+    `### Heading` becomes `Heading:`, and `%` is doubled, since QGIS reads the
+    file with configparser's default interpolation."""
+    lines = [
+        re.sub(r"^### (.*)$", r"\1:", line).replace("%", "%%")
+        for line in changelog.splitlines()
+        if line.strip()
+    ]
+    field = "changelog=" + lines[0] + "".join(f"\n    {line}" for line in lines[1:])
+    return metadata_text.rstrip("\n") + "\n" + field + "\n"
 
 
 def platform_dir(wheel_name):
@@ -88,6 +123,9 @@ def main():
             f"tag is {args.tag}: set metadata.txt's version, or tag "
             f"qgis-plugin-v{version}"
         )
+    changelog = changelog_section(version)
+    if args.tag is not None and changelog is None:
+        sys.exit(f"{CHANGELOG} has no section for {version}")
 
     args.out.mkdir(parents=True, exist_ok=True)
     target = args.out / f"gpkg_toolkit-{version}.zip"
@@ -96,6 +134,10 @@ def main():
         for path in sorted(PLUGIN.rglob("*")):
             relative = path.relative_to(PLUGIN.parent)
             if path.is_dir() or "__pycache__" in path.parts or "ext-libs" in path.parts:
+                continue
+            if path == PLUGIN / "metadata.txt" and changelog is not None:
+                text = with_changelog(path.read_text(encoding="utf-8"), changelog)
+                out.writestr(relative.as_posix(), text)
                 continue
             out.write(path, relative.as_posix())
         # The licence texts that gpkg_toolkit/LICENSE names, from the
