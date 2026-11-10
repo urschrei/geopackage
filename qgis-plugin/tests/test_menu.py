@@ -1,6 +1,9 @@
-"""The Plugins menu entries for the algorithms."""
+"""The Plugins menu entries for the algorithms, and the provider's name."""
 
-from gpkg_toolkit import plugin
+import configparser
+import pathlib
+
+from gpkg_toolkit import plugin, provider
 from gpkg_toolkit.algorithms import ALGORITHMS
 
 
@@ -22,3 +25,11 @@ def test_menu_separates_groups():
             runs[-1].append(groups[entry[1]])
     assert all(len(set(run)) == 1 for run in runs)
     assert len(runs) == len(set(groups.values()))
+
+
+def test_provider_names_the_plugin_version():
+    metadata = configparser.ConfigParser(interpolation=None)
+    metadata.read(pathlib.Path(plugin.__file__).with_name("metadata.txt"))
+    version = metadata["general"]["version"]
+    assert provider.plugin_version() == version
+    assert provider.GpkgToolkitProvider().longName() == f"GeoPackage Toolkit {version}"
