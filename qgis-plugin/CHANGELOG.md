@@ -13,6 +13,8 @@ shows.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-10
+
 ### Changed
 
 - The plugin has its own releases, separate from the crates'. Its version
@@ -31,4 +33,5 @@ shows.
   the file has no layers or tables, or it has more than one and the source
   must add `|layername=<name>`.
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.14.4...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/qgis-plugin-v0.15.0...HEAD
+[0.15.0]: https://github.com/urschrei/geopackage/compare/v0.14.4...qgis-plugin-v0.15.0
