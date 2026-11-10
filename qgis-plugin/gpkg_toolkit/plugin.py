@@ -8,14 +8,21 @@ from .provider import GpkgToolkitProvider
 
 MENU = "&GeoPackage Toolkit"
 
-# Algorithms offered from the Plugins menu as well as the toolbox: the ones a
-# user reaches for with a file in hand rather than inside a model.
-MENU_ALGORITHMS = [
-    ("Validate GeoPackage…", "validate"),
-    ("Repair spatial indexes…", "repairspatialindexes"),
-    ("Repair geometry and datetime encodings…", "repairencodings"),
-    ("List extensions…", "listextensions"),
-]
+
+def menu_algorithms():
+    """Returns the Plugins menu entries for the algorithms, as ``(label,
+    name)`` pairs in toolbox order, with ``None`` between two groups. Every
+    registered algorithm has an entry."""
+    from .algorithms import ALGORITHMS
+
+    entries = []
+    group = None
+    for algorithm in ALGORITHMS:
+        if group is not None and algorithm.GROUP_ID != group:
+            entries.append(None)
+        group = algorithm.GROUP_ID
+        entries.append((f"{algorithm.DISPLAY_NAME}…", algorithm.NAME))
+    return entries
 
 
 def register_data_provider():
@@ -75,18 +82,26 @@ class GpkgToolkitPlugin:
         self.initProcessing()
         from qgis.PyQt.QtWidgets import QAction
 
-        if native.gpkg is not None:
-            add_layer = QAction(
-                "Add GeoPackage layer (geopackage crate)…", self.iface.mainWindow()
-            )
-            add_layer.triggered.connect(self._add_layer)
-            self.iface.addPluginToMenu(MENU, add_layer)
-            self.actions.append(add_layer)
-        for label, name in MENU_ALGORITHMS:
-            action = QAction(label, self.iface.mainWindow())
-            action.triggered.connect(lambda _checked=False, n=name: self._open(n))
-            self.iface.addPluginToMenu(MENU, action)
-            self.actions.append(action)
+        # Without the geopackage_rs module, no algorithm is registered.
+        if native.gpkg is None:
+            return
+        window = self.iface.mainWindow()
+        add_layer = QAction("Add GeoPackage layer (geopackage crate)…", window)
+        add_layer.triggered.connect(self._add_layer)
+        self._add_to_menu(add_layer)
+        for entry in [None, *menu_algorithms()]:
+            if entry is None:
+                action = QAction(window)
+                action.setSeparator(True)
+            else:
+                label, name = entry
+                action = QAction(label, window)
+                action.triggered.connect(lambda _checked=False, n=name: self._open(n))
+            self._add_to_menu(action)
+
+    def _add_to_menu(self, action):
+        self.iface.addPluginToMenu(MENU, action)
+        self.actions.append(action)
 
     def _open(self, name):
         import processing
