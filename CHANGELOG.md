@@ -8,6 +8,11 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+## [0.14.4] - 2026-11-10
+
+This release changes the QGIS plugin and its plugin repository. The crates'
+code is the same as in 0.14.3.
+
 ### Changed
 
 - The QGIS plugin's *Plugins → GeoPackage Toolkit* menu lists every
@@ -1827,7 +1832,8 @@ spec-correct spatial indexing (M2), across the `geopackage-core` and
   inserted into an indexed table ([#5]).
 - Feature iteration materialises the result set rather than streaming ([#4]).
 
-[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.14.3...HEAD
+[Unreleased]: https://github.com/urschrei/geopackage/compare/v0.14.4...HEAD
+[0.14.4]: https://github.com/urschrei/geopackage/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/urschrei/geopackage/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/urschrei/geopackage/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/urschrei/geopackage/compare/v0.14.0...v0.14.1
