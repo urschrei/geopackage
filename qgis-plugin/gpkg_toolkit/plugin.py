@@ -86,7 +86,7 @@ class GpkgToolkitPlugin:
         if native.gpkg is None:
             return
         window = self.iface.mainWindow()
-        add_layer = QAction("Add GeoPackage layer (geopackage crate)…", window)
+        add_layer = QAction("Add GeoPackage layer with this plugin…", window)
         add_layer.triggered.connect(self._add_layer)
         self._add_to_menu(add_layer)
         for entry in [None, *menu_algorithms()]:
@@ -109,8 +109,8 @@ class GpkgToolkitPlugin:
         processing.execAlgorithmDialog(f"{GpkgToolkitProvider.ID}:{name}")
 
     def _add_layer(self):
-        """Asks for a file and a layer, and adds it through the crate's
-        provider rather than OGR."""
+        """Asks for a file and a layer, and adds the layer through the
+        ``geopackage_rs`` provider instead of OGR."""
         from qgis.core import QgsVectorLayer
         from qgis.PyQt.QtWidgets import QFileDialog, QInputDialog
 
@@ -130,13 +130,13 @@ class GpkgToolkitPlugin:
             return
         if not names:
             self.iface.messageBar().pushWarning(
-                "GeoPackage Toolkit", f"{path} has no layers"
+                "GeoPackage Toolkit", f"{path} has no layers or tables"
             )
             return
         name = names[0]
         if len(names) > 1:
             name, ok = QInputDialog.getItem(
-                window, "GeoPackage", "Layer", names, 0, False
+                window, "GeoPackage", "Layer or table", names, 0, False
             )
             if not ok:
                 return

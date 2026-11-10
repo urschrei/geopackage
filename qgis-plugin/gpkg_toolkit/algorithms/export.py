@@ -30,16 +30,17 @@ class ExportLayerAlgorithm(Algorithm):
     GROUP = "Import and export"
     GROUP_ID = "export"
     HELP = (
-        "Writes a vector layer into a GeoPackage through the geopackage "
-        "crate: a new file, or a new table in an existing one. Rows are "
-        "written in batches with the crate's bulk RTree build, and the "
-        "result is a GeoPackage 1.4 table with the 1.4 trigger set.\n\n"
-        "An integer field named 'fid' supplies the feature ids, as GDAL "
-        "treats it; otherwise ids are assigned. Field types map to their "
-        "GeoPackage equivalents, and anything without one is written as "
-        "TEXT. Single geometries in a multi layer are promoted to multi. "
-        "The layer's CRS is added from the EPSG registry when it has an EPSG "
-        "code, and from its WKT otherwise."
+        "Writes a vector layer to a new table in a GeoPackage. If the "
+        "GeoPackage file does not exist, it is created. The table follows "
+        "GeoPackage 1.4, and its spatial index is built after all the "
+        "features are written.\n\n"
+        "If the layer has an integer field named 'fid', its values become "
+        "the feature ids, as in GDAL. Otherwise, the ids are assigned. Each "
+        "field gets the equivalent GeoPackage type; a field with no "
+        "equivalent is written as TEXT. In a layer whose geometry type is "
+        "multipart, single-part geometries are written as multipart. If "
+        "the layer's CRS has an EPSG code, the CRS is added from the EPSG "
+        "definitions; otherwise it is added from the CRS's WKT."
     )
 
     LAYER_NAME = "LAYER_NAME"
@@ -61,7 +62,7 @@ class ExportLayerAlgorithm(Algorithm):
         )
         self.addParameter(
             QgsProcessingParameterString(
-                self.LAYER_NAME, "Table name (the input's name if empty)", optional=True
+                self.LAYER_NAME, "Table name (if empty, the input layer's name)", optional=True
             )
         )
         self.addParameter(
@@ -161,7 +162,7 @@ class ExportLayerAlgorithm(Algorithm):
                 written = len(wrap_errors(target.insert, rows(), batch=self.BATCH))
             except Cancelled:
                 feedback.reportError(
-                    "Cancelled: the batches before it were kept.", False
+                    "Cancelled. The features written before you cancelled are kept.", False
                 )
                 written = target.count()
 

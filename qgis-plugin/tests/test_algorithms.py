@@ -117,7 +117,7 @@ def test_repair_a_legacy_trigger_set(tmp_path, run):
     (row,) = table_rows(result["OUTPUT"])
     assert (row["status_before"], row["action"], row["status_after"]) == (
         "legacy",
-        "repaired to the 1.4 trigger set",
+        "rebuilt with 1.4 triggers",
         "current",
     )
 

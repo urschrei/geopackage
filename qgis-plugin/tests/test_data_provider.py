@@ -300,7 +300,7 @@ def test_a_failed_write_fails_the_commit_with_the_crate_error(tmp_path, key):
     layer.addFeature(bad)
     assert not layer.commitChanges()
     errors = layer.commitErrors() + layer.dataProvider().errors()
-    assert any("add features failed" in e and "NOT NULL" in e for e in errors), errors
+    assert any("cannot add features" in e and "NOT NULL" in e for e in errors), errors
     layer.rollBack()
     assert layer.featureCount() == 0
 
