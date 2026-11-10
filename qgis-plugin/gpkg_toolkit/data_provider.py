@@ -105,9 +105,14 @@ class GpkgFeatureIterator(QgsAbstractFeatureIterator):
         self._single = None
 
         self._transform = QgsCoordinateTransform()
-        if self._request.destinationCrs().isValid() and self._request.destinationCrs() != source.crs:
+        if (
+            self._request.destinationCrs().isValid()
+            and self._request.destinationCrs() != source.crs
+        ):
             self._transform = QgsCoordinateTransform(
-                source.crs, self._request.destinationCrs(), self._request.transformContext()
+                source.crs,
+                self._request.destinationCrs(),
+                self._request.transformContext(),
             )
         try:
             self._rect = self.filterRectToSourceCrs(self._transform)
@@ -116,7 +121,10 @@ class GpkgFeatureIterator(QgsAbstractFeatureIterator):
             return
 
         self._exact_engine = None
-        if not self._rect.isNull() and self._request.flags() & compat.REQUEST_EXACT_INTERSECT:
+        if (
+            not self._rect.isNull()
+            and self._request.flags() & compat.REQUEST_EXACT_INTERSECT
+        ):
             self._exact_engine = QgsGeometry.createGeometryEngine(
                 QgsGeometry.fromRect(self._rect).constGet()
             )
@@ -128,7 +136,9 @@ class GpkgFeatureIterator(QgsAbstractFeatureIterator):
             and not self._request.referenceGeometry().isEmpty()
         ):
             reference = self._request.referenceGeometry()
-            self._distance_engine = QgsGeometry.createGeometryEngine(reference.constGet())
+            self._distance_engine = QgsGeometry.createGeometryEngine(
+                reference.constGet()
+            )
             self._distance_engine.prepareGeometry()
 
         self._expression = None
@@ -139,19 +149,18 @@ class GpkgFeatureIterator(QgsAbstractFeatureIterator):
 
         self._columns = self._columns_to_read()
         self._positions = (
-            None if self._columns is None else [source.field_index[c] for c in self._columns]
+            None
+            if self._columns is None
+            else [source.field_index[c] for c in self._columns]
         )
         self._no_geometry = bool(self._request.flags() & compat.REQUEST_NO_GEOMETRY)
         self._has_transform = self._transform.isValid()
-        self._want_geometry = (
-            source.has_geometry
-            and (
-                not (self._request.flags() & compat.REQUEST_NO_GEOMETRY)
-                or not self._rect.isNull()
-                or self._exact_engine is not None
-                or self._distance_engine is not None
-                or (self._expression is not None and self._expression.needsGeometry())
-            )
+        self._want_geometry = source.has_geometry and (
+            not (self._request.flags() & compat.REQUEST_NO_GEOMETRY)
+            or not self._rect.isNull()
+            or self._exact_engine is not None
+            or self._distance_engine is not None
+            or (self._expression is not None and self._expression.needsGeometry())
         )
 
     # -- planning -----------------------------------------------------------
@@ -264,10 +273,16 @@ class GpkgFeatureIterator(QgsAbstractFeatureIterator):
             else:
                 attributes = [None] * width
                 for index, value in zip(positions, values):
-                    attributes[index] = from_value(value) if index in convert_set else value
+                    attributes[index] = (
+                        from_value(value) if index in convert_set else value
+                    )
             f.setAttributes(attributes)
-            if wkb is not None and not (no_geometry and exact is None and distance is None
-                                        and expression is None):
+            if wkb is not None and not (
+                no_geometry
+                and exact is None
+                and distance is None
+                and expression is None
+            ):
                 geometry = QgsGeometry()
                 geometry.fromWkb(wkb)
                 f.setGeometry(geometry)
@@ -286,7 +301,8 @@ class GpkgFeatureIterator(QgsAbstractFeatureIterator):
                 self.geometryToDestinationCrs(f, self._transform)
             if distance is not None and (
                 not f.hasGeometry()
-                or distance.distance(f.geometry().constGet()) > self._request.distanceWithin()
+                or distance.distance(f.geometry().constGet())
+                > self._request.distanceWithin()
             ):
                 continue
             if no_geometry and f.hasGeometry():
@@ -425,7 +441,9 @@ class GpkgDataProvider(QgsVectorDataProvider):
             qgs_field.setTypeName(field.declared_type)
             self._fields.append(qgs_field)
             self._field_names.append(field.name)
-        self._pk_sql = _quote(self._layer.primary_key) if self._layer.primary_key else "rowid"
+        self._pk_sql = (
+            _quote(self._layer.primary_key) if self._layer.primary_key else "rowid"
+        )
 
         geometry = self._layer.geometry_column
         if geometry is not None:
@@ -468,7 +486,9 @@ class GpkgDataProvider(QgsVectorDataProvider):
                     request = QgsFeatureRequest().setSubsetOfAttributes([])
                     for feature in self.getFeatures(request):
                         if feature.hasGeometry():
-                            self._extent.combineExtentWith(feature.geometry().boundingBox())
+                            self._extent.combineExtentWith(
+                                feature.geometry().boundingBox()
+                            )
         return QgsRectangle(self._extent)
 
     def updateExtents(self):  # noqa: N802
@@ -521,7 +541,9 @@ class GpkgDataProvider(QgsVectorDataProvider):
         if subset:
             # Run it once, so a typo fails here rather than as an empty layer.
             try:
-                probe = self._layer.features(where=subset, columns=[], geometry=False, chunk_size=1)
+                probe = self._layer.features(
+                    where=subset, columns=[], geometry=False, chunk_size=1
+                )
                 probe.next_chunk()
                 probe.close()
             except gpkg.GeoPackageError as error:
@@ -577,7 +599,11 @@ class GpkgDataProvider(QgsVectorDataProvider):
         for feature in features:
             attributes = list(feature.attributes())[:width]
             attributes += [None] * (width - len(attributes))
-            wkb = self._wkb_for(feature.geometry()) if self._layer.geometry_column else None
+            wkb = (
+                self._wkb_for(feature.geometry())
+                if self._layer.geometry_column
+                else None
+            )
             rows.append((None, wkb, [to_value(v) for v in attributes]))
         try:
             fids = self._layer.insert(rows)
@@ -623,7 +649,9 @@ class GpkgDataProvider(QgsVectorDataProvider):
             for fid, geometry in changes.items():
                 wkb = self._wkb_for(geometry)
                 if wkb is None:
-                    self.pushError("this provider cannot remove a geometry from a feature")
+                    self.pushError(
+                        "this provider cannot remove a geometry from a feature"
+                    )
                     return False
                 self._layer.update_geometry(int(fid), wkb)
         except gpkg.GeoPackageError as error:
@@ -641,7 +669,9 @@ class GpkgProviderMetadata(QgsProviderMetadata):
     QGIS can make relative and resolve again."""
 
     def __init__(self):
-        super().__init__(PROVIDER_KEY, PROVIDER_DESCRIPTION, GpkgDataProvider.createProvider)
+        super().__init__(
+            PROVIDER_KEY, PROVIDER_DESCRIPTION, GpkgDataProvider.createProvider
+        )
 
     def decodeUri(self, uri):  # noqa: N802
         return decode_uri(uri)

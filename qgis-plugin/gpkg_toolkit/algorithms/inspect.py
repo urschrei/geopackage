@@ -134,7 +134,9 @@ class RepairSpatialIndexesAlgorithm(Algorithm):
 
     def initAlgorithm(self, config=None):  # noqa: N802
         self.add_gpkg_parameter()
-        self.add_name_parameter(self.LAYER, "Layer name (if empty, every feature layer)")
+        self.add_name_parameter(
+            self.LAYER, "Layer name (if empty, every feature layer)"
+        )
         self.addParameter(
             QgsProcessingParameterBoolean(
                 self.BUILD_MISSING, "Build missing indexes", False
@@ -223,7 +225,9 @@ class RepairEncodingsAlgorithm(Algorithm):
 
     def initAlgorithm(self, config=None):  # noqa: N802
         self.add_gpkg_parameter()
-        self.add_name_parameter(self.LAYER, "Layer or table name (if empty, all of them)")
+        self.add_name_parameter(
+            self.LAYER, "Layer or table name (if empty, all of them)"
+        )
         self.add_table_sink(description="Repair report")
         self.addOutput(QgsProcessingOutputNumber(self.REPAIRED, "Tables changed"))
 

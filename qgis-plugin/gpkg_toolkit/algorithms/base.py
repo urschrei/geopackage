@@ -54,11 +54,15 @@ class Algorithm(QgsProcessingAlgorithm):
         )
 
     def add_name_parameter(self, name, description, optional=True):
-        self.addParameter(QgsProcessingParameterString(name, description, optional=optional))
+        self.addParameter(
+            QgsProcessingParameterString(name, description, optional=optional)
+        )
 
     def add_table_sink(self, name=OUTPUT, description="Report"):
         self.addParameter(
-            QgsProcessingParameterFeatureSink(name, description, type=compat.SOURCE_VECTOR)
+            QgsProcessingParameterFeatureSink(
+                name, description, type=compat.SOURCE_VECTOR
+            )
         )
 
     # -- execution ----------------------------------------------------------

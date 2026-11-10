@@ -12,7 +12,9 @@ def plugin_version():
     """The plugin's version, from ``metadata.txt``. It is independent of
     the version of the bundled ``geopackage_rs`` module."""
     metadata = configparser.ConfigParser(interpolation=None)
-    metadata.read(os.path.join(os.path.dirname(__file__), "metadata.txt"), encoding="utf-8")
+    metadata.read(
+        os.path.join(os.path.dirname(__file__), "metadata.txt"), encoding="utf-8"
+    )
     return metadata["general"]["version"]
 
 
