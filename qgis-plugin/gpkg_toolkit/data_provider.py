@@ -57,7 +57,7 @@ from .conversions import crs_for_srs, field_kind_for, from_value, to_value, wkb_
 from .native import gpkg
 
 PROVIDER_KEY = "geopackage_rs"
-PROVIDER_DESCRIPTION = "GeoPackage (geopackage crate)"
+PROVIDER_DESCRIPTION = "GeoPackage (GeoPackage Toolkit)"
 
 # Rows per chunk the reader thread hands over. Large enough that the per-chunk
 # crossing is noise, small enough that the first features of a canvas render
@@ -244,7 +244,7 @@ class GpkgFeatureIterator(QgsAbstractFeatureIterator):
             try:
                 row = self._next_row()
             except gpkg.GeoPackageError as error:
-                source.report(f"read failed: {error}")
+                source.report(f"cannot read features: {error}")
                 row = None
             if row is None:
                 f.setValid(False)
@@ -391,7 +391,7 @@ class GpkgDataProvider(QgsVectorDataProvider):
         self._pk_sql = "rowid"
         try:
             self._open(uri)
-        except (gpkg.GeoPackageError, KeyError, OSError) as error:
+        except (gpkg.GeoPackageError, KeyError, OSError, ValueError) as error:
             self.pushError(f"{PROVIDER_DESCRIPTION}: cannot open {uri}: {error}")
 
     def _open(self, uri):
@@ -402,8 +402,13 @@ class GpkgDataProvider(QgsVectorDataProvider):
         name = parts.get("layerName")
         if not name:
             names = self._gpkg.layer_names() + self._gpkg.attribute_table_names()
-            if len(names) != 1:
-                raise KeyError(f"name one of the layers with |layername=: {', '.join(names)}")
+            if not names:
+                raise ValueError("the file has no layers or tables")
+            if len(names) > 1:
+                raise ValueError(
+                    "the file has more than one layer or table; add "
+                    f"|layername=<name> to the source, with one of: {', '.join(names)}"
+                )
             name = names[0]
         if name in self._gpkg.layer_names():
             self._layer = self._gpkg.layer(name)
@@ -577,7 +582,7 @@ class GpkgDataProvider(QgsVectorDataProvider):
         try:
             fids = self._layer.insert(rows)
         except gpkg.GeoPackageError as error:
-            self.pushError(f"add features failed: {error}")
+            self.pushError(f"cannot add features: {error}")
             return False, features
         added = []
         for feature, fid in zip(features, fids):
@@ -592,7 +597,7 @@ class GpkgDataProvider(QgsVectorDataProvider):
         try:
             self._layer.delete([int(fid) for fid in fids])
         except gpkg.GeoPackageError as error:
-            self.pushError(f"delete features failed: {error}")
+            self.pushError(f"cannot delete features: {error}")
             return False
         self._invalidate()
         return True
@@ -608,7 +613,7 @@ class GpkgDataProvider(QgsVectorDataProvider):
                 if named:
                     self._layer.update_attributes(int(fid), named)
         except gpkg.GeoPackageError as error:
-            self.pushError(f"change attributes failed: {error}")
+            self.pushError(f"cannot change attribute values: {error}")
             return False
         self._invalidate()
         return True
@@ -618,11 +623,11 @@ class GpkgDataProvider(QgsVectorDataProvider):
             for fid, geometry in changes.items():
                 wkb = self._wkb_for(geometry)
                 if wkb is None:
-                    self.pushError("clearing a geometry is not supported by this provider")
+                    self.pushError("this provider cannot remove a geometry from a feature")
                     return False
                 self._layer.update_geometry(int(fid), wkb)
         except gpkg.GeoPackageError as error:
-            self.pushError(f"change geometries failed: {error}")
+            self.pushError(f"cannot change geometries: {error}")
             return False
         self._invalidate()
         return True

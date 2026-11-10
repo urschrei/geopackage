@@ -270,7 +270,14 @@ fn open_layer(path: &str, layer: &str) -> Result<Box<RsLayer>, Error> {
         );
         match names.as_slice() {
             [only] => table = only.clone(),
-            _ => return Err(format!("name one of the layers: {}", names.join(", ")).into()),
+            [] => return Err("the file has no layers or tables".into()),
+            _ => {
+                return Err(format!(
+                    "the file has more than one layer or table; add |layername=<name> to the source, with one of: {}",
+                    names.join(", ")
+                )
+                .into());
+            }
         }
     }
     let attributes = gpkg.layer(&table).is_err();

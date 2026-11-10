@@ -1,4 +1,4 @@
-"""Tiled gridded coverage tools: value lookups, statistics, Requirement 21."""
+"""Tiled gridded coverage tools: value lookups, statistics, sample checks."""
 
 from qgis.core import (
     QgsCoordinateTransform,
@@ -38,12 +38,13 @@ def resolve_coverages(gpkg, name, *, all_if_empty):
             )
         return [gpkg.coverage(name)]
     if not names:
-        raise QgsProcessingException("the file has no tiled gridded coverages")
+        raise QgsProcessingException("the file has no coverages")
     if all_if_empty:
         return [gpkg.coverage(n) for n in names]
     if len(names) > 1:
         raise QgsProcessingException(
-            f"the file has {len(names)} coverages ({', '.join(names)}); name one"
+            f"the file has {len(names)} coverages ({', '.join(names)}); "
+            "enter the name of one"
         )
     return [gpkg.coverage(names[0])]
 
@@ -51,7 +52,7 @@ def resolve_coverages(gpkg, name, *, all_if_empty):
 def zoom_parameter():
     return QgsProcessingParameterNumber(
         ZOOM,
-        "Zoom level (most detailed if empty)",
+        "Zoom level (if empty, the most detailed)",
         type=compat.NUMBER_INTEGER,
         optional=True,
         minValue=0,
@@ -75,15 +76,17 @@ class SampleCoverageAlgorithm(Algorithm):
     GROUP = GROUP
     GROUP_ID = GROUP_ID
     HELP = (
-        "Looks up a tiled gridded coverage (an elevation model, say) at each "
-        "input point and writes the value to a new field. Points are "
-        "transformed into the coverage's CRS first. A point outside the "
-        "coverage, in a tile it does not store, or on a null sample gets "
-        "NULL.\n\n"
-        "<b>Bilinear</b> interpolation weights the four surrounding samples; "
-        "on a grid-value-is-area coverage it is the same as nearest, since "
-        "such a cell has one value over its whole area. A multipart or "
-        "non-point geometry is sampled at its centroid."
+        "Reads the value of a coverage (gridded data stored as tiles, such "
+        "as an elevation model) at each input point, and writes it to a new "
+        "field. The points are transformed into the coverage's CRS first. "
+        "A point gets NULL if it is outside the coverage, in a tile that the "
+        "coverage does not store, or on a cell that has no value. A "
+        "multipart geometry is sampled at its centroid.\n\n"
+        "<b>Nearest</b> takes the value of the cell that contains the point. "
+        "<b>Bilinear</b> interpolates between the four nearest cell values. "
+        "On a coverage whose cells each have one value over their whole area "
+        "(grid cell encoding 'grid-value-is-area'), bilinear gives the same "
+        "values as nearest."
     )
 
     POINTS = "POINTS"
@@ -93,7 +96,7 @@ class SampleCoverageAlgorithm(Algorithm):
 
     def initAlgorithm(self, config=None):  # noqa: N802
         self.add_gpkg_parameter()
-        self.add_name_parameter(COVERAGE, "Coverage (the only one if empty)")
+        self.add_name_parameter(COVERAGE, "Coverage name (if empty, the file's only coverage)")
         self.addParameter(
             QgsProcessingParameterFeatureSource(self.POINTS, "Points", [compat.SOURCE_POINT])
         )
@@ -103,9 +106,11 @@ class SampleCoverageAlgorithm(Algorithm):
                 self.INTERPOLATION, "Interpolation", options=self.INTERPOLATIONS, defaultValue=0
             )
         )
-        self.addParameter(QgsProcessingParameterString(self.FIELD, "Value field", "value"))
         self.addParameter(
-            QgsProcessingParameterFeatureSink(self.OUTPUT, "Sampled", compat.SOURCE_POINT)
+            QgsProcessingParameterString(self.FIELD, "Name of the new field", "value")
+        )
+        self.addParameter(
+            QgsProcessingParameterFeatureSink(self.OUTPUT, "Sampled points", compat.SOURCE_POINT)
         )
 
     def processAlgorithm(self, parameters, context, feedback):  # noqa: N802
@@ -121,7 +126,9 @@ class SampleCoverageAlgorithm(Algorithm):
 
         fields = QgsFields(source.fields())
         if fields.indexOf(field_name) >= 0:
-            raise QgsProcessingException(f"the points already have a field {field_name!r}")
+            raise QgsProcessingException(
+                f"the points already have a field named {field_name!r}; enter another name"
+            )
         fields.append(compat.field(field_name, "double"))
         sink, dest = self.sink(
             parameters, context, fields, source.wkbType(), source.sourceCrs()
@@ -188,12 +195,14 @@ class CoverageStatisticsAlgorithm(Algorithm):
     GROUP = GROUP
     GROUP_ID = GROUP_ID
     HELP = (
-        "Decodes every stored tile of a coverage and writes its footprint "
-        "with two sets of statistics: those recorded in "
-        "gpkg_2d_gridded_tile_ancillary (rec_*) and those calculated from the "
-        "samples, after scale and offset and without null samples. A "
-        "disagreement between the two points to stale ancillary rows. A tile "
-        "that cannot be decoded has its reason in 'error'."
+        "Reads every stored tile of a coverage at one zoom level, and writes "
+        "the outline of each tile with two sets of statistics. The rec_* "
+        "fields are the statistics that the file records for the tile, in "
+        "the table gpkg_2d_gridded_tile_ancillary. The other fields are "
+        "calculated from the tile's values, after scale and offset are "
+        "applied and without cells that have no value. If the two sets do "
+        "not agree, the recorded statistics are out of date. If a tile cannot "
+        "be read, the 'error' field gives the reason."
     )
 
     FIELDS = (
@@ -215,7 +224,7 @@ class CoverageStatisticsAlgorithm(Algorithm):
 
     def initAlgorithm(self, config=None):  # noqa: N802
         self.add_gpkg_parameter()
-        self.add_name_parameter(COVERAGE, "Coverage (the only one if empty)")
+        self.add_name_parameter(COVERAGE, "Coverage name (if empty, the file's only coverage)")
         self.addParameter(zoom_parameter())
         self.addParameter(
             QgsProcessingParameterFeatureSink(self.OUTPUT, "Tile statistics", compat.SOURCE_ANY_GEOMETRY)
@@ -263,16 +272,18 @@ class CoverageStatisticsAlgorithm(Algorithm):
 
 class CheckCoverageSamplesAlgorithm(Algorithm):
     NAME = "checkcoveragesamples"
-    DISPLAY_NAME = "Check coverage samples (Requirement 21)"
+    DISPLAY_NAME = "Find NaN and infinite values in coverages"
     GROUP = GROUP
     GROUP_ID = GROUP_ID
     HELP = (
-        "Decodes every stored tile of one coverage, or of every coverage in "
-        "the file, and reports the tiles that break Requirement 21 of the "
-        "tiled gridded coverage extension (no NaN or infinite sample) or "
-        "that cannot be decoded. A header read cannot make this check, so "
-        "'Validate GeoPackage' does not. The output has one footprint per "
-        "failing tile, in the coverage's CRS; empty means every tile passed."
+        "Reads every stored tile of one coverage, or of every coverage in "
+        "the file, and reports each tile that contains a NaN or infinite "
+        "value or that cannot be read. The GeoPackage standard does not "
+        "allow NaN or infinite values in a coverage.\n\n"
+        "Validate GeoPackage does not make this check, because it reads only "
+        "the header of each tile.\n\n"
+        "The output has the outline of each failing tile, in the coverage's "
+        "CRS. If the output is empty, every tile passed."
     )
 
     FAILURES = "FAILURES"
@@ -286,7 +297,7 @@ class CheckCoverageSamplesAlgorithm(Algorithm):
 
     def initAlgorithm(self, config=None):  # noqa: N802
         self.add_gpkg_parameter()
-        self.add_name_parameter(COVERAGE, "Coverage (every coverage if empty)")
+        self.add_name_parameter(COVERAGE, "Coverage name (if empty, every coverage)")
         self.addParameter(
             QgsProcessingParameterFeatureSink(self.OUTPUT, "Failing tiles", compat.SOURCE_ANY_GEOMETRY)
         )
@@ -306,14 +317,16 @@ class CheckCoverageSamplesAlgorithm(Algorithm):
                 same_crs = coverage.srs_id == coverages[0].srs_id
                 if not same_crs:
                     feedback.reportError(
-                        f"{coverage.name} is in srs_id {coverage.srs_id}, not the output's; "
-                        "its failing tiles are listed without footprints",
+                        f"{coverage.name} has a different CRS from the first "
+                        "coverage; its failing tiles are listed without outlines",
                         fatalError=False,
                     )
                 found = wrap_errors(coverage.check_samples)
                 for zoom, column, row, message in found:
                     failures += 1
-                    feedback.pushWarning(f"{coverage.name} {zoom}/{column}/{row}: {message}")
+                    feedback.pushWarning(
+                        f"{coverage.name}, zoom {zoom}, column {column}, row {row}: {message}"
+                    )
                     add_row(
                         sink,
                         fields,

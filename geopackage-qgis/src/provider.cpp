@@ -54,7 +54,7 @@ namespace {
 // when the plugin uses this provider in its place, or a key of its own when
 // both are registered side by side.
 QString PROVIDER_KEY = QStringLiteral("geopackage_rs");
-const QString PROVIDER_DESCRIPTION = QStringLiteral("GeoPackage (geopackage crate, native)");
+const QString PROVIDER_DESCRIPTION = QStringLiteral("GeoPackage (GeoPackage Toolkit, native)");
 
 // Matches `kind` in lib.rs.
 enum Kind : uint8_t {
@@ -455,7 +455,7 @@ class Provider final : public QgsVectorDataProvider {
       size_t i = 0;
       for (QgsFeature &feature : features) feature.setId(fids[i++]);
     } catch (const rust::Error &error) {
-      pushError(QStringLiteral("add features failed: %1").arg(QString::fromUtf8(error.what())));
+      pushError(QStringLiteral("cannot add features: %1").arg(QString::fromUtf8(error.what())));
       return false;
     }
     edited();
@@ -469,7 +469,7 @@ class Provider final : public QgsVectorDataProvider {
     try {
       mShared->layer->delete_features(rust::Slice<const int64_t>(fids.data(), fids.size()));
     } catch (const rust::Error &error) {
-      pushError(QStringLiteral("delete features failed: %1").arg(QString::fromUtf8(error.what())));
+      pushError(QStringLiteral("cannot delete features: %1").arg(QString::fromUtf8(error.what())));
       return false;
     }
     edited();
@@ -488,7 +488,7 @@ class Provider final : public QgsVectorDataProvider {
     try {
       mShared->layer->change_attributes(rust::Slice<const AttributeChange>(flat.data(), flat.size()));
     } catch (const rust::Error &error) {
-      pushError(QStringLiteral("change attributes failed: %1").arg(QString::fromUtf8(error.what())));
+      pushError(QStringLiteral("cannot change attribute values: %1").arg(QString::fromUtf8(error.what())));
       return false;
     }
     edited();
@@ -501,7 +501,7 @@ class Provider final : public QgsVectorDataProvider {
     for (auto change = changes.cbegin(); change != changes.cend(); ++change) {
       const QByteArray wkb = wkbFor(change.value(), mShared->wkbType);
       if (wkb.isEmpty()) {
-        pushError(QStringLiteral("clearing a geometry is not supported by this provider"));
+        pushError(QStringLiteral("this provider cannot remove a geometry from a feature"));
         return false;
       }
       flat.push_back(GeometryChange{change.key(), toVec(wkb)});
@@ -509,7 +509,7 @@ class Provider final : public QgsVectorDataProvider {
     try {
       mShared->layer->change_geometries(rust::Slice<const GeometryChange>(flat.data(), flat.size()));
     } catch (const rust::Error &error) {
-      pushError(QStringLiteral("change geometries failed: %1").arg(QString::fromUtf8(error.what())));
+      pushError(QStringLiteral("cannot change geometries: %1").arg(QString::fromUtf8(error.what())));
       return false;
     }
     edited();

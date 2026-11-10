@@ -15,8 +15,9 @@ class GpkgToolkitProvider(QgsProcessingProvider):
         return "GeoPackage Toolkit"
 
     def longName(self):  # noqa: N802
-        version = native.gpkg.__version__ if native.gpkg else "unavailable"
-        return f"GeoPackage Toolkit (geopackage crate {version})"
+        if native.gpkg is None:
+            return "GeoPackage Toolkit (not loaded)"
+        return f"GeoPackage Toolkit {native.gpkg.__version__}"
 
     def loadAlgorithms(self):  # noqa: N802
         if native.gpkg is None:

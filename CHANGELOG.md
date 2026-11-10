@@ -8,6 +8,20 @@ While the version is below 1.0 the API may change in any release.
 
 ## [Unreleased]
 
+### Changed
+
+- The QGIS plugin's menu entries, algorithm help, parameter labels and
+  messages are rewritten for QGIS users. *Check coverage samples
+  (Requirement 21)* is now *Find NaN and infinite values in coverages*; its
+  identifier, `checkcoveragesamples`, is unchanged. *Add GeoPackage layer
+  (geopackage crate)* is now *Add GeoPackage layer with this plugin*. The
+  data provider's description is *GeoPackage (GeoPackage Toolkit)*. In the
+  report of *Repair spatial indexes*, the `action` for a replaced trigger
+  set is `rebuilt with 1.4 triggers`.
+- The QGIS data provider says why it cannot open a source that names no
+  layer: the file has no layers or tables, or it has more than one and the
+  source must add `|layername=<name>`.
+
 ## [0.14.4] - 2026-11-10
 
 This release changes the QGIS plugin and its plugin repository. The crates'

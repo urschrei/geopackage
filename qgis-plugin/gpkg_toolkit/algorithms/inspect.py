@@ -27,17 +27,17 @@ class ValidateAlgorithm(Algorithm):
     GROUP = GROUP
     GROUP_ID = GROUP_ID
     HELP = (
-        "Reports what the geopackage crate can see wrong with a GeoPackage, "
-        "most severe first, and the repair for each finding where there is "
-        "one. The plugin_algorithm column names the algorithm in this plugin "
-        "that makes the repair. The file is opened read-only and leniently "
-        "and is not modified.\n\n"
-        "<b>error</b>: a reader can get a wrong answer from the file. "
-        "<b>warning</b>: the file breaks a rule but reads correctly. "
-        "<b>advisory</b>: a choice worth knowing about, such as a layer with "
-        "no spatial index.\n\n"
-        "These are this crate's checks, not the OGC test suite's: no findings "
-        "is not a conformance claim."
+        "Reports the problems in a GeoPackage, most severe first. For each "
+        "problem that has a repair, the repair field says what to do, and "
+        "the plugin_algorithm field names the algorithm in this plugin that "
+        "makes the repair. The file is not changed.\n\n"
+        "<b>error</b>: software that reads the file can get a wrong result. "
+        "<b>warning</b>: the file breaks a rule of the GeoPackage standard, "
+        "but reads correctly. "
+        "<b>advisory</b>: not a problem, but worth knowing, such as a layer "
+        "with no spatial index.\n\n"
+        "These checks are not the OGC conformance tests. A file with no "
+        "findings is not certified as conformant to the standard."
     )
 
     ERRORS = "ERRORS"
@@ -90,7 +90,7 @@ class ValidateAlgorithm(Algorithm):
                 feedback.pushInfo(f"{finding.severity}: {finding.message}")
         if not any(counts.values()):
             feedback.pushInfo(
-                "No findings (this crate's checks; the OGC ETS is the authority)."
+                "No findings. These checks are not the OGC conformance tests."
             )
         return {
             self.OUTPUT: dest,
@@ -106,15 +106,17 @@ class RepairSpatialIndexesAlgorithm(Algorithm):
     GROUP = GROUP
     GROUP_ID = GROUP_ID
     HELP = (
-        "Audits the RTree spatial index of every feature layer, or of one "
-        "named layer, and repairs what is wrong. <b>The file is modified in "
-        "place</b>; close any layer that QGIS is editing from it first.\n\n"
-        "A legacy index (pre-1.4 or mixed triggers) or a stale one (a table "
-        "without its triggers) is replaced by the GeoPackage 1.4 trigger set "
-        "and rebuilt. An index whose entries are out of step with the table "
-        "is rebuilt. A layer with no index is left alone unless 'Build "
-        "missing indexes' is checked, since an absent index is a choice "
-        "rather than a defect."
+        "Checks the spatial index of every feature layer, or of one named "
+        "layer, and repairs the problems it finds. <b>The file is changed "
+        "in place</b>. Before you run it, stop editing any layer from the "
+        "file in QGIS.\n\n"
+        "A spatial index is kept up to date by triggers in the file. If the "
+        "triggers are from a GeoPackage version before 1.4 or from a mix of "
+        "versions ('legacy'), or if some are missing ('stale'), they are "
+        "replaced with the GeoPackage 1.4 triggers and the index is rebuilt. "
+        "If the index does not match the layer's features, it is rebuilt.\n\n"
+        "A layer with no spatial index does not get one unless you select "
+        "Build missing indexes."
     )
 
     LAYER = "LAYER"
@@ -132,7 +134,7 @@ class RepairSpatialIndexesAlgorithm(Algorithm):
 
     def initAlgorithm(self, config=None):  # noqa: N802
         self.add_gpkg_parameter()
-        self.add_name_parameter(self.LAYER, "Layer (all layers if empty)")
+        self.add_name_parameter(self.LAYER, "Layer name (if empty, every feature layer)")
         self.addParameter(
             QgsProcessingParameterBoolean(
                 self.BUILD_MISSING, "Build missing indexes", False
@@ -159,7 +161,7 @@ class RepairSpatialIndexesAlgorithm(Algorithm):
                 action = "none"
                 if before in ("legacy", "stale"):
                     wrap_errors(layer.repair_spatial_index)
-                    action = "repaired to the 1.4 trigger set"
+                    action = "rebuilt with 1.4 triggers"
                 elif audit is not None and not audit["consistent"]:
                     wrap_errors(layer.rebuild_spatial_index)
                     action = "rebuilt"
@@ -169,7 +171,7 @@ class RepairSpatialIndexesAlgorithm(Algorithm):
                 after = layer.spatial_index_status()
                 if action != "none":
                     changed += 1
-                    feedback.pushInfo(f"{name}: {before} index {action}")
+                    feedback.pushInfo(f"{name}: spatial index {action}")
                 add_row(
                     sink,
                     fields,
@@ -193,18 +195,21 @@ class RepairEncodingsAlgorithm(Algorithm):
     GROUP = GROUP
     GROUP_ID = GROUP_ID
     HELP = (
-        "Rewrites values that QGIS reads but that are not in the form the "
-        "GeoPackage standard gives them, in every feature layer and attribute "
-        "table, or in one named table. <b>The file is modified in place</b>; "
-        "close any layer that QGIS is editing from it first.\n\n"
-        "A geometry whose WKB gives Z or M by a high-bit flag in a type code, "
-        "as some Esri exports write it, is rewritten with ISO type codes and "
-        "given a header envelope. Its coordinates do not change.\n\n"
-        "DATETIME text in another ISO 8601 form, such as "
-        "2017-08-01T00:00:00.0Z, is rewritten as 2017-08-01T00:00:00.000Z. A "
-        "value that would lose precision, or that is not a datetime, is left "
-        "as it is.\n\n"
-        "Run Validate GeoPackage afterwards to see anything left."
+        "Rewrites geometries and datetimes that QGIS can read but that are "
+        "not in the form the GeoPackage standard specifies, in every feature "
+        "layer and attribute table, or in one named table. <b>The file is "
+        "changed in place</b>. Before you run it, stop editing any layer "
+        "from the file in QGIS.\n\n"
+        "Some software, such as some Esri exports, marks a geometry as 3D "
+        "(Z) or measured (M) with a non-standard WKB type code. These "
+        "geometries are rewritten with the standard ISO type codes, and get "
+        "a bounding box in their header. Their coordinates do not change.\n\n"
+        "DATETIME values in another ISO 8601 form, such as "
+        "2017-08-01T00:00:00.0Z, are rewritten in the GeoPackage form, "
+        "2017-08-01T00:00:00.000Z. A value that would lose precision, or "
+        "that is not a datetime, does not change.\n\n"
+        "To find the problems that remain, run Validate GeoPackage after this "
+        "algorithm."
     )
 
     LAYER = "LAYER"
@@ -218,7 +223,7 @@ class RepairEncodingsAlgorithm(Algorithm):
 
     def initAlgorithm(self, config=None):  # noqa: N802
         self.add_gpkg_parameter()
-        self.add_name_parameter(self.LAYER, "Layer or table (all if empty)")
+        self.add_name_parameter(self.LAYER, "Layer or table name (if empty, all of them)")
         self.add_table_sink(description="Repair report")
         self.addOutput(QgsProcessingOutputNumber(self.REPAIRED, "Tables changed"))
 
@@ -263,11 +268,16 @@ class ListExtensionsAlgorithm(Algorithm):
     GROUP = GROUP
     GROUP_ID = GROUP_ID
     HELP = (
-        "Lists the rows of gpkg_extensions, each with this crate's support "
-        "for it: <b>implemented</b> (read and written correctly), "
-        "<b>known</b> (recognised but not implemented; writes to a table it "
-        "covers are refused if its scope is read-write), <b>removed</b> "
-        "(withdrawn from the standard) or <b>unrecognised</b>."
+        "Lists the extensions that the GeoPackage declares (the rows of "
+        "gpkg_extensions), and whether this plugin supports each one. The "
+        "support field is one of:\n\n"
+        "<b>implemented</b>: the plugin reads and writes data that uses the "
+        "extension correctly.\n"
+        "<b>known</b>: the plugin recognises the extension but does not "
+        "implement it. If the extension's scope is read-write, the plugin "
+        "does not write to the tables that it applies to.\n"
+        "<b>removed</b>: the extension was withdrawn from the standard.\n"
+        "<b>unrecognised</b>: the plugin does not recognise the extension."
     )
 
     FIELDS = (

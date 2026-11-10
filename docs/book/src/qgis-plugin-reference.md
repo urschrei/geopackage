@@ -114,8 +114,11 @@ Fields of `OUTPUT`: `layer`, `status_before` and `status_after` (`current`,
 
 Output: `REPAIRED`, the number of layers changed.
 
-A legacy (pre-1.4 or mixed) or stale trigger set is replaced, and an index
-that is out of step with its table is rebuilt.
+A legacy (pre-1.4 or mixed) or stale trigger set is replaced with the 1.4
+triggers and the index is rebuilt; the `action` is `rebuilt with 1.4
+triggers`. An index that is out of step with its table is rebuilt
+(`rebuilt`), and with `BUILD_MISSING`, an absent one is built (`built`).
+Otherwise the `action` is `none`.
 
 ### Repair geometry and datetime encodings (`repairencodings`)
 
@@ -188,7 +191,7 @@ statistics recorded in `gpkg_2d_gridded_tile_ancillary`, `rec_min`,
 decoded samples after scale and offset, without null samples, `min`, `max`,
 `mean`, `std_dev`, `count`; and `error`, why a tile could not be decoded.
 
-### Check coverage samples (Requirement 21) (`checkcoveragesamples`)
+### Find NaN and infinite values in coverages (`checkcoveragesamples`)
 
 Group: Coverages. Read-only.
 
@@ -196,16 +199,18 @@ Group: Coverages. Read-only.
 |---|---|---|
 | `INPUT` | File (`.gpkg`) | The GeoPackage |
 | `COVERAGE` | String, optional | The coverage; every coverage if empty |
-| `OUTPUT` | Polygon layer | One footprint per failing tile, in the coverage's CRS |
+| `OUTPUT` | Polygon layer | The outline of each failing tile, in the coverage's CRS |
 
 Fields of `OUTPUT`: `coverage`, `zoom`, `tile_column`, `tile_row`,
 `message`.
 
 Output: `FAILURES`, the number of failing tiles.
 
-A tile fails when a sample is NaN or infinite (Requirement 21 of the tiled
-gridded coverage extension), or when it cannot be decoded. *Validate
-GeoPackage* does not make this check.
+A tile fails when it contains a NaN or infinite value, which the
+GeoPackage standard does not allow in a coverage
+([Requirement 21](explanation/coverages.md#requirement-21)), or when it
+cannot be read. *Validate GeoPackage* reads only the header of each tile,
+so it does not make this check.
 
 ### Export layer to GeoPackage (`exportlayer`)
 
@@ -233,7 +238,7 @@ its WKT otherwise.
 
 | Entry | Effect |
 |---|---|
-| Add GeoPackage layer (geopackage crate) | Asks for a file and a layer, and adds the layer through `geopackage_rs` |
+| Add GeoPackage layer with this plugin | Asks for a file and a layer, and adds the layer through `geopackage_rs` |
 | Each [algorithm](#algorithms), in the toolbox's groups | Opens the algorithm's dialog |
 
 The menu has no entries when the `geopackage_rs` module does not load. The

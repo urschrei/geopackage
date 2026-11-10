@@ -46,8 +46,8 @@ Both serve the same layers, so a project opens with either.
 
 ## Add a layer through the provider
 
-1. Select *Plugins → GeoPackage Toolkit → Add GeoPackage layer (geopackage
-   crate)*.
+1. Select *Plugins → GeoPackage Toolkit → Add GeoPackage layer with this
+   plugin*.
 2. Choose the file. If it has more than one layer or attribute table,
    choose one.
 
