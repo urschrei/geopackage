@@ -234,4 +234,7 @@ its WKT otherwise.
 | Entry | Effect |
 |---|---|
 | Add GeoPackage layer (geopackage crate) | Asks for a file and a layer, and adds the layer through `geopackage_rs` |
-| Validate GeoPackage, Repair spatial indexes, Repair geometry and datetime encodings, List extensions | Opens the algorithm's dialog |
+| Each [algorithm](#algorithms), in the toolbox's groups | Opens the algorithm's dialog |
+
+The menu has no entries when the `geopackage_rs` module does not load. The
+*GeoPackage Toolkit* tab of the *Log Messages* panel gives the reason.
