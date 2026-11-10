@@ -143,11 +143,16 @@ jobs:
       # mangled with abseil's lts_20260526, and the solver otherwise picks a
       # libprotobuf built with a newer abseil, so qgis._core fails to load
       # ("The specified procedure could not be found"). Pin abseil to the
-      # version QGIS was built with.
+      # version QGIS was built with. Build 2 of QGIS 4.2.3, with GEOS 3.15,
+      # fails to load the same way, so Windows also keeps build 1.
       - run: |
+          qgis="qgis=4.2"
           extra=""
-          if [ "$RUNNER_OS" = Windows ]; then extra="libabseil=20260526"; fi
-          conda install -y "qgis=4.2" pytest maturin $extra
+          if [ "$RUNNER_OS" = Windows ]; then
+            qgis="qgis=4.2.3=*_1"
+            extra="libabseil=20260526"
+          fi
+          conda install -y "$qgis" pytest maturin $extra
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
