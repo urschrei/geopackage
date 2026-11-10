@@ -7,7 +7,8 @@ name: release
 #
 # A release that already exists gets its archives through a manual run with
 # its tag. A pull request that changes this file builds and packages every
-# target, and uploads nothing.
+# target, and uploads nothing. A QGIS plugin release (a `qgis-plugin-v` tag)
+# has no CLI build: qgis-plugin.yml makes its assets.
 
 on:
   release:
@@ -30,6 +31,7 @@ env:
 
 jobs:
   cli:
+    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag || '', 'qgis-plugin-v') }}
     strategy:
       fail-fast: false
       matrix:
