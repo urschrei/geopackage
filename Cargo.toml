@@ -27,7 +27,7 @@ thiserror = "2"
 # each crate's `bundled` feature opts into the vendored amalgamation instead.
 # `array` is the `rarray` table-valued function, which the Arrow bounding-box
 # read binds a page's candidate ids through (see `arrow::read`).
-rusqlite = { version = "0.40", features = ["array", "functions", "limits"] }
+rusqlite = { version = "0.41", features = ["array", "functions", "limits"] }
 tempfile = "3"
 wkb = "0.9.3"
 geo-traits = "0.3"
@@ -65,7 +65,7 @@ png = "0.18.1"
 # Total system memory, for the Arrow read path's default batch byte ceiling.
 # Only the `system` feature: the default set also probes disks, networks,
 # components and users, none of which we ask anything about.
-sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 # The Arrow data plane. `arrow-array`/`arrow-schema` only: the GeoArrow WKB
 # encoding is a Binary field carrying extension metadata, so `geoarrow-array`
 # would add a dependency without adding capability. Revisit if native GeoArrow
